@@ -10,7 +10,7 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, JobContext
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.plugins import synthesia
@@ -582,7 +582,16 @@ class TestAvatarSession:
 
     @pytest.fixture(autouse=True)
     def job_context(self, monkeypatch):
-        ctx = type("FakeJobContext", (), {"local_participant_identity": "dev-agent"})()
+        # create_participant_token is the real one: it signs locally, as outside token mode
+        ctx = type(
+            "FakeJobContext",
+            (),
+            {
+                "local_participant_identity": "dev-agent",
+                "_job_token_client": None,
+                "create_participant_token": JobContext.create_participant_token,
+            },
+        )()
         monkeypatch.setattr(
             "livekit.plugins.synthesia.avatar.get_job_context", lambda *, required=True: ctx
         )
@@ -880,7 +889,6 @@ class TestAvatarSession:
     @pytest.mark.parametrize(
         ("url", "key", "secret"),
         [
-            (LK_URL, None, None),
             (LK_URL, "   ", LK_SECRET),
             (LK_URL, LK_KEY, "   "),
             (LK_URL, "   ", "   "),
@@ -901,6 +909,16 @@ class TestAvatarSession:
                 **({} if key is None else {"livekit_api_key": key}),
                 **({} if secret is None else {"livekit_api_secret": secret}),
             )
+        assert api_recorder.requests == []
+
+    async def test_missing_livekit_credentials_in_a_job_fail_before_launch(
+        self, api_recorder, monkeypatch
+    ):
+        for var in ("LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"):
+            monkeypatch.delenv(var, raising=False)
+        session = self._session()
+        with pytest.raises(ValueError, match="api_key and api_secret are required"):
+            await session.start(self._FakeAgentSession(), self._FakeRoom(), livekit_url=self.LK_URL)
         assert api_recorder.requests == []
 
     @pytest.mark.virtual_time

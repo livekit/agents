@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import aiohttp
 import httpx2 as httpx
@@ -14,9 +15,11 @@ from yarl import URL
 
 import livekit.agents.inference._utils as inference_utils
 import livekit.agents.job as job_module
+from livekit import api
 from livekit.agents import inference
 from livekit.agents.inference._utils import (
     HEADER_SESSION_ID,
+    create_access_token,
     create_api_error_from_response,
     create_inference_request_id,
     extract_quota_usage,
@@ -224,3 +227,81 @@ def test_llm_stream_logs_429_without_quota_headers(caplog: pytest.LogCaptureFixt
     assert record.model == "openai/gpt-4o"
     assert not hasattr(record, "rpm_limit")
     assert not hasattr(record, "rpm_used")
+
+
+@pytest.fixture
+def token_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LIVEKIT_TOKEN without an API key and secret."""
+    for name in (
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "LIVEKIT_INFERENCE_API_KEY",
+        "LIVEKIT_INFERENCE_API_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+
+
+@pytest.mark.usefixtures("token_mode")
+def test_inference_sends_the_job_token_in_token_mode() -> None:
+    from livekit.agents._token_mode import INFERENCE_CLAIMS
+    from livekit.agents.job import _JobContextVar
+
+    assert inference_utils.resolve_credentials(None, None) == ("", "")
+    stt = inference.STT("deepgram/nova-3")
+
+    tokens = {INFERENCE_CLAIMS: "inference-token"}
+    ctx_token = _JobContextVar.set(MagicMock(_job_token=tokens.get))
+    try:
+        assert create_access_token("", "") == "inference-token"
+        assert create_access_token(stt._opts.api_key, stt._opts.api_secret) == "inference-token"
+
+        # the job has no token yet: never the worker token
+        tokens.clear()
+        with pytest.raises(RuntimeError, match="needs a running job"):
+            create_access_token("", "")
+    finally:
+        _JobContextVar.reset(ctx_token)
+
+    # outside a job
+    with pytest.raises(RuntimeError, match="needs a running job"):
+        create_access_token("", "")
+
+
+@pytest.mark.usefixtures("token_mode")
+async def test_inference_llm_is_constructed_before_the_job_in_token_mode() -> None:
+    """Process setup can construct a model for its job: no token is needed until a request."""
+    from livekit.agents.inference import responses
+
+    llm = inference.LLM("openai/gpt-4.1-mini")
+    http_llm = responses.LLM("openai/gpt-4.1-mini", use_websocket=False)
+    try:
+        assert llm._client.api_key == inference_utils._NO_JOB_TOKEN
+        assert (
+            http_llm._client is not None
+            and http_llm._client.api_key == inference_utils._NO_JOB_TOKEN
+        )
+        with pytest.raises(RuntimeError, match="needs a running job"):
+            await llm._prewarm_impl()
+        # prewarm runs once, so it must stay available for the job
+        llm.prewarm()
+        http_llm.prewarm()
+        assert llm._prewarm_task is None and http_llm._prewarm_task is None
+    finally:
+        await llm.aclose()
+        await http_llm.aclose()
+
+
+def test_inference_signs_with_key_and_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    token = create_access_token("devkey", "secret" * 6)
+
+    claims = api.TokenVerifier("devkey", "secret" * 6).verify(token)
+    assert claims.inference is not None and claims.inference.perform
+
+
+def test_inference_without_credentials_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("LIVEKIT_API_KEY", "LIVEKIT_INFERENCE_API_KEY", "LIVEKIT_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError, match="api_key is required"):
+        inference_utils.resolve_credentials(None, None)

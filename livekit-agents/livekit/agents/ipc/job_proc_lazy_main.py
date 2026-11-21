@@ -17,6 +17,7 @@ if current_process().name == "job_proc":
 import asyncio
 import contextlib
 import contextvars
+import json
 import socket
 import time
 from collections.abc import Awaitable, Callable
@@ -26,12 +27,14 @@ from typing import TYPE_CHECKING, Any, cast
 from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
+from livekit.api.access_token import TokenGrants
 from livekit.protocol import agent
 
+from .._token_mode import INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS, token_mode_token
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
-from ..telemetry.traces import _resource
+from ..telemetry.traces import _end_job_token_source, _resource
 from ..types import ATTRIBUTE_SIMULATOR
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from ..voice.events import CloseReason
@@ -39,6 +42,8 @@ from .channel import Message
 from .inference_executor import InferenceExecutor
 from .proc_client import _dump_stack_traces_impl, _ProcClient
 from .proto import (
+    CreateJobTokenRequest,
+    CreateJobTokenResponse,
     DumpStackTraceRequest,
     Exiting,
     InferenceRequest,
@@ -191,6 +196,102 @@ class _InfClient(InferenceExecutor):
             fut.set_result(resp)
 
 
+# above the worker's own limit for the server's answer (CREATE_JOB_TOKEN_TIMEOUT), so that
+# this one ends the wait only when the worker itself does not answer
+_JOB_TOKEN_TIMEOUT = 6.0
+_JOB_TOKEN_RETRY_DELAY = 5.0
+
+
+class _JobTokenClient:
+    """Gets tokens for the job from the worker, which asks the server with
+    CreateJobTokenRequest. Used in token mode, where no process holds the API secret.
+
+    A token is cached per claims and renewed once half of its lifetime has passed.
+    """
+
+    def __init__(self, proc_client: _ProcClient) -> None:
+        self._client = proc_client
+        self._active_requests: dict[str, asyncio.Future[CreateJobTokenResponse]] = {}
+        # claims -> (token, renew_at, expires_at), unix seconds
+        self._tokens: dict[str, tuple[str, float, float]] = {}
+
+    async def create_token(self, claims: str) -> str:
+        """Returns a token with ``claims``, the JSON payload of an access token."""
+        cached = self._tokens.get(claims)
+        if cached is not None and time.time() < cached[1]:
+            return cached[0]
+
+        request_id = shortuuid("job_token_")
+        fut = asyncio.Future[CreateJobTokenResponse]()
+        self._active_requests[request_id] = fut
+        try:
+            await self._client.send(CreateJobTokenRequest(request_id=request_id, claims=claims))
+        except Exception:
+            self._active_requests.pop(request_id, None)
+            raise
+
+        try:
+            resp = await asyncio.wait_for(fut, _JOB_TOKEN_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"the worker did not answer the job token request within {_JOB_TOKEN_TIMEOUT}s"
+            ) from None
+        finally:
+            self._active_requests.pop(request_id, None)
+
+        if resp.error:
+            raise RuntimeError(resp.error)
+
+        now = time.time()
+        self._tokens[claims] = (resp.token, now + (resp.expires_at - now) / 2, resp.expires_at)
+        return resp.token
+
+    def cached_token(self, claims: str) -> str | None:
+        """The last token created with ``claims``, until it expires."""
+        cached = self._tokens.get(claims)
+        return cached[0] if cached is not None and time.time() < cached[2] else None
+
+    async def renew(self, *claims: str) -> float:
+        """Creates the tokens that are due. Returns the seconds until the next one is."""
+        results = await asyncio.gather(
+            *(self.create_token(c) for c in claims), return_exceptions=True
+        )
+        for res in results:
+            if isinstance(res, asyncio.CancelledError):
+                raise res
+            if isinstance(res, BaseException):
+                logger.warning("failed to get a job token, retrying", extra={"error": str(res)})
+                return _JOB_TOKEN_RETRY_DELAY
+
+        # the floor keeps a bad expiry from the server from making this a busy loop
+        return max(min(self._tokens[c][1] for c in claims) - time.time(), _JOB_TOKEN_RETRY_DELAY)
+
+    async def keep_current(self, delay: float, *claims: str) -> None:
+        """Renews the tokens with ``claims`` until cancelled, first after ``delay``."""
+        while True:
+            await asyncio.sleep(delay)
+            delay = await self.renew(*claims)
+
+    async def token_provider(self, claims: TokenGrants) -> str:
+        """A ``livekit.api.TokenProvider`` for ``LiveKitAPI``."""
+        return await self.create_token(json.dumps(claims.asdict()))
+
+    def close(self) -> None:
+        for fut in self._active_requests.values():
+            if not fut.done():
+                fut.cancel()
+        self._active_requests.clear()
+
+    def _on_response(self, resp: CreateJobTokenResponse) -> None:
+        fut = self._active_requests.pop(resp.request_id, None)
+        if fut is None:
+            logger.warning("received unexpected job token response")
+            return
+
+        with contextlib.suppress(asyncio.InvalidStateError):
+            fut.set_result(resp)
+
+
 @dataclass
 class _ShutdownInfo:
     user_initiated: bool
@@ -223,6 +324,7 @@ class _JobProc:
         # used to warn users if both connect and shutdown are not called inside the job_entry
         self._ctx_connect_called = False
         self._ctx_shutdown_called = False
+        self._job_tokens_task: asyncio.Task[None] | None = None
         self.failed = False
 
     @property
@@ -232,6 +334,7 @@ class _JobProc:
     def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
         self._client = client
         self._inf_client = _InfClient(client)
+        self._job_token_client = _JobTokenClient(client)
         self._job_proc = JobProcess(
             executor_type=self._executor_type,
             user_arguments=self._user_arguments,
@@ -279,11 +382,15 @@ class _JobProc:
                 if isinstance(msg, InferenceResponse):
                     self._inf_client._on_inference_response(msg)
 
+                if isinstance(msg, CreateJobTokenResponse):
+                    self._job_token_client._on_response(msg)
+
                 if isinstance(msg, DumpStackTraceRequest):
                     _dump_stack_traces_impl()
 
             # unblock any pending do_inference() calls
             self._inf_client.close()
+            self._job_token_client.close()
 
         def _on_read_done(t: asyncio.Task[None]) -> None:
             if t.cancelled() or t.exception() is None:
@@ -349,6 +456,7 @@ class _JobProc:
             on_connect=_on_ctx_connect,
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
+            job_token_client=self._job_token_client,
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
@@ -366,6 +474,15 @@ class _JobProc:
     async def _run_job_task(self) -> None:
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         try:
+            if token_mode_token() is not None and not self._job_ctx.is_fake_job():
+                # inference and telemetry read these from the cache: have them before the
+                # entrypoint runs, and renew them for as long as the job does
+                claims = (INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS)
+                delay = await self._job_token_client.renew(*claims)
+                self._job_tokens_task = asyncio.create_task(
+                    self._job_token_client.keep_current(delay, *claims), name="job_tokens"
+                )
+
             self._job_ctx._on_setup()
             self._job_ctx._start_log_buffering()
             # before the first span: without a provider the job's root would not record
@@ -468,6 +585,9 @@ class _JobProc:
             await aio.cancel_and_wait(*tasks)
 
         await self._job_ctx._on_cleanup()
+        if self._job_tokens_task is not None:
+            await aio.cancel_and_wait(self._job_tokens_task)
+            _end_job_token_source(self._job_ctx.job.id)
         await http_context._close_http_ctx()
         _JobContextVar.reset(job_ctx_token)
 

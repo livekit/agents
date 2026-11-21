@@ -26,6 +26,7 @@ import tempfile
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum, unique
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -34,9 +35,10 @@ from urllib.parse import urlparse
 import aiohttp
 
 from livekit import api, rtc
-from livekit.api.access_token import Claims
+from livekit.api.access_token import AccessToken, Claims, VideoGrants
 from livekit.protocol import agent, models
 
+from ._token_mode import OBSERVABILITY_CLAIMS, token_mode_token
 from .log import logger
 from .observability import Tagger
 from .telemetry import (
@@ -53,6 +55,7 @@ from .telemetry.traces import (
     _discard_cloud_tracer,
     _JobTelemetry,
     _prepare_cloud_tracer,
+    _set_job_token_source,
     _setup_cloud_tracer,
     _shutdown_telemetry,
 )
@@ -86,6 +89,7 @@ def _observability_url(livekit_url: str) -> str | None:
 
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
+    from .ipc.job_proc_lazy_main import _JobTokenClient
     from .simulation import SimulationContext
     from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.remote_session import SessionHost
@@ -224,6 +228,7 @@ class JobContext:
         on_connect: Callable[[], None],
         on_shutdown: Callable[[str], None],
         inference_executor: InferenceExecutor,
+        job_token_client: _JobTokenClient | None = None,
     ) -> None:
         self._proc = proc
         self._info = info
@@ -243,6 +248,7 @@ class JobContext:
         self._pending_tasks = list[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
+        self._job_token_client = job_token_client
 
         self._log_fields: dict[str, Any] = {}
         self._log_filter = _ContextLogFieldsFilter(self)
@@ -302,6 +308,12 @@ class JobContext:
         self._early_log_handler = _BufferingHandler()
         logging.getLogger().addHandler(self._early_log_handler)
 
+    def _job_token(self, claims: str) -> str | None:
+        """Token mode: the token the job keeps current for ``claims``, if it has one."""
+        if self._job_token_client is None:
+            return None
+        return self._job_token_client.cached_token(claims)
+
     def _prepare_telemetry(self) -> None:
         """Have the cloud trace pipeline up before the job's first span; whether anything is
         uploaded is decided in ``init_recording``, and the job's spans are held until then."""
@@ -311,6 +323,8 @@ class JobContext:
         if not obs_url:
             return
         try:
+            if token_mode_token() is not None:
+                _set_job_token_source(self.job.id, lambda: self._job_token(OBSERVABILITY_CLAIMS))
             _prepare_cloud_tracer(
                 room_id=self.job.room.sid,
                 job_id=self.job.id,
@@ -505,8 +519,82 @@ class JobContext:
         When starting via the worker, values passed in `WorkerOptions` are exported to
         LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET so this API is always
         usable inside job entrypoints.
+
+        In token mode (LIVEKIT_TOKEN without an API key and secret), each call gets a
+        token with the grants it needs from the server, through the worker.
         """
-        return api.LiveKitAPI(session=http_context.http_session())
+        if self._job_token_client is not None and token_mode_token() is not None:
+            return api.LiveKitAPI(
+                token_provider=self._job_token_client.token_provider,
+                session=http_context.http_session(),
+            )
+
+        # given here: without them LiveKitAPI prefers a LIVEKIT_TOKEN in the environment
+        return api.LiveKitAPI(
+            api_key=os.environ.get("LIVEKIT_API_KEY"),
+            api_secret=os.environ.get("LIVEKIT_API_SECRET"),
+            session=http_context.http_session(),
+        )
+
+    async def create_participant_token(
+        self,
+        *,
+        identity: str,
+        name: str = "",
+        kind: AccessToken.ParticipantKind | None = None,
+        attributes: dict[str, str] | None = None,
+        grants: VideoGrants | None = None,
+        ttl: timedelta | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+    ) -> str:
+        """Creates a token for another participant to join the room, such as an avatar worker.
+
+        The token is signed with ``api_key`` and ``api_secret`` when both are given, else with
+        LIVEKIT_API_KEY and LIVEKIT_API_SECRET. In token mode (LIVEKIT_TOKEN without an API
+        key and secret), the server creates it through the worker and sets its lifetime.
+
+        Args:
+            identity: identity of the participant.
+            name: display name of the participant.
+            kind: participant kind, such as ``"agent"``.
+            attributes: participant attributes.
+            grants: video grants; defaults to joining the job's room.
+            ttl: lifetime of a token signed here; defaults to that of ``AccessToken``.
+                Ignored in token mode.
+            api_key: API key to sign with, in place of LIVEKIT_API_KEY.
+            api_secret: API secret to sign with, in place of LIVEKIT_API_SECRET.
+        """
+        if grants is None:
+            grants = VideoGrants(room_join=True, room=self._info.job.room.name)
+
+        if (
+            not (api_key and api_secret)
+            and self._job_token_client is not None
+            and token_mode_token() is not None
+        ):
+            claims = Claims(
+                identity=identity, name=name, kind=kind or "", video=grants, attributes=attributes
+            )
+            return await self._job_token_client.token_provider(claims)
+
+        api_key = api_key or os.getenv("LIVEKIT_API_KEY")
+        api_secret = api_secret or os.getenv("LIVEKIT_API_SECRET")
+        if not api_key or not api_secret:
+            raise ValueError(
+                "api_key and api_secret are required to create a participant token: pass them, "
+                "or set LIVEKIT_API_KEY and LIVEKIT_API_SECRET"
+            )
+
+        token = AccessToken(api_key, api_secret)
+        token.with_identity(identity).with_name(name).with_grants(grants)
+        if kind is not None:
+            token.with_kind(kind)
+        if attributes is not None:
+            token.with_attributes(attributes)
+        if ttl is not None:
+            token.with_ttl(ttl)
+        return token.to_jwt()
 
     @property
     def proc(self) -> JobProcess:

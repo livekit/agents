@@ -110,29 +110,28 @@ class AvatarSession(BaseAvatarSession):
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
+        if not livekit_url:
             raise LemonSliceException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
+                "livekit_url must be set by arguments or environment variables"
             )
 
         self._livekit_url = livekit_url
-        self._livekit_api_key = livekit_api_key
-        self._livekit_api_secret = livekit_api_secret
+        self._livekit_api_key = livekit_api_key or None
+        self._livekit_api_secret = livekit_api_secret or None
         self._livekit_room = room.name
 
         job_ctx = get_job_context()
         local_participant_identity = job_ctx.local_participant_identity
         livekit_session_id = job_ctx.job.room.sid or await room.sid
-        livekit_token = (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
+        livekit_token = await job_ctx.create_participant_token(
+            kind="agent",
+            identity=self._avatar_participant_identity,
+            name=self._avatar_participant_name,
+            grants=api.VideoGrants(room_join=True, room=room.name),
             # allow the avatar agent to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-            .to_jwt()
+            attributes={ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity},
+            api_key=self._livekit_api_key,
+            api_secret=self._livekit_api_secret,
         )
 
         # Rebind audio output BEFORE the slow upstream HTTP call so
@@ -180,8 +179,8 @@ class AvatarSession(BaseAvatarSession):
     def session_id(self) -> str | None:
         return self._session_id
 
-    def _mint_broadcast_token(self) -> str:
-        if not self._livekit_api_key or not self._livekit_api_secret or not self._livekit_room:
+    async def _mint_broadcast_token(self) -> str:
+        if not self._livekit_room:
             raise LemonSliceException("call start() before join_meeting()")
 
         grants = api.VideoGrants(
@@ -191,13 +190,13 @@ class AvatarSession(BaseAvatarSession):
             can_publish=False,
             can_publish_data=False,
         )
-        return (
-            api.AccessToken(self._livekit_api_key, self._livekit_api_secret)
-            .with_identity(_MEETING_BROADCAST_IDENTITY)
-            .with_name(_MEETING_BROADCAST_IDENTITY)
-            .with_grants(grants)
-            .with_ttl(timedelta(hours=4))
-            .to_jwt()
+        return await get_job_context().create_participant_token(
+            identity=_MEETING_BROADCAST_IDENTITY,
+            name=_MEETING_BROADCAST_IDENTITY,
+            grants=grants,
+            ttl=timedelta(hours=4),
+            api_key=self._livekit_api_key,
+            api_secret=self._livekit_api_secret,
         )
 
     async def join_meeting(
@@ -226,7 +225,7 @@ class AvatarSession(BaseAvatarSession):
         if self._meeting_bot_id is not None:
             raise LemonSliceException("already joined a meeting; call leave_meeting() first")
 
-        broadcast_token = self._mint_broadcast_token()
+        broadcast_token = await self._mint_broadcast_token()
 
         async with LemonSliceAPI(
             api_url=self._api_url,

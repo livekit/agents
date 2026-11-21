@@ -31,6 +31,7 @@ from livekit import rtc
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
+from .._token_mode import token_mode_token
 from ..log import logger
 from ..metrics.base import InterruptionMetrics, Metadata
 from ..telemetry import trace_types
@@ -314,7 +315,7 @@ class AdaptiveInterruptionDetector(
             if api_key
             else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
         )
-        if not lk_api_key:
+        if not lk_api_key and token_mode_token() is None:
             raise ValueError(
                 "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
             )
@@ -324,7 +325,7 @@ class AdaptiveInterruptionDetector(
             if api_secret
             else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
         )
-        if not lk_api_secret:
+        if not lk_api_secret and token_mode_token() is None:
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )

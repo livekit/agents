@@ -7,6 +7,7 @@ body SimliConfig sends to POST /compose/token.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from types import SimpleNamespace
@@ -16,9 +17,17 @@ from unittest.mock import MagicMock
 import aiohttp
 import pytest
 
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, JobContext
 
 pytestmark = pytest.mark.plugin("simli")
+
+
+def _job_context() -> SimpleNamespace:
+    """A job context whose create_participant_token signs locally, as outside token mode."""
+    ctx = SimpleNamespace(local_participant_identity="agent", _job_token_client=None)
+    ctx.create_participant_token = functools.partial(JobContext.create_participant_token, ctx)
+    return ctx
+
 
 _OPTS = APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=1.0)
 _TOKEN_BODY = json.dumps({"session_token": "simli-session-token"})
@@ -99,11 +108,7 @@ def _patch_start(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr(BaseAvatarSession, "start", _base_start)
-    monkeypatch.setattr(
-        simli_avatar,
-        "get_job_context",
-        lambda: SimpleNamespace(local_participant_identity="agent"),
-    )
+    monkeypatch.setattr(simli_avatar, "get_job_context", _job_context)
 
 
 async def _start(avatar: Any, agent_session: Any) -> None:

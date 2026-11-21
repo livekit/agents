@@ -3,25 +3,31 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import io
+import json
 import logging
 import multiprocessing as mp
+import os
 import socket
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from multiprocessing.context import BaseContext
 from typing import ClassVar
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt
 import psutil
 import pytest
 
+from livekit import api
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
 from livekit.agents.voice.events import CloseReason
-from livekit.protocol import agent
+from livekit.protocol import agent, models
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
@@ -692,6 +698,7 @@ def _create_thread_proc(
     *,
     close_timeout: float,
     job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+    create_job_token: Callable[[str, str], Awaitable[agent.CreateJobTokenResponse]] | None = None,
 ) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
     # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
     # in-process synchronization here
@@ -710,6 +717,7 @@ def _create_thread_proc(
         high_ping_threshold=1.0,
         http_proxy=None,
         loop=loop,
+        create_job_token=create_job_token,
     )
     proc.user_arguments = start_args
     return proc, start_args
@@ -892,3 +900,291 @@ def test_inference_executor_is_alive_after_proc_closed() -> None:
     executor._proc = proc
 
     assert executor.is_alive() is False
+
+
+# -- CreateJobToken: a job asks its worker for a token (token mode)
+
+
+class _TokenWorker:
+    """Answers the requests of a _JobTokenClient the way the worker relays the server's."""
+
+    def __init__(self, *, ttl: int = 600, error: str = "") -> None:
+        self.claims: list[str] = []
+        self._ttl = ttl
+        self._error = error
+        self.client = ipc.job_proc_lazy_main._JobTokenClient(self)  # type: ignore[arg-type]
+
+    async def send(self, msg: ipc.proto.CreateJobTokenRequest) -> None:
+        self.claims.append(msg.claims)
+        resp = ipc.proto.CreateJobTokenResponse(
+            request_id=msg.request_id,
+            token=f"token-{len(self.claims)}",
+            expires_at=int(time.time()) + self._ttl,
+            error=self._error,
+        )
+        asyncio.get_running_loop().call_soon(self.client._on_response, resp)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_is_cached_and_renewed_at_half_life() -> None:
+    worker = _TokenWorker(ttl=600)
+    claims = '{"video": {"roomList": true}}'
+
+    assert await worker.client.create_token(claims) == "token-1"
+    await asyncio.sleep(290)
+    assert await worker.client.create_token(claims) == "token-1"
+    assert await worker.client.create_token('{"video": {"roomCreate": true}}') == "token-2"
+
+    await asyncio.sleep(20)  # past half of the first token's 600s
+    assert await worker.client.create_token(claims) == "token-3"
+    assert worker.claims == [claims, '{"video": {"roomCreate": true}}', claims]
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_tokens_are_kept_current_in_the_background() -> None:
+    """What a job in token mode runs for its inference and telemetry tokens: both are in the
+    cache after the first renew, and each is replaced at half of its lifetime."""
+    from livekit.agents._token_mode import INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS
+
+    worker = _TokenWorker(ttl=1800)
+    client = worker.client
+    assert client.cached_token(INFERENCE_CLAIMS) is None
+
+    delay = await client.renew(INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS)
+    assert delay == pytest.approx(900, abs=1)
+    assert client.cached_token(INFERENCE_CLAIMS) == "token-1"
+    assert client.cached_token(OBSERVABILITY_CLAIMS) == "token-2"
+
+    task = asyncio.create_task(client.keep_current(delay, INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS))
+    await asyncio.sleep(890)
+    assert len(worker.claims) == 2
+    await asyncio.sleep(20)  # past half of the 1800s
+    assert client.cached_token(INFERENCE_CLAIMS) == "token-3"
+    assert client.cached_token(OBSERVABILITY_CLAIMS) == "token-4"
+    await utils.aio.cancel_and_wait(task)
+
+    # the job ended: its last tokens are good until they expire
+    await asyncio.sleep(1780)
+    assert client.cached_token(INFERENCE_CLAIMS) == "token-3"
+    await asyncio.sleep(30)
+    assert client.cached_token(INFERENCE_CLAIMS) is None
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_renewal_retries_after_an_error() -> None:
+    worker = _TokenWorker(error="the connection to the LiveKit server was lost")
+    client = worker.client
+
+    delay = await client.renew("{}")  # does not raise: the job starts without the token
+    assert delay == ipc.job_proc_lazy_main._JOB_TOKEN_RETRY_DELAY
+    assert client.cached_token("{}") is None
+
+    task = asyncio.create_task(client.keep_current(delay, "{}"))
+    worker._error = ""
+    await asyncio.sleep(delay + 1)
+    assert client.cached_token("{}") == "token-2"
+    await utils.aio.cancel_and_wait(task)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_error_is_raised_and_not_cached() -> None:
+    worker = _TokenWorker(error="the LiveKit server refused the job token: claim not allowed")
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="refused the job token: claim not allowed"):
+            await worker.client.create_token('{"sha256": "x"}')
+    assert len(worker.claims) == 2
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_job_token_request_times_out_when_the_worker_never_answers() -> None:
+    silent = MagicMock(send=AsyncMock())
+    client = ipc.job_proc_lazy_main._JobTokenClient(silent)
+
+    with pytest.raises(RuntimeError, match="worker did not answer the job token request"):
+        await client.create_token("{}")
+    assert not client._active_requests
+
+
+# -- JobContext.create_participant_token: signed here, or by the server in token mode
+
+_TOKEN_MODE_ENV = {"LIVEKIT_API_KEY": "", "LIVEKIT_API_SECRET": "", "LIVEKIT_TOKEN": "worker-token"}
+_KEY_MODE_ENV = {
+    "LIVEKIT_API_KEY": "devkey",
+    "LIVEKIT_API_SECRET": "secret" * 6,
+    "LIVEKIT_TOKEN": "",
+}
+_AVATAR_TOKEN_ARGS = {
+    "identity": "avatar",
+    "name": "Avatar",
+    "kind": "agent",
+    "attributes": {"lk.publish_on_behalf": "agent"},
+}
+
+
+def _participant_token_ctx(worker: _TokenWorker) -> JobContext:
+    info = job.RunningJobInfo(
+        job=agent.Job(id="AJ_avatar", room=models.Room(name="avatar-room")),
+        url="",
+        token="",
+        accept_arguments=job.JobAcceptArguments(name="", identity="agent", metadata=""),
+        worker_id="AW_test",
+        fake_job=True,
+    )
+    return JobContext(
+        proc=MagicMock(),
+        info=info,
+        room=MagicMock(),
+        on_connect=lambda: None,
+        on_shutdown=lambda _: None,
+        inference_executor=MagicMock(),
+        job_token_client=worker.client,
+    )
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_job_api_signs_with_the_key_when_a_worker_token_is_also_set() -> None:
+    """Key mode with LIVEKIT_TOKEN in the environment: ctx.api must not send that token."""
+    ctx = _participant_token_ctx(_TokenWorker())
+    with (
+        patch.dict(os.environ, {**_KEY_MODE_ENV, "LIVEKIT_TOKEN": "worker-token"}),
+        patch.dict(os.environ, {"LIVEKIT_URL": "http://localhost:7880"}),
+        patch("livekit.agents.job.http_context.http_session", return_value=MagicMock()),
+    ):
+        room = ctx.api.room
+
+    assert getattr(room, "_token", None) is None
+    assert room.api_key == "devkey"
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_is_signed_with_the_worker_credentials() -> None:
+    worker = _TokenWorker()
+    ctx = _participant_token_ctx(worker)
+    with patch.dict(os.environ, _KEY_MODE_ENV):
+        token = await ctx.create_participant_token(**_AVATAR_TOKEN_ARGS)  # type: ignore[arg-type]
+        short = await ctx.create_participant_token(identity="avatar", ttl=timedelta(minutes=5))
+
+    payload = jwt.decode(token, "secret" * 6, algorithms=["HS256"])
+    assert payload["iss"] == "devkey"
+    assert payload["sub"] == "avatar"
+    assert payload["name"] == "Avatar"
+    assert payload["kind"] == "agent"
+    assert payload["attributes"] == {"lk.publish_on_behalf": "agent"}
+    assert payload["video"]["roomJoin"] is True
+    assert payload["video"]["room"] == "avatar-room"
+    assert payload["exp"] - payload["nbf"] == 6 * 3600  # the AccessToken default
+    short_payload = jwt.decode(short, "secret" * 6, algorithms=["HS256"])
+    assert short_payload["exp"] - short_payload["nbf"] == 300
+    assert worker.claims == []
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_comes_from_create_job_token_in_token_mode() -> None:
+    worker = _TokenWorker()
+    ctx = _participant_token_ctx(worker)
+    grants = api.VideoGrants(room_join=True, room="avatar-room", can_subscribe=False)
+    with patch.dict(os.environ, _TOKEN_MODE_ENV):
+        token = await ctx.create_participant_token(
+            **_AVATAR_TOKEN_ARGS,  # type: ignore[arg-type]
+            grants=grants,
+            ttl=timedelta(hours=4),  # the server sets the lifetime
+        )
+
+    assert token == "token-1"
+    assert [json.loads(c) for c in worker.claims] == [
+        {
+            "identity": "avatar",
+            "name": "Avatar",
+            "kind": "agent",
+            "video": {
+                "roomJoin": True,
+                "room": "avatar-room",
+                "canPublish": True,
+                "canSubscribe": False,
+                "canPublishData": True,
+            },
+            "attributes": {"lk.publish_on_behalf": "agent"},
+        }
+    ]
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_with_a_given_key_is_signed_here_in_token_mode() -> None:
+    worker = _TokenWorker()
+    ctx = _participant_token_ctx(worker)
+    with patch.dict(os.environ, _TOKEN_MODE_ENV):
+        token = await ctx.create_participant_token(
+            identity="avatar", api_key="otherkey", api_secret="other" * 8
+        )
+
+    assert jwt.decode(token, "other" * 8, algorithms=["HS256"])["iss"] == "otherkey"
+    assert worker.claims == []
+
+
+@pytest.mark.no_concurrent  # patches os.environ
+async def test_participant_token_without_credentials_raises() -> None:
+    ctx = _participant_token_ctx(_TokenWorker())
+    with (
+        patch.dict(os.environ, {**_KEY_MODE_ENV, "LIVEKIT_API_SECRET": ""}),
+        pytest.raises(ValueError, match="api_key and api_secret are required"),
+    ):
+        await ctx.create_participant_token(identity="avatar")
+
+
+_job_token_results: list[str] = []
+
+
+async def _job_entrypoint_creates_tokens(job_ctx: JobContext) -> None:
+    client = job_ctx._job_token_client
+    assert client is not None
+    claims = '{"video": {"roomList": true}}'
+    _job_token_results.append(await client.create_token(claims))
+    _job_token_results.append(await client.create_token(claims))
+    try:
+        await client.create_token('{"sha256": "x"}')
+    except RuntimeError as e:
+        _job_token_results.append(str(e))
+
+    await _job_entrypoint(job_ctx)
+
+
+async def test_job_token_round_trip_through_ipc() -> None:
+    """The job's request reaches the worker callback with the job's id, and the token or the
+    error comes back to the job."""
+    _job_token_results.clear()
+    requests: list[tuple[str, str]] = []
+
+    async def create_job_token(job_id: str, claims: str) -> agent.CreateJobTokenResponse:
+        requests.append((job_id, claims))
+        if "sha256" in claims:
+            raise RuntimeError("the LiveKit server refused the job token: sha256")
+        return agent.CreateJobTokenResponse(token="job-token", expires_at=int(time.time()) + 600)
+
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0,
+        job_entrypoint_fnc=_job_entrypoint_creates_tokens,
+        create_job_token=create_job_token,
+    )
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert _job_token_results == [
+        "job-token",
+        "job-token",  # cached
+        "the LiveKit server refused the job token: sha256",
+    ]
+    assert requests == [
+        (fake_job.job.id, '{"video": {"roomList": true}}'),
+        (fake_job.job.id, '{"sha256": "x"}'),
+    ]

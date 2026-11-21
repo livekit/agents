@@ -304,20 +304,17 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # create a new room for the human agent
         human_agent_room_name = self._caller_room.name + "-human-agent"
         room = rtc.Room()
-        token = (
-            api.AccessToken()
-            .with_identity(self._caller_room.local_participant.identity)
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=human_agent_room_name,
-                    can_update_own_metadata=True,
-                    can_publish=True,
-                    can_subscribe=True,
-                )
-            )
-            .with_kind("agent")
-        ).to_jwt()
+        token = await job_ctx.create_participant_token(
+            identity=self._caller_room.local_participant.identity,
+            kind="agent",
+            grants=api.VideoGrants(
+                room_join=True,
+                room=human_agent_room_name,
+                can_update_own_metadata=True,
+                can_publish=True,
+                can_subscribe=True,
+            ),
+        )
 
         logger.debug(
             "connecting to human agent room",

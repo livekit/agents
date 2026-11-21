@@ -272,29 +272,45 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
+        job_ctx = get_job_context(required=False)
+        if not livekit_url or (job_ctx is None and (not livekit_api_key or not livekit_api_secret)):
             raise AtmeeException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
                 "by arguments or environment variables"
             )
 
-        job_ctx = get_job_context(required=False)
         local_participant_identity = (
             job_ctx.local_participant_identity
             if job_ctx is not None
             else room.local_participant.identity
         )
-        livekit_token = (
-            api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            # allow the avatar to publish audio and video on behalf of your local agent
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-            .with_ttl(timedelta(seconds=self._max_duration_seconds) + _TOKEN_TTL_SLACK)
-            .to_jwt()
-        )
+        token_ttl = timedelta(seconds=self._max_duration_seconds) + _TOKEN_TTL_SLACK
+        # allow the avatar to publish audio and video on behalf of your local agent
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity}
+        if job_ctx is not None:
+            livekit_token = await job_ctx.create_participant_token(
+                kind="agent",
+                identity=self._avatar_participant_identity,
+                name=self._avatar_participant_name,
+                grants=api.VideoGrants(room_join=True, room=room.name),
+                attributes=attributes,
+                ttl=token_ttl,
+                api_key=livekit_api_key or None,
+                api_secret=livekit_api_secret or None,
+            )
+        else:
+            livekit_token = (
+                api.AccessToken(
+                    api_key=livekit_api_key or None, api_secret=livekit_api_secret or None
+                )
+                .with_kind("agent")
+                .with_identity(self._avatar_participant_identity)
+                .with_name(self._avatar_participant_name)
+                .with_grants(api.VideoGrants(room_join=True, room=room.name))
+                .with_attributes(attributes)
+                .with_ttl(token_ttl)
+                .to_jwt()
+            )
 
         logger.debug(
             "starting atmee avatar session",

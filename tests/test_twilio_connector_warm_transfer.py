@@ -435,9 +435,11 @@ async def test_consultation_setup_releases_resources_on_failure(
     task = build_task()
     task._caller_room = Mock(name="caller-room", local_participant=Mock(identity="agent"))
     task._caller_room.name = "caller-room"
-    ctx = SimpleNamespace(_info=SimpleNamespace(url="wss://example.test"))
+    ctx = SimpleNamespace(
+        _info=SimpleNamespace(url="wss://example.test"),
+        create_participant_token=AsyncMock(return_value="test-token"),
+    )
     monkeypatch.setattr(warm_transfer, "get_job_context", lambda: ctx)
-    monkeypatch.setattr(warm_transfer.api, "AccessToken", Mock())
     room = Mock(connect=AsyncMock(), disconnect=AsyncMock())
     monkeypatch.setattr(warm_transfer.rtc, "Room", Mock(return_value=room))
     parent = SimpleNamespace(vad=None, llm=None, stt=None, tts=None, turn_detection=None)

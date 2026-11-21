@@ -44,29 +44,6 @@ class AvatarSession(BaseAvatarSession):
     def provider(self) -> str:
         return "avatartalk"
 
-    def __generate_lk_token(
-        self,
-        livekit_api_key: str,
-        livekit_api_secret: str,
-        room: rtc.Room,
-        participant_identity: str,
-        participant_name: str,
-        as_agent: bool = True,
-        local_participant_identity: str | None = None,
-    ) -> str:
-        token = api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
-        token = token.with_identity(participant_identity)
-        token = token.with_name(participant_name)
-        token = token.with_grants(api.VideoGrants(room_join=True, room=room.name))
-
-        if as_agent:
-            token = token.with_kind("agent")
-
-        if local_participant_identity is not None:
-            token = token.with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-
-        return token.to_jwt()
-
     async def start(
         self,
         agent_session: AgentSession,
@@ -81,9 +58,9 @@ class AvatarSession(BaseAvatarSession):
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
+        if not livekit_url:
             raise AvatarTalkException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set by arguments or environment variables"
+                "livekit_url must be set by arguments or environment variables"
             )
 
         session_task_mapping: dict[str, str] = {}
@@ -98,24 +75,22 @@ class AvatarSession(BaseAvatarSession):
         job_ctx.add_shutdown_callback(_shutdown_session)
 
         local_participant_identity = job_ctx.local_participant_identity
-        livekit_token = self.__generate_lk_token(
-            livekit_api_key,
-            livekit_api_secret,
-            room,
-            self._avatar_participant_identity,
-            self._avatar_participant_name,
-            as_agent=True,
-            local_participant_identity=local_participant_identity,
+        livekit_token = await job_ctx.create_participant_token(
+            identity=self._avatar_participant_identity,
+            name=self._avatar_participant_name,
+            kind="agent",
+            grants=api.VideoGrants(room_join=True, room=room.name),
+            attributes={ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity},
+            api_key=livekit_api_key or None,
+            api_secret=livekit_api_secret or None,
         )
 
-        livekit_listener_token = self.__generate_lk_token(
-            livekit_api_key,
-            livekit_api_secret,
-            room,
-            "listener",
-            "listener",
-            as_agent=False,
-            local_participant_identity=None,
+        livekit_listener_token = await job_ctx.create_participant_token(
+            identity="listener",
+            name="listener",
+            grants=api.VideoGrants(room_join=True, room=room.name),
+            api_key=livekit_api_key or None,
+            api_secret=livekit_api_secret or None,
         )
 
         logger.debug(

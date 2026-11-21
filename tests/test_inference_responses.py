@@ -248,8 +248,8 @@ async def test_token_minted_per_chat(monkeypatch: pytest.MonkeyPatch) -> None:
     await _drain(model)
     await _drain(model)
 
-    assert calls == 3
-    assert transport.requests[-1].headers["authorization"] == "Bearer token-3"
+    assert calls == 2
+    assert transport.requests[-1].headers["authorization"] == "Bearer token-2"
 
 
 @pytest.mark.parametrize(

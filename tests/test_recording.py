@@ -507,6 +507,74 @@ async def test_upload_transcript_only() -> None:
     assert "audio" not in part_names
 
 
+@pytest.fixture
+def job_token_source(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """The observability token of the job, as telemetry reads it in token mode."""
+    tokens: dict[str, str] = {"token": "job-token"}
+    monkeypatch.setattr(
+        f"{_TRACES_MOD}._job_token_sources", {"AJ_job": lambda: tokens.get("token")}
+    )
+    return tokens
+
+
+@pytest.mark.usefixtures("job_token_source")
+@pytest.mark.parametrize("token_mode", [True, False], ids=["token_mode", "key_mode"])
+async def test_upload_authorization(token_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Token mode sends the job's token; with a key and secret the upload signs one."""
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "" if token_mode else "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "" if token_mode else "secret")
+    report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
+    mock_http = _make_mock_http()
+
+    with _patch_upload_deps():
+        if token_mode:
+            # nothing is signed: an AccessToken without a key and secret may raise
+            with patch(f"{_TRACES_MOD}.api.AccessToken", side_effect=ValueError):
+                await _call_upload(report, http_session=mock_http)
+        else:
+            await _call_upload(report, http_session=mock_http)
+
+    authorization = mock_http.post.call_args.kwargs["headers"]["Authorization"]
+    assert authorization == ("Bearer job-token" if token_mode else "Bearer test-jwt")
+
+
+@pytest.mark.usefixtures("job_token_source")
+@pytest.mark.parametrize("token_mode", [True, False], ids=["token_mode", "key_mode"])
+def test_telemetry_auth_header(token_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents.telemetry.traces import _AuthHeaderProvider
+
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "" if token_mode else "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "" if token_mode else "secret")
+    with patch(f"{_TRACES_MOD}.api.AccessToken") as mock_at:
+        _stub_access_token(mock_at)
+        headers = _AuthHeaderProvider()()
+
+    assert headers == {"Authorization": "Bearer job-token" if token_mode else "Bearer test-jwt"}
+
+
+def test_telemetry_auth_header_follows_the_job_token(
+    job_token_source: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token the job renewed after the provider was created is sent on the next export,
+    and the worker token never is."""
+    from livekit.agents.telemetry.traces import _AuthHeaderProvider
+
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    monkeypatch.delenv("LIVEKIT_API_KEY", raising=False)
+    monkeypatch.delenv("LIVEKIT_API_SECRET", raising=False)
+    provider = _AuthHeaderProvider()
+    assert provider() == {"Authorization": "Bearer job-token"}
+
+    job_token_source["token"] = "renewed-job-token"
+    assert provider() == {"Authorization": "Bearer renewed-job-token"}
+
+    job_token_source.clear()
+    with pytest.raises(RuntimeError, match="no observability token"):
+        provider()
+
+
 async def test_upload_uses_extended_timeout() -> None:
     report = _make_mock_report({"audio": False, "traces": False, "logs": False, "transcript": True})
     mock_http = _make_mock_http()
@@ -1861,3 +1929,68 @@ async def test_invalid_recorder_bit_rate_rejected(audio: bool) -> None:
     assert mock_ctx._primary_agent_session is None
     assert session._room_io is None
     assert not session._started
+
+
+def test_telemetry_token_comes_from_a_job_that_still_has_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Jobs that run in threads share the pipeline: when the job that started last ends and
+    its token expires, the exports use the token of a job that still renews its own."""
+    from livekit.agents.telemetry import traces
+
+    monkeypatch.setattr(traces, "_job_token_sources", {})
+    monkeypatch.setattr(traces, "_ended_token_jobs", set())
+    tokens: dict[str, str | None] = {"AJ_a": "token-a", "AJ_b": "token-b"}
+    traces._set_job_token_source("AJ_a", lambda: tokens["AJ_a"])
+    traces._set_job_token_source("AJ_b", lambda: tokens["AJ_b"])
+
+    assert traces._job_observability_token() == "token-b"
+    assert traces._job_observability_token("AJ_a") == "token-a"  # a job's own upload
+
+    traces._end_job_token_source("AJ_b")
+    tokens["AJ_b"] = None  # the job ended and its last token expired
+    assert traces._job_observability_token() == "token-a"
+    assert traces._job_observability_token("AJ_b") == "token-a"
+
+    traces._set_job_token_source("AJ_c", lambda: "token-c")
+    assert list(traces._job_token_sources) == ["AJ_a", "AJ_c"]
+
+
+def test_telemetry_token_source_of_a_running_job_is_kept_while_it_has_no_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A job that still runs can be without a token for a moment, while it waits to ask
+    again: another job that starts then must not drop its source."""
+    from livekit.agents.telemetry import traces
+
+    monkeypatch.setattr(traces, "_job_token_sources", {})
+    monkeypatch.setattr(traces, "_ended_token_jobs", set())
+    tokens: dict[str, str | None] = {"AJ_a": None, "AJ_b": "token-b"}
+    traces._set_job_token_source("AJ_a", lambda: tokens["AJ_a"])
+    traces._set_job_token_source("AJ_b", lambda: tokens["AJ_b"])
+    assert list(traces._job_token_sources) == ["AJ_a", "AJ_b"]
+
+    tokens["AJ_a"] = "token-a"  # the retry got it
+    traces._end_job_token_source("AJ_b")
+    tokens["AJ_b"] = None
+    assert traces._job_observability_token() == "token-a"
+
+
+def test_telemetry_token_source_is_set_while_another_job_sets_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Jobs in threads register at the same time: a source added during another job's
+    registration must not make that one fail."""
+    from livekit.agents.telemetry import traces
+
+    monkeypatch.setattr(traces, "_job_token_sources", {})
+    monkeypatch.setattr(traces, "_ended_token_jobs", set())
+
+    def _source_a() -> str:
+        traces._job_token_sources.setdefault("AJ_c", lambda: "token-c")  # the other thread
+        return "token-a"
+
+    traces._set_job_token_source("AJ_a", _source_a)
+    traces._end_job_token_source("AJ_a")  # its source is read when the next job starts
+    traces._set_job_token_source("AJ_b", lambda: "token-b")
+    assert list(traces._job_token_sources) == ["AJ_a", "AJ_c", "AJ_b"]
