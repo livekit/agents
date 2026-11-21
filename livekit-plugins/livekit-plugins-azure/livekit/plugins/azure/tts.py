@@ -13,15 +13,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import aiohttp
 
+import azure.cognitiveservices.speech as speechsdk  # type: ignore
 from livekit.agents import (
     APIConnectionError,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -37,13 +40,24 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 SUPPORTED_OUTPUT_FORMATS = {
-    8000: "raw-8khz-16bit-mono-pcm",
-    16000: "raw-16khz-16bit-mono-pcm",
-    22050: "raw-22050hz-16bit-mono-pcm",
-    24000: "raw-24khz-16bit-mono-pcm",
-    44100: "raw-44100hz-16bit-mono-pcm",
-    48000: "raw-48khz-16bit-mono-pcm",
+    8000: speechsdk.SpeechSynthesisOutputFormat.Raw8Khz16BitMonoPcm,
+    16000: speechsdk.SpeechSynthesisOutputFormat.Raw16Khz16BitMonoPcm,
+    22050: speechsdk.SpeechSynthesisOutputFormat.Raw22050Hz16BitMonoPcm,
+    24000: speechsdk.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm,
+    44100: speechsdk.SpeechSynthesisOutputFormat.Raw44100Hz16BitMonoPcm,
+    48000: speechsdk.SpeechSynthesisOutputFormat.Raw48Khz16BitMonoPcm,
 }
+
+_CANCELLATION_STATUS_CODES = {
+    speechsdk.CancellationErrorCode.BadRequest: 400,
+    speechsdk.CancellationErrorCode.AuthenticationFailure: 401,
+    speechsdk.CancellationErrorCode.Forbidden: 403,
+    speechsdk.CancellationErrorCode.TooManyRequests: 429,
+    speechsdk.CancellationErrorCode.ServiceError: 500,
+    speechsdk.CancellationErrorCode.ServiceUnavailable: 503,
+}
+
+_SYNTHESIS_TIMEOUT = 30.0
 
 
 @dataclass
@@ -111,25 +125,15 @@ class StyleConfig:
 @dataclass
 class _TTSOptions:
     sample_rate: int
-    subscription_key: str | None
-    region: str | None
     voice: str
     language: LanguageCode | None
     speech_endpoint: str | None
+    speech_host: str | None
+    region: str | None
     deployment_id: str | None
     prosody: NotGivenOr[ProsodyConfig]
     style: NotGivenOr[StyleConfig]
     lexicon_uri: NotGivenOr[str]
-    auth_token: str | None = None
-
-    def get_endpoint_url(self) -> str:
-        base = (
-            self.speech_endpoint
-            or f"https://{self.region}.tts.speech.microsoft.com/cognitiveservices/v1"
-        )
-        if self.deployment_id:
-            return f"{base}?deploymentId={self.deployment_id}"
-        return base
 
 
 class TTS(tts.TTS):
@@ -145,10 +149,36 @@ class TTS(tts.TTS):
         speech_key: str | None = None,
         speech_region: str | None = None,
         speech_endpoint: str | None = None,
+        speech_host: str | None = None,
         deployment_id: str | None = None,
         speech_auth_token: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """
+        Create a new instance of Azure TTS, backed by the Azure Speech SDK.
+
+        One of ``speech_endpoint``, ``speech_host``, ``speech_key`` and ``speech_region``, or
+        ``speech_auth_token`` and ``speech_region`` must be set, either as arguments or through
+        the ``AZURE_SPEECH_ENDPOINT``, ``AZURE_SPEECH_HOST``, ``AZURE_SPEECH_KEY`` and
+        ``AZURE_SPEECH_REGION`` environment variables. ``speech_auth_token`` must be passed as an
+        argument since it's an ephemeral token.
+
+        Args:
+            voice: Voice name, e.g. ``en-US-JennyNeural``.
+            language: SSML ``xml:lang``, defaults to ``en-US``.
+            sample_rate: Output sample rate, one of 8000, 16000, 22050, 24000, 44100, 48000.
+            prosody: Rate, volume and pitch applied to the synthesized text.
+            style: Speaking style (``mstts:express-as``) applied to the synthesized text.
+            lexicon_uri: Custom lexicon URI.
+            speech_key: Speech resource key.
+            speech_region: Speech resource region.
+            speech_endpoint: Speech SDK endpoint, takes precedence over ``speech_region``.
+            speech_host: Speech container host, e.g. ``ws://localhost:5000``.
+            deployment_id: Custom voice deployment ID.
+            speech_auth_token: Microsoft Entra authorization token.
+            http_session: Accepted for backward compatibility; the Speech SDK manages its
+                own connections, so it is not used.
+        """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=sample_rate,
@@ -159,51 +189,69 @@ class TTS(tts.TTS):
                 f"Unsupported sample rate {sample_rate}. Supported: {list(SUPPORTED_OUTPUT_FORMATS)}"  # noqa: E501
             )
 
-        if not speech_key:
-            speech_key = os.environ.get("AZURE_SPEECH_KEY")
+        speech_key = speech_key or os.environ.get("AZURE_SPEECH_KEY")
+        speech_region = speech_region or os.environ.get("AZURE_SPEECH_REGION")
+        speech_endpoint = speech_endpoint or os.environ.get("AZURE_SPEECH_ENDPOINT")
+        speech_host = speech_host or os.environ.get("AZURE_SPEECH_HOST")
 
-        if not speech_region:
-            speech_region = os.environ.get("AZURE_SPEECH_REGION")
-
-        if not speech_endpoint:
-            speech_endpoint = os.environ.get("AZURE_SPEECH_ENDPOINT")
-
-        has_endpoint = bool(speech_endpoint)
-        has_key_and_region = bool(speech_key and speech_region)
-        has_token_and_region = bool(speech_auth_token and speech_region)
-        if not (has_endpoint or has_key_and_region or has_token_and_region):
+        if not (
+            speech_endpoint
+            or speech_host
+            or (speech_key and speech_region)
+            or (speech_auth_token and speech_region)
+        ):
             raise ValueError(
                 "Authentication requires one of: speech_endpoint (AZURE_SPEECH_ENDPOINT), "
+                "speech_host (AZURE_SPEECH_HOST), "
                 "speech_key & speech_region (AZURE_SPEECH_KEY & AZURE_SPEECH_REGION), "
                 "or speech_auth_token & speech_region."
             )
+
+        if speech_endpoint or speech_host:
+            speech_region = None
 
         if is_given(prosody):
             prosody.validate()
         if is_given(style):
             style.validate()
 
-        self._session = http_session
+        # let the SpeechConfig constructor validate the arguments
+        self._speech_config = speechsdk.SpeechConfig(
+            subscription=speech_key,
+            region=speech_region,
+            endpoint=speech_endpoint,
+            host=speech_host,
+            auth_token=speech_auth_token,
+        )
+        self._speech_config.set_speech_synthesis_output_format(
+            SUPPORTED_OUTPUT_FORMATS[sample_rate]
+        )
+        if deployment_id:
+            self._speech_config.endpoint_id = deployment_id
+
         self._opts = _TTSOptions(
             sample_rate=sample_rate,
-            subscription_key=speech_key,
-            region=speech_region,
-            speech_endpoint=speech_endpoint,
             voice=voice,
-            deployment_id=deployment_id,
             language=LanguageCode(language) if language else None,
+            speech_endpoint=speech_endpoint,
+            speech_host=speech_host,
+            region=speech_region,
+            deployment_id=deployment_id,
             prosody=prosody,
             style=style,
             lexicon_uri=lexicon_uri,
-            auth_token=speech_auth_token,
+        )
+        self._pool = utils.ConnectionPool[speechsdk.SpeechSynthesizer](
+            connect_cb=self._connect_synthesizer,
+            close_cb=self._close_synthesizer,
         )
 
     @property
     def model(self) -> str:
-        if self._opts.speech_endpoint:
-            endpoint = self._opts.speech_endpoint.strip()
-            parsed = urlparse(endpoint if "://" in endpoint else f"//{endpoint}")
-            location = parsed.hostname or endpoint
+        if location := (self._opts.speech_endpoint or self._opts.speech_host):
+            location = location.strip()
+            parsed = urlparse(location if "://" in location else f"//{location}")
+            location = parsed.hostname or location
         elif self._opts.region:
             location = self._opts.region
         else:
@@ -239,10 +287,21 @@ class TTS(tts.TTS):
         if is_given(lexicon_uri):
             self._opts.lexicon_uri = lexicon_uri
 
-    def _ensure_session(self) -> aiohttp.ClientSession:
-        if not self._session:
-            self._session = utils.http_context.http_session()
-        return self._session
+    async def _connect_synthesizer(self, timeout: float) -> speechsdk.SpeechSynthesizer:
+        def _connect() -> speechsdk.SpeechSynthesizer:
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=self._speech_config, audio_config=None
+            )
+            speechsdk.Connection.from_speech_synthesizer(synthesizer).open(True)
+            return synthesizer
+
+        return await asyncio.wait_for(asyncio.to_thread(_connect), timeout)
+
+    async def _close_synthesizer(self, synthesizer: speechsdk.SpeechSynthesizer) -> None:
+        await asyncio.to_thread(speechsdk.Connection.from_speech_synthesizer(synthesizer).close)
+
+    def prewarm(self) -> None:
+        self._pool.prewarm()
 
     def synthesize(
         self,
@@ -251,6 +310,9 @@ class TTS(tts.TTS):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> tts.ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    async def aclose(self) -> None:
+        await self._pool.aclose()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -293,17 +355,6 @@ class ChunkedStream(tts.ChunkedStream):
         return ssml
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        headers = {
-            "Content-Type": "application/ssml+xml",
-            "X-Microsoft-OutputFormat": SUPPORTED_OUTPUT_FORMATS[self._opts.sample_rate],
-            "User-Agent": "LiveKit Agents",
-        }
-        if self._opts.auth_token:
-            headers["Authorization"] = f"Bearer {self._opts.auth_token}"
-
-        elif self._opts.subscription_key:
-            headers["Ocp-Apim-Subscription-Key"] = self._opts.subscription_key
-
         output_emitter.initialize(
             request_id=utils.shortuuid(),
             sample_rate=self._opts.sample_rate,
@@ -311,25 +362,71 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type="audio/pcm",
         )
 
-        try:
-            async with self._tts._ensure_session().post(
-                url=self._opts.get_endpoint_url(),
-                headers=headers,
-                data=self._build_ssml(),
-                timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
-            ) as resp:
-                resp.raise_for_status()
-                async for data, _ in resp.content.iter_chunks():
-                    output_emitter.push(data)
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
 
+        def _push(data: bytes) -> None:
+            if not done.done():
+                output_emitter.push(data)
+
+        def _resolve(error: Exception | None) -> None:
+            if done.done():
+                return
+            if error is None:
+                done.set_result(None)
+            else:
+                done.set_exception(error)
+
+        # SDK callbacks run on SDK threads, the loop may already be closed
+        def _threadsafe(cb: Any, *args: Any) -> None:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(cb, *args)
+
+        def _on_synthesizing(evt: speechsdk.SpeechSynthesisEventArgs) -> None:
+            _threadsafe(_push, evt.result.audio_data)
+
+        def _on_completed(evt: speechsdk.SpeechSynthesisEventArgs) -> None:
+            _threadsafe(_resolve, None)
+
+        def _on_canceled(evt: speechsdk.SpeechSynthesisEventArgs) -> None:
+            _threadsafe(_resolve, _cancellation_error(evt.result.cancellation_details))
+
+        try:
+            synthesizer = await self._tts._pool.get(timeout=self._conn_options.timeout)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
-        except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message,
-                status_code=e.status,
-                request_id=None,
-                body=None,
-            ) from None
         except Exception as e:
             raise APIConnectionError(str(e)) from e
+
+        synthesizer.synthesizing.connect(_on_synthesizing)
+        synthesizer.synthesis_completed.connect(_on_completed)
+        synthesizer.synthesis_canceled.connect(_on_canceled)
+        succeeded = False
+        try:
+            synthesizer.speak_ssml_async(self._build_ssml())
+            await asyncio.wait_for(done, _SYNTHESIS_TIMEOUT)
+            succeeded = True
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except APIError:
+            raise
+        except Exception as e:
+            raise APIConnectionError(str(e)) from e
+        finally:
+            synthesizer.synthesizing.disconnect_all()
+            synthesizer.synthesis_completed.disconnect_all()
+            synthesizer.synthesis_canceled.disconnect_all()
+            if succeeded:
+                self._tts._pool.put(synthesizer)
+            else:
+                synthesizer.stop_speaking_async()
+                self._tts._pool.remove(synthesizer)
+
+
+def _cancellation_error(details: speechsdk.SpeechSynthesisCancellationDetails) -> APIError:
+    message = details.error_details or str(details.reason)
+    if details.error_code == speechsdk.CancellationErrorCode.ServiceTimeout:
+        return APITimeoutError(message)
+    if status_code := _CANCELLATION_STATUS_CODES.get(details.error_code):
+        return APIStatusError(message, status_code=status_code)
+    return APIConnectionError(message)
