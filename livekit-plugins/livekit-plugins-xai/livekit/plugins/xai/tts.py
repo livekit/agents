@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from typing import cast
 from urllib.parse import urlencode
 
 import aiohttp
@@ -68,7 +69,8 @@ class _WordMerger:
     char's start to its last char's end. A word is emitted once the next word starts (or on
     `flush()`), so words may span `audio.delta` frames. With `drop_cues` (expressive mode),
     the bracket cues the markup conversion inserted, such as `[pause]`, are echoed in the
-    timings but never spoken, so they are dropped.
+    timings but never spoken, so they are dropped per character, before words are built:
+    a word attached to a cue then keeps the timing of its own first character.
     """
 
     def __init__(self, *, drop_cues: bool) -> None:
@@ -78,13 +80,21 @@ class _WordMerger:
         self._held: list[TimedString] = []
 
     def push(self, data: dict) -> list[TimedString]:
-        for chars, start, end in _char_timings(data):
-            self._text += chars
-            self._times += [(start, end)] * len(chars)
+        chars = [TimedString(text=c, start_time=s, end_time=e) for c, s, e in _char_timings(data)]
+        if self._drop_cues:
+            chars = drop_bracket_cues(chars, self._held)
+        self._add(chars)
         return self._take_words(flush=False)
 
     def flush(self) -> list[TimedString]:
+        if self._drop_cues:
+            self._add(drop_bracket_cues([], self._held, final=True))
         return self._take_words(flush=True)
+
+    def _add(self, chars: list[TimedString]) -> None:
+        for c in chars:
+            self._text += c
+            self._times += [(cast(float, c.start_time), cast(float, c.end_time))] * len(c)
 
     def _take_words(self, *, flush: bool) -> list[TimedString]:
         bounds = [
@@ -104,9 +114,7 @@ class _WordMerger:
         # the last word may still be growing, so keep it for the next frame
         keep = len(self._text) if flush or not bounds else bounds[-1]
         self._text, self._times = self._text[keep:], self._times[keep:]
-        if not self._drop_cues:
-            return words
-        return drop_bracket_cues(words, self._held, final=flush)
+        return words
 
 
 @dataclass

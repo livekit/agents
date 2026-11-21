@@ -222,6 +222,21 @@ async def test_bracket_cues_dropped_in_expressive_mode(
 
 
 @pytest.mark.asyncio
+async def test_cue_attached_to_word_keeps_word_timing(monkeypatch: pytest.MonkeyPatch):
+    tts = xai_tts.TTS(api_key="test-key")
+    tts._set_expressive(True)  # pyright: ignore[reportPrivateUsage]
+    # "[pause]" spans 0.6-1.3 s and "go" is spoken from 1.3 s
+    frames = [_graph("Ready [pause]go ", 0.0)]
+    _, emitter = await _run_with_timestamps(monkeypatch, tts, "Ready [pause]go", frames)
+
+    assert [(str(t), t.start_time, t.end_time) for t in emitter.timed] == [
+        ("Ready ", 0.0, pytest.approx(0.6)),
+        ("go ", pytest.approx(1.3), pytest.approx(1.6)),
+    ]
+    await tts.aclose()
+
+
+@pytest.mark.asyncio
 async def test_malformed_timestamps_keep_audio(monkeypatch: pytest.MonkeyPatch):
     tts = xai_tts.TTS(api_key="test-key")
     short = {"graph_chars": ["H", "i"], "graph_times": [[0.0, 0.1]]}
