@@ -292,6 +292,22 @@ async def test_horizontal_rule(text: str, expected: str):
     assert await _outputs(filter_markdown, text) == {expected}
 
 
+LINK_CASES = [
+    ("see [this](https://example.com) now", "see this now"),
+    # a destination may hold balanced parentheses, as Wikipedia URLs often do
+    ("read [Python](https://en.wikipedia.org/wiki/Python_(language)) first", "read Python first"),
+    ("![the logo](img_(1).png) here", "the logo here"),
+    # a backslash-escaped paren opens no group
+    (r"read [guide](https://example.com/a\(b) now", "read guide now"),
+    (r"![logo](img\(1.png) here", "logo here"),
+]
+
+
+@pytest.mark.parametrize("text,expected", LINK_CASES)
+async def test_link_text_kept(text: str, expected: str):
+    assert await _outputs(filter_markdown, text) == {expected}
+
+
 # Emoji test data
 EMOJI_INPUT = """Hello! 😀 Welcome to our app! 🎉
 
