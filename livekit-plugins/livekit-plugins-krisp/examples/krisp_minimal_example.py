@@ -8,10 +8,10 @@ without requiring a full agent setup. Good for testing and debugging.
 Because this script runs outside an agent context, it cannot use the default
 ``LiveKitCloudAuthProvider`` (that path needs the framework to push the room's
 JWT into the FrameProcessor at runtime). It uses ``KrispLicenseAuthProvider``
-with a Krisp license key + ``.kef`` model file.
+with a ``.kef`` model file, plus a license key on Krisp's UAR builds.
 
 Prerequisites:
-    1. Set KRISP_VIVA_SDK_LICENSE_KEY and KRISP_VIVA_FILTER_MODEL_PATH environment variables
+    1. Set KRISP_VIVA_FILTER_MODEL_PATH, plus KRISP_VIVA_SDK_LICENSE_KEY on Krisp's UAR builds
     2. Install: pip install livekit-plugins-krisp krisp-audio numpy
 
 Usage:
@@ -43,7 +43,7 @@ async def test_krisp_filter():
         logger.info("\n1. Creating Krisp frame processor...")
         krisp_processor = KrispVivaFilterFrameProcessor(
             auth_provider=KrispLicenseAuthProvider(),
-            noise_suppression_level=100,
+            noise_suppression_level=100.0,
             frame_duration_ms=10,
             sample_rate=16000,
         )

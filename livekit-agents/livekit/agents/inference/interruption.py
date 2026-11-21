@@ -12,7 +12,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from time import perf_counter_ns
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, Protocol, TypeAlias, runtime_checkable
 
 import aiohttp
 import numpy as np
@@ -265,7 +265,35 @@ InterruptionDataFrameType: TypeAlias = (
 )
 
 
-class AdaptiveInterruptionDetector(
+@runtime_checkable
+class InterruptionStream(Protocol):
+    """I/O stream returned by :meth:`InterruptionDetector.stream`.
+
+    The session pushes every user audio frame plus the agent-speech and overlap-speech
+    sentinels, and consumes one :class:`OverlappingSpeechEvent` verdict per overlap.
+    """
+
+    def push_frame(self, frame: InterruptionDataFrameType) -> None:
+        """Push a user audio frame or a speech-state sentinel. Called on the event loop, so
+        it must not block."""
+
+    def flush(self) -> None:
+        """Mark the end of the current segment."""
+
+    def end_input(self) -> None:
+        """Mark the end of input; no more frames will be pushed."""
+
+    async def aclose(self) -> None:
+        """Close the stream and release its resources."""
+
+    def __aiter__(self) -> AsyncIterator[OverlappingSpeechEvent]: ...
+
+    async def __anext__(self) -> OverlappingSpeechEvent:
+        """Return the next verdict: ``is_interruption=True`` interrupts the agent, ``False``
+        marks the overlap as a backchannel."""
+
+
+class InterruptionDetector(
     rtc.EventEmitter[
         Literal[
             "overlapping_speech",
@@ -273,7 +301,49 @@ class AdaptiveInterruptionDetector(
             "metrics_collected",
         ]
     ],
+    ABC,
 ):
+    """Base class for detectors that classify user speech overlapping the agent's speech
+    as a genuine interruption or a backchannel.
+
+    Pass an instance as ``turn_handling={"interruption": {"mode": detector}}`` on
+    ``AgentSession`` or ``Agent`` to use it instead of the built-in
+    :class:`AdaptiveInterruptionDetector`. An instance is used only when it is the first
+    ``mode`` set, checked on the agent and then on the session, so a session's detector
+    does not override an agent's ``"vad"`` or ``"adaptive"``. It is ignored, with a warning,
+    when the session cannot detect interruptions, for example without a VAD or an STT.
+
+    The session reads verdicts from :meth:`stream` and listens to the detector's
+    ``"metrics_collected"`` (:class:`~livekit.agents.metrics.InterruptionMetrics`) and
+    ``"error"`` (:class:`InterruptionDetectionError`) events. A non-recoverable error makes
+    the session fall back to VAD-based interruptions.
+    """
+
+    @property
+    @abstractmethod
+    def model(self) -> str:
+        """Name of the model behind the detector, e.g. for metrics metadata."""
+
+    @property
+    @abstractmethod
+    def provider(self) -> str:
+        """Name of the model's provider, e.g. for metrics metadata."""
+
+    @property
+    def label(self) -> str:
+        """Identifies the detector in :class:`InterruptionDetectionError`. Defaults to the
+        class's qualified name."""
+        return f"{type(self).__module__}.{type(self).__name__}"
+
+    @abstractmethod
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_INTERRUPTION_CONN_OPTIONS
+    ) -> InterruptionStream:
+        """Open a new stream of overlap verdicts. Called on the event loop, so it must not
+        block."""
+
+
+class AdaptiveInterruptionDetector(InterruptionDetector):
     def __init__(
         self,
         *,

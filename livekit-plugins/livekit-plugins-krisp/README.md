@@ -6,6 +6,9 @@ Real-time noise reduction for LiveKit voice agents using [Krisp's VIVA SDK](http
 
 - **`voice_isolation()`**: Real-time voice isolation and noise reduction `FrameProcessor`
 - **`voice_isolation_telephony()`**: Voice isolation tuned for telephony audio (for example, SIP participants)
+- **`TurnDetector`**: End-of-turn detection with Krisp VIVA Turn Taking *(Krisp license only)*
+- **`InterruptionDetector`**: Tells genuine interruptions from backchannels with Krisp VIVA
+  Interruption Prediction *(Krisp license only)*
 
 ## Installation
 
@@ -34,7 +37,7 @@ from livekit.plugins import krisp, openai
 async def entrypoint(ctx: JobContext):
     # Default: LiveKit Cloud auth + bundled model. No keys or model files.
     noise_cancellation = krisp.voice_isolation(
-        noise_suppression_level=75,  # 0-100
+        noise_suppression_level=100.0,  # 0.0-100.0
     )
 
     session = AgentSession(
@@ -69,7 +72,10 @@ telephony.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `auth_provider` | `LiveKitCloudAuthProvider \| KrispLicenseAuthProvider` | `LiveKitCloudAuthProvider` | Authentication backend. Defaults to LiveKit Cloud. See [the alternative](#alternative-krisp-license-auth). |
-| `noise_suppression_level` | int | 75 | Noise reduction intensity (0-100) |
+| `noise_suppression_level` | float | 100.0 | Noise reduction intensity, from 0.0 to 100.0. Ints are converted to float. |
+
+> **Note:** a `noise_suppression_level` below `100.0` lets background voices leak through, and
+> they may interrupt the agent.
 
 Input frames of any size and sample rate are buffered and adapted automatically.
 
@@ -79,9 +85,9 @@ Both factory functions return a `KrispVivaFilterFrameProcessor`. Adjust it while
 session is running:
 
 ```python
-noise_cancellation.enabled = False              # pass audio through unmodified
-noise_cancellation.noise_suppression_level = 50  # adjust 0-100 on the fly
-noise_cancellation.close()                       # free resources when done
+noise_cancellation.enabled = False                 # pass audio through unmodified
+noise_cancellation.noise_suppression_level = 50.0  # adjust 0.0-100.0 on the fly
+noise_cancellation.close()                         # free resources when done
 ```
 
 
@@ -91,8 +97,8 @@ noise_cancellation.close()                       # free resources when done
 > running the public Krisp SDK directly with your own Krisp license — for example, when
 > using Livekit OSS server.
 
-This path uses the public `krisp_audio` wheel together with a Krisp license key and a
-`.kef` model file that you obtain from Krisp.
+This path uses the public `krisp_audio` wheel together with a `.kef` model file that you
+obtain from Krisp, plus a license key if you use Krisp's UAR build.
 
 ### Prerequisites
 
@@ -101,7 +107,8 @@ This path uses the public `krisp_audio` wheel together with a Krisp license key 
    ```bash
    pip install krisp-audio
    ```
-2. **License key**:
+2. **License key** — only for Krisp's UAR (Usage Auto Reporting) builds, which report
+   usage over the network; Krisp's regular builds take none:
    ```bash
    export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
    ```
@@ -122,11 +129,60 @@ noise_cancellation = krisp.voice_isolation(
         license_key="...",                    # or KRISP_VIVA_SDK_LICENSE_KEY
         model_path="/path/to/noise_model.kef",  # or KRISP_VIVA_FILTER_MODEL_PATH
     ),
-    noise_suppression_level=75,
+    noise_suppression_level=100.0,
 )
 ```
 
 `license_key` and `model_path` fall back to the environment variables above when omitted.
+Without an `auth_provider`, setting `KRISP_VIVA_FILTER_MODEL_PATH` selects this backend too.
+`KRISP_VIVA_SDK_LICENSE_KEY` alone doesn't, because `TurnDetector` and `InterruptionDetector`
+read it as well.
+
+## Turn Taking and Interruption Prediction
+
+`krisp.TurnDetector` and `krisp.InterruptionDetector` run in-process on the public
+`krisp_audio` wheel, so they need the same [Krisp license prerequisites](#prerequisites),
+plus Krisp `.kef` models: a TT model, an IP model, and a Krisp VAD model that supplies
+both with per-frame voice activity.
+
+`InterruptionDetector` needs `krisp-audio` 1.14.0 or later. Both need a build that
+includes turn taking and interruption prediction; Krisp's accent-reduction (AR) builds
+don't.
+
+```bash
+export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here  # UAR builds only
+export KRISP_VIVA_TT_MODEL_PATH=/path/to/tt.kef
+export KRISP_VIVA_IP_MODEL_PATH=/path/to/ip.kef
+export KRISP_VIVA_VAD_MODEL_PATH=/path/to/vad.kef
+```
+
+```python
+from livekit.agents import AgentSession, inference
+from livekit.plugins import krisp
+
+session = AgentSession(
+    vad=inference.VAD(),
+    stt=...,
+    llm=...,
+    tts=...,
+    turn_handling={
+        "turn_detection": krisp.TurnDetector(),
+        "interruption": {"mode": krisp.InterruptionDetector()},
+    },
+)
+```
+
+- **`TurnDetector`** is a streaming turn detector. Krisp's turn-shift probability rises while
+  the user stays silent, so when the user pauses it answers as soon as the probability reaches
+  `unlikely_threshold` (default 0.5), or with its latest value after `max_prediction_delay`
+  (default 0.8 s). Below the threshold, the session waits the maximum endpointing delay
+  before replying.
+- **`InterruptionDetector`** scores user speech that overlaps the agent's speech. Speech at
+  or above `threshold` (default 0.5) interrupts the agent. Below that, the overlap is
+  treated as a backchannel ("uh-huh", "yeah") and the agent keeps talking.
+
+Both accept `model_path`, `vad_model_path`, `license_key`, `vad_threshold` and
+`frame_duration_ms` arguments in place of the environment variables.
 
 ## Troubleshooting
 
@@ -138,16 +194,19 @@ pip install --force-reinstall livekit-plugins-krisp
 ```
 Alternatively, fall back to the [Krisp license auth](#alternative-krisp-license-auth) path.
 
-### "Krisp SDK initialization failed" or licensing errors *(license auth only)*
-Make sure the license key is set:
+### "Krisp license key is required by this krisp-audio build" or licensing errors *(license auth only)*
+Krisp's UAR builds need a license key. Pass `license_key=...` or set:
 ```bash
 export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
 ```
 
-### "Model path must be provided" *(license auth only)*
+### "Krisp model path is required" *(license auth only)*
+Pass `model_path=...` or set:
 ```bash
 export KRISP_VIVA_FILTER_MODEL_PATH=/path/to/model.kef
 ```
+`TurnDetector` and `InterruptionDetector` report a missing TT, IP or VAD model the same way;
+set the variable the error names.
 
 ### "Unsupported sample rate"
 Supported: 8000, 16000, 24000, 32000, 44100, 48000 Hz
