@@ -29,6 +29,7 @@ members = [
     "livekit-example-inference",
     "livekit-example-survey",
     "livekit-example-voice-agents",
+    "livekit-plugins-alkove",
     "livekit-plugins-anam",
     "livekit-plugins-anthropic",
     "livekit-plugins-assemblyai",
@@ -379,6 +380,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/76/641ae371508676492379f16e2fa48f4e2c11741bd63c48be4b12a6b09cba/aiosignal-1.4.0-py3-none-any.whl", hash = "sha256:053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e", size = 7490, upload-time = "2025-07-03T22:54:42.156Z" },
+]
+
+[[package]]
+name = "alkove"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/46/ea/f7d513ce235ee412f144f174e1010b3d8a40b988aad85996fd16de212a4d/alkove-0.5.0.tar.gz", hash = "sha256:69c30af6aab9d82a6eaa39415b40428d82789c0cb53cd3e278eeb54b93146366", size = 217790, upload-time = "2026-11-21T12:13:39.545Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/c3/c36c44d3ee1c91f94d7f1dad10290d1d7b62631f696c92adcdc12b8a8bb2/alkove-0.5.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:2d66278f807caead271aa3ca1d16721aac33c29fe8370910a2beba6c2705091b", size = 574024, upload-time = "2026-11-21T12:13:31.847Z" },
+    { url = "https://files.pythonhosted.org/packages/49/4a/2b73bd2162603f7af5c8949e00ba2c7845c72dbbc7392144ac496d78e175/alkove-0.5.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:08d67f426c72026752fd33857f347b2d81b974de248aef4c4519315c5bd6876f", size = 562218, upload-time = "2026-11-21T12:13:33.458Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/a4/e0dc7821e57a2c8b4ec5f86db8e9519399b3bc79eeb63387962dd7d742d4/alkove-0.5.0-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d76cdef47d9d9a727d34088e8244515d3b1307cb59cd313108a4b78dc266a94b", size = 574569, upload-time = "2026-11-21T12:13:34.874Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/8b/71368ea28deca0d930c8a5d0cdfd70f9cb309f0e553c597a862b23f1d27f/alkove-0.5.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:78a7e0afb8dee1da6b6b13af11adb291ba1d435c922ed4675f0a4dda9c021ba7", size = 596261, upload-time = "2026-11-21T12:13:36.536Z" },
+    { url = "https://files.pythonhosted.org/packages/00/72/51216867dbb4a81844324e2ac54c61496617d6170b5d05a140a699398a22/alkove-0.5.0-cp39-abi3-win_amd64.whl", hash = "sha256:7a28b2dc3539fe506f29ed62a4174f9934a30f6716c3460fd32409ebb0fa8cf6", size = 530256, upload-time = "2026-11-21T12:13:37.919Z" },
 ]
 
 [[package]]
@@ -2155,6 +2172,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+alkove = [
+    { name = "livekit-plugins-alkove" },
+]
 anam = [
     { name = "livekit-plugins-anam" },
 ]
@@ -2433,6 +2453,7 @@ requires-dist = [
     { name = "livekit-api", specifier = ">=1.2.2,<2" },
     { name = "livekit-blingfire", specifier = "~=1.1,<2" },
     { name = "livekit-local-inference", specifier = ">=0.3.0,<0.4" },
+    { name = "livekit-plugins-alkove", marker = "extra == 'alkove'", editable = "livekit-plugins/livekit-plugins-alkove" },
     { name = "livekit-plugins-anam", marker = "extra == 'anam'", editable = "livekit-plugins/livekit-plugins-anam" },
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
@@ -2540,7 +2561,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "silma", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
+provides-extras = ["alkove", "anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "silma", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -2847,6 +2868,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/43/15/eb48d2e662a08667f4526d3181097f900b9088e78028d9742114d8b4d729/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d78a4e48d80c09b0a9e192115f850891813589cde8090d36b745bd4e3312bf3", size = 70398515, upload-time = "2026-06-15T20:53:22.37Z" },
     { url = "https://files.pythonhosted.org/packages/ed/c0/9ddfd240baccca55021a0cb2622968ae0b7041a570aed1b4ce792a6b0f29/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4e70be41a4988d9344516fb5f3f64d9cab369a93bd94135226f0c903863da150", size = 70742569, upload-time = "2026-06-15T20:53:25.877Z" },
     { url = "https://files.pythonhosted.org/packages/13/da/12b27e79ac14f29e4f732b7c3a665604bf0e34830802d9658fa679ca04a5/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-win_amd64.whl", hash = "sha256:3940b252fb8a278ea7455144629cbb8283f8927b99125327492efe6cde74c8fd", size = 70087927, upload-time = "2026-06-15T20:53:29.37Z" },
+]
+
+[[package]]
+name = "livekit-plugins-alkove"
+source = { editable = "livekit-plugins/livekit-plugins-alkove" }
+dependencies = [
+    { name = "alkove" },
+    { name = "livekit-agents" },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alkove", specifier = ">=0.5.0,<0.6" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
