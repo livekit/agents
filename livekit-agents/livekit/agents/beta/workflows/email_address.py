@@ -42,6 +42,19 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         # deprecated
         extra_instructions: str = "",
     ) -> None:
+        """Collect an email address from the user.
+
+        Args:
+            require_confirmation: Whether to ask the user to confirm the captured email.
+                Defaults to ``True`` for audio turns and ``False`` for text turns.
+            require_explicit_ask: When ``True``, the ``update_email_address`` tool is
+                suppressed on entry so the agent asks for the address before recording it.
+            verify_spelling: Audio-only. When ``True``, the agent reads the email back
+                character-by-character from the very first capture (rather than only after
+                a correction) and the audio system prompt instructs the LLM to spell it out
+                for confirmation. Has no effect in text turns. On audio turns it takes
+                precedence over ``require_confirmation``.
+        """
         if not is_given(instructions):
             instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
         elif extra_instructions:
@@ -57,11 +70,11 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                     audio=CONFIRMATION_INSTRUCTION
                     if verify_spelling or require_confirmation is not False
                     else "",
-                    text=CONFIRMATION_INSTRUCTION
-                    if verify_spelling or require_confirmation is True
-                    else "",
+                    text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
                 ),
-                _spelling=SPELLING_INSTRUCTION if verify_spelling else "",
+                _spelling=Instructions(audio=SPELLING_INSTRUCTION, text="")
+                if verify_spelling
+                else "",
             )
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
@@ -126,9 +139,10 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        is_audio = ctx.speech_handle.input_details.modality == "audio"
         read_back = (
             f"Repeat the email character by character: {separated_email}"
-            if self._spell_read_back
+            if self._spell_read_back and is_audio
             else "Repeat the email back to the user."
         )
         self._spell_read_back = True
@@ -167,7 +181,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             self.complete(ToolError(f"couldn't get the email address: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
-        if self._verify_spelling:
+        if self._verify_spelling and ctx.speech_handle.input_details.modality == "audio":
             return True
         if is_given(self._require_confirmation):
             return self._require_confirmation
