@@ -786,6 +786,8 @@ class _StreamData:
     # text-to-dialogue alignment restarts at 0 on every message; this is where the
     # next message's audio starts within the context
     audio_offset_ms: float = 0.0
+    # End of the last alignment in the current dialogue generation.
+    alignment_end_ms: int | None = None
     # trailing bytes of an incomplete Ogg page (opus output)
     ogg_tail: bytes = b""
 
@@ -838,9 +840,9 @@ def _accumulate_alignment(
     chars: list[str] | None,
     starts: list[int] | None,
     durs: list[int] | None,
-) -> None:
+) -> int | None:
     if not (chars and starts and durs and len(chars) == len(starts) == len(durs)):
-        return
+        return None
 
     stream._text_buffer += "".join(chars)
     # in case item in chars has multiple characters
@@ -857,6 +859,7 @@ def _accumulate_alignment(
     emitter.push_timed_transcript(timed_words)
     stream._start_times_ms = stream._start_times_ms[-len(stream._text_buffer) :]
     stream._durations_ms = stream._durations_ms[-len(stream._text_buffer) :]
+    return starts[-1] + durs[-1]
 
 
 class _Connection:
@@ -1353,16 +1356,25 @@ class _DialogueConnection(_Connection):
                 audio = base64.b64decode(data["audio"]) if data.get("audio") else b""
                 alignment = data.get("alignment")
                 if alignment:
-                    # times restart at 0 on every message: shift them onto the context's clock
+                    # Alignment chunks and audio packets have different durations within a turn.
+                    offset = (
+                        ctx.alignment_end_ms
+                        if ctx.alignment_end_ms is not None
+                        else ctx.audio_offset_ms
+                    )
                     starts = alignment.get("char_start_times_ms")
-                    _accumulate_alignment(
+                    end = _accumulate_alignment(
                         stream,
                         emitter,
                         alignment.get("chars"),
-                        [round(ctx.audio_offset_ms + s) for s in starts] if starts else None,
+                        [round(offset + s) for s in starts] if starts else None,
                         alignment.get("char_durations_ms"),
                     )
+                    if end is not None:
+                        ctx.alignment_end_ms = end
                 _advance_dialogue_clock(ctx, self._opts, audio, alignment)
+                if data.get("is_final_audio_for_turn"):
+                    ctx.alignment_end_ms = None
 
                 if audio:
                     emitter.push(audio)
