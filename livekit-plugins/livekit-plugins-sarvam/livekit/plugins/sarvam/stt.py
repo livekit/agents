@@ -927,6 +927,7 @@ class SpeechStream(stt.SpeechStream):
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
         self._utterance_speech_start_wall: float | None = None
+        self._utterance_speech_end_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
@@ -1024,6 +1025,7 @@ class SpeechStream(stt.SpeechStream):
         self._pending_final_data = None
         self._pending_eos = False
         self._utterance_speech_start_wall = time.time()
+        self._utterance_speech_end_wall = None
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
         self._utterance_resolved.clear()
@@ -1080,12 +1082,13 @@ class SpeechStream(stt.SpeechStream):
 
         self._cancel_eos_fallback()
 
-        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
-        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
+        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events.
+        # speech_end_time is when Sarvam's VAD speech-end signal arrived.
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._server_request_id or "",
+                speech_end_time=self._utterance_speech_end_wall,
             )
         )
         self._eos_emitted_for_utterance = True
@@ -1834,6 +1837,8 @@ class SpeechStream(stt.SpeechStream):
                     self._end_speech_sample = self._sent_samples
                 if self._speaking:
                     self._speaking = False
+                    # wall-clock receipt of Sarvam's VAD speech-end signal, sent as speech_end_time
+                    self._utterance_speech_end_wall = time.time()
                     self._pending_eos = True
                     self._try_commit_utterance()
                     if self._settling_for_reconnect:

@@ -4,17 +4,22 @@ import asyncio
 import base64
 import gc
 import json
+import time
 import weakref
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import aiohttp
 import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, llm
+from livekit.agents.voice import AgentSession
+from livekit.agents.voice.audio_recognition import AudioRecognition
+from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import stt as sarvam_stt
 
@@ -258,6 +263,10 @@ class _WebSocket:
     async def receive(self) -> aiohttp.WSMessage:
         await self._closed.wait()
         return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, 1000, "")
+
+    async def ping(self, message: bytes = b"") -> None:
+        # the liveness monitor probes an idle socket
+        return None
 
     async def close(self) -> None:
         self.closed = True
@@ -1079,3 +1088,58 @@ async def test_recognize_omits_timestamps_by_default() -> None:
     await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
 
     assert "with_timestamps" not in session.fields
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    "final_latency",
+    [0.2, 1.4],
+    ids=["final_within_eos_grace", "final_after_eos_fallback"],
+)
+async def test_transcription_delay_measures_sarvam_speech_end_to_final(
+    session: _Session, final_latency: float
+) -> None:
+    # Sarvam's VAD owns the turn (turn_detection="stt", no local VAD) and its final carries no
+    # speech_end. Whether the final beats the 1 s EOS grace period (FINAL, then END_OF_SPEECH)
+    # or the fallback emits END_OF_SPEECH first, the turn is anchored at END_OF_SPEECH's
+    # speech_end_time rather than at the final's arrival.
+    hooks = MagicMock()
+    hooks.retrieve_chat_ctx.return_value = llm.ChatContext()
+    hooks.on_end_of_turn.return_value = True
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        recognition = AudioRecognition(
+            AgentSession(vad=None, turn_handling={"turn_detection": "stt"}),
+            hooks=hooks,
+            endpointing=BaseEndpointing(min_delay=0.5, max_delay=3.0),
+            stt=model,
+            vad=None,
+            interruption_detection=None,
+            turn_detection="stt",
+        )
+        stream = model.stream()
+
+        async def forward() -> None:
+            async for ev in stream:
+                await recognition._on_stt_event(ev)
+
+        forward_task = asyncio.create_task(forward())
+        try:
+            await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+            await asyncio.sleep(1.0)
+            await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+            speech_end = time.time()
+            await asyncio.sleep(final_latency)
+            await stream._handle_transcript_data(
+                {"data": {"transcript": "नमस्ते", "language_code": "hi-IN", "metrics": {}}}
+            )
+            while not hooks.on_end_of_turn.called:
+                await asyncio.sleep(0.01)
+        finally:
+            forward_task.cancel()
+            await recognition._aclose()
+
+    metrics = hooks.on_end_of_turn.call_args.args[0].metrics
+    assert metrics.stopped_speaking_at == pytest.approx(speech_end, abs=1e-3)
+    assert metrics.transcription_delay == pytest.approx(final_latency, abs=1e-3)
+    # the turn commits one endpointing delay after the speech end, or on a later final
+    assert metrics.end_of_turn_delay == pytest.approx(max(0.5, final_latency), abs=1e-3)
