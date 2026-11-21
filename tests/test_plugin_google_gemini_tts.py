@@ -336,6 +336,24 @@ def test_multi_speaker_config_is_validated() -> None:
             google_tts.update_options(speaker="Nobody")
 
 
+@pytest.mark.parametrize("speakers", [None, {"Sienna": "Kore", "Comanchero": "Puck"}])
+def test_rejected_update_options_changes_nothing(speakers) -> None:
+    """A rejected update_options leaves every option as it was."""
+    with patch("livekit.plugins.google.beta.gemini_tts.Client"):
+        if speakers is None:
+            google_tts = TTS(api_key="k", model="gemini-3.8-flash-tts")
+        else:
+            google_tts = TTS(
+                api_key="k", model="gemini-3.8-flash-tts", speakers=speakers, speaker="Sienna"
+            )
+    snapshot = dict(vars(google_tts._opts))
+
+    with pytest.raises(ValueError):
+        google_tts.update_options(voice_name="Puck", speaker="Nobody")
+
+    assert vars(google_tts._opts) == snapshot
+
+
 @pytest.mark.asyncio
 @patch("livekit.plugins.google.beta.gemini_tts.Client")
 async def test_every_multi_speaker_turn_names_its_speaker(mock_genai_client_class) -> None:
