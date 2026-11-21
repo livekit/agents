@@ -115,9 +115,9 @@ def extract_and_strip(
     pattern = re.compile(
         # leading space is part of the match so removing a tag can't double the separator
         LEADING_WS + "(?:"
-        # <tag .../> or <tag ...> optionally followed by inner</tag>
-        rf"<(?P<tag>{tag_pattern})\b(?P<attrs>[^>]*?)\s*/?\s*>"
-        rf"(?:(?P<inner>.*?)</(?P=tag)\s*>)?"
+        # <tag .../>, or <tag ...> optionally followed by inner</tag>
+        rf"<(?P<tag>{tag_pattern})\b(?P<attrs>[^>]*?)\s*"
+        rf"(?:/\s*>|>(?:(?P<inner>.*?)</(?P=tag)\s*>)?)"
         # lone closing tag: </tag>
         rf"|</(?:{tag_pattern})\s*>"
         ")",
