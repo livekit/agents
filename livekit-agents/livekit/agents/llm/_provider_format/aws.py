@@ -106,7 +106,7 @@ def to_chat_ctx(
                             if isinstance(msg.output, dict)
                             else {"text": msg.output}
                         ],
-                        "status": "success",
+                        "status": "error" if msg.is_error else "success",
                     }
                 }
             )
