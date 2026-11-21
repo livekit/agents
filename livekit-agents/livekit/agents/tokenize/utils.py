@@ -32,7 +32,7 @@ def replace_words(
     replacement will keep the case of the original word.
     Args:
         text: text to replace words in
-        words: dictionary of words to replace
+        replacements: dictionary of words to replace
     """
 
     replacements = {k.lower(): v for k, v in replacements.items()}
