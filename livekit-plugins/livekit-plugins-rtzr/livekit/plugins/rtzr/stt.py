@@ -36,6 +36,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
+from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -44,12 +45,39 @@ from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient
 _DEFAULT_CHUNK_MS = 100
 _IDLE_TIMEOUT_SECONDS = 25.0
 _RECV_COMPLETION_TIMEOUT = 5.0
+_DEFAULT_MODEL = "sommers_ko"
+# RTZR has no language parameter: the recognized language is fixed by the model.
+_MODEL_LANGUAGES: dict[str, str] = {"sommers_ko": "ko", "sommers_ja": "ja"}
+
+
+def _model_for_language(language: str) -> str | None:
+    lang = LanguageCode(language).language
+    for model, model_lang in _MODEL_LANGUAGES.items():
+        if model_lang == lang:
+            return model
+    return None
+
+
+def _language_for_model(model: str, language: NotGivenOr[str]) -> LanguageCode:
+    """Return the language a model actually transcribes, falling back to ``language``
+    for models whose language is unknown."""
+    model_lang = _MODEL_LANGUAGES.get(model)
+    if model_lang is None:
+        return LanguageCode(language if is_given(language) else "ko")
+    if is_given(language) and LanguageCode(language).language != model_lang:
+        logger.warning(
+            "RTZR model %s transcribes %r; ignoring language %r",
+            model,
+            model_lang,
+            language,
+        )
+    return LanguageCode(model_lang)
 
 
 @dataclass
 class _STTOptions:
-    model_name: str = "sommers_ko"  # sommers_ko: "ko", sommers_ja: "ja"
-    language: LanguageCode = LanguageCode("ko")  # ko, ja, en
+    model_name: str = _DEFAULT_MODEL  # sommers_ko: "ko", sommers_ja: "ja"
+    language: LanguageCode = LanguageCode("ko")  # derived from model_name
     sample_rate: int = DEFAULT_SAMPLE_RATE
     encoding: str = "LINEAR16"  # or "OGG_OPUS" in future
     domain: str = "CALL"  # CALL, MEETING
@@ -66,8 +94,8 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
-        model: str = "sommers_ko",
-        language: str = "ko",
+        model: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 8000,
         domain: str = "CALL",
         epd_time: float = 0.8,
@@ -77,6 +105,21 @@ class STT(stt.STT):
         keywords: list[str] | list[tuple[str, float]] | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """Create a new instance of RTZR STT.
+
+        Args:
+            model: RTZR model, which determines the recognized language
+                (``sommers_ko`` for Korean, ``sommers_ja`` for Japanese). Defaults to the model
+                matching ``language``, or ``sommers_ko``.
+            language: Language to recognize. RTZR has no language parameter, so this selects
+                the model when ``model`` is not given; transcripts are always labeled with the
+                model's language.
+        """
+        if not is_given(model):
+            model = (_model_for_language(language) if is_given(language) else None) or (
+                _DEFAULT_MODEL
+            )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -88,7 +131,7 @@ class STT(stt.STT):
 
         self._params = _STTOptions(
             model_name=model,
-            language=LanguageCode(language),
+            language=_language_for_model(model, language),
             sample_rate=sample_rate,
             domain=domain,
             epd_time=epd_time,
@@ -128,23 +171,43 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
+        model = self._params.model_name
+        stream_language = self._params.language
+        if is_given(language):
+            language_model = _model_for_language(language)
+            if language_model is None:
+                logger.warning("RTZR has no model for language %r; using model %s", language, model)
+            else:
+                model = language_model
+                stream_language = _language_for_model(model, language)
         return SpeechStream(
             stt=self,
             conn_options=conn_options,
+            model_name=model,
+            language=stream_language,
         )
 
 
 class SpeechStream(stt.SpeechStream):
-    def __init__(self, *, stt: STT, conn_options: APIConnectOptions) -> None:
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        conn_options: APIConnectOptions,
+        model_name: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[LanguageCode] = NOT_GIVEN,
+    ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=stt._params.sample_rate)
         self._rtzr_stt: STT = stt
+        self._model_name = model_name if is_given(model_name) else stt._params.model_name
+        self._language = language if is_given(language) else stt._params.language
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         config = self._rtzr_stt._client.build_config(
-            model_name=self._rtzr_stt._params.model_name,
+            model_name=self._model_name,
             domain=self._rtzr_stt._params.domain,
             sample_rate=self._rtzr_stt._params.sample_rate,
             encoding=self._rtzr_stt._params.encoding,
@@ -163,7 +226,7 @@ class SpeechStream(stt.SpeechStream):
             logger.debug(
                 "RTZR STT WS connected (model=%s, sr=%s, epd=%.2fs, "
                 "noise=%.2f, active=%.2f, punct=%s)",
-                self._rtzr_stt._params.model_name,
+                self._model_name,
                 self._rtzr_stt._params.sample_rate,
                 self._rtzr_stt._params.epd_time,
                 self._rtzr_stt._params.noise_threshold,
@@ -340,7 +403,7 @@ class SpeechStream(stt.SpeechStream):
                 alternatives=[
                     stt.SpeechData(
                         text=text,
-                        language=self._rtzr_stt._params.language,
+                        language=self._language,
                         start_time=start_time + self.start_time_offset,
                         end_time=start_time + duration + self.start_time_offset,
                         words=self._parse_words(words, start_time=start_time) if words else None,
