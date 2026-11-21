@@ -1,8 +1,11 @@
 """Tests for VAD update_options behavior, specifically deactivation_threshold recalculation."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from livekit.agents.inference import VAD as InferenceVAD
+from livekit.plugins.silero import vad as silero_vad
 
 pytestmark = pytest.mark.unit
 
@@ -85,3 +88,33 @@ def test_inference_vad_update_options_activation_below_deactivation() -> None:
     assert vad._opts.activation_threshold == 0.2
     assert vad._opts.deactivation_threshold == pytest.approx(0.05)  # recalculated, not 0.55
     assert vad._opts.deactivation_threshold < vad._opts.activation_threshold
+
+
+@pytest.mark.asyncio
+async def test_silero_vad_updates_recalculate_thresholds() -> None:
+    """The local Silero VAD keeps its parent and active stream thresholds in sync."""
+    opts = silero_vad._VADOptions(
+        min_speech_duration=0.05,
+        min_silence_duration=0.55,
+        prefix_padding_duration=0.5,
+        max_buffered_speech=60.0,
+        activation_threshold=0.5,
+        deactivation_threshold=0.35,
+        sample_rate=16000,
+    )
+    vad = silero_vad.VAD(session=MagicMock(), opts=opts)
+    stream = vad.stream()
+    try:
+        vad.update_options(activation_threshold=0.7)
+
+        assert vad._opts.activation_threshold == 0.7
+        assert vad._opts.deactivation_threshold == pytest.approx(0.55)
+        assert stream._opts.activation_threshold == 0.7
+        assert stream._opts.deactivation_threshold == pytest.approx(0.55)
+
+        vad.update_options(activation_threshold=0.8, deactivation_threshold=0.75)
+
+        assert vad._opts.deactivation_threshold == 0.75
+        assert stream._opts.deactivation_threshold == 0.75
+    finally:
+        await stream.aclose()
