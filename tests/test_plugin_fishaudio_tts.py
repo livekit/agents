@@ -232,6 +232,33 @@ def test_generation_tuning_validated():
         tts.update_options(early_stop_threshold=-0.1)
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"chunk_length": 50},
+        {"temperature": 1.5},
+        {"top_p": -0.1},
+        {"max_new_tokens": -1},
+        {"min_chunk_length": 150},
+        {"early_stop_threshold": 1.5},
+    ],
+)
+def test_rejected_update_options_changes_nothing(invalid):
+    """A rejected update_options leaves every option, and the pooled connections, as they were."""
+    from livekit.plugins.fishaudio import TTS
+
+    tts = TTS(api_key="test-key", model="s2-pro", normalize_loudness=True)
+    snapshot = dict(vars(tts._opts))
+    invalidated = []
+    tts._pool.invalidate = lambda: invalidated.append(True)
+
+    with pytest.raises(ValueError):
+        tts.update_options(model="s1", voice_id="other-voice", speed=1.2, **invalid)
+
+    assert vars(tts._opts) == snapshot
+    assert not invalidated
+
+
 def test_normalize_loudness_dropped_on_s1_constructor():
     """On the s1 model normalize_loudness is dropped (warn log), not sent."""
     from livekit.plugins.fishaudio import TTS
