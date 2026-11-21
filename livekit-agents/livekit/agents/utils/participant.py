@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Mapping
 from typing import Literal, overload
 
 from livekit import rtc
@@ -82,6 +83,26 @@ async def wait_for_participant_attribute(
     present, the participant disconnects, or the room disconnects before the
     attribute is set.
     """
+    await wait_for_participant_attributes(
+        room,
+        identity=identity,
+        predicate=lambda attrs: attrs.get(attribute) == value,
+        description=attribute,
+    )
+
+
+async def wait_for_participant_attributes(
+    room: rtc.Room,
+    *,
+    identity: str,
+    predicate: Callable[[Mapping[str, str]], bool],
+    description: str,
+) -> None:
+    """Wait until ``predicate`` holds for a remote participant's attributes.
+
+    Same semantics as :func:`wait_for_participant_attribute`; ``description``
+    names the awaited condition in error messages.
+    """
     if not room.isconnected():
         raise RuntimeError("room is not connected")
     if identity not in room.remote_participants:
@@ -93,7 +114,7 @@ async def wait_for_participant_attribute(
         return (
             isinstance(p, rtc.RemoteParticipant)
             and p.identity == identity
-            and p.attributes.get(attribute) == value
+            and predicate(p.attributes)
         )
 
     def _on_attributes_changed(_changed: list[str], p: rtc.Participant) -> None:
@@ -103,13 +124,15 @@ async def wait_for_participant_attribute(
     def _on_participant_disconnected(p: rtc.RemoteParticipant) -> None:
         if p.identity == identity and not fut.done():
             fut.set_exception(
-                RuntimeError(f"participant {identity!r} disconnected while waiting for {attribute}")
+                RuntimeError(
+                    f"participant {identity!r} disconnected while waiting for {description}"
+                )
             )
 
     def _on_connection_state_changed(state: int) -> None:
         if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(
-                RuntimeError(f"room disconnected while waiting for {identity!r} {attribute}")
+                RuntimeError(f"room disconnected while waiting for {identity!r} {description}")
             )
 
     room.on("participant_attributes_changed", _on_attributes_changed)
@@ -121,7 +144,7 @@ async def wait_for_participant_attribute(
         existing = room.remote_participants.get(identity)
         if existing is None:
             raise RuntimeError(f"participant {identity!r} is not in the room")
-        if existing.attributes.get(attribute) == value:
+        if predicate(existing.attributes):
             return
         await fut
     finally:
