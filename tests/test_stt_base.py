@@ -7,8 +7,10 @@ import dataclasses
 import time
 from collections.abc import AsyncIterator
 
+import numpy as np
 import pytest
 
+from livekit import rtc
 from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
@@ -506,3 +508,32 @@ async def test_local_events_do_not_reset_retry_budget(event_type: SpeechEventTyp
         assert stream._num_retries == 2
     finally:
         await stream.aclose()
+
+
+class _ResamplingStream(RecognizeStream):
+    """Asks for 16 kHz audio and records the frames it reads."""
+
+    def __init__(self, *, stt: STT) -> None:
+        super().__init__(stt=stt, conn_options=DEFAULT_API_CONNECT_OPTIONS, sample_rate=16000)
+        self.frames: list[rtc.AudioFrame] = []
+
+    async def _run(self) -> None:
+        async for data in self._input_ch:
+            if isinstance(data, rtc.AudioFrame):
+                self.frames.append(data)
+
+
+async def test_push_frame_resamples_stereo_audio_per_channel() -> None:
+    stream = _ResamplingStream(stt=_DummySTT())
+    t = np.arange(4800) / 48000
+    left = (np.sin(2 * np.pi * 440 * t) * 16000).astype(np.int16)
+    stereo = np.stack([left, np.zeros_like(left)], axis=1)  # 0.1 s, tone left, right silent
+    stream.push_frame(rtc.AudioFrame(stereo.tobytes(), 48000, 2, len(left)))
+    stream.end_input()
+    await asyncio.sleep(0.1)
+    await stream.aclose()
+
+    assert {f.num_channels for f in stream.frames} == {2}
+    assert sum(f.samples_per_channel for f in stream.frames) == 1600  # still 0.1 s
+    out = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in stream.frames])
+    assert np.abs(out.reshape(-1, 2)[:, 1]).max() <= 1  # right channel stays silent
