@@ -27,6 +27,7 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import aio
+from . import _replay
 from .chat_context import ChatContext, ChatRole, MetricsMetadata
 from .tool_context import Tool, ToolChoice
 
@@ -330,6 +331,15 @@ class LLMStream(ABC):
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()
+
+        # a delegating stream (fallback) is replayed through the provider streams it wraps
+        if self._genai_operation_name is not None and (replay_url := _replay.replay_url()):
+            try:
+                await _replay.serve(self, replay_url)
+            except Exception as e:
+                self._emit_error(e, recoverable=False)
+                raise
+            return
 
         for i in range(self._conn_options.max_retry + 1):
             try:
