@@ -57,9 +57,11 @@ class DecisionModel(llm.DecisionModel):
         )
 
     Args:
-        model: Perplexity decision model. ``pplx-decider-flash-v1.3`` is the
-            low-latency default for in-turn decisions. ``pplx-decider-v1.3`` is the
-            larger, more accurate model for background checks.
+        model: Perplexity decision model. Defaults to ``pplx-decider-flash-latest``, the
+            alias for the current low-latency flash model for in-turn decisions. Pass a
+            versioned id such as ``pplx-decider-flash-v1.3`` to pin a version.
+            ``pplx-decider-v1.3`` is the larger, more accurate model for background
+            checks; ``pplx-decider-latest`` is its alias.
         api_key: Required for the default base URL, where it defaults to
             PERPLEXITY_API_KEY. Other base URLs only receive an explicit ``api_key``.
         base_url: Defaults to ``https://api.perplexity.ai/v1``. For Decider for Mac, use
@@ -76,7 +78,7 @@ class DecisionModel(llm.DecisionModel):
     def __init__(
         self,
         *,
-        model: PerplexityDecisionModels | str = "pplx-decider-flash-v1.3",
+        model: PerplexityDecisionModels | str = "pplx-decider-flash-latest",
         api_key: str | None = None,
         base_url: str = _BASE_URL,
         mode: Literal["web_grounding"] | None = None,

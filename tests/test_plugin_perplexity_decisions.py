@@ -30,7 +30,7 @@ def no_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def response_body() -> dict[str, Any]:
     # Shape of the documented /v1/decisions response: JSON object keys are strings.
     return {
-        "model": "pplx-decider-flash-v1.3",
+        "model": "pplx-decider-flash-latest",
         "answers": {
             "human": {"type": "noul", "noul": 0.9},
             "intent": {
@@ -81,7 +81,7 @@ async def test_batch_is_sent_as_one_request_with_bearer_auth_and_attribution() -
     assert headers["Authorization"] == "Bearer test-key"
     assert headers["X-Pplx-Integration"] == f"livekit-agents/{__version__}"
     assert http.post.call_args.kwargs["json"] == {
-        "model": "pplx-decider-flash-v1.3",
+        "model": "pplx-decider-flash-latest",
         "state": "user: Please book a table.",
         "questions": {
             "human": {"type": "noul", "instructions": "The caller wants a human."},
@@ -115,7 +115,7 @@ async def test_every_kind_is_decoded_from_string_keyed_distributions() -> None:
     assert score.probabilities == {0: 0.1, 1: 0.4, 2: 0.5}
     assert score.levels == ["Calm", "Annoyed", "Angry"]
     assert (response.model, response.provider, response.request_id) == (
-        "pplx-decider-flash-v1.3",
+        "pplx-decider-flash-latest",
         "Perplexity",
         "request-1",
     )
