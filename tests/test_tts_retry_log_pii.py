@@ -87,7 +87,7 @@ async def test_retry_warning_keeps_the_text_out_of_the_log_body(
         await fake_tts.aclose()
 
     _assert_body_is_clean(
-        caplog, "failed to synthesize speech", streamed=False, has_retry_interval=True
+        caplog, "failed to synthesize speech, retrying in", streamed=False, has_retry_interval=True
     )
 
 
@@ -103,7 +103,7 @@ async def test_streaming_retry_warning_keeps_the_text_out_of_the_log_body(
         await fake_tts.aclose()
 
     _assert_body_is_clean(
-        caplog, "failed to synthesize speech", streamed=True, has_retry_interval=True
+        caplog, "failed to synthesize speech, retrying in", streamed=True, has_retry_interval=True
     )
 
 

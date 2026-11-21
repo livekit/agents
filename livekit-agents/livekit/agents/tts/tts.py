@@ -448,7 +448,8 @@ class ChunkedStream(ABC):
                 # the error message can quote the synthesized text (see the APIError raised
                 # above): a log body cannot be redacted, so keep it out of the message
                 logger.warning(
-                    "failed to synthesize speech, retrying",
+                    "failed to synthesize speech, retrying in %ss",
+                    retry_interval,
                     extra={
                         "tts": self._tts._label,
                         "attempt": i + 1,
@@ -672,7 +673,8 @@ class SynthesizeStream(ABC):
                 # the error message can quote the synthesized text (see the APIError raised
                 # above): a log body cannot be redacted, so keep it out of the message
                 logger.warning(
-                    "failed to synthesize speech, retrying",
+                    "failed to synthesize speech, retrying in %ss",
+                    retry_interval,
                     extra={
                         "tts": self._tts._label,
                         "attempt": i + 1,
