@@ -20,9 +20,11 @@ from ..llm.decisions import (
     DecisionModel as BaseDecisionModel,
     DecisionResponse,
 )
+from ..log import logger
 from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import http_context, is_given
 from ._utils import (
+    HEADER_DECISIONS_MODEL_FALLBACK,
     HEADER_REQUEST_ID,
     create_access_token,
     get_default_inference_url,
@@ -32,10 +34,9 @@ from ._utils import (
 
 DecisionModels = Literal[
     "openai/gpt-6-luna-decisions",
-    "typesafe/jev",
-    "typesafe/jev-latest",
-    "typesafe/jev-preview",
-    "livekit/clef-omni",
+    "google/gemini-decision-1",
+    "microsoft/decision-1",
+    "microsoft-eu/decision-1",
 ]
 
 
@@ -69,6 +70,7 @@ class DecisionModel(BaseDecisionModel):
         self,
         model: DecisionModels | str = "openai/gpt-6-luna-decisions",
         *,
+        fallback: NotGivenOr[list[DecisionModels | str] | DecisionModels | str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
@@ -77,6 +79,10 @@ class DecisionModel(BaseDecisionModel):
         """
         Args:
             model: Gateway model id, ``"<provider>/<model>"``.
+            fallback: Gateway model ids to try in order when ``model`` fails. The gateway
+                does this inside the same request. Leave it unset to use the gateway's
+                default for ``model``; an empty list turns that default off. To fall back
+                to a model outside the gateway, use ``llm.DecisionModelFallbackAdapter``.
             base_url: Inference gateway base URL. Defaults to the environment's
                 gateway (see ``get_default_inference_url``).
             api_key: Gateway API key (see the class docstring for resolution).
@@ -88,6 +94,9 @@ class DecisionModel(BaseDecisionModel):
             capabilities=DecisionCapabilities(decision_kinds=["probability", "choice", "score"])
         )
         self._model = model
+        self._fallback: NotGivenOr[list[str]] = NOT_GIVEN
+        if is_given(fallback):
+            self._fallback = [fallback] if isinstance(fallback, str) else list(fallback)
         self._base_url = base_url if is_given(base_url) else get_default_inference_url()
         self._api_key, self._api_secret = resolve_credentials(
             api_key if is_given(api_key) else None,
@@ -119,26 +128,37 @@ class DecisionModel(BaseDecisionModel):
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
         questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
+        body: dict[str, object] = {"model": self._model, "state": input, "questions": questions}
+        if is_given(self._fallback):
+            body["fallback"] = {"models": [{"model": model} for model in self._fallback]}
         session = self._session or http_context.http_session()
         url = f"{self._base_url.rstrip('/')}/decisions"
         try:
             async with session.post(
                 url,
                 headers=self._headers(),
-                json={"model": self._model, "state": input, "questions": questions},
+                json=body,
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
             ) as response:
                 request_id = response.headers.get(HEADER_REQUEST_ID)
+                fallback_model = response.headers.get(HEADER_DECISIONS_MODEL_FALLBACK)
                 if response.status >= 400:
                     raise _error_from_response(
                         await response.text(), status=response.status, request_id=request_id
                     )
                 parsed = systemone.Response.model_validate(await response.json())
+            if fallback_model:
+                logger.warning(
+                    "inference decision was served by a fallback model",
+                    extra={"model": self._model, "fallback_model": fallback_model},
+                )
             results, errors = systemone.decode_answers(parsed.answers)
             return DecisionResponse(
                 results=results,
                 errors=errors,
-                model=parsed.model,
+                # the body names the model that answered; without it, the base class
+                # would report the requested model for an answer a fallback model gave
+                model=parsed.model or fallback_model or "",
                 provider=self.provider,
                 request_id=request_id or parsed.id,
                 input_tokens=parsed.usage.input_tokens,
