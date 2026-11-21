@@ -906,9 +906,9 @@ class RealtimeSession(llm.RealtimeSession):
             "additional_params": self._opts.additional_params,
             "external_id": self._opts.external_id,
         }
-        if not self._realtime_model.capabilities.audio_output:
-            options["input_modality"] = "text"
-            options["output_modality"] = "text"
+        modality = "speech" if self._realtime_model.capabilities.audio_output else "text"
+        options["input_modality"] = modality
+        options["output_modality"] = modality
         # Filter out NOT_GIVEN values
         return {k: v for k, v in options.items() if v is not NOT_GIVEN}
 
