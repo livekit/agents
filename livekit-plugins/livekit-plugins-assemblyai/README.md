@@ -21,7 +21,7 @@ from livekit.agents import AgentSession, TurnHandlingOptions
 from livekit.plugins import assemblyai
 
 session = AgentSession(
-    stt=assemblyai.STT(model="universal-3-6-pro", mode="balanced"),
+    stt=assemblyai.STT(model="assemblyai-stt-3-7-realtime-agent", mode="balanced"),
     tts=assemblyai.TTS(
         model="assemblyai-tts-1",
         voice="49c443a4-8a1d-5f7e-b70b-98bdbd9823c3",  # Audrey
@@ -36,7 +36,7 @@ session = AgentSession(
 
 ### Speech-to-text
 
-`assemblyai.STT` streams Universal-3.6 Pro by default (`model`). Useful options:
+`assemblyai.STT` streams AssemblyAI-STT-3.7-Realtime-Agent by default (`model`). Useful options:
 
 - `mode`: `"min_latency"`, `"balanced"` or `"max_accuracy"`.
 - `language_codes`: steer transcription toward one or more expected languages (`"es"` or

@@ -1,4 +1,4 @@
-# Copyright 2025 LiveKit, Inc.
+# Copyright 2026 LiveKit, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,38 +12,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SLNG plugin for LiveKit Agents
+"""SILMA AI plugin for LiveKit Agents
 
-STT and TTS adapters for SLNG gateway models.
+Arabic and English text-to-speech with SILMA TTS v2.
 
-See https://docs.slng.ai/ for more information.
+See https://silma.ai/ for more information.
 """
 
-from .connection import PluginEvent, STTConnectionConfig, TTSConnectionConfig
-from .log import logger
-from .stt import STT, SpeechStream
-from .tts import TTS
+from .models import (
+    DEFAULT_MODEL,
+    DEFAULT_VOICE,
+    TTSArabicVoices,
+    TTSEnglishVoices,
+    TTSModels,
+    TTSVoices,
+)
+from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
 __all__ = [
-    "STT",
     "TTS",
-    "PluginEvent",
-    "STTConnectionConfig",
-    "SpeechStream",
-    "TTSConnectionConfig",
+    "ChunkedStream",
+    "SynthesizeStream",
+    "TTSModels",
+    "TTSVoices",
+    "TTSArabicVoices",
+    "TTSEnglishVoices",
+    "DEFAULT_MODEL",
+    "DEFAULT_VOICE",
     "__version__",
 ]
 
 from livekit.agents import Plugin
 
+from .log import logger
 
-class SLNGPlugin(Plugin):
+
+class SilmaPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__(__name__, __version__, __package__, logger)
 
 
-Plugin.register_plugin(SLNGPlugin())
+Plugin.register_plugin(SilmaPlugin())
 
 # Cleanup docs of unexported modules
 _module = dir()
