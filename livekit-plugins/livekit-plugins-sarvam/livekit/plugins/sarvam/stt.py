@@ -501,7 +501,8 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,
+                # the streaming endpoint only sends final transcripts; use STTRealtime for partials
+                interim_results=False,
                 # chunk timestamps don't seem to work despite the docs saying they do
                 aligned_transcript=False,
             )

@@ -1079,3 +1079,9 @@ async def test_recognize_omits_timestamps_by_default() -> None:
     await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
 
     assert "with_timestamps" not in session.fields
+
+
+def test_does_not_advertise_interim_results() -> None:
+    # The streaming endpoint only sends final transcripts, so the framework must not wait
+    # for partials. STTRealtime is the class that streams them.
+    assert sarvam_stt.STT(api_key="sk_test").capabilities.interim_results is False
