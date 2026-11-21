@@ -246,6 +246,8 @@ class JobContext:
         # kept apart from _pending_tasks: these stop early in the shutdown, while the
         # framework's own requests (delete_room, SIP transfers) must be allowed to finish
         self._user_tasks = set[asyncio.Task[Any]]()
+        # tasks that ignored their cancel past the deadline; nothing waits for them again
+        self._abandoned_tasks = set[asyncio.Task[Any]]()
         self._room.on("participant_connected", self._participant_available)
         self._inf_executor = inference_executor
 
@@ -787,7 +789,12 @@ class JobContext:
         The job keeps a reference to the task, logs its exception if it fails, and cancels
         it if it is still running when the job shuts down. The cancel happens once the
         entrypoint has returned and before the `AgentSession` is closed, so these tasks are
-        stopped before ``on_session_end`` and the shutdown callbacks run.
+        stopped before ``on_session_end`` and the shutdown callbacks run. A task that ignores
+        the cancel is waited for a few seconds, then logged and left behind, so it delays
+        neither the shutdown nor the exit of the job.
+
+        A task the entrypoint itself awaits is part of the entrypoint: it runs until the
+        entrypoint returns or is cancelled at the end of its shutdown grace period.
 
         Work that has to finish after the call ends, such as uploading a transcript,
         belongs in :meth:`add_shutdown_callback` instead.
@@ -806,6 +813,7 @@ class JobContext:
 
     def _on_user_task_done(self, task: asyncio.Task[Any]) -> None:
         self._user_tasks.discard(task)
+        self._abandoned_tasks.discard(task)
         if not task.cancelled() and (exc := task.exception()) is not None:
             logger.error(f"error in {task.get_name()}", exc_info=exc)
 
@@ -818,9 +826,12 @@ class JobContext:
 
         _, pending = await asyncio.wait(tasks, timeout=timeout)
         if pending:
-            # a task that swallows the cancel must not hold up the rest of the shutdown
+            # a task that swallows the cancel must not hold up the rest of the shutdown, nor
+            # the final drain of the job loop, which would otherwise wait for it with no deadline
+            self._user_tasks.difference_update(pending)
+            self._abandoned_tasks.update(pending)
             logger.warning(
-                "background tasks did not stop within %.1fs of being cancelled",
+                "background tasks did not stop within %.1fs of being cancelled, leaving them",
                 timeout,
                 extra={"tasks": sorted(t.get_name() for t in pending)},
             )

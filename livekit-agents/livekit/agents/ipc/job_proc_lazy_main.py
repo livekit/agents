@@ -104,7 +104,13 @@ def proc_main(args: ProcStartArgs) -> None:
         simulation_end_fnc=args.simulation_end_fnc,
     )
 
-    client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
+    client = _ProcClient(
+        args.mp_cch,
+        args.log_cch,
+        job_proc.initialize,
+        job_proc.entrypoint,
+        abandoned_tasks_fnc=job_proc.abandoned_tasks,
+    )
     try:
         client.initialize()
     except Exception:
@@ -232,6 +238,11 @@ class _JobProc:
     @property
     def has_running_job(self) -> bool:
         return self._job_task is not None
+
+    def abandoned_tasks(self) -> set[asyncio.Task[Any]]:
+        """JobContext.create_task() tasks that ignored their cancel during the shutdown."""
+        job_ctx: JobContext | None = getattr(self, "_job_ctx", None)
+        return job_ctx._abandoned_tasks if job_ctx is not None else set()
 
     def initialize(self, init_req: InitializeRequest, client: _ProcClient) -> None:
         self._client = client
@@ -760,7 +771,13 @@ def thread_main(
             simulation_end_fnc=args.simulation_end_fnc,
         )
 
-        client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
+        client = _ProcClient(
+            args.mp_cch,
+            None,
+            job_proc.initialize,
+            job_proc.entrypoint,
+            abandoned_tasks_fnc=job_proc.abandoned_tasks,
+        )
         client.initialize()
         client.run()
         exitcode = int(job_proc.failed)

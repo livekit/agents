@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import socket
 import sys
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Collection, Coroutine
 from types import FrameType
+from typing import Any
 
 from ..log import logger
 from ..telemetry import loop_monitor
@@ -27,8 +28,11 @@ class _ProcClient:
         log_cch: socket.socket | None,
         initialize_fnc: Callable[[InitializeRequest, _ProcClient], None],
         main_task_fnc: Callable[[aio.ChanReceiver[Message]], Coroutine[None, None, None]],
+        *,
+        abandoned_tasks_fnc: Callable[[], Collection[asyncio.Task[Any]]] | None = None,
     ) -> None:
         self._mp_cch = mp_cch
+        self._abandoned_tasks_fnc = abandoned_tasks_fnc
         self._initialize_fnc = initialize_fnc
         self._main_task_fnc = main_task_fnc
         self._initialized = False
@@ -82,7 +86,12 @@ class _ProcClient:
             loop_monitor.stop_monitoring(loop)
             # shut the loop down the way asyncio.run() does, a thread runner reuses the process
             try:
-                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                # tasks the job already cancelled and gave up on would keep this gather (and
+                # the join of a thread runner) waiting forever
+                abandoned = self._abandoned_tasks_fnc() if self._abandoned_tasks_fnc else ()
+                pending = [
+                    t for t in asyncio.all_tasks(loop) if not t.done() and t not in abandoned
+                ]
                 for t in pending:
                     t.cancel()
                 if pending:
