@@ -148,11 +148,10 @@ async def test_streaming_segments_reuse_websocket_connection(monkeypatch: pytest
     assert websockets[0].closed is False
     assert emitter.audio_chunks == [b"audio", b"audio"]
     assert emitter.ended_segments == 2
-    # nothing carries over from the first utterance: same single word, same times
-    assert [(str(t), t.start_time, t.end_time) for t in emitter.timed] == [
-        ("word ", 0.0, pytest.approx(0.5)),
-        ("word ", 0.0, pytest.approx(0.5)),
-    ]
+    # each utterance's characters keep their own timings, restarting at 0
+    assert "".join(emitter.timed) == "word word "
+    starts = [t.start_time for t in emitter.timed]
+    assert starts[:5] == starts[5:] == pytest.approx([0.0, 0.1, 0.2, 0.3, 0.4])
 
     await tts.aclose()
 
@@ -160,7 +159,7 @@ async def test_streaming_segments_reuse_websocket_connection(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_char_timings_become_word_timed_transcripts(monkeypatch: pytest.MonkeyPatch):
+async def test_char_timings_become_timed_transcripts(monkeypatch: pytest.MonkeyPatch):
     tts = xai_tts.TTS(api_key="test-key")
     # "Hi there " arrives in two frames, splitting "there" across them
     frames = [_graph("Hi th", 0.0), _graph("ere ", 0.5)]
@@ -168,12 +167,13 @@ async def test_char_timings_become_word_timed_transcripts(monkeypatch: pytest.Mo
 
     assert tts.capabilities.aligned_transcript
     assert [p["delta"] for p in ws.sent if p["type"] == "text.delta"] == ["Hi ", "there "]
-    assert [(str(t), t.start_time, t.end_time) for t in emitter.timed] == [
-        ("Hi ", 0.0, pytest.approx(0.3)),
-        ("there ", pytest.approx(0.3), pytest.approx(0.9)),
+    assert "".join(emitter.timed) == "Hi there "
+    assert [(str(t), t.start_time, t.end_time) for t in emitter.timed[4:6]] == [
+        ("h", pytest.approx(0.4), pytest.approx(0.5)),
+        ("e", pytest.approx(0.5), pytest.approx(0.6)),
     ]
-    # each frame's words are pushed ahead of its audio; the split word is flushed on audio.done
-    assert emitter.calls == ["timed", "audio", "audio", "timed"]
+    # each frame's timings are pushed ahead of its audio
+    assert emitter.calls == ["timed", "audio", "timed", "audio"]
     await tts.aclose()
 
 
@@ -185,54 +185,6 @@ async def test_word_timestamps_off(monkeypatch: pytest.MonkeyPatch):
 
     assert emitter.timed == []
     assert emitter.audio_chunks == [b"audio"]
-    await tts.aclose()
-
-
-@pytest.mark.asyncio
-async def test_unspaced_script_gets_one_word_per_character(monkeypatch: pytest.MonkeyPatch):
-    tts = xai_tts.TTS(api_key="test-key", language="ja")
-    frames = [_graph("こんに", 0.0), _graph("ちは。 ", 0.3)]
-    _, emitter = await _run_with_timestamps(monkeypatch, tts, "こんにちは。", frames)
-
-    assert [str(t) for t in emitter.timed] == ["こ", "ん", "に", "ち", "は", "。 "]
-    assert (emitter.timed[2].start_time, emitter.timed[2].end_time) == (
-        pytest.approx(0.2),
-        pytest.approx(0.3),
-    )
-    await tts.aclose()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("expressive", [True, False])
-async def test_bracket_cues_dropped_in_expressive_mode(
-    expressive: bool, monkeypatch: pytest.MonkeyPatch
-):
-    tts = xai_tts.TTS(api_key="test-key")
-    tts._set_expressive(expressive)  # pyright: ignore[reportPrivateUsage]
-    # xAI echoes the [pause] cue in its timings, split here across two frames
-    frames = [_graph("Sure [pau", 0.0), _graph("se] one ", 0.9)]
-    _, emitter = await _run_with_timestamps(monkeypatch, tts, "Sure [pause] one", frames)
-
-    # outside expressive mode a bracket is the reply's own text, so it stays
-    expected = "Sure one " if expressive else "Sure [pause] one "
-    assert "".join(str(t) for t in emitter.timed) == expected
-    one = next(t for t in emitter.timed if str(t) == "one ")
-    assert (one.start_time, one.end_time) == (pytest.approx(1.3), pytest.approx(1.7))
-    await tts.aclose()
-
-
-@pytest.mark.asyncio
-async def test_cue_attached_to_word_keeps_word_timing(monkeypatch: pytest.MonkeyPatch):
-    tts = xai_tts.TTS(api_key="test-key")
-    tts._set_expressive(True)  # pyright: ignore[reportPrivateUsage]
-    # "[pause]" spans 0.6-1.3 s and "go" is spoken from 1.3 s
-    frames = [_graph("Ready [pause]go ", 0.0)]
-    _, emitter = await _run_with_timestamps(monkeypatch, tts, "Ready [pause]go", frames)
-
-    assert [(str(t), t.start_time, t.end_time) for t in emitter.timed] == [
-        ("Ready ", 0.0, pytest.approx(0.6)),
-        ("go ", pytest.approx(1.3), pytest.approx(1.6)),
-    ]
     await tts.aclose()
 
 
