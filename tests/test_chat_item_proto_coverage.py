@@ -93,7 +93,25 @@ SATURATED_ITEMS: list[llm.ChatItem] = [
 
 def _repeated(fd: FieldDescriptor) -> bool:
     # FieldDescriptor.is_repeated landed in protobuf 6.31; the package floor is 3
-    return bool(getattr(fd, "is_repeated", fd.label == fd.LABEL_REPEATED))
+    repeated = getattr(fd, "is_repeated", None)
+    if repeated is not None:
+        return bool(repeated)
+    return fd.label == fd.LABEL_REPEATED
+
+
+@pytest.mark.parametrize("repeated", [False, True])
+def test_repeated_supports_descriptors_without_label(repeated: bool) -> None:
+    from types import SimpleNamespace
+
+    assert _repeated(SimpleNamespace(is_repeated=repeated)) is repeated
+
+
+@pytest.mark.parametrize("repeated", [False, True])
+def test_repeated_supports_legacy_descriptors(repeated: bool) -> None:
+    from types import SimpleNamespace
+
+    descriptor = SimpleNamespace(label=3 if repeated else 1, LABEL_REPEATED=3)
+    assert _repeated(descriptor) is repeated
 
 
 def _unset_fields(msg: Message, prefix: str = "") -> list[str]:
