@@ -488,6 +488,43 @@ async def test_incomplete_response_is_non_retryable_and_does_not_update_context(
         await llm_model.aclose()
 
 
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("frames", "attempts"),
+    [([_RESPONSE_CREATED], 3), ([_RESPONSE_CREATED, _TEXT_DELTA], 1)],
+    ids=["no-output", "after-text"],
+)
+async def test_http_stream_ending_before_a_terminal_event_is_an_error(
+    frames: list[dict], attempts: int
+) -> None:
+    """An SSE body that ends without response.completed/failed/incomplete was cut short.
+    It is retried only while nothing has reached the caller, as on the WebSocket path."""
+    client = MagicMock()
+    client._base_url = httpx.URL("https://api.openai.com/v1")
+    events = [LLMStream._parse_ws_event(object(), f) for f in frames]  # type: ignore[arg-type]
+    client.responses.create = AsyncMock(side_effect=lambda **_: _ReplayHTTPStream(events))
+    llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    text = ""
+    try:
+        with pytest.raises(APIConnectionError):
+            async with llm_model.chat(
+                chat_ctx=chat_ctx,
+                conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=5.0),
+            ) as stream:
+                async for chunk in stream:
+                    if chunk.delta and chunk.delta.content:
+                        text += chunk.delta.content
+
+        assert client.responses.create.await_count == attempts
+        assert text == ("hello" if attempts == 1 else "")
+        assert llm_model._prev_resp_id == ""
+    finally:
+        await llm_model.aclose()
+
+
 class _StallingResponsesWS:
     """Replays raw response frames, then dies the way a socket going quiet does."""
 
