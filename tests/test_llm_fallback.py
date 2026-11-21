@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError
+from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, utils
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -679,6 +679,124 @@ async def test_reports_active_instance_model_and_provider() -> None:
         assert fallback_adapter.provider == "primary"
     finally:
         await fallback_adapter.aclose()
+
+
+class _GatedFailureLLM(_NamedLLM):
+    """Fails only when released, so a close can race an attempt that is still in flight."""
+
+    def __init__(self, model: str) -> None:
+        super().__init__(model=model, provider=f"{model}-provider")
+        self.requests = 0
+        self.first_started = asyncio.Event()
+        self.first_release = asyncio.Event()
+        self.probe_started = asyncio.Event()
+        self.probe_release = asyncio.Event()
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        **kwargs: Any,
+    ) -> LLMStream:
+        self.requests += 1
+        first = self.requests == 1
+        return _GatedFailureLLMStream(
+            self,
+            started=self.first_started if first else self.probe_started,
+            release=self.first_release if first else self.probe_release,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+        )
+
+
+class _GatedFailureLLMStream(LLMStream):
+    def __init__(
+        self,
+        llm: _GatedFailureLLM,
+        *,
+        started: asyncio.Event,
+        release: asyncio.Event,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(llm, **kwargs)
+        self._started = started
+        self._release = release
+
+    async def _run(self) -> None:
+        self._started.set()
+        await self._release.wait()
+        raise APITimeoutError("provider failed")
+
+
+async def test_aclose_cancels_in_flight_recovery_probe() -> None:
+    primary = _ScriptedLLM("primary", [APITimeoutError(), None])
+    fallback = _ScriptedLLM("fallback", [])
+    probe_finish = asyncio.Event()
+    primary.finish = probe_finish
+    adapter = FallbackAdapter([primary, fallback])
+    events: list[Any] = []
+    adapter.on("llm_availability_changed", events.append)
+    try:
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+
+        recovery = adapter._status[0].recovering_task
+        assert recovery is not None, "the failed primary was not probed"
+        assert not recovery.done(), "the recovery probe finished before aclose()"
+
+        await adapter.aclose()
+
+        assert recovery.done(), "recovery probe outlived aclose()"
+        assert recovery.cancelled(), "aclose() did not cancel the recovery probe"
+
+        # the probe's provider request is cancelled, so releasing it cannot flip the
+        # adapter back to available or emit on the already-closed adapter
+        probe_finish.set()
+        await asyncio.gather(recovery, return_exceptions=True)
+        assert not adapter._status[0].available, "availability flipped after aclose()"
+        assert not any(event.available for event in events), (
+            "availability event emitted after aclose()"
+        )
+    finally:
+        probe_finish.set()
+        task = adapter._status[0].recovering_task
+        if task is not None:
+            await utils.aio.cancel_and_wait(task)
+        await adapter.aclose()
+
+
+async def test_no_recovery_probe_after_close() -> None:
+    # aclose() sweeps the recovery slots once; an attempt still in flight fails
+    # afterwards and must not start a probe that nothing is left to cancel
+    primary = _GatedFailureLLM("primary")
+    fallback = _ScriptedLLM("fallback", [])
+    adapter = FallbackAdapter([primary, fallback])
+    stream = adapter.chat(chat_ctx=ChatContext.empty())
+    try:
+        await asyncio.wait_for(primary.first_started.wait(), timeout=5)
+
+        await adapter.aclose()
+        primary.first_release.set()
+
+        response = await stream.collect()
+        assert response.text == "fallback"
+
+        for llm_status in adapter._status:
+            assert llm_status.recovering_task is None or llm_status.recovering_task.done(), (
+                "a recovery probe outlived aclose()"
+            )
+        assert not primary.probe_started.is_set(), "a recovery probe started after aclose()"
+        assert primary.requests == 1
+    finally:
+        primary.first_release.set()
+        primary.probe_release.set()
+        for llm_status in adapter._status:
+            if llm_status.recovering_task is not None:
+                await utils.aio.cancel_and_wait(llm_status.recovering_task)
+        await adapter.aclose()
 
 
 async def test_prewarm_forwards_event_loop() -> None:
