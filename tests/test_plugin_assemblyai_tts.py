@@ -41,6 +41,7 @@ def _pcm(num_bytes: int, seed: int) -> bytes:
 class _Session:
     params: dict[str, str]
     authorization: str | None
+    user_agent: str | None = None
     received: list[dict[str, Any]] = field(default_factory=list)
     ws: web.WebSocketResponse | None = None
 
@@ -132,6 +133,7 @@ class _FakeServer:
         session = _Session(
             params=dict(request.query),
             authorization=request.headers.get("Authorization"),
+            user_agent=request.headers.get("User-Agent"),
             ws=ws,
         )
         self.sessions.append(session)
@@ -453,6 +455,7 @@ async def test_stream_sends_one_request_per_sentence() -> None:
 
     session = srv.sessions[0]
     assert session.authorization == "test-key"  # raw key, no "Bearer"
+    assert session.user_agent == "AssemblyAI/1.0 (integration=Livekit)"
     assert session.params == {
         "model_id": "assemblyai-tts-1",
         "voice_id": "aai-anna",

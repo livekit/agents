@@ -295,10 +295,15 @@ class TTS(tts.TTS):
             params["language"] = opts.language
         url = f"{opts.base_url}/v1/ws?{urlencode(params)}"
 
+        headers = {
+            "Authorization": opts.api_key,
+            "User-Agent": "AssemblyAI/1.0 (integration=Livekit)",
+        }
+
         try:
             ws = await asyncio.wait_for(
                 # the key goes in raw: the service rejects "Bearer <key>" as an invalid key
-                self._ensure_session().ws_connect(url, headers={"Authorization": opts.api_key}),
+                self._ensure_session().ws_connect(url, headers=headers),
                 timeout,
             )
         except asyncio.TimeoutError:
