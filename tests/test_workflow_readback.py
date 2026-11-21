@@ -87,10 +87,16 @@ async def test_email_with_verify_spelling_requires_confirmation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("first_name", "last_name"),
-    [("Shayne", "Cole"), ("Anne-Marie", "O'Neill"), ("Ana", "García")],
+    ("first_name", "last_name", "spelled"),
+    [
+        ("Shayne", "Cole", "S h a y n e C o l e"),
+        ("Anne-Marie", "O'Neill", "A n n e hyphen M a r i e O apostrophe N e i l l"),
+        ("Ana", "García", "A n a G a r c í a"),
+    ],
 )
-async def test_name_is_spelled_on_subsequent_updates(first_name: str, last_name: str) -> None:
+async def test_name_is_spelled_on_subsequent_updates(
+    first_name: str, last_name: str, spelled: str
+) -> None:
     task = beta.workflows.GetNameTask(first_name=True, last_name=True)
     ctx = _audio_ctx()
 
@@ -100,7 +106,6 @@ async def test_name_is_spelled_on_subsequent_updates(first_name: str, last_name:
 
     assert first is not None and second is not None
     assert first != second
-    spelled = " ".join(f"{first_name}{last_name}")
     assert spelled not in first
     assert spelled in second
     assert "  " not in second
@@ -137,15 +142,34 @@ async def test_phone_is_read_digit_by_digit_once_a_confirmation_is_refused() -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("street", "unit", "locality", "country"),
+    ("street", "unit", "locality", "country", "spelled"),
     [
-        ("1 Main St", "", "Springfield", "US"),
-        ("88 Harbor Lane", "Apartment 3", "Portland Oregon 97209", "United States"),
-        ("5 Rue de l’Ancienne Comédie", "App C4", "75006 Paris", "France"),
+        ("1 Main St", "", "Springfield", "US", "1 M a i n S t"),
+        (
+            "88 Harbor Lane",
+            "Apartment 3",
+            "Portland Oregon 97209",
+            "United States",
+            "8 8 H a r b o r L a n e",
+        ),
+        (
+            "5 Rue de l’Ancienne Comédie",
+            "App C4",
+            "75006 Paris",
+            "France",
+            "5 R u e d e l apostrophe A n c i e n n e C o m é d i e",
+        ),
+        (
+            "12 St. Mary's Rd.",
+            "",
+            "Saint-Denis",
+            "France",
+            "1 2 S t period M a r y apostrophe s R d period",
+        ),
     ],
 )
 async def test_address_is_spelled_on_subsequent_updates(
-    street: str, unit: str, locality: str, country: str
+    street: str, unit: str, locality: str, country: str, spelled: str
 ) -> None:
     task = beta.workflows.GetAddressTask()
     ctx = _audio_ctx()
@@ -156,7 +180,6 @@ async def test_address_is_spelled_on_subsequent_updates(
 
     assert first is not None and second is not None
     assert first != second
-    spelled = " ".join(street.replace(" ", ""))
     assert spelled not in first
     assert spelled in second
     assert "  " not in second
