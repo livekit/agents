@@ -33,11 +33,12 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
 from .api import ws_headers
-from .log import logger
+from .log import log_server_message, logger
+from .models import LogLevel
 
 SUPPORTED_SAMPLE_RATE = 48000
 # Catalog voice "Everly" (en-us), used when neither `voice` nor `voice_id` is given.
@@ -83,6 +84,19 @@ def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
     )
 
 
+def _timed_text(msg_data: dict[str, Any]) -> TimedString:
+    """Build the timed transcript for a `{"type": "text"}` frame.
+
+    The server sends the synthesized text word by word (the first frame can hold a few
+    words), with timings in seconds from the start of the stream.
+    """
+    return TimedString(
+        text=f"{msg_data['text']} ",
+        start_time=msg_data.get("start_s", NOT_GIVEN),
+        end_time=msg_data.get("stop_s", NOT_GIVEN),
+    )
+
+
 @dataclass
 class _TTSOptions:
     voice: str | None
@@ -90,6 +104,7 @@ class _TTSOptions:
     pronunciation_id: str | None
     word_tokenizer: tokenize.WordTokenizer
     json_config: dict[str, Any] | None = None
+    log_level: LogLevel | None = None
 
 
 class TTS(tts.TTS):
@@ -105,6 +120,7 @@ class TTS(tts.TTS):
         json_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
         word_tokenizer: tokenize.WordTokenizer | None = None,
+        log_level: LogLevel | None = None,
     ) -> None:
         """
         Initialize the Gradium TTS.
@@ -118,9 +134,13 @@ class TTS(tts.TTS):
                 default (`DEFAULT_VOICE_ID`) when neither is given.
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            log_level (LogLevel): Opt in to the server's log messages, such as a warning about an
+                unknown or deprecated `json_config` key: the lowest level to receive ("debug",
+                "info", "warning" or "error"). They are written to the `livekit.plugins.gradium`
+                logger at their own level. Off by default.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
             sample_rate=SUPPORTED_SAMPLE_RATE,
             num_channels=1,
         )
@@ -159,6 +179,7 @@ class TTS(tts.TTS):
             pronunciation_id=pronunciation_id,
             word_tokenizer=word_tokenizer,
             json_config=json_config,
+            log_level=log_level,
         )
         self._session = http_session
 
@@ -274,6 +295,8 @@ class ChunkedStream(tts.ChunkedStream):
                     setup_msg["pronunciation_id"] = self._opts.pronunciation_id
                 if self._opts.json_config is not None:
                     setup_msg["json_config"] = json.dumps(self._opts.json_config)
+                if self._opts.log_level is not None:
+                    setup_msg["log_level"] = self._opts.log_level
                 await ws.send_str(json.dumps(setup_msg))
                 text_msg = {"type": "text", "text": self._input_text}
                 await ws.send_str(json.dumps(text_msg))
@@ -300,8 +323,7 @@ class ChunkedStream(tts.ChunkedStream):
                         msg_data = json.loads(msg.data)
                         type_ = msg_data.get("type")
                         if type_ == "text":
-                            # TODO(laurent): handle text timestamps?
-                            pass
+                            output_emitter.push_timed_transcript(_timed_text(msg_data))
                         elif type_ == "ready":
                             pass
                         elif type_ == "audio":
@@ -311,6 +333,8 @@ class ChunkedStream(tts.ChunkedStream):
                             break
                         elif type_ == "error":
                             raise _api_error(msg_data)
+                        elif type_ == "log":
+                            log_server_message(msg_data)
                         else:
                             logger.warning(f"unknown message type: {type_}")
                 output_emitter.flush()
@@ -405,6 +429,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 setup_msg["pronunciation_id"] = self._opts.pronunciation_id
             if self._opts.json_config is not None:
                 setup_msg["json_config"] = json.dumps(self._opts.json_config)
+            if self._opts.log_level is not None:
+                setup_msg["log_level"] = self._opts.log_level
 
             await ws.send_str(json.dumps(setup_msg))
 
@@ -437,8 +463,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     msg_data = json.loads(msg.data)
                     type_ = msg_data.get("type")
                     if type_ == "text":
-                        # TODO(laurent): handle text timestamps?
-                        pass
+                        output_emitter.push_timed_transcript(_timed_text(msg_data))
                     elif type_ == "ready":
                         pass
                     elif type_ == "audio":
@@ -449,6 +474,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         break
                     elif type_ == "error":
                         raise _api_error(msg_data)
+                    elif type_ == "log":
+                        log_server_message(msg_data)
                     else:
                         logger.warning(f"unknown message type: {type_}")
 

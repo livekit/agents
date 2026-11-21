@@ -178,13 +178,18 @@ class LLM(llm.LLM):
         if is_given(self._opts.user):
             extra["metadata"] = {**(extra.get("metadata") or {}), "user_id": self._opts.user}
 
-        # SDK 1.x dropped temperature/top_k from messages.create(). Older models
+        # SDK 1.x dropped temperature/top_p/top_k from messages.create(). Older models
         # still honor them when they are merged into the request JSON.
         sampling: dict[str, Any] = {}
         if is_given(self._opts.temperature):
             sampling["temperature"] = self._opts.temperature
         if is_given(self._opts.top_k):
             sampling["top_k"] = self._opts.top_k
+        # the same applies to extra_kwargs (the evals judges pass temperature there),
+        # which override the options above
+        for param in ("temperature", "top_p", "top_k"):
+            if param in extra:
+                sampling[param] = extra.pop(param)
         if sampling:
             extra_body = dict(extra.get("extra_body") or {})
             extra_body.update(sampling)
@@ -390,7 +395,15 @@ class LLMStream(llm.LLMStream):
             if event.message.usage.cache_read_input_tokens:
                 self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
-            self._output_tokens += event.usage.output_tokens
+            # usage on message_delta is cumulative: it replaces the message_start counts
+            usage = event.usage
+            self._output_tokens = usage.output_tokens
+            if usage.input_tokens is not None:
+                self._input_tokens = usage.input_tokens
+            if usage.cache_creation_input_tokens is not None:
+                self._cache_creation_tokens = usage.cache_creation_input_tokens
+            if usage.cache_read_input_tokens is not None:
+                self._cache_read_tokens = usage.cache_read_input_tokens
         elif event.type == "content_block_start":
             if event.content_block.type == "tool_use":
                 self._tool_call_id = event.content_block.id

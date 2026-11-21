@@ -31,7 +31,7 @@ import base64
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import aiohttp
 
@@ -44,23 +44,36 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
+from livekit.agents.utils.misc import is_given
 
 from .log import logger
 from .models import (
     DEFAULT_MODEL,
+    DEFAULT_VOICE,
+    DEFAULT_VOICES,
+    MAX_SPEED,
+    MIN_SPEED,
+    RETIRED_MODELS,
+    SOURCE_HEADER,
+    SOURCE_VALUE,
+    SPEED_RANGES,
     GnaniTTSBitrates,
     GnaniTTSContainers,
     GnaniTTSEncodings,
     GnaniTTSLanguages,
     GnaniTTSModels,
+    GnaniTTSV25Voices,
+    GnaniTTSV30Voices,
     GnaniTTSVoices,
 )
+from .request_id import REQUEST_ID_HEADER, generate_request_id
 
 GNANI_TTS_BASE_URL = "https://api.vachana.ai"
 
 GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 
-SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
+SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
 
 _DEPRECATED_TTS_KWARGS = frozenset(("http_session",))
@@ -79,12 +92,57 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
         )
 
 
+# Voices known to belong to exactly one model. Used only to fail fast on a
+# cross-model mismatch (which the API rejects with a 400); voices outside these
+# sets are passed through untouched so newly added voices keep working.
+_MODEL_VOICES: dict[str, frozenset[str]] = {
+    "timbre-v2.5": frozenset(get_args(GnaniTTSV25Voices)),
+    "timbre-v3.0": frozenset(get_args(GnaniTTSV30Voices)),
+}
+
+
+def _validate_model(model: str) -> None:
+    if model in RETIRED_MODELS:
+        raise ValueError(
+            f"Gnani TTS model {model!r} has been retired by the API and is no longer "
+            f"available. Use model='timbre-v2.5' or model='timbre-v3.0' instead "
+            "(voices are model-specific, see https://docs.gnani.ai/api/TTS/available-voices)."
+        )
+
+
+def _validate_voice(model: str, voice: str) -> None:
+    """Raise if ``voice`` is known to belong to a *different* model than ``model``."""
+    own = _MODEL_VOICES.get(model)
+    if own is None or voice in own:
+        return
+    for other_model, other_voices in _MODEL_VOICES.items():
+        if other_model != model and voice in other_voices:
+            raise ValueError(
+                f"Voice {voice!r} belongs to model {other_model!r} and is not supported by "
+                f"model {model!r}. Pass a {model} voice, e.g. voice={DEFAULT_VOICES[model]!r}."
+            )
+
+
+def _validate_speed(model: str, speed: float | None) -> None:
+    """Raise if ``speed`` is outside the range the API accepts for ``model``."""
+    if speed is None:
+        return
+    low, high = SPEED_RANGES.get(model, (MIN_SPEED, MAX_SPEED))
+    if not (low <= speed <= high):
+        raise ValueError(f"speed for {model} must be between {low} and {high}, got {speed}")
+
+
+def _default_voice(model: str) -> str:
+    return DEFAULT_VOICES.get(model, DEFAULT_VOICE)
+
+
 @dataclass
 class GnaniTTSOptions:
     api_key: str
-    voice: str = "Pranav"
+    voice: str = DEFAULT_VOICE
     model: str = DEFAULT_MODEL
     language: str | None = None
+    speed: float | None = None
     sample_rate: int = 16000
     encoding: str = "linear_pcm"
     container: str = "wav"
@@ -102,11 +160,17 @@ class TTS(tts.TTS):
     Supports REST, SSE, and WebSocket synthesis modes.
 
     Args:
-        voice: Voice to use for synthesis
-            (see https://docs.gnani.ai/api/TTS/tts-sse#available-voices).
-        model: TTS model name (default: timbre-v2.0; also: timbre-v2.5).
-        language: BCP-47 language code for timbre-v2.5 only (e.g. "hi-IN").
-        sample_rate: Audio output sample rate (8000-44100).
+        voice: Voice to use for synthesis. Voices belong to a model; when omitted
+            the model's default is used (Pranav for timbre-v2.5, Avinash for
+            timbre-v3.0). See https://docs.gnani.ai/api/TTS/available-voices.
+        model: TTS model name: "timbre-v2.5" (default) or "timbre-v3.0".
+            "timbre-v2.0" has been retired by the API and raises ``ValueError``.
+        language: Language code (e.g. "hi-IN", "auto") for timbre-v2.5 and
+            timbre-v3.0. timbre-v3.0 voices speak every supported language.
+        speed: Speaking rate multiplier: 0.85 to 1.15 for timbre-v2.5, 0.8 to 1.2 for
+            timbre-v3.0. Omitted from the request when not set, so the API default
+            applies (1.0, or the voice's recommended speed on timbre-v3.0).
+        sample_rate: Audio output sample rate (8000, 16000, 22050, 24000, 44100, 48000).
         encoding: Audio encoding (linear_pcm or oggopus).
         container: Audio container format (raw, mp3, wav, ogg).
         api_key: Gnani API key (falls back to GNANI_API_KEY env var).
@@ -117,9 +181,10 @@ class TTS(tts.TTS):
     def __init__(
         self,
         *,
-        voice: GnaniTTSVoices | str = "Pranav",
+        voice: NotGivenOr[GnaniTTSVoices | str] = NOT_GIVEN,
         model: GnaniTTSModels | str = DEFAULT_MODEL,
         language: GnaniTTSLanguages | str | None = None,
+        speed: float | None = None,
         sample_rate: int = 16000,
         num_channels: int = 1,
         encoding: GnaniTTSEncodings | str = "linear_pcm",
@@ -131,6 +196,12 @@ class TTS(tts.TTS):
         **kwargs: Any,
     ) -> None:
         _check_deprecated_tts_args(kwargs)
+
+        _validate_model(model)
+        _validate_speed(model, speed)
+        voice_is_default = not is_given(voice)
+        resolved_voice = _default_voice(model) if not is_given(voice) else voice
+        _validate_voice(model, resolved_voice)
 
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(
@@ -152,9 +223,10 @@ class TTS(tts.TTS):
 
         self._opts = GnaniTTSOptions(
             api_key=self._api_key,
-            voice=voice,
+            voice=resolved_voice,
             model=model,
             language=language,
+            speed=speed,
             sample_rate=sample_rate,
             encoding=encoding,
             container=container,
@@ -163,6 +235,7 @@ class TTS(tts.TTS):
             base_url=base_url,
             synthesize_method=synthesize_method,
         )
+        self._voice_is_default = voice_is_default
         self._session: aiohttp.ClientSession | None = None
 
     @property
@@ -198,16 +271,35 @@ class TTS(tts.TTS):
         voice: GnaniTTSVoices | str | None = None,
         model: GnaniTTSModels | str | None = None,
         language: GnaniTTSLanguages | str | None = None,
+        speed: float | None = None,
         **kwargs: Any,
     ) -> None:
         _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
 
+        new_model = model if model is not None else self._opts.model
+        _validate_model(new_model)
+        # A speed set earlier must also fit a model it is moved to.
+        _validate_speed(new_model, speed if speed is not None else self._opts.speed)
+
+        # Voices are model-specific: when only the model changes and the voice was
+        # never chosen explicitly, move to the new model's default voice.
+        new_voice = self._opts.voice
+        voice_is_default = self._voice_is_default
         if voice is not None:
-            self._opts.voice = voice
-        if model is not None:
-            self._opts.model = model
+            new_voice = voice
+            voice_is_default = False
+        elif voice_is_default and model is not None:
+            new_voice = _default_voice(new_model)
+        _validate_voice(new_model, new_voice)
+
+        # Apply only after everything validated, so a rejected call changes nothing.
+        self._opts.model = new_model
+        self._opts.voice = new_voice
+        self._voice_is_default = voice_is_default
         if language is not None:
             self._opts.language = language
+        if speed is not None:
+            self._opts.speed = speed
 
     async def aclose(self) -> None:
         pass
@@ -234,16 +326,70 @@ def _build_payload(opts: GnaniTTSOptions, text: str) -> dict:
         "model": opts.model,
         "audio_config": audio_config,
     }
-    if opts.model == "timbre-v2.5" and opts.language is not None:
+    if opts.language is not None:
         payload["language"] = opts.language
+    if opts.speed is not None:
+        payload["speed"] = opts.speed
     return payload
 
 
 def _build_headers(opts: GnaniTTSOptions) -> dict[str, str]:
+    """Headers for one outbound request: a new request ID each time it is called."""
     return {
         "X-API-Key-ID": opts.api_key,
+        SOURCE_HEADER: SOURCE_VALUE,
+        REQUEST_ID_HEADER: generate_request_id(),
         "Content-Type": "application/json",
     }
+
+
+# WebSocket ``error`` messages carry only a ``type`` and a ``message``, with no status code.
+# The API's input validation (an unknown voice or model, a speed out of range, ...) is
+# reported with these texts. They are the caller's mistake, so retrying cannot help, and
+# they are mapped to a 400 (not retried) just as REST and SSE report them. Any other error
+# message keeps the retryable 500: it may be a transient server failure.
+_CLIENT_ERROR_MESSAGES = (
+    "invalid request",
+    "is not supported",
+    "no longer available",
+    "invalid text or audio configuration",
+)
+
+
+def _ws_error(message: str) -> APIStatusError:
+    """Turn a WebSocket ``error`` message into an ``APIStatusError`` with the right status."""
+    lowered = message.lower()
+    status = 400 if any(text in lowered for text in _CLIENT_ERROR_MESSAGES) else 500
+    return APIStatusError(
+        message=f"Gnani TTS stream error: {message}", status_code=status, body=message
+    )
+
+
+def _ws_handshake_error(error: Any) -> APIStatusError:
+    """The server refused the WebSocket upgrade (``websockets.exceptions.InvalidStatus``).
+
+    Keep the HTTP status, so a bad key (401) fails at once like it does on REST and SSE
+    instead of being retried as a connection error.
+    """
+    response = error.response
+    body = response.body.decode(errors="replace") if response.body else None
+    return APIStatusError(
+        message=f"Gnani TTS WebSocket handshake rejected ({response.status_code})",
+        status_code=response.status_code,
+        body=body,
+    )
+
+
+def _ws_closed_error(error: Any) -> APIStatusError | APIConnectionError:
+    """The connection closed before the audio was complete. A 1008 close is the server
+    rejecting the request (a policy violation), which a retry cannot fix."""
+    rcvd = error.rcvd
+    if rcvd is not None and rcvd.code == 1008:
+        reason = rcvd.reason or "rejected"
+        return APIStatusError(
+            message=f"Gnani TTS rejected the request: {reason}", status_code=400, body=reason
+        )
+    return APIConnectionError(f"Gnani TTS WebSocket closed: {error}")
 
 
 def _mime_type(opts: GnaniTTSOptions) -> str:
@@ -480,16 +626,14 @@ class WebSocketChunkedStream(tts.ChunkedStream):
                     elif msg_type == "error":
                         error_msg = payload.get("message", "Unknown error")
                         logger.error("Gnani TTS WS error: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Gnani TTS stream error: {error_msg}",
-                            status_code=500,
-                            body=error_msg,
-                        )
+                        raise _ws_error(error_msg)
 
                 output_emitter.flush()
 
+        except websockets.exceptions.InvalidStatus as e:
+            raise _ws_handshake_error(e) from e
         except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
+            raise _ws_closed_error(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Gnani TTS WebSocket timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):
@@ -586,14 +730,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif msg_type == "error":
                         error_msg = payload.get("message", "Unknown error")
                         logger.error("Gnani TTS WS error: %s", error_msg)
-                        raise APIStatusError(
-                            message=f"Gnani TTS stream error: {error_msg}",
-                            status_code=500,
-                            body=error_msg,
-                        )
+                        raise _ws_error(error_msg)
 
+        except websockets.exceptions.InvalidStatus as e:
+            raise _ws_handshake_error(e) from e
         except websockets.exceptions.ConnectionClosed as e:
-            raise APIConnectionError(f"Gnani TTS WebSocket closed: {e}") from e
+            raise _ws_closed_error(e) from e
         except asyncio.TimeoutError as e:
             raise APITimeoutError("Gnani TTS WebSocket timed out") from e
         except (APIStatusError, APIConnectionError, APITimeoutError):

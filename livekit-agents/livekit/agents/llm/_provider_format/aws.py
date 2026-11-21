@@ -26,14 +26,36 @@ class BedrockFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    cache_messages: bool = False,
 ) -> tuple[list[dict], BedrockFormatData]:
+    """Convert to Bedrock Converse ``messages`` and system texts.
+
+    With ``cache_messages``, a ``cachePoint`` block follows the last block of conversation
+    content in the serialized messages: the latest user message, tool call or tool result
+    that produced content. Tool results are serialized next to their calls, so this is
+    not always the last item of ``chat_ctx``. System and developer messages after the
+    preamble, such as ``generate_reply(instructions=...)``, are rewritten into user turns
+    for this request only and never end the cached prefix: a cachePoint after their text
+    would end it on content the next request no longer sends, so it would never be read.
+    """
+    # ids survive convert_mid_conversation_instructions, so the rewritten instructions
+    # can still be told apart from the conversation
+    instruction_ids = {
+        item.id
+        for item in chat_ctx.items
+        if item.type == "message" and item.role in ("system", "developer")
+    }
     chat_ctx = convert_mid_conversation_instructions(chat_ctx)
 
     messages: list[dict] = []
     system_messages: list[str] = []
     current_role: str | None = None
     current_content: list[dict] = []
+    # (content list, index) right after the last conversation block serialized so far
+    cache_at: tuple[list[dict], int] | None = None
 
     for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
         if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
@@ -54,6 +76,7 @@ def to_chat_ctx(
             current_content = []
             current_role = role
 
+        blocks_before = len(current_content)
         if msg.type == "message":
             for content in msg.content:
                 if isinstance(content, llm.ImageContent):
@@ -88,9 +111,22 @@ def to_chat_ctx(
                 }
             )
 
+        # an item that added no block (e.g. audio only) leaves the boundary where it was
+        if (
+            cache_messages
+            and msg.id not in instruction_ids
+            and len(current_content) > blocks_before
+        ):
+            cache_at = (current_content, len(current_content))
+
     # Finalize the last message if there’s any content left
     if current_role is not None and current_content:
         messages.append({"role": current_role, "content": current_content})
+
+    # the content list is the one stored in `messages`, so this edits the request
+    if cache_at is not None:
+        cache_content, cache_index = cache_at
+        cache_content.insert(cache_index, {"cachePoint": {"type": "default"}})
 
     # Ensure the message list starts with a "user" message
     if inject_dummy_user_message and (not messages or messages[0]["role"] != "user"):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections import deque
 from collections.abc import Callable
@@ -16,6 +15,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
 from .chat_context import ChatContext, ChatMessage, FunctionCall
+from .delegation import DelegationDetectionOptions
 from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
@@ -198,6 +198,8 @@ class _Burst:
     """Span clock minus audio clock, fixed by the first fragment: the sound that opened the gate
     and the oldest unclaimed fragment describe the same moment."""
     opened_at: float = field(default_factory=time.time)
+    abandoned: bool = False
+    """Interrupted by the framework, which no longer reads it; its sound plays out unheard."""
     transcript: str = ""
     _last_annotation: float = 0.0
 
@@ -344,6 +346,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
+        duplex.on("delegation_created", lambda ev: self.emit("delegation_created", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(
@@ -533,7 +536,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._chat_ctx.insert(call)
         # a call joins the burst in flight so the tool runs while the model talks; alone, it is a
         # generation of its own, over as soon as it is delivered
-        if self._burst is not None:
+        if self._burst is not None and not self._burst.abandoned:
             self._burst.function_ch.send_nowait(call)
             return
         # under a tool_choice that forces a call, the call is the reply: the speech it leads to
@@ -569,6 +572,10 @@ class _DuplexRealtimeSession(RealtimeSession):
     @property
     def tools(self) -> ToolContext:
         return self._duplex.tools
+
+    @property
+    def background_work_running(self) -> bool:
+        return self._duplex.background_work_running
 
     async def _update_session(
         self,
@@ -667,7 +674,17 @@ class _DuplexRealtimeSession(RealtimeSession):
         pass
 
     def interrupt(self) -> None:
-        pass  # barge-in is the model's own, and it cannot be cancelled
+        # barge-in is the model's own and cannot be cancelled, but the framework stops reading
+        # the burst in flight, so a call arriving later must not join it
+        if self._burst is not None:
+            self._burst.abandoned = True
+
+    def delegate(self, instructions: str | None = None) -> None:
+        self._duplex.delegate(instructions)
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        return self._duplex._delegation_detection
 
     def truncate(
         self,
@@ -685,8 +702,10 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._pending_reply.set_exception(RealtimeError(reason))
 
     async def aclose(self) -> None:
+        await (await self._release_and_close())
+
+    async def _release_and_close(self) -> asyncio.Future[None]:
         await aio.cancel_and_wait(self._segment_atask)
         self._close_burst()
         self._fail_pending_reply("the session closed before the model replied")
-        with contextlib.suppress(Exception):
-            await self._duplex.aclose()
+        return await self._duplex._release_and_close()

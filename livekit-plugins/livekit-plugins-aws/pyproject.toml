@@ -23,11 +23,12 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.8.11",
+    "livekit-agents>=1.8.13",
     "aiobotocore>=3.0.0",
     # StartStreamTranscription is bidirectional, which only the CRT transport provides;
     # transcribe-streaming 0.11 dropped it from its own base dependencies.
-    "aws_sdk_transcribe_streaming>=0.11.0; python_version >= '3.12'",
+    # 0.13 moved the async client to .aio and needs smithy-core 0.13, which stt.py doesn't support yet.
+    "aws_sdk_transcribe_streaming>=0.11.0,<0.13.0; python_version >= '3.12'",
     "smithy-http[awscrt]; python_version >= '3.12'",
 ]
 

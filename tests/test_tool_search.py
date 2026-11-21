@@ -108,166 +108,63 @@ def _make_items() -> list[SearchItem]:
 STRATEGIES = [KeywordSearchStrategy(), BM25SearchStrategy()]
 
 
+@pytest.mark.parametrize("strategy", STRATEGIES)
 class TestSearchStrategies:
     """Tests that apply to all SearchStrategy implementations."""
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_name(self, strategy: SearchStrategy):
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            ("weather", ("get_weather", "get_forecast")),
+            ("academic", ("search_papers",)),
+            ("ticker symbol", ("get_stock_price",)),
+            # a name match outranks description-only matches
+            ("calculator", ("calculator",)),
+        ],
+        ids=["name", "description", "parameter", "name-weighted-higher"],
+    )
+    def test_top_match(self, strategy: SearchStrategy, query: str, expected: tuple[str, ...]):
         items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("weather", items, 5)
-        assert len(results) >= 1
-        assert results[0].name in ("get_weather", "get_forecast")
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_description(self, strategy: SearchStrategy):
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("academic", items, 5)
-        assert len(results) >= 1
-        assert results[0].name == "search_papers"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_parameter(self, strategy: SearchStrategy):
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("ticker symbol", items, 5)
-        assert len(results) >= 1
-        assert results[0].name == "get_stock_price"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    @pytest.mark.parametrize("query", ["checking_balance", "checking balance"])
-    def test_match_by_underscore_term_in_description(self, strategy: SearchStrategy, query: str):
-        """Underscore-joined terms in the description must match, like the
-        space-separated query normalization applied by search()."""
-        items = [
-            SearchItem(
-                name="get_records",
-                description="Fetch the user's checking_balance from the ledger",
-                parameters={"record_type": "Which records to fetch"},
-                source=calculator,
-            ),
-            SearchItem(
-                name="get_weather",
-                description="Get current weather for a city",
-                parameters={"city": "City name"},
-                source=weather_tool,
-            ),
-        ]
         strategy.build_index(items)
         results = strategy.search(query, items, 5)
-        assert len(results) == 1
-        assert results[0].name == "get_records"
+        assert results[0].name in expected
+        assert results[0].index_data is not None
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    @pytest.mark.parametrize("query", ["pending_refunds", "pending refunds"])
-    def test_match_by_underscore_term_in_param_description(
-        self, strategy: SearchStrategy, query: str
+    # index and query text get the same normalization: underscores, punctuation and hyphens
+    # never stop a match
+    @pytest.mark.parametrize(
+        ("description", "parameters", "query"),
+        [
+            ("Fetch the user's checking_balance from the ledger", {}, "checking_balance"),
+            ("Fetch the user's checking_balance from the ledger", {}, "checking balance"),
+            (
+                "Fetch ledger records",
+                {"filter": "One of: pending_refunds only, all"},
+                "pending_refunds",
+            ),
+            (
+                "Fetch ledger records",
+                {"filter": "One of: pending_refunds only, all"},
+                "pending refunds",
+            ),
+            ("Fetch the ledger, then the balance.", {}, "balance"),
+            ("Fetch the ledger, then the balance.", {}, "ledger"),
+            ("Track ledger, journal and receipts", {}, "ledger"),
+            ("Get real-time balance updates", {}, "real"),
+            ("Get real-time balance updates", {}, "time"),
+            ("Fetch account balance", {}, "the balance."),
+            ("Fetch account balance", {}, "balance?"),
+            ("Fetch ledger records", {"filter": "Only include settled refunds."}, "refunds"),
+        ],
+    )
+    def test_text_normalization(
+        self, strategy: SearchStrategy, description: str, parameters: dict, query: str
     ):
-        """Underscore-joined terms in parameter descriptions must match, like
-        the space-separated query normalization applied by search()."""
         items = [
             SearchItem(
                 name="get_records",
-                description="Fetch ledger records for the user",
-                parameters={"filter": "One of: pending_refunds only, settled only, all"},
-                source=calculator,
-            ),
-            SearchItem(
-                name="get_weather",
-                description="Get current weather for a city",
-                parameters={"city": "City name"},
-                source=weather_tool,
-            ),
-        ]
-        strategy.build_index(items)
-        results = strategy.search(query, items, 5)
-        assert len(results) == 1
-        assert results[0].name == "get_records"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    @pytest.mark.parametrize("query", ["balance", "ledger"])
-    def test_match_by_punctuation_in_description(self, strategy: SearchStrategy, query: str):
-        """Punctuation attached to description words (commas, trailing period)
-        must not prevent matches, like the query normalization applied by
-        search()."""
-        items = [
-            SearchItem(
-                name="get_records",
-                description="Fetch the ledger, then the balance.",
-                parameters={"record_type": "Which records to fetch"},
-                source=calculator,
-            ),
-            SearchItem(
-                name="get_weather",
-                description="Get current weather for a city",
-                parameters={"city": "City name"},
-                source=weather_tool,
-            ),
-        ]
-        strategy.build_index(items)
-        results = strategy.search(query, items, 5)
-        assert len(results) == 1
-        assert results[0].name == "get_records"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_mid_sentence_punctuation_in_description(self, strategy: SearchStrategy):
-        """A comma attached to a mid-sentence description word must not prevent
-        matches, like the query normalization applied by search()."""
-        items = [
-            SearchItem(
-                name="get_records",
-                description="Track ledger, journal and receipts",
-                parameters={"record_type": "Which records to track"},
-                source=calculator,
-            ),
-            SearchItem(
-                name="get_weather",
-                description="Get current weather for a city",
-                parameters={"city": "City name"},
-                source=weather_tool,
-            ),
-        ]
-        strategy.build_index(items)
-        results = strategy.search("ledger", items, 5)
-        assert len(results) == 1
-        assert results[0].name == "get_records"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    @pytest.mark.parametrize("query", ["real", "time"])
-    def test_match_by_hyphenated_word_in_description(self, strategy: SearchStrategy, query: str):
-        """Hyphenated description words must match their parts, like the query
-        normalization applied by search()."""
-        items = [
-            SearchItem(
-                name="get_records",
-                description="Get real-time balance updates",
-                parameters={"metric": "Which metric to report"},
-                source=calculator,
-            ),
-            SearchItem(
-                name="get_weather",
-                description="Get current weather for a city",
-                parameters={"city": "City name"},
-                source=weather_tool,
-            ),
-        ]
-        strategy.build_index(items)
-        results = strategy.search(query, items, 5)
-        assert len(results) == 1
-        assert results[0].name == "get_records"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    @pytest.mark.parametrize("query", ["the balance.", "balance?"])
-    def test_match_by_punctuation_in_query(self, strategy: SearchStrategy, query: str):
-        """Punctuation attached to query words must not prevent matches against
-        clean description words, like the index normalization applied by
-        build_index()."""
-        items = [
-            SearchItem(
-                name="get_records",
-                description="Fetch account balance",
-                parameters={"account": "Account identifier"},
+                description=description,
+                parameters=parameters,
                 source=calculator,
             ),
             SearchItem(
@@ -278,76 +175,18 @@ class TestSearchStrategies:
             ),
         ]
         strategy.build_index(items)
-        results = strategy.search(query, items, 5)
-        assert len(results) == 1
-        assert results[0].name == "get_records"
+        assert [r.name for r in strategy.search(query, items, 5)] == ["get_records"]
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_period_terminated_param_description(self, strategy: SearchStrategy):
-        """A trailing period on a parameter description must not prevent
-        matches, like the query normalization applied by search()."""
-        items = [
-            SearchItem(
-                name="get_records",
-                description="Fetch ledger records",
-                parameters={"filter": "Only include settled refunds."},
-                source=calculator,
-            ),
-            SearchItem(
-                name="get_weather",
-                description="Get current weather for a city",
-                parameters={"city": "City name"},
-                source=weather_tool,
-            ),
-        ]
-        strategy.build_index(items)
-        results = strategy.search("refunds", items, 5)
-        assert len(results) == 1
-        assert results[0].name == "get_records"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
     def test_max_results_limit(self, strategy: SearchStrategy):
         items = _make_items()
         strategy.build_index(items)
-        results = strategy.search("get", items, 2)
-        assert len(results) == 2
+        assert len(strategy.search("get", items, 2)) == 2
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_no_matches(self, strategy: SearchStrategy):
+    @pytest.mark.parametrize("query", ["xyznonexistent", ""])
+    def test_no_matches(self, strategy: SearchStrategy, query: str):
         items = _make_items()
         strategy.build_index(items)
-        results = strategy.search("xyznonexistent", items, 5)
-        assert len(results) == 0
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_empty_query(self, strategy: SearchStrategy):
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("", items, 5)
-        assert len(results) == 0
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_name_weighted_higher(self, strategy: SearchStrategy):
-        """Tool name matches should rank higher than description-only matches."""
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("calculator", items, 5)
-        assert len(results) >= 1
-        assert results[0].name == "calculator"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_index_data_set_by_build_index(self, strategy: SearchStrategy):
-        items = _make_items()
-        assert items[0].index_data is None
-        strategy.build_index(items)
-        assert items[0].index_data is not None
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_index_data_preserved_through_search(self, strategy: SearchStrategy):
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("weather", items, 5)
-        assert results[0].index_data is not None
+        assert strategy.search(query, items, 5) == []
 
 
 class TestKeywordSpecific:

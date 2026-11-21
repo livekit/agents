@@ -27,6 +27,7 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
+    from .delegation import DelegationDetectionOptions
 
 
 @dataclass
@@ -408,6 +409,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     def tools(self) -> ToolContext:
         return self._active.tools
 
+    @property
+    def background_work_running(self) -> bool:
+        return self._active.background_work_running
+
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
         await self._active.update_instructions(instructions)
@@ -462,6 +467,13 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
         return self._active.say(text)
+
+    def delegate(self, instructions: str | None = None) -> None:
+        self._active.delegate(instructions)
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        return self._active._delegation_detection
 
     def truncate(
         self,

@@ -14,6 +14,10 @@ from .chat_context import (
     ImageContent,
     MetricsReport,
 )
+from .decision_fallback_adapter import (
+    DecisionAvailabilityChangedEvent,
+    DecisionModelFallbackAdapter,
+)
 from .decisions import (
     Choice,
     ChoiceResult,
@@ -27,6 +31,12 @@ from .decisions import (
     ProbabilityResult,
     Score,
     ScoreResult,
+)
+from .delegation import (
+    DelegationCheck,
+    DelegationCreatedEvent,
+    DelegationDetectionOptions,
+    DelegationDetector,
 )
 from .duplex import (
     DuplexAudioFrame,
@@ -150,7 +160,9 @@ __all__ = [
     "Decision",
     "DecisionCapabilities",
     "DecisionKind",
+    "DecisionAvailabilityChangedEvent",
     "DecisionModel",
+    "DecisionModelFallbackAdapter",
     "DecisionResponse",
     "DecisionResult",
     "Probability",
@@ -167,6 +179,10 @@ __all__ = [
     "GenerationCreatedEvent",
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
+    "DelegationCheck",
+    "DelegationCreatedEvent",
+    "DelegationDetectionOptions",
+    "DelegationDetector",
     "LLMError",
     "RemoteItemAddedEvent",
 ]
