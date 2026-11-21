@@ -8,7 +8,7 @@ import pytest
 from livekit.agents import vad
 from livekit.agents.inference import VAD as InferenceVAD
 from livekit.local_inference import VAD as NativeVAD, VAD_WINDOW_SAMPLES
-from livekit.plugins.silero import onnx_model
+from livekit.plugins.silero import VAD as SileroVAD, onnx_model
 
 from . import utils
 
@@ -220,3 +220,40 @@ async def test_plugin_checkpoint_matches_inference_vad() -> None:
         windows += 1
 
     assert windows > 100, "test audio too short to be meaningful"
+
+
+def _silero_vad(**kwargs: Any) -> Any:
+    return SileroVAD.load(force_cpu=True, **kwargs)
+
+
+@pytest.mark.parametrize("make_vad", [_silero_vad, InferenceVAD], ids=["silero", "inference"])
+async def test_update_options_derives_deactivation_like_construction(make_vad: Any) -> None:
+    built = make_vad(activation_threshold=0.7)
+
+    updated = make_vad()
+    stream = updated.stream()
+    try:
+        updated.update_options(activation_threshold=0.7)
+
+        expected = built._opts.deactivation_threshold
+        assert expected == pytest.approx(0.55)
+        assert updated._opts.deactivation_threshold == expected
+        assert stream._opts.deactivation_threshold == expected
+    finally:
+        await stream.aclose()
+
+    lowered = make_vad()
+    lowered.update_options(activation_threshold=0.2)
+    assert lowered._opts.deactivation_threshold < 0.2
+
+
+@pytest.mark.parametrize("make_vad", [_silero_vad, InferenceVAD], ids=["silero", "inference"])
+async def test_update_options_keeps_an_explicit_deactivation_threshold(make_vad: Any) -> None:
+    built = make_vad(deactivation_threshold=0.3)
+    built.update_options(activation_threshold=0.8)
+    assert built._opts.deactivation_threshold == 0.3
+
+    updated = make_vad()
+    updated.update_options(deactivation_threshold=0.2)
+    updated.update_options(activation_threshold=0.8)
+    assert updated._opts.deactivation_threshold == 0.2
