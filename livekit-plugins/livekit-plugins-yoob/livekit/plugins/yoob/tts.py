@@ -235,6 +235,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         segments_ch = utils.aio.Chan[utils.aio.Chan[str]]()
 
         async def _split_segments() -> None:
+            # LiveKit's base class sends one segment per stream (it drops text pushed after a flush),
+            # but a second one, if handed over, gets its own socket and segment.
             current: utils.aio.Chan[str] | None = None
             async for item in self._input_ch:
                 if isinstance(item, str):
@@ -273,12 +275,22 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run_ws(self, text_ch: utils.aio.Chan[str], output_emitter: tts.AudioEmitter) -> None:
         session = self._tts._ensure_session()
         ws = await asyncio.wait_for(
-            session.ws_connect(self._opts.ws_url(), headers=self._tts._headers(), max_msg_size=0),
+            session.ws_connect(
+                self._opts.ws_url(),
+                headers=self._tts._headers(),
+                max_msg_size=0,
+                # The monitor answers pings and probes an idle socket, so a half-open
+                # connection fails within conn_options.liveness_timeout.
+                autoping=False,
+            ),
             self._conn_options.timeout,
+        )
+        monitor = utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
         )
         try:
             await ws.send_str(json.dumps(self._opts.body()))
-            ready = await asyncio.wait_for(ws.receive(), self._conn_options.timeout)
+            ready = await asyncio.wait_for(monitor.receive(), self._conn_options.timeout)
             if ready.type != aiohttp.WSMsgType.TEXT:
                 raise APIStatusError(
                     "Yoob speech socket closed before it was ready",
@@ -289,16 +301,27 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise _socket_error(ready_msg)
             segment_id = ready_msg.get("request_id") or utils.shortuuid()
             output_emitter.start_segment(segment_id=segment_id)
+            text_done = False
 
             async def send_task() -> None:
+                nonlocal text_done
                 async for text in text_ch:
                     self._mark_started()
                     await ws.send_str(json.dumps({"text": text}))
                 await ws.send_str(json.dumps({"end": True}))
+                text_done = True
 
             async def recv_task() -> None:
                 while True:
-                    msg = await ws.receive()
+                    # While text is still coming, a quiet socket is normal (the monitor still
+                    # catches a dead one). Once it has all been sent, audio or "done" must keep
+                    # arriving: a stalled render fails within conn_options.timeout.
+                    try:
+                        msg = await asyncio.wait_for(monitor.receive(), self._conn_options.timeout)
+                    except asyncio.TimeoutError:
+                        if text_done:
+                            raise
+                        continue
                     if msg.type == aiohttp.WSMsgType.BINARY:
                         output_emitter.push(msg.data)
                     elif msg.type == aiohttp.WSMsgType.TEXT:
