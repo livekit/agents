@@ -1,0 +1,38 @@
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_497b6c9b3158a6::t_28ef29376159a8 54,72-74,76-78,92,1135,1212,1641,1953,2065-2066
+  s_497b6c9b3158a6::t_0d4f1eb4bda797 75
+tests/test_realtime_metrics.py
+  s_497b6c9b3158a6::t_cc1706811d09f8 323,325,333,340
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_497b6c9b3158a6::t_28ef29376159a8 97,1786-1815,1822-1823,1826-1831,1842-1843,1846,1858
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_497b6c9b3158a6::t_0d4f1eb4bda797 2113,2115,2968
+  s_497b6c9b3158a6::t_3681c6d6b80d22 64,115,2066-2073,2081-2089,2095,2100,2102-2112,2114,2116-2120,2967,3166-3167
+  s_497b6c9b3158a6::t_b9f49a5647870c 3168
+livekit-agents/livekit/agents/voice/turn.py
+  s_497b6c9b3158a6::t_28ef29376159a8 5,20-29
+livekit-agents/livekit/agents/__init__.py
+  s_497b6c9b3158a6::t_28ef29376159a8 91,198
+livekit-agents/livekit/agents/voice/__init__.py
+  s_497b6c9b3158a6::t_28ef29376159a8 50,54
+tests/test_user_turn.py
+  s_497b6c9b3158a6::t_cc1706811d09f8 35,209-247
+  s_497b6c9b3158a6::t_a5b05e32db31bd 19-20,115-208
+  s_497b6c9b3158a6::t_bec9854a98c8a4 248-249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d02591389f58c5b74e80ae30e8f33ffedf07eab7",
+  "prompts": {},
+  "sessions": {
+    "s_497b6c9b3158a6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2043f-afac-7bc0-bf0a-8939a1563cd2",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
