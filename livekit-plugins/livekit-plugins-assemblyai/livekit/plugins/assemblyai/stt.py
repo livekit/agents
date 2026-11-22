@@ -435,6 +435,17 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
+        if is_given(language):
+            if language:
+                if config.speech_model not in _U3_PRO_MODELS:
+                    raise ValueError(
+                        f"'language' in stream() is only supported for Universal-3 Pro models "
+                        f"({_U3_PRO_MODELS}), but speech_model is '{config.speech_model}'."
+                    )
+                config.language_codes = _normalize_language_codes(language, config.speech_model)
+            else:
+                config.language_codes = NOT_GIVEN
+
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
