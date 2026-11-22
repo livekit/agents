@@ -35,7 +35,7 @@ from typing import (
     overload,
 )
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import NotRequired, ParamSpec, Required, Self, TypedDict
 
 from ..log import logger
@@ -58,6 +58,17 @@ class ProviderTool(Tool):
     @property
     def id(self) -> str:
         return self._id
+
+
+class ToolsetError(BaseModel):
+    """A toolset failed to set up; the session continues without its tools."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    type: Literal["toolset_error"] = "toolset_error"
+    timestamp: float
+    label: str
+    error: Exception = Field(..., exclude=True)
+    recoverable: bool
 
 
 class Toolset:
