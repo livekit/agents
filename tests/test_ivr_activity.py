@@ -95,6 +95,7 @@ class _FakeSession(EventEmitter[Any]):
         )
 
 
+@pytest.mark.virtual_time
 async def test_silence_check_armed_when_started_while_idle() -> None:
     # AMD starts IVR detection after the IVR greeting, with both sides already listening:
     # no state event follows, so the activity has to start from the current states
@@ -108,6 +109,7 @@ async def test_silence_check_armed_when_started_while_idle() -> None:
         await ivr.aclose()
 
 
+@pytest.mark.virtual_time
 async def test_silence_check_waits_for_agent_to_go_idle() -> None:
     session = _FakeSession(agent_state="speaking", user_state="listening")
     ivr = IVRActivity(session, max_silence_duration=0.05)  # type: ignore[arg-type]
