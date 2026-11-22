@@ -40,7 +40,7 @@ async def entrypoint(ctx: JobContext):
         allow_interruptions=True,
         vad=inference.VAD(),
         llm=RealtimeModel(
-            model_id="fixie-ai/ultravox",
+            model="fixie-ai/ultravox",
             voice="Mark",
         ),
     )
@@ -78,7 +78,7 @@ async def entrypoint(ctx: JobContext):
     session: AgentSession[None] = AgentSession(
         allow_interruptions=True,
         vad=inference.VAD(),
-        llm=RealtimeModel(model_id="fixie-ai/ultravox"),
+        llm=RealtimeModel(model="fixie-ai/ultravox"),
     )
     
     await session.start(
@@ -100,14 +100,13 @@ if __name__ == "__main__":
 
 ```python
 RealtimeModel(
-    model_id="fixie-ai/ultravox",         # Model to use (warn + pass-through if unknown)
+    model="fixie-ai/ultravox",             # Model to use (warn + pass-through if unknown)
     voice="Mark",                         # Voice to use (warn + pass-through if unknown)
     api_key=None,                          # API key (defaults to env var)
     base_url=None,                         # API base URL (defaults to Ultravox API)
     system_prompt="You are helpful.",      # System prompt
     input_sample_rate=16000,               # Input audio sample rate
     output_sample_rate=24000,              # Output audio sample rate
-    client_buffer_size_ms=60,              # Audio buffer size (min 200ms used on WS)
     http_session=None,                     # Custom HTTP session
 )
 
