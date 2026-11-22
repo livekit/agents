@@ -2,7 +2,9 @@
 
 [Yoob](https://yoob.com) speech and transcription for [LiveKit Agents](https://docs.livekit.io/agents/).
 
-- `yoob.TTS`: Overtone expressive speech. Understands inline tags such as `[laughing]`, `[sigh]` and `[whisper] ... [/whisper]`, plus free-text `instructions`. Supports `synthesize()` (one request, audio streamed back) and `stream()` (text pushed as the LLM writes it, over one socket per segment). 48 kHz mono.
+LiveKit docs: [speech-to-text](https://docs.livekit.io/agents/models/stt/yoob/) and [text-to-speech](https://docs.livekit.io/agents/models/tts/yoob/) (live with the next release).
+
+- `yoob.TTS`: Overtone expressive speech. Understands inline tags such as `[laughing]`, `[sigh]` and `[whisper] ... [/whisper]`, plus free-text `instructions`. Supports `synthesize()` (one request, audio streamed back) and `stream()` (text pushed as the LLM writes it, over one socket). 48 kHz mono.
 - `yoob.STT`: Undertone transcription. Streaming with interim results and start/end-of-speech events, plus batch `recognize()` of up to 60 s.
 
 ## Install
@@ -27,8 +29,6 @@ session = AgentSession(
 )
 ```
 
-A full agent is in [`examples/voice_agent.py`](examples/voice_agent.py).
-
 ### `yoob.TTS(...)`
 
 | Argument | Default | |
@@ -52,11 +52,8 @@ A full agent is in [`examples/voice_agent.py`](examples/voice_agent.py).
 
 ## Tests
 
-The tests follow LiveKit's own plugin tests (`tests/test_tts.py`, `tests/test_stt.py` in livekit/agents) with the same assertions and thresholds, run against the live API:
+Yoob runs in this repository's shared suites (`tests/test_tts.py`, `tests/test_stt.py`) against the live API:
 
 ```bash
-pip install -e ".[test]"
-YOOB_API_KEY=... pytest -q
+YOOB_API_KEY=... uv run pytest tests/test_tts.py tests/test_stt.py -k yoob
 ```
-
-Last run (2026-11-01, livekit-agents 1.8.10): 10 passed. STT WER on LiveKit's 46.7 s test recording: 4.0% (`yoob-asr-turbo-v1`), 3.4% (`yoob-asr-pro-v1`), 4.0% streamed; `flush()` returns a final in about 0.3 s. Spoken audio is checked with Yoob transcription (WER <= 0.2), and timeouts with a local socket that never answers.

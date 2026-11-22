@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -60,7 +61,7 @@ class STT(stt.STT):
 
         Args:
             model: ``yoob-asr-turbo-v1`` (default) or ``yoob-asr-pro-v1``. Used for batch ``recognize()`` of up to 60 s;
-                streaming always uses the live model.
+                streaming always uses the live model. ``recognize()`` waits ``conn_options.timeout`` for the answer.
             interim_results: Emit partial transcripts while the user speaks.
             api_key: Defaults to the ``YOOB_API_KEY`` environment variable. Keys come from https://app.yoob.com.
             base_url: Defaults to ``YOOB_BASE_URL`` or https://tts-api.yoob.com/v1.
@@ -122,7 +123,11 @@ class STT(stt.STT):
                 params={"model": self._opts.model, "response_format": "verbose_json"},
                 data=wav.getvalue(),
                 headers={**self._headers(), "Content-Type": "audio/wav"},
-                timeout=aiohttp.ClientTimeout(total=60, sock_connect=conn_options.timeout),
+                timeout=aiohttp.ClientTimeout(
+                    total=None,
+                    sock_connect=conn_options.timeout,
+                    sock_read=conn_options.timeout,
+                ),
             ) as resp:
                 body = await resp.text()
                 request_id = resp.headers.get("x-request-id") or ""
@@ -191,11 +196,30 @@ class SpeechStream(stt.SpeechStream):
         self._opts = opts
         self._request_id = ""
 
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        # The socket takes mono. Mix multichannel frames down before the base class resamples and queues
+        # them; sent as is, interleaved stereo would arrive as one channel at twice its length.
+        if frame.num_channels > 1:
+            pcm = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+            frame = rtc.AudioFrame(
+                data=pcm.mean(axis=1).astype(np.int16).tobytes(),
+                sample_rate=frame.sample_rate,
+                num_channels=1,
+                samples_per_channel=frame.samples_per_channel,
+            )
+        super().push_frame(frame)
+
     async def _run(self) -> None:
         session = self._stt._ensure_session()
         try:
             ws = await asyncio.wait_for(
-                session.ws_connect(self._opts.ws_url(), headers=self._stt._headers()),
+                session.ws_connect(
+                    self._opts.ws_url(),
+                    headers=self._stt._headers(),
+                    # The monitor answers pings and probes an idle socket, so a half-open
+                    # connection fails within conn_options.liveness_timeout.
+                    autoping=False,
+                ),
                 self._conn_options.timeout,
             )
         except asyncio.TimeoutError:
@@ -205,8 +229,11 @@ class SpeechStream(stt.SpeechStream):
         except aiohttp.ClientError as e:
             raise APIConnectionError() from e
 
+        monitor = utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
+        )
         try:
-            ready = await asyncio.wait_for(ws.receive(), self._conn_options.timeout)
+            ready = await asyncio.wait_for(monitor.receive(), self._conn_options.timeout)
             if ready.type != aiohttp.WSMsgType.TEXT:
                 raise APIStatusError(
                     "Yoob transcription socket closed before it was ready",
@@ -240,21 +267,30 @@ class SpeechStream(stt.SpeechStream):
             async def recv_task() -> None:
                 speaking = False
                 pending_end = False  # VAD said the utterance ended; its final is still coming
+                last_end: float | None = None  # where this utterance's latest final ends
 
                 def end_of_speech() -> None:
-                    nonlocal speaking, pending_end
+                    nonlocal speaking, pending_end, last_end
                     if speaking:
+                        started_at = self._input_ch.input_started_at
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
-                                type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id
+                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                request_id=self._request_id,
+                                speech_end_time=(
+                                    started_at + last_end
+                                    if started_at is not None and last_end is not None
+                                    else None
+                                ),
                             )
                         )
                     speaking = pending_end = False
+                    last_end = None
 
-                def start_of_speech() -> None:
+                def ensure_started() -> None:
+                    # A transcript belongs to the open utterance, even one VAD has already
+                    # closed, or opens one: it never ends a turn itself.
                     nonlocal speaking
-                    if pending_end:
-                        end_of_speech()
                     if not speaking:
                         speaking = True
                         self._event_ch.send_nowait(
@@ -265,7 +301,7 @@ class SpeechStream(stt.SpeechStream):
                         )
 
                 while True:
-                    msg = await ws.receive()
+                    msg = await monitor.receive()
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,
@@ -292,13 +328,16 @@ class SpeechStream(stt.SpeechStream):
                         raise _socket_error(data)
                     if kind == "vad":
                         if data.get("speech"):
-                            start_of_speech()
+                            if pending_end:
+                                # new speech before the last utterance's final: that one is over
+                                end_of_speech()
+                            ensure_started()
                         elif speaking:
                             pending_end = True
                     elif kind == "partial":
                         if not self._opts.interim_results or not data.get("text"):
                             continue
-                        start_of_speech()
+                        ensure_started()
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
                                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -308,12 +347,15 @@ class SpeechStream(stt.SpeechStream):
                         )
                     elif kind == "final":
                         if data.get("text"):
-                            start_of_speech()
+                            ensure_started()
+                            final = self._speech_data(data)
+                            if final.end_time > 0:
+                                last_end = final.end_time
                             self._event_ch.send_nowait(
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                                     request_id=self._request_id,
-                                    alternatives=[self._speech_data(data)],
+                                    alternatives=[final],
                                 )
                             )
                         if pending_end:
@@ -322,11 +364,37 @@ class SpeechStream(stt.SpeechStream):
                         end_of_speech()
                         return
 
-            tasks = [asyncio.create_task(send_task()), asyncio.create_task(recv_task())]
+            sender = asyncio.create_task(send_task())
+            receiver = asyncio.create_task(recv_task())
             try:
-                await asyncio.gather(*tasks)
+                await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
+                if not sender.done():
+                    receiver.result()
+                else:
+                    sender.result()
+                    # Input has ended: the last finals and "done" must follow within the timeout. A live
+                    # stream waits on the caller for as long as it lasts; this bounds only the wait for a
+                    # server that stops answering after "stop". The audio is spent, so this is final.
+                    try:
+                        await asyncio.wait_for(receiver, self._conn_options.timeout)
+                    except asyncio.TimeoutError:
+                        raise APITimeoutError(
+                            "Yoob transcription sent no last results in time", retryable=False
+                        ) from None
+                    except APIConnectionError as e:
+                        if e.retryable:
+                            raise APIConnectionError(
+                                "Yoob transcription connection lost before the last results",
+                                retryable=False,
+                            ) from e
+                        raise
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.gracefully_cancel(sender, receiver)
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientError as e:
+            # a send on a socket that dropped mid-stream raises before the receiver sees the close
+            raise APIConnectionError() from e
         finally:
             await ws.close()
 
