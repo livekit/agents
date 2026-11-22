@@ -367,3 +367,83 @@ async def test_a_slow_writer_does_not_time_out_while_text_is_still_coming():
         _tts_stream(_tts_server(), ["Hello ", "there."], pause=1.2, timeout=0.5), 10
     )
     assert sum(len(ev.frame.data) for ev in events) > 0
+
+
+async def test_the_render_deadline_starts_when_the_last_text_is_sent():
+    # The writer pauses almost the whole timeout before its last text; the render then needs less than
+    # the timeout. The deadline must count from the end message, not from a read started in the pause.
+    async def ws_tts(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()  # options
+        await ws.send_str(json.dumps({"type": "ready", "request_id": "r1"}))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("end"):
+                await asyncio.sleep(0.3)
+                await ws.send_bytes(b"\x00\x01" * 4800)
+                await ws.send_str(json.dumps({"type": "done"}))
+                await ws.close()
+        return ws
+
+    events = await asyncio.wait_for(
+        _tts_stream(ws_tts, ["Hello ", "there."], pause=0.45, timeout=0.5), 10
+    )
+    assert sum(len(ev.frame.data) for ev in events) > 0
+
+
+async def test_a_failed_send_after_end_input_is_not_retried():
+    # The frames the dead connection consumed cannot be replayed, so a retry would quietly drop them.
+    from livekit.plugins.yoob import STT
+
+    incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+    incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(_READY), ""))
+    ws = AsyncMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.receive.side_effect = incoming.get
+    ws.send_bytes.side_effect = aiohttp.ClientConnectionError("connection reset")
+
+    async def connect(url: str, *, autoping: bool, **kwargs: Any) -> AsyncMock:
+        return ws
+
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.closed = False
+    session.ws_connect = connect
+    s = STT(api_key="k", http_session=session)
+    stream = s.stream(conn_options=APIConnectOptions(max_retry=0))
+    for _ in range(3):
+        stream.push_frame(_frame())
+    stream.end_input()
+    try:
+        with pytest.raises(APIConnectionError) as exc:
+            async for _ in stream:
+                pass
+        assert exc.value.retryable is False
+    finally:
+        await stream.aclose()
+
+
+async def test_recognize_bounds_a_trickling_answer():
+    # One budget for the whole request: an answer that trickles in a byte at a time must not reset it.
+    from livekit.plugins.yoob import STT
+
+    async def trickle(request: web.Request) -> web.StreamResponse:
+        await request.read()
+        resp = web.StreamResponse(headers={"Content-Type": "application/json"})
+        await resp.prepare(request)
+        for ch in json.dumps({"text": "late"}):
+            await resp.write(ch.encode())
+            await asyncio.sleep(0.2)
+        await resp.write_eof()
+        return resp
+
+    runner, base = await _serve({"/v1/audio/transcriptions": trickle})
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="k", base_url=base, http_session=session)
+            started = time.monotonic()
+            with pytest.raises(APITimeoutError):
+                await s.recognize(
+                    [_frame()], conn_options=APIConnectOptions(max_retry=0, timeout=0.5)
+                )
+            assert time.monotonic() - started < 2
+    finally:
+        await runner.cleanup()

@@ -123,11 +123,8 @@ class STT(stt.STT):
                 params={"model": self._opts.model, "response_format": "verbose_json"},
                 data=wav.getvalue(),
                 headers={**self._headers(), "Content-Type": "audio/wav"},
-                timeout=aiohttp.ClientTimeout(
-                    total=None,
-                    sock_connect=conn_options.timeout,
-                    sock_read=conn_options.timeout,
-                ),
+                # one budget for the pooled connection, the upload and the whole answer
+                timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
             ) as resp:
                 body = await resp.text()
                 request_id = resp.headers.get("x-request-id") or ""
@@ -393,8 +390,9 @@ class SpeechStream(stt.SpeechStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientError as e:
-            # a send on a socket that dropped mid-stream raises before the receiver sees the close
-            raise APIConnectionError() from e
+            # A send on a socket that dropped mid-stream raises before the receiver sees the close. Once input has
+            # ended, the frames this connection consumed cannot be replayed: a retry would quietly lose them.
+            raise APIConnectionError(retryable=not self._input_ch.closed) from e
         finally:
             await ws.close()
 

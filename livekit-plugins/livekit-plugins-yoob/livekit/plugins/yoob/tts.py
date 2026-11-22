@@ -301,46 +301,62 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise _socket_error(ready_msg)
             segment_id = ready_msg.get("request_id") or utils.shortuuid()
             output_emitter.start_segment(segment_id=segment_id)
-            text_done = False
+            text_sent = asyncio.Event()
 
             async def send_task() -> None:
-                nonlocal text_done
                 async for text in text_ch:
                     self._mark_started()
                     await ws.send_str(json.dumps({"text": text}))
                 await ws.send_str(json.dumps({"end": True}))
-                text_done = True
+                text_sent.set()
 
             async def recv_task() -> None:
-                while True:
-                    # While text is still coming, a quiet socket is normal (the monitor still
-                    # catches a dead one). Once it has all been sent, audio or "done" must keep
-                    # arriving: a stalled render fails within conn_options.timeout.
-                    try:
-                        msg = await asyncio.wait_for(monitor.receive(), self._conn_options.timeout)
-                    except asyncio.TimeoutError:
-                        if text_done:
-                            raise
-                        continue
-                    if msg.type == aiohttp.WSMsgType.BINARY:
-                        output_emitter.push(msg.data)
-                    elif msg.type == aiohttp.WSMsgType.TEXT:
-                        data = json.loads(msg.data)
-                        kind = data.get("type")
-                        if kind == "error":
-                            raise _socket_error(data)
-                        if kind == "done":
-                            output_emitter.end_segment()
-                            return
-                    elif msg.type in (
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        raise APIStatusError(
-                            "Yoob speech socket closed unexpectedly",
-                            status_code=ws.close_code or -1,
+                # While text is still coming, a quiet socket is normal (the monitor still catches a dead one).
+                # Once the end has been sent, audio or "done" must keep arriving: the deadline starts then and
+                # each message resets it. One read stays outstanding, so no message is lost between phases.
+                loop = asyncio.get_running_loop()
+                limit = self._conn_options.timeout
+                read: asyncio.Future[aiohttp.WSMessage] = asyncio.ensure_future(monitor.receive())
+                sent = asyncio.ensure_future(text_sent.wait())
+                deadline: float | None = None
+                try:
+                    while True:
+                        if deadline is None and text_sent.is_set():
+                            deadline = loop.time() + limit
+                        wait_for: set[asyncio.Future[Any]] = {read} if deadline else {read, sent}
+                        timeout = None if deadline is None else max(0.0, deadline - loop.time())
+                        done, _ = await asyncio.wait(
+                            wait_for, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
                         )
+                        if read not in done:
+                            if deadline is not None and loop.time() >= deadline:
+                                raise asyncio.TimeoutError()
+                            continue
+                        msg = read.result()
+                        read = asyncio.ensure_future(monitor.receive())
+                        if deadline is not None:
+                            deadline = loop.time() + limit
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            output_emitter.push(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.TEXT:
+                            data = json.loads(msg.data)
+                            kind = data.get("type")
+                            if kind == "error":
+                                raise _socket_error(data)
+                            if kind == "done":
+                                output_emitter.end_segment()
+                                return
+                        elif msg.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.CLOSING,
+                        ):
+                            raise APIStatusError(
+                                "Yoob speech socket closed unexpectedly",
+                                status_code=ws.close_code or -1,
+                            )
+                finally:
+                    await utils.aio.gracefully_cancel(read, sent)
 
             tasks = [asyncio.create_task(send_task()), asyncio.create_task(recv_task())]
             try:
