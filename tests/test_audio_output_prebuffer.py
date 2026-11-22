@@ -557,9 +557,7 @@ async def test_wholly_held_interruption_settles_transcript_sync() -> None:
     """The synchronizer wrapper above a wholly held buffer is also released."""
     sink = _RecordingSink()
     buf = _buffered(sink, 0.3)
-    sync = TranscriptSynchronizer(
-        next_in_chain_audio=buf, next_in_chain_text=FakeTextOutput()
-    )
+    sync = TranscriptSynchronizer(next_in_chain_audio=buf, next_in_chain_text=FakeTextOutput())
     output = sync.audio_output
 
     await sync.text_output.capture_text("interrupted")
