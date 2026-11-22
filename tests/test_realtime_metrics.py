@@ -320,8 +320,9 @@ async def test_realtime_e2e_uses_latest_turn_before_playback(
     assert "e2e_latency" not in second.metrics
 
 
+@pytest.mark.parametrize("return_handle", [False, True])
 async def test_realtime_manual_commit_preserves_speech_timing(
-    realtime: tuple[AgentSession, FakeRealtimeModel],
+    realtime: tuple[AgentSession, FakeRealtimeModel], return_handle: bool
 ) -> None:
     session, model = realtime
     now = time.time()
@@ -329,13 +330,14 @@ async def test_realtime_manual_commit_preserves_speech_timing(
     await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
     speeches: list[SpeechCreatedEvent] = []
     session.on("speech_created", speeches.append)
-    await session.commit_user_turn()
+    result = await session.commit_user_turn(return_handle=return_handle)
     for _ in range(100):
         if model.active_session._reply_futs:
             break
         await asyncio.sleep(0)
     assert model.active_session._reply_futs
     assert len(speeches) == 1
+    assert result == (("", speeches[0].speech_handle) if return_handle else "")
     reply = await _finish_reply(
         session, *_start_reply(session, model, requested=speeches[0].speech_handle)
     )
