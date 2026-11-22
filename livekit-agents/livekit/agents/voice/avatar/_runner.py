@@ -135,7 +135,7 @@ class AvatarRunner:
                 if self._audio_playing:
                     notify_task = self._audio_recv.notify_playback_finished(
                         playback_position=self._playback_position,
-                        interrupted=False,
+                        interrupted=frame.interrupted,
                     )
                     self._audio_playing = False
                     self._playback_position = 0.0

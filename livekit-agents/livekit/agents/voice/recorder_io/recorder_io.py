@@ -455,6 +455,15 @@ class RecorderAudioOutput(io.AudioOutput):
         return self.next_in_chain.sample_rate if self.next_in_chain else None
 
     @property
+    def capabilities(self) -> io.AudioOutputCapabilities:
+        return io.AudioOutputCapabilities(
+            pause=self._capabilities.pause,
+            flush_ends_segment=(
+                self.next_in_chain.capabilities.flush_ends_segment if self.next_in_chain else False
+            ),
+        )
+
+    @property
     def pending_since(self) -> float | None:
         """Wall time from which the agent channel is unsettled, while a segment is in flight."""
         return self.__segment_since
@@ -549,3 +558,20 @@ class RecorderAudioOutput(io.AudioOutput):
     def clear_buffer(self) -> None:
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
+
+    def interrupt_buffer(self) -> None:
+        # reset this wrapper's capture state, but do not send a normal downstream
+        # flush: the leaf's interruption hook owns the external transport
+        super().flush()
+        if self.next_in_chain:
+            self.next_in_chain.interrupt_buffer()
+
+    def _on_capture_cancelled(self) -> None:
+        super()._on_capture_cancelled()
+        if self.__recording_io.recording:
+            self.__recording_io._end_run(channel=1)
+        self.__acc = []
+        self.__pcm = None
+        self.__segment_since = None
+        self.__started_at = None
+        self.__reported = False
