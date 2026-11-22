@@ -647,6 +647,13 @@ async def test_vad_trip_flushes_once_and_only_its_reply_ends_the_turn():
         assert _final_texts(events) == ["hello world"]
 
 
+async def _keep_alive(ws: _FakeWebSocket, seconds: int, inactivity_prob: float = 0.95) -> None:
+    """Send one step per second, as a live server does and a silent socket would not."""
+    for _ in range(seconds):
+        ws.incoming.put_nowait(_step(inactivity_prob))
+        await asyncio.sleep(1)
+
+
 async def test_vad_flush_without_a_reply_ends_the_turn_at_the_connection_timeout(caplog):
     """A server that never answers the flush must not hold the turn open: the words the
     model already produced are finalized once the connection timeout runs out, and the
@@ -659,15 +666,9 @@ async def test_vad_flush_without_a_reply_ends_the_turn_at_the_connection_timeout
         ws.incoming.put_nowait(_step(0.95))
         await ws.wait_sent("flush")
 
-        async def keep_alive(seconds: int) -> None:
-            # a live server keeps sending steps, which a silent socket would not
-            for _ in range(seconds):
-                ws.incoming.put_nowait(_step(0.95))
-                await asyncio.sleep(1)
-
-        await keep_alive(int(timeout) - 1)
+        await _keep_alive(ws, int(timeout) - 1)
         assert _final_texts(collector.events) == []
-        await keep_alive(2)
+        await _keep_alive(ws, 2)
         assert _final_texts(collector.events) == ["hello"]
         assert "did not answer a flush" in caplog.text
 
@@ -690,6 +691,29 @@ async def test_vad_confirm_steps_hold_the_turn_until_the_pause_is_confirmed():
 
         ws.incoming.put_nowait(_step(0.95))
         await collector.wait_for(5)
+        assert _final_texts(collector.events) == ["hello"]
+
+
+async def test_answered_flush_waits_for_the_confirmations_past_the_connection_timeout(caplog):
+    """The connection timeout bounds the wait for the server's reply, not for the pause
+    confirmation: once the flush is answered, only `vad_confirm_steps` ends the turn, even
+    when dips keep the count short past the timeout."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    timeout = DEFAULT_API_CONNECT_OPTIONS.timeout
+    async with _open_stream(vad_confirm_steps=3) as (ws, _, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        ws.incoming.put_nowait(FLUSHED)
+        ws.incoming.put_nowait(_step(0.95))
+        ws.incoming.put_nowait(_step(0.95))
+        await _keep_alive(ws, int(timeout) + 2, inactivity_prob=0.85)
+        assert _final_texts(collector.events) == []
+        assert "did not answer a flush" not in caplog.text
+
+        ws.incoming.put_nowait(_step(0.95))
+        await collector.drain(ws)
         assert _final_texts(collector.events) == ["hello"]
 
 

@@ -633,6 +633,9 @@ class SpeechStream(stt.SpeechStream):
                             # commit without them: the caller's reply ends the turn instead.
                             # The deadline stays, so a lost reply can't hold it open.
                             if not manual_flushes and self._queued_manual_flushes == 0:
+                                # the server answered: only `vad_confirm_steps` can end the
+                                # turn now, not the missing-reply timeout
+                                flush_deadline = None
                                 flush_replied = True
                                 _end_turn_if_confirmed()
                     elif type_ == "log":
