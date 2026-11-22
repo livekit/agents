@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping
+import json
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from .. import inference, llm
+from .. import inference, llm, utils
+from ..llm import utils as llm_utils
 from ..llm.decisions import (
     Decision,
     DecisionModel,
@@ -46,9 +49,55 @@ class Block:
 
 @dataclass(frozen=True)
 class Steer:
-    """Let the reply go ahead with extra instructions for this turn only."""
+    """Let the reply go ahead, changed for this turn only.
 
-    instructions: str
+    Set any mix of the fields. With all three, the tools in ``tool_calls`` run first, then
+    the LLM replies with ``instructions`` and has to call ``tool_choice``.
+
+    A steered turn never uses a reply that was generated before the end of the turn
+    (preemptive generation), so its reply starts later than an unsteered one.
+
+    Args:
+        instructions: Extra instructions for the LLM.
+        tool_calls: Tools to run before the LLM replies, without asking the LLM: one name,
+            a list of names, or a mapping of each name to its arguments. They run
+            concurrently, are recorded like the LLM's own tool calls, and count as one
+            step towards ``max_tool_steps``. The LLM then replies as it does after its own
+            calls: it answers a tool that returns a result, and says nothing when no tool
+            returns one, such as a tool that returns ``None`` or only hands off to another
+            agent. ``instructions`` don't change that, so a tool has to return something,
+            such as a short confirmation, for the LLM to reply: instructions that go
+            unused are logged as a warning. Not supported with a realtime model.
+        tool_choice: Name of the one tool the LLM has to call in its first step. The LLM
+            writes the arguments. The LLM always gets that step after ``tool_calls``,
+            whatever they return, unless one of them hands off.
+
+    A tool the active agent doesn't have, or arguments the tool rejects, fail the check:
+    the handler's ``on_error`` decides whether the reply goes ahead unsteered. The
+    arguments of a tool defined with ``raw_schema`` are only checked for the parameters
+    its schema requires.
+    """
+
+    instructions: str | None = None
+    tool_calls: str | Sequence[str] | Mapping[str, Mapping[str, Any]] | None = None
+    tool_choice: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.instructions is None and not self.tool_calls and self.tool_choice is None:
+            raise ValueError("Steer needs instructions, tool_calls or tool_choice")
+
+    def _function_calls(self) -> list[llm.FunctionCall]:
+        """The calls ``tool_calls`` asks for, as the items an LLM step would produce."""
+        step_id = utils.shortuuid("item_")
+        return [
+            llm.FunctionCall(
+                id=f"{step_id}/fnc_{index}",
+                call_id=utils.shortuuid("call_"),
+                name=name,
+                arguments=json.dumps(arguments),
+            )
+            for index, (name, arguments) in enumerate(_tool_call_arguments(self.tool_calls).items())
+        ]
 
 
 class DecisionEvaluated(BaseModel):
@@ -109,7 +158,7 @@ class DecisionGuardrail:
 
     - :meth:`on_user_turn` runs before the agent replies to a user turn. Its handlers can
       return :class:`Block` (no reply for this turn) or :class:`Steer` (extra instructions
-      for this reply).
+      for this reply, tools to run before it, or a tool the LLM has to call).
     - :meth:`on_agent_sentence` runs on each sentence of the agent's reply before it is
       spoken. Its handlers can return :class:`Block` to stop the reply at that sentence.
     - :meth:`on_agent_turn` runs on each complete agent message. It can't change anything.
@@ -185,7 +234,8 @@ class DecisionGuardrail:
                 conversation before it.
             timeout: Longest the check may delay the reply. Defaults to the guardrail's.
             on_error: ``"block"`` treats a failed or timed-out check as :class:`Block`;
-                ``"allow"`` lets the reply go ahead.
+                ``"allow"`` lets the reply go ahead. A :class:`Steer` the reply can't
+                apply fails the check too.
             eager: Re-evaluate on every final transcript so the result is usually ready
                 by the end of the turn.
         """
@@ -415,8 +465,13 @@ class DecisionGuardrail:
         chat_ctx: llm.ChatContext,
         user_message: llm.ChatMessage,
         eager: dict[int, _EagerEvaluation],
+        tool_ctx: llm.ToolContext,
+        direct_tool_calls: bool,
     ) -> list[_Verdict]:
         checks = self._checks_for("user_turn")
+        validate_steer = functools.partial(
+            _validate_steer, tool_ctx=tool_ctx, direct_tool_calls=direct_tool_calls
+        )
         transcript = user_message.text_content or ""
 
         pending: list[Awaitable[_Verdict]] = []
@@ -436,7 +491,13 @@ class DecisionGuardrail:
                 else:
                     prior.task.cancel()
             pending.append(
-                self._run_check(check, evaluate_input, input_text=transcript, evaluation=evaluation)
+                self._run_check(
+                    check,
+                    evaluate_input,
+                    input_text=transcript,
+                    evaluation=evaluation,
+                    validate_steer=validate_steer,
+                )
             )
         return list(await asyncio.gather(*pending))
 
@@ -463,6 +524,7 @@ class DecisionGuardrail:
         speech_id: str | None = None,
         item_id: str | None = None,
         evaluation: asyncio.Task[DecisionResponse] | None = None,
+        validate_steer: Callable[[Steer], None] | None = None,
     ) -> _Verdict:
         failed: _Verdict = Block() if check.on_error == "block" else None
         if evaluation is None:
@@ -521,6 +583,22 @@ class DecisionGuardrail:
         if isinstance(verdict, Block) and check.hook in ("user_turn", "agent_sentence"):
             return verdict
         if isinstance(verdict, Steer) and check.hook == "user_turn":
+            if validate_steer is not None:
+                try:
+                    validate_steer(verdict)
+                except Exception as e:
+                    # checked here, before the reply is touched: a steer that can't be
+                    # applied fails like any other check instead of half-applying. Only a
+                    # ValueError's message is known to leave argument values out
+                    logger.error(
+                        "guardrail handler returned a Steer the reply can't apply",
+                        extra={
+                            "hook": check.hook,
+                            "handler": check.name,
+                            "error": str(e) if isinstance(e, ValueError) else type(e).__name__,
+                        },
+                    )
+                    return failed
             return verdict
         # only the type: Block/Steer carry text that may quote the conversation
         logger.warning(
@@ -539,11 +617,17 @@ class DecisionGuardrail:
         chat_ctx: llm.ChatContext,
         user_message: llm.ChatMessage,
         eager: dict[int, _EagerEvaluation],
+        tool_ctx: llm.ToolContext,
+        direct_tool_calls: bool,
     ) -> Block | Steer | None:
         """Run every ``on_user_turn`` check and combine their results.
 
         ``eager`` is the turn's state from :meth:`_take_turn`. Evaluations
         reused here are removed from it; the caller cancels the rest.
+
+        Args:
+            tool_ctx: The tools the reply will have, to check a :class:`Steer` against.
+            direct_tool_calls: Whether the reply can run ``Steer.tool_calls``.
         """
         checks = self._checks_for("user_turn")
         if not checks:
@@ -559,7 +643,11 @@ class DecisionGuardrail:
                 )
             return _combine([Block() if c.on_error == "block" else None for c in checks])
         verdicts = await self._user_turn_verdicts(
-            chat_ctx=chat_ctx, user_message=user_message, eager=eager
+            chat_ctx=chat_ctx,
+            user_message=user_message,
+            eager=eager,
+            tool_ctx=tool_ctx,
+            direct_tool_calls=direct_tool_calls,
         )
         return _combine(verdicts)
 
@@ -645,12 +733,115 @@ class DecisionGuardrail:
 
 
 def _combine(verdicts: list[_Verdict]) -> Block | Steer | None:
-    """The first Block wins; otherwise every Steer applies, in registration order."""
+    """The first Block wins; otherwise every Steer applies, in registration order.
+
+    Instructions and tool calls add up. Where two handlers disagree on one tool's
+    arguments or on the tool choice, the first registered handler wins.
+    """
     for verdict in verdicts:
         if isinstance(verdict, Block):
             return verdict
-    steers = [v.instructions for v in verdicts if isinstance(v, Steer)]
-    return Steer(instructions="\n".join(steers)) if steers else None
+    steers = [v for v in verdicts if isinstance(v, Steer)]
+    if len(steers) <= 1:
+        return steers[0] if steers else None
+
+    tool_calls: dict[str, dict[str, Any]] = {}
+    tool_choice: str | None = None
+    for steer in steers:
+        for name, arguments in _tool_call_arguments(steer.tool_calls).items():
+            if tool_calls.setdefault(name, arguments) != arguments:
+                logger.warning(
+                    "guardrail handlers called the same tool with different arguments, "
+                    "keeping the first",
+                    extra={"tool": name},
+                )
+        if steer.tool_choice is None:
+            continue
+        if tool_choice is None:
+            tool_choice = steer.tool_choice
+        elif tool_choice != steer.tool_choice:
+            logger.warning(
+                "guardrail handlers set different tool choices, keeping the first",
+                extra={"tool_choice": tool_choice, "ignored_tool_choice": steer.tool_choice},
+            )
+    return Steer(
+        instructions="\n".join(s.instructions for s in steers if s.instructions) or None,
+        tool_calls=tool_calls or None,
+        tool_choice=tool_choice,
+    )
+
+
+def _tool_call_arguments(
+    tool_calls: str | Sequence[str] | Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    """``Steer.tool_calls`` as one mapping of tool name to arguments, in the order given."""
+    if tool_calls is None:
+        return {}
+    if isinstance(tool_calls, str):
+        return {tool_calls: {}}
+    if isinstance(tool_calls, Mapping):
+        return {name: dict(arguments) for name, arguments in tool_calls.items()}
+    return {name: {} for name in tool_calls}
+
+
+def _validate_steer(steer: Steer, *, tool_ctx: llm.ToolContext, direct_tool_calls: bool) -> None:
+    """Raise ``ValueError`` if a reply with the tools in ``tool_ctx`` can't apply ``steer``.
+
+    The message names tools and parameters only: argument values may quote the user.
+    """
+    try:
+        calls = _tool_call_arguments(steer.tool_calls)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "tool_calls has to be a tool name, a list of names, "
+            "or a mapping of each name to its arguments"
+        ) from None
+    if calls and not direct_tool_calls:
+        raise ValueError("tool_calls is not supported with a realtime model")
+
+    names = [*calls, *([steer.tool_choice] if steer.tool_choice is not None else [])]
+    for name in names:
+        if not isinstance(
+            tool_ctx.function_tools.get(name), llm.FunctionTool | llm.RawFunctionTool
+        ):
+            raise ValueError(
+                f"the active agent has no function tool `{name}`, "
+                f"available tools: {', '.join(tool_ctx.function_tools)}"
+            )
+
+    for name, arguments in calls.items():
+        tool = tool_ctx.function_tools[name]
+        try:
+            # the tool gets the arguments the way an LLM sends them, as JSON
+            arguments = json.loads(json.dumps(arguments))
+        except (ValueError, TypeError):
+            raise ValueError(f"the arguments for tool `{name}` are not JSON") from None
+        try:
+            if isinstance(tool, llm.FunctionTool):
+                parameters = llm_utils.function_arguments_to_pydantic_model(tool).model_fields
+                if unknown := sorted(set(arguments) - set(parameters)):
+                    raise ValueError(f"unknown parameters {', '.join(unknown)}")
+                llm_utils.validated_arguments(tool, arguments)
+            else:
+                # a raw schema is the provider's to enforce: only its required list is
+                # checked here
+                required = tool.info.raw_schema.get("parameters", {}).get("required", [])
+                if missing := sorted(set(required) - set(arguments)):
+                    raise ValueError(f"missing parameters {', '.join(missing)}")
+        except ValidationError as e:
+            # the parameter and the kind of error only: a validator's own message, or a
+            # key inside a parameter, can repeat the value
+            problems = sorted(
+                {
+                    f"{error['loc'][0] if error['loc'] else 'arguments'}: {error['type']}"
+                    for error in e.errors(include_url=False, include_input=False)
+                }
+            )
+            raise ValueError(
+                f"invalid arguments for tool `{name}`: {'; '.join(problems)}"
+            ) from None
+        except ValueError as e:
+            raise ValueError(f"invalid arguments for tool `{name}`: {e}") from None
 
 
 # a sentence with its pending check (None for whitespace, which isn't checked), or a

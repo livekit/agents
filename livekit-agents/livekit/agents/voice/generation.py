@@ -186,6 +186,28 @@ def perform_llm_inference(
     return llm_task, data
 
 
+def perform_direct_tool_calls(
+    function_calls: list[llm.FunctionCall],
+) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
+    """Stand in for an LLM step whose whole output is ``function_calls``.
+
+    No request is made and no ``llm_node`` span is recorded, so the calls reach the tool
+    executor the way an LLM's do without being attributed to the LLM.
+    """
+    data = _LLMGenerationData(text_ch=aio.Chan(), function_ch=aio.Chan())
+    data.generated_functions.extend(function_calls)
+    for fnc_call in function_calls:
+        data.function_ch.send_nowait(fnc_call)
+    data.text_ch.close()
+    data.function_ch.close()
+    data.started_fut.set_result(None)
+
+    async def _generated() -> bool:
+        return True
+
+    return asyncio.create_task(_generated()), data
+
+
 @utils.log_exceptions(logger=logger)
 @tracer.start_as_current_span("llm_node")
 async def _llm_inference_task(

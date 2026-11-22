@@ -95,6 +95,7 @@ from .generation import (
     forward_generation,
     mark_instructions_cache_boundary,
     perform_audio_forwarding,
+    perform_direct_tool_calls,
     perform_llm_inference,
     perform_text_forwarding,
     perform_tool_executions,
@@ -122,7 +123,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
-    from ..beta.guardrail import Block, _EagerEvaluation
+    from ..beta.guardrail import Block, Steer, _EagerEvaluation
     from ..llm import mcp
     from ._turn_hooks import TurnHooks
     from .agent_session import AgentSession, ExpressiveOptions
@@ -131,6 +132,24 @@ if TYPE_CHECKING:
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
+
+# what the LLM does after direct tool calls that return no result, see _generate_reply
+_DirectToolCallsReply = Literal["optional", "expected", "required"]
+
+
+def _steer_reply_options(
+    steer: Steer,
+) -> tuple[NotGivenOr[llm.ToolChoice], list[llm.FunctionCall] | None, _DirectToolCallsReply]:
+    """The tool choice, the direct tool calls and their reply mode that apply ``steer``."""
+    tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
+    reply: _DirectToolCallsReply = "optional"
+    if steer.tool_choice is not None:
+        tool_choice = {"type": "function", "function": {"name": steer.tool_choice}}
+        reply = "required"
+    elif steer.instructions is not None:
+        # the instructions are for a reply, which tools without a result don't ask for
+        reply = "expected"
+    return tool_choice, steer._function_calls() or None, reply
 
 
 async def _aligned_transcript_or_text(
@@ -1884,11 +1903,22 @@ class AgentActivity(RecognitionHooks):
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
         check_user_turn: bool = False,
+        direct_tool_calls: list[llm.FunctionCall] | None = None,
+        direct_tool_calls_reply: _DirectToolCallsReply = "optional",
     ) -> SpeechHandle:
         """Create and schedule a reply.
 
-        ``check_user_turn`` runs the guardrail's ``on_user_turn`` checks on ``user_message``
-        before replying. Audio turns are checked in ``_user_turn_completed_impl`` instead.
+        Args:
+            check_user_turn: Run the guardrail's ``on_user_turn`` checks on
+                ``user_message`` before replying. Audio turns are checked in
+                ``_user_turn_completed_impl`` instead.
+            direct_tool_calls: Run these calls before the LLM is asked, as if it had made
+                them. ``tool_choice`` then applies to the LLM step that answers them. Only
+                supported with a pipeline LLM.
+            direct_tool_calls_reply: Whether the LLM gets a step after
+                ``direct_tool_calls`` that return no result. ``"optional"``: it doesn't.
+                ``"expected"``: it doesn't, and that is logged as a warning.
+                ``"required"``: it does, with ``tool_choice``, unless a tool hands off.
         """
         if self._rt_turn_detection_enabled and allow_interruptions is False:
             logger.warning(
@@ -1899,6 +1929,8 @@ class AgentActivity(RecognitionHooks):
 
         if self.llm is None:
             raise RuntimeError("trying to generate reply without an LLM model")
+        if direct_tool_calls and not isinstance(self.llm, llm.LLM):
+            raise ValueError("direct tool calls are not supported with a realtime model")
 
         task = asyncio.current_task()
         if not is_given(tool_choice) and task is not None:
@@ -1972,6 +2004,8 @@ class AgentActivity(RecognitionHooks):
                         if utils.is_given(tool_choice) or self._tool_choice is None
                         else self._tool_choice
                     ),
+                    direct_tool_calls=direct_tool_calls,
+                    direct_tool_calls_reply=direct_tool_calls_reply,
                     _previous_user_metrics=user_metrics,
                     check_user_turn=check_user_turn,
                 ),
@@ -3034,12 +3068,14 @@ class AgentActivity(RecognitionHooks):
         user_message: llm.ChatMessage,
         *,
         chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool | llm.Toolset],
         record_blocked: bool = True,
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, Steer | None]:
         """Run the guardrail's ``on_user_turn`` checks on a typed message.
 
-        Returns whether the reply is blocked, and the steer instructions for it. A blocked
-        turn says its replacement and, with ``record_blocked``, stays in the history.
+        Returns whether the reply is blocked, and the steer for it, checked against
+        ``tools``. A blocked turn says its replacement and, with ``record_blocked``, stays
+        in the history.
         """
         guardrail = self._session._guardrail
         if guardrail is None:
@@ -3048,7 +3084,11 @@ class AgentActivity(RecognitionHooks):
         from ..beta.guardrail import Block, Steer
 
         verdict = await guardrail._run_user_turn_checks(
-            chat_ctx=chat_ctx, user_message=user_message, eager={}
+            chat_ctx=chat_ctx,
+            user_message=user_message,
+            eager={},
+            tool_ctx=llm.ToolContext(tools),
+            direct_tool_calls=not isinstance(self.llm, llm.RealtimeModel),
         )
         if isinstance(verdict, Block):
             if record_blocked:
@@ -3058,7 +3098,7 @@ class AgentActivity(RecognitionHooks):
                 self._session.say(verdict.say)
             return True, None
         if isinstance(verdict, Steer):
-            return False, verdict.instructions
+            return False, verdict
         return False, None
 
     async def _user_turn_completed_impl(
@@ -3202,6 +3242,9 @@ class AgentActivity(RecognitionHooks):
             return
 
         reply_instructions: NotGivenOr[str] = NOT_GIVEN
+        steer_tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN
+        steer_tool_calls: list[llm.FunctionCall] | None = None
+        steer_reply: _DirectToolCallsReply = "optional"
         if (guardrail := self._session._guardrail) is not None:
             # imported here: livekit.agents.beta imports the voice package
             from ..beta.guardrail import Block, Steer
@@ -3210,6 +3253,10 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx=temp_mutable_chat_ctx,
                 user_message=user_message,
                 eager=guardrail_eager if guardrail_eager is not None else {},
+                tool_ctx=llm.ToolContext(self.tools),
+                # a realtime model produces its own function calls: there is no step to
+                # put these in
+                direct_tool_calls=not isinstance(self.llm, llm.RealtimeModel),
             )
             if isinstance(verdict, Block):
                 # nothing is generated for this turn, but the turn stays in the history
@@ -3221,13 +3268,17 @@ class AgentActivity(RecognitionHooks):
                     self._session.say(verdict.say)
                 return
             if isinstance(verdict, Steer):
-                if isinstance(self.llm, llm.RealtimeModel):
-                    # a realtime reply ignores the chat context: pass the instructions as
-                    # generate_reply(instructions=...) does
-                    reply_instructions = verdict.instructions
-                else:
-                    # changes the context, so a preemptive reply is regenerated below
-                    temp_mutable_chat_ctx.add_message(role="system", content=[verdict.instructions])
+                steer_tool_choice, steer_tool_calls, steer_reply = _steer_reply_options(verdict)
+                if verdict.instructions is not None:
+                    if isinstance(self.llm, llm.RealtimeModel):
+                        # a realtime reply ignores the chat context: pass the instructions
+                        # as generate_reply(instructions=...) does
+                        reply_instructions = verdict.instructions
+                    else:
+                        # changes the context, so a preemptive reply is regenerated below
+                        temp_mutable_chat_ctx.add_message(
+                            role="system", content=[verdict.instructions]
+                        )
 
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
@@ -3264,6 +3315,9 @@ class AgentActivity(RecognitionHooks):
                 and preemptive.chat_ctx.is_equivalent(temp_mutable_chat_ctx)
                 and preemptive.tools == self.tools
                 and preemptive.tool_choice == self._tool_choice
+                # the preemptive reply was generated without the steer's tools
+                and steer_tool_calls is None
+                and not is_given(steer_tool_choice)
             ):
                 speech_handle = preemptive.speech_handle
 
@@ -3296,6 +3350,9 @@ class AgentActivity(RecognitionHooks):
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
                 instructions=reply_instructions,
+                tool_choice=steer_tool_choice,
+                direct_tool_calls=steer_tool_calls,
+                direct_tool_calls_reply=steer_reply,
                 input_details=InputDetails(modality="audio"),
             )
             # the invalidated preemptive attempt answered this same turn: one agent_turn
@@ -3873,6 +3930,8 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
+        direct_tool_calls: list[llm.FunctionCall] | None = None,
+        direct_tool_calls_reply: _DirectToolCallsReply = "optional",
         _previous_user_metrics: llm.MetricsReport | None = None,
         check_user_turn: bool = False,
     ) -> None:
@@ -3888,6 +3947,8 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
                 new_message=new_message,
                 instructions=instructions,
+                direct_tool_calls=direct_tool_calls,
+                direct_tool_calls_reply=direct_tool_calls_reply,
                 _previous_user_metrics=_previous_user_metrics,
                 check_user_turn=check_user_turn,
             )
@@ -3901,16 +3962,33 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
+        direct_tool_calls: list[llm.FunctionCall] | None = None,
+        direct_tool_calls_reply: _DirectToolCallsReply = "optional",
         _previous_user_metrics: llm.MetricsReport | None = None,
         check_user_turn: bool = False,
     ) -> None:
+        """
+        Args:
+            direct_tool_calls: Make this step run these calls instead of asking the LLM.
+                ``model_settings.tool_choice`` then applies to the step that answers them.
+            direct_tool_calls_reply: See :meth:`_generate_reply`.
+        """
         from .agent import ModelSettings
 
-        steer: str | None = None
+        steer: Steer | None = None
         if check_user_turn and new_message is not None:
-            blocked, steer = await self._check_typed_user_turn(new_message, chat_ctx=chat_ctx)
+            blocked, steer = await self._check_typed_user_turn(
+                new_message, chat_ctx=chat_ctx, tools=tools
+            )
             if blocked:
                 return
+            if steer is not None:
+                steer_tool_choice, steer_tool_calls, steer_reply = _steer_reply_options(steer)
+                if is_given(steer_tool_choice):
+                    model_settings = ModelSettings(tool_choice=steer_tool_choice)
+                if steer_tool_calls:
+                    direct_tool_calls = steer_tool_calls
+                    direct_tool_calls_reply = steer_reply
 
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
@@ -3942,8 +4020,8 @@ class AgentActivity(RecognitionHooks):
 
         if new_message is not None:
             chat_ctx.insert(new_message)
-        if steer is not None:
-            chat_ctx.add_message(role="system", content=[steer])
+        if steer is not None and steer.instructions is not None:
+            chat_ctx.add_message(role="system", content=[steer.instructions])
 
         # resolve modality-specific instructions for this turn
         turn_modality = speech_handle.input_details.modality
@@ -3998,24 +4076,26 @@ class AgentActivity(RecognitionHooks):
         )
 
         tasks: list[asyncio.Task[Any]] = []
-        # the spans of this generation record their input against the last committed one
-        delta_scope = (
-            self._input_delta.begin()
-            if self._session.options.recording_options.get("input_delta")
-            else None
-        )
-        input_token = input_delta.set_scope(delta_scope)
-        try:
-            llm_task, llm_gen_data = perform_llm_inference(
-                node=self._agent.llm_node,
-                chat_ctx=chat_ctx,
-                tool_ctx=tool_ctx,
-                model_settings=model_settings,
-                model=self.llm.model if self.llm else None,
-                provider=self.llm.provider if self.llm else None,
-            )
-        finally:
-            input_delta.reset_scope(input_token)
+        delta_scope: input_delta.InputDeltaScope | None = None
+        if direct_tool_calls:
+            # nothing is sent to the LLM in this step, so there is no input to record
+            llm_task, llm_gen_data = perform_direct_tool_calls(direct_tool_calls)
+        else:
+            # the spans of this generation record their input against the last committed one
+            if self._session.options.recording_options.get("input_delta"):
+                delta_scope = self._input_delta.begin()
+            input_token = input_delta.set_scope(delta_scope)
+            try:
+                llm_task, llm_gen_data = perform_llm_inference(
+                    node=self._agent.llm_node,
+                    chat_ctx=chat_ctx,
+                    tool_ctx=tool_ctx,
+                    model_settings=model_settings,
+                    model=self.llm.model if self.llm else None,
+                    provider=self.llm.provider if self.llm else None,
+                )
+            finally:
+                input_delta.reset_scope(input_token)
         tasks.append(llm_task)
 
         def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
@@ -4263,7 +4343,8 @@ class AgentActivity(RecognitionHooks):
             session=self._session,
             speech_handle=speech_handle,
             tool_ctx=tool_ctx,
-            tool_choice=model_settings.tool_choice,
+            # the tool choice is for the LLM: it doesn't stop calls the LLM didn't make
+            tool_choice=NOT_GIVEN if direct_tool_calls else model_settings.tool_choice,
             function_stream=llm_gen_data.function_ch,
             tool_execution_started_cb=_tool_execution_started_cb,
             tool_execution_completed_cb=_tool_execution_completed_cb,
@@ -4529,8 +4610,30 @@ class AgentActivity(RecognitionHooks):
                 self._session.update_agent(new_agent_task)
                 draining = True
 
+            # the LLM hasn't had its step yet after direct tool calls, so the step that
+            # answers them is the one this turn's tool choice was meant for
+            pending_tool_choice: llm.ToolChoice | None = None
+            if direct_tool_calls and is_given(model_settings.tool_choice):
+                pending_tool_choice = model_settings.tool_choice
+            # a tool the caller wants the LLM to call is a reason to reply even when no
+            # direct call asked for one; a handoff leaves that to the next agent
+            reply_required = bool(direct_tool_calls) and direct_tool_calls_reply == "required"
+            needs_reply = fnc_executed_ev.has_tool_reply or (
+                reply_required and not draining and not max_steps_reached
+            )
+            if direct_tool_calls and direct_tool_calls_reply != "optional" and not needs_reply:
+                logger.warning(
+                    "no reply was generated after the direct tool calls, so the instructions "
+                    "or tool choice given with them were not used",
+                    extra={
+                        "speech_id": speech_handle.id,
+                        "tools": [fnc_call.name for fnc_call in direct_tool_calls],
+                        "draining": draining,
+                    },
+                )
+
             chain_continues = (
-                fnc_executed_ev.has_tool_reply
+                needs_reply
                 or self._session._agent is not self._agent
                 or (isinstance(self._agent, AgentTask) and self._agent.done())
             )
@@ -4541,7 +4644,7 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
 
-            if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
+            if needs_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
                 # (the next turn re-injects from the live running set)
                 _strip_running_tool_calls(chat_ctx)
@@ -4578,11 +4681,15 @@ class AgentActivity(RecognitionHooks):
                             # a final text response instead of silently stopping.
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else _reply_tool_choice(
+                            # a tool the caller named outranks a progress report's
+                            # request to keep the tools out of its answer
+                            else (pending_tool_choice if reply_required else None)
+                            or _reply_tool_choice(
                                 out.reply_tool_choice
                                 for out in tool_output.output
                                 if out.fnc_call_out.reply_required
                             )
+                            or pending_tool_choice
                             or "auto",
                         ),
                         # the tool reply answers whatever user turn is still unanswered: this
@@ -4649,11 +4756,18 @@ class AgentActivity(RecognitionHooks):
             blocked, steer = await self._check_typed_user_turn(
                 llm.ChatMessage(role="user", content=[user_input]),
                 chat_ctx=self._agent.chat_ctx,
+                tools=tools if tools is not None else self.tools,
                 record_blocked=False,
             )
-            if steer is not None:
+            if steer is not None and steer.tool_choice is not None:
+                model_settings = ModelSettings(
+                    tool_choice={"type": "function", "function": {"name": steer.tool_choice}}
+                )
+            if steer is not None and steer.instructions is not None:
                 # a realtime reply ignores the chat context, like the audio path's steer
-                instructions = f"{instructions}\n{steer}" if instructions else steer
+                instructions = (
+                    f"{instructions}\n{steer.instructions}" if instructions else steer.instructions
+                )
 
         if user_input is not None:
             try:
