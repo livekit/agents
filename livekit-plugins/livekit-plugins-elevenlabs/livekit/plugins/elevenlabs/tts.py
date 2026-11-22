@@ -863,11 +863,12 @@ def _accumulate_alignment(
 _NON_RETRYABLE_CONNECTION_ERRORS = frozenset({"invalid_api_key"})
 
 
-def _connection_error(data: dict[str, Any]) -> APIStatusError:
+def _connection_error(data: dict[str, Any], *, close_code: int | None = None) -> APIStatusError:
     """The error for a server message that rejects the websocket itself.
 
     ElevenLabs sends these without a context id and then closes the socket, e.g.
     `{"message": "Invalid API key", "error": "invalid_api_key", "code": 1008}`.
+    `close_code` is the status to report when the message carries no code.
     """
     error = data.get("error")
     message = data.get("message")
@@ -875,7 +876,7 @@ def _connection_error(data: dict[str, Any]) -> APIStatusError:
     non_retryable = isinstance(error, str) and error in _NON_RETRYABLE_CONNECTION_ERRORS
     return APIStatusError(
         f"{message} ({error})" if isinstance(message, str) and message else str(error),
-        status_code=code if isinstance(code, int) else -1,
+        status_code=code if isinstance(code, int) else close_code or -1,
         retryable=False if non_retryable else None,
     )
 
@@ -898,8 +899,9 @@ class _Connection:
         self._send_task: asyncio.Task | None = None
         self._recv_task: asyncio.Task | None = None
         self._closed = False
-        # why the server is about to close this socket, when it said so
-        self._connection_error: APIStatusError | None = None
+        # the last error the server sent without a context id: why it is about to close this
+        # socket, unless it goes on serving contexts afterwards
+        self._rejection: dict[str, Any] | None = None
 
     @property
     def voice_id(self) -> str:
@@ -962,6 +964,16 @@ class _Connection:
         if self._closed or not self._ws or self._ws.closed:
             raise APIConnectionError("WebSocket connection is closed")
         self._input_queue.send_nowait(_CloseContext(context_id))
+
+    def _closed_error(self, message: str, *, reason: str | None = None) -> APIStatusError:
+        """The error for the streams still waiting on this socket when it closes.
+
+        `reason` is the close frame's reason, if the close came with one.
+        """
+        close_code = self._ws.close_code if self._ws else None
+        if self._rejection is not None:
+            return _connection_error(self._rejection, close_code=close_code)
+        return APIStatusError(message, status_code=close_code or -1, body=reason or None)
 
     async def _send_loop(self) -> None:
         """Send loop - processes messages from input queue"""
@@ -1026,9 +1038,9 @@ class _Connection:
                 ):
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
-                        raise self._connection_error or APIStatusError(
+                        raise self._closed_error(
                             "ElevenLabs websocket connection closed unexpectedly",
-                            status_code=self._ws.close_code or -1,
+                            reason=msg.extra,
                         )
                     break
 
@@ -1054,8 +1066,13 @@ class _Connection:
                     else:
                         # the socket itself was rejected (an invalid API key, for instance) and
                         # the server closes it next: keep the reason for the streams that fail
-                        self._connection_error = _connection_error(data)
+                        self._rejection = data
                     continue
+
+                if context_id is not None:
+                    # the server is still serving this socket, so an earlier rejection did not
+                    # end it
+                    self._rejection = None
 
                 if ctx is None:
                     if context_id is None:
@@ -1181,8 +1198,10 @@ class _Connection:
         for ctx in self._context_data.values():
             if not ctx.waiter.done():
                 # do not cancel the future as it becomes difficult to catch
-                # all pending tasks will be aborted with an exception
-                ctx.waiter.set_exception(APIStatusError("connection closed"))
+                # all pending tasks will be aborted with an exception. The send loop closes
+                # the socket this way when a write fails because the server is closing it,
+                # which can happen before the receive loop reads the close frame
+                ctx.waiter.set_exception(self._closed_error("connection closed"))
             if ctx.timeout_timer:
                 ctx.timeout_timer.cancel()
         self._context_data.clear()
@@ -1325,9 +1344,9 @@ class _DialogueConnection(_Connection):
                 ):
                     if not self._closed and len(self._context_data) > 0:
                         # websocket will be closed after all contexts are closed
-                        raise self._connection_error or APIStatusError(
+                        raise self._closed_error(
                             "ElevenLabs dialogue websocket connection closed unexpectedly",
-                            status_code=self._ws.close_code or -1,
+                            reason=msg.extra,
                         )
                     break
 
@@ -1355,8 +1374,13 @@ class _DialogueConnection(_Connection):
                     else:
                         # the socket itself was rejected (an invalid API key, for instance) and
                         # the server closes it next: keep the reason for the streams that fail
-                        self._connection_error = _connection_error(data)
+                        self._rejection = data
                     continue
+
+                if context_id is not None:
+                    # the server is still serving this socket, so an earlier rejection did not
+                    # end it
+                    self._rejection = None
 
                 if ctx is None:
                     if context_id is None:
