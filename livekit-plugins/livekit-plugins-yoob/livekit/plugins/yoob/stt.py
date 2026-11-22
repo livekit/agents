@@ -8,6 +8,7 @@ import wave
 import weakref
 from dataclasses import dataclass, replace
 from typing import Any
+from urllib.parse import urlencode
 
 import aiohttp
 import numpy as np
@@ -24,25 +25,79 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils import AudioBuffer, is_given
 
 from .log import logger
 from .models import DEFAULT_BASE_URL, STT_SAMPLE_RATE, STTModels
 
-# The transcription models are English-first; transcripts are tagged "en".
-_LANGUAGE = LanguageCode("en")
+# Without a language, a stream transcribes English (the API's default).
+_DEFAULT_LANGUAGE = "en"
+
+# English names the API reports in verbose_json, mapped to codes.
+_LANGUAGE_CODES = {
+    "english": "en",
+    "german": "de",
+    "spanish": "es",
+    "french": "fr",
+    "italian": "it",
+    "dutch": "nl",
+    "portuguese": "pt",
+    "polish": "pl",
+    "russian": "ru",
+    "ukrainian": "uk",
+    "swedish": "sv",
+    "danish": "da",
+    "finnish": "fi",
+    "czech": "cs",
+    "slovak": "sk",
+    "slovenian": "sl",
+    "croatian": "hr",
+    "bulgarian": "bg",
+    "romanian": "ro",
+    "hungarian": "hu",
+    "greek": "el",
+    "estonian": "et",
+    "latvian": "lv",
+    "lithuanian": "lt",
+    "maltese": "mt",
+    "arabic": "ar",
+    "hebrew": "he",
+    "hindi": "hi",
+    "bengali": "bn",
+    "japanese": "ja",
+    "korean": "ko",
+    "chinese": "zh",
+    "thai": "th",
+    "vietnamese": "vi",
+    "indonesian": "id",
+    "malay": "ms",
+    "turkish": "tr",
+    "persian": "fa",
+}
+
+
+def _language_code(name: str | None) -> LanguageCode:
+    name = (name or _DEFAULT_LANGUAGE).strip()
+    return LanguageCode(_LANGUAGE_CODES.get(name.lower(), name))
 
 
 @dataclass
 class _STTOptions:
     model: STTModels | str
+    language: str | None
     interim_results: bool
     base_url: str
     api_key: str
 
     def ws_url(self) -> str:
-        return self.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1) + (
-            "/audio/transcriptions/stream"
+        # The stream reads its model and language from the URL when it opens.
+        query = {"model": self.model}
+        if self.language:
+            query["language"] = self.language
+        return (
+            self.base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+            + "/audio/transcriptions/stream?"
+            + urlencode(query)
         )
 
 
@@ -51,6 +106,7 @@ class STT(stt.STT):
         self,
         *,
         model: STTModels | str = "yoob-asr-turbo-v1",
+        language: str | None = None,
         interim_results: bool = True,
         api_key: str | None = None,
         base_url: str | None = None,
@@ -60,8 +116,11 @@ class STT(stt.STT):
         Create a new instance of Yoob STT (Undertone).
 
         Args:
-            model: ``yoob-asr-turbo-v1`` (default) or ``yoob-asr-pro-v1``. Used for batch ``recognize()`` of up to 60 s;
-                streaming always uses the live model. ``recognize()`` waits ``conn_options.timeout`` for the answer.
+            model: ``yoob-asr-turbo-v1`` (default, fastest; 25 languages) or ``yoob-asr-pro-v1`` (most accurate;
+                47 languages), for both streaming and batch ``recognize()`` of up to 60 s. ``recognize()`` waits
+                ``conn_options.timeout`` for the answer.
+            language: The spoken language as a code (``de``), a regional tag (``de-DE``) or an English name.
+                Streams default to English; ``recognize()`` without it detects the language (Pro).
             interim_results: Emit partial transcripts while the user speaks.
             api_key: Defaults to the ``YOOB_API_KEY`` environment variable. Keys come from https://app.yoob.com.
             base_url: Defaults to ``YOOB_BASE_URL`` or https://tts-api.yoob.com/v1.
@@ -80,6 +139,7 @@ class STT(stt.STT):
             raise ValueError("Yoob API key is required: pass api_key or set YOOB_API_KEY")
         self._opts = _STTOptions(
             model=model,
+            language=language,
             interim_results=interim_results,
             base_url=(base_url or os.environ.get("YOOB_BASE_URL") or DEFAULT_BASE_URL).rstrip("/"),
             api_key=key,
@@ -110,6 +170,7 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
+        lang = language if is_given(language) else self._opts.language
         frame = rtc.combine_audio_frames(buffer)
         wav = io.BytesIO()
         with wave.open(wav, "wb") as w:
@@ -120,7 +181,11 @@ class STT(stt.STT):
         try:
             async with self._ensure_session().post(
                 f"{self._opts.base_url}/audio/transcriptions",
-                params={"model": self._opts.model, "response_format": "verbose_json"},
+                params={
+                    "model": self._opts.model,
+                    "response_format": "verbose_json",
+                    **({"language": lang} if lang else {}),
+                },
                 data=wav.getvalue(),
                 headers={**self._headers(), "Content-Type": "audio/wav"},
                 # one budget for the pooled connection, the upload and the whole answer
@@ -144,7 +209,7 @@ class STT(stt.STT):
             request_id=request_id,
             alternatives=[
                 stt.SpeechData(
-                    language=_LANGUAGE,
+                    language=_language_code(data.get("language") or lang),
                     text=data.get("text") or "",
                     start_time=float(segments[0].get("start", 0)) if segments else 0.0,
                     end_time=float(segments[-1].get("end", 0)) if segments else 0.0,
@@ -159,7 +224,10 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
-        stream = SpeechStream(stt=self, opts=replace(self._opts), conn_options=conn_options)
+        opts = replace(self._opts)
+        if is_given(language):
+            opts.language = language
+        stream = SpeechStream(stt=self, opts=opts, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -398,7 +466,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _speech_data(self, ev: dict[str, Any]) -> stt.SpeechData:
         return stt.SpeechData(
-            language=_LANGUAGE,
+            language=_language_code(self._opts.language),
             text=str(ev.get("text") or ""),
             start_time=float(ev.get("start") or 0.0) + self.start_time_offset,
             end_time=float(ev.get("end") or 0.0) + self.start_time_offset,
