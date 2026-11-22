@@ -815,12 +815,13 @@ class JobContext:
 
         Args:
             coro: The coroutine to run.
-            name: Name of the task, used in logs.
+            name: Name of the task, used in logs. Defaults to the coroutine's qualified
+                name, so a failure is logged as ``error in watch_silence``.
 
         Returns:
             The ``asyncio.Task``. It can still be awaited or cancelled directly.
         """
-        task = asyncio.create_task(coro, name=name)
+        task = asyncio.create_task(coro, name=name or getattr(coro, "__qualname__", None))
         self._user_tasks.add(task)
         task.add_done_callback(self._on_user_task_done)
         return task

@@ -998,6 +998,26 @@ async def test_job_task_exception_is_logged(caplog: pytest.LogCaptureFixture):
     assert str(records[0].exc_info[1]) == "stats backend down"
 
 
+async def test_job_task_without_name_is_logged_with_coroutine_name(
+    caplog: pytest.LogCaptureFixture,
+):
+    async def _entrypoint(job_ctx: JobContext) -> None:
+        async def _save_stats() -> None:
+            raise RuntimeError("stats backend down")
+
+        task = job_ctx.create_task(_save_stats())
+        assert task.get_name().endswith("_save_stats")
+        await asyncio.wait([task])
+        job_ctx.shutdown("done")
+
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        await _run_job_in_process(_entrypoint)
+
+    records = [r for r in caplog.records if r.getMessage().startswith("error in ")]
+    assert len(records) == 1
+    assert records[0].getMessage().endswith("._save_stats")
+
+
 async def test_finished_job_task_is_no_longer_tracked():
     tracked: list[int] = []
 
