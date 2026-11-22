@@ -171,7 +171,6 @@ class STT(stt.STT):
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
         filter_profanity: NotGivenOr[bool] = NOT_GIVEN,
-        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -264,8 +263,6 @@ class STT(stt.STT):
                 family models. Set at construction (connect) time only.
             filter_profanity: Whether to filter profanity from transcribed text with
                 asterisks. Defaults to unset (leaves text unfiltered).
-            profanity_filter: Alias for ``filter_profanity`` to align with LiveKit's STT
-                cross-plugin convention.
         """
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
@@ -281,8 +278,6 @@ class STT(stt.STT):
             language_codes = NOT_GIVEN
         if is_given(agent_context):
             _validate_agent_context(agent_context)
-        if is_given(profanity_filter) and not is_given(filter_profanity):
-            filter_profanity = profanity_filter
 
         # agent_context carryover is only available on the u3-rt-pro family ("u3-pro" is
         # normalized to "u3-rt-pro" below), where it is on by default; the session's

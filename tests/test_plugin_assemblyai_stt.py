@@ -1793,8 +1793,16 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
     }
 
 
-async def test_filter_profanity_default():
-    """filter_profanity is NOT_GIVEN by default and omitted from connect config."""
+@pytest.mark.parametrize(
+    "filter_profanity,expected_query_val",
+    [
+        (NOT_GIVEN, None),
+        (True, "true"),
+        (False, "false"),
+    ],
+)
+async def test_filter_profanity_in_connect_config(filter_profanity, expected_query_val):
+    """filter_profanity is serialized correctly or omitted when NOT_GIVEN."""
     from urllib.parse import parse_qs, urlparse
 
     from livekit.plugins.assemblyai import STT
@@ -1805,82 +1813,19 @@ async def test_filter_profanity_default():
         captured["url"] = url
         return MagicMock()
 
-    stt = STT(api_key="test-key")
-    assert stt._opts.filter_profanity is NOT_GIVEN
+    kwargs = {}
+    if filter_profanity is not NOT_GIVEN:
+        kwargs["filter_profanity"] = filter_profanity
+
+    stt = STT(api_key="test-key", **kwargs)
+    assert stt._opts.filter_profanity is filter_profanity
 
     stream = _make_stream_for_unit_test(stt)
     stream._session.ws_connect = _fake_ws_connect
     await stream._connect_ws()
 
     query = parse_qs(urlparse(captured["url"]).query)
-    assert "filter_profanity" not in query
-
-
-async def test_filter_profanity_true_in_connect_config():
-    """filter_profanity=True is serialized as filter_profanity=true in connect config."""
-    from urllib.parse import parse_qs, urlparse
-
-    from livekit.plugins.assemblyai import STT
-
-    captured: dict = {}
-
-    async def _fake_ws_connect(url, **kwargs):
-        captured["url"] = url
-        return MagicMock()
-
-    stt = STT(api_key="test-key", filter_profanity=True)
-    assert stt._opts.filter_profanity is True
-
-    stream = _make_stream_for_unit_test(stt)
-    stream._session.ws_connect = _fake_ws_connect
-    await stream._connect_ws()
-
-    query = parse_qs(urlparse(captured["url"]).query)
-    assert query["filter_profanity"] == ["true"]
-
-
-async def test_filter_profanity_false_in_connect_config():
-    """filter_profanity=False is serialized as filter_profanity=false in connect config."""
-    from urllib.parse import parse_qs, urlparse
-
-    from livekit.plugins.assemblyai import STT
-
-    captured: dict = {}
-
-    async def _fake_ws_connect(url, **kwargs):
-        captured["url"] = url
-        return MagicMock()
-
-    stt = STT(api_key="test-key", filter_profanity=False)
-    assert stt._opts.filter_profanity is False
-
-    stream = _make_stream_for_unit_test(stt)
-    stream._session.ws_connect = _fake_ws_connect
-    await stream._connect_ws()
-
-    query = parse_qs(urlparse(captured["url"]).query)
-    assert query["filter_profanity"] == ["false"]
-
-
-async def test_profanity_filter_alias_in_connect_config():
-    """profanity_filter alias sets filter_profanity to match LiveKit STT cross-plugin convention."""
-    from urllib.parse import parse_qs, urlparse
-
-    from livekit.plugins.assemblyai import STT
-
-    captured: dict = {}
-
-    async def _fake_ws_connect(url, **kwargs):
-        captured["url"] = url
-        return MagicMock()
-
-    stt = STT(api_key="test-key", profanity_filter=True)
-    assert stt._opts.filter_profanity is True
-
-    stream = _make_stream_for_unit_test(stt)
-    stream._session.ws_connect = _fake_ws_connect
-    await stream._connect_ws()
-
-    query = parse_qs(urlparse(captured["url"]).query)
-    assert query["filter_profanity"] == ["true"]
-
+    if expected_query_val is None:
+        assert "filter_profanity" not in query
+    else:
+        assert query["filter_profanity"] == [expected_query_val]
