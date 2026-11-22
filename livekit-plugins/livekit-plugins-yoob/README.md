@@ -5,7 +5,7 @@
 LiveKit docs: [speech-to-text](https://docs.livekit.io/agents/models/stt/yoob/) and [text-to-speech](https://docs.livekit.io/agents/models/tts/yoob/) (live with the next release).
 
 - `yoob.TTS`: Overtone expressive speech. Understands inline tags such as `[laughing]`, `[sigh]` and `[whisper] ... [/whisper]`, plus free-text `instructions`. Supports `synthesize()` (one request, audio streamed back) and `stream()` (text pushed as the LLM writes it, over one socket). 48 kHz mono.
-- `yoob.STT`: Undertone transcription. Streaming with interim results and start/end-of-speech events, plus batch `recognize()` of up to 60 s.
+- `yoob.STT`: Transcription with Turbo or Pro. Streaming with interim results and start/end-of-speech events, plus batch `recognize()` of up to 60 s.
 
 ## Install
 
@@ -46,7 +46,8 @@ session = AgentSession(
 
 | Argument | Default | |
 |---|---|---|
-| `model` | `yoob-asr-turbo-v1` | For batch `recognize()`: `yoob-asr-turbo-v1` or `yoob-asr-pro-v1`. |
+| `model` | `yoob-asr-turbo-v1` | `yoob-asr-turbo-v1` (fastest, 25 languages) or `yoob-asr-pro-v1` (most accurate, 47 languages), for streaming and `recognize()`. |
+| `language` | none | A code (`de`), regional tag (`de-DE`) or English name. Streams default to English; `recognize()` without it detects the language. `stream(language=...)` overrides it. |
 | `interim_results` | `True` | Emit partial transcripts while the user speaks. |
 | `api_key`, `base_url`, `http_session` | env | |
 

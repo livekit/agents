@@ -447,3 +447,62 @@ async def test_recognize_bounds_a_trickling_answer():
             assert time.monotonic() - started < 2
     finally:
         await runner.cleanup()
+
+
+# --- STT: model and language ---
+
+
+async def test_a_stream_uses_the_configured_model_and_language():
+    from livekit.plugins.yoob import STT
+
+    seen: dict[str, Any] = {}
+
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        seen["query"] = dict(request.query)
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_str(json.dumps(_READY))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == "stop":
+                await ws.send_str(
+                    json.dumps({"type": "final", "text": "Guten Tag.", "start": 0.0, "end": 0.4})
+                )
+                await ws.send_str(json.dumps({"type": "done"}))
+                await ws.close()
+        return ws
+
+    runner, base = await _serve({"/v1/audio/transcriptions/stream": ws_stt})
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="k", base_url=base, http_session=session, model="yoob-asr-pro-v1")
+            stream = s.stream(language="de", conn_options=APIConnectOptions(max_retry=0))
+            stream.push_frame(_frame())
+            stream.end_input()
+            events = [ev async for ev in stream]
+            await stream.aclose()
+    finally:
+        await runner.cleanup()
+    assert seen["query"] == {"model": "yoob-asr-pro-v1", "language": "de"}
+    final = next(e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT)
+    assert final.alternatives[0].language == "de"
+
+
+async def test_recognize_sends_the_language_and_reports_the_detected_one():
+    from livekit.plugins.yoob import STT
+
+    seen: dict[str, Any] = {}
+
+    async def transcribe(request: web.Request) -> web.Response:
+        seen["query"] = dict(request.query)
+        await request.read()
+        return web.json_response({"text": "Hola.", "language": "spanish", "segments": []})
+
+    runner, base = await _serve({"/v1/audio/transcriptions": transcribe})
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="k", base_url=base, http_session=session, model="yoob-asr-pro-v1")
+            ev = await s.recognize([_frame()], language="es")
+    finally:
+        await runner.cleanup()
+    assert seen["query"]["model"] == "yoob-asr-pro-v1" and seen["query"]["language"] == "es"
+    assert ev.alternatives[0].language == "es"
