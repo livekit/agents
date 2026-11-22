@@ -4,8 +4,20 @@ from __future__ import annotations
 
 import httpx2 as httpx
 import pytest
+from anthropic.types import (
+    InputJSONDelta,
+    MessageDeltaUsage,
+    RawContentBlockDeltaEvent,
+    RawContentBlockStartEvent,
+    RawContentBlockStopEvent,
+    RawMessageDeltaEvent,
+    RawMessageStopEvent,
+    TextDelta,
+    ToolUseBlock,
+)
+from anthropic.types.raw_message_delta_event import Delta
 
-from livekit.agents import APIConnectOptions, llm
+from livekit.agents import APIConnectionError, APIConnectOptions, llm
 from livekit.plugins.anthropic.llm import LLMStream
 
 pytestmark = pytest.mark.plugin("anthropic")
@@ -72,7 +84,10 @@ class TestHttpxTimeoutCustom:
         assert llm._client._client.timeout.read == 1.0
 
 
-class _EmptyAnthropicStream:
+class _FakeAnthropicStream:
+    def __init__(self, events: list) -> None:
+        self._events = iter(events)
+
     async def __aenter__(self):
         return self
 
@@ -83,7 +98,10 @@ class _EmptyAnthropicStream:
         return self
 
     async def __anext__(self):
-        raise StopAsyncIteration
+        try:
+            return next(self._events)
+        except StopIteration:
+            raise StopAsyncIteration from None
 
 
 class TestAnthropicStreamRetry:
@@ -95,7 +113,7 @@ class TestAnthropicStreamRetry:
             raise RuntimeError("transient connect failure")
 
         async def empty_stream():
-            return _EmptyAnthropicStream()
+            return _FakeAnthropicStream([RawMessageStopEvent(type="message_stop")])
 
         def create_stream():
             nonlocal calls
@@ -114,3 +132,127 @@ class TestAnthropicStreamRetry:
 
         assert calls == 2
         assert response.usage is not None
+
+    @pytest.mark.virtual_time
+    @pytest.mark.parametrize(
+        ("events", "expected_attempts", "expected_text"),
+        [
+            pytest.param([], 3, "", id="no-output"),
+            pytest.param(
+                [
+                    RawContentBlockDeltaEvent(
+                        type="content_block_delta",
+                        index=0,
+                        delta=TextDelta(type="text_delta", text="Hello"),
+                    )
+                ],
+                1,
+                "Hello",
+                id="after-text",
+            ),
+        ],
+    )
+    async def test_stream_ending_before_message_stop_raises(
+        self, events: list, expected_attempts: int, expected_text: str
+    ) -> None:
+        """A body that ends without message_stop is truncated, not a complete response."""
+        calls = 0
+
+        async def truncated_stream():
+            return _FakeAnthropicStream(events)
+
+        def create_stream():
+            nonlocal calls
+            calls += 1
+            return truncated_stream()
+
+        stream = LLMStream(
+            _make_llm(),
+            create_anthropic_stream=create_stream,
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[],
+            conn_options=APIConnectOptions(max_retry=2, retry_interval=0),
+        )
+
+        text = ""
+        with pytest.raises(APIConnectionError):
+            async for chunk in stream:
+                if chunk.delta and chunk.delta.content:
+                    text += chunk.delta.content
+
+        assert calls == expected_attempts
+        assert text == expected_text
+
+    @pytest.mark.asyncio
+    async def test_stream_ending_after_stop_reason_is_complete(self) -> None:
+        """A message_delta carrying stop_reason ends the message even if message_stop is lost."""
+        events = [
+            RawContentBlockDeltaEvent(
+                type="content_block_delta",
+                index=0,
+                delta=TextDelta(type="text_delta", text="Hello"),
+            ),
+            RawMessageDeltaEvent(
+                type="message_delta",
+                delta=Delta(stop_reason="end_turn", stop_sequence=None),
+                usage=MessageDeltaUsage(output_tokens=1),
+            ),
+        ]
+
+        async def stream_without_message_stop():
+            return _FakeAnthropicStream(events)
+
+        stream = LLMStream(
+            _make_llm(),
+            create_anthropic_stream=stream_without_message_stop,
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[],
+            conn_options=APIConnectOptions(max_retry=0, retry_interval=0),
+        )
+
+        response = await stream.collect()
+
+        assert response.text == "Hello"
+
+    @pytest.mark.virtual_time
+    async def test_retry_after_a_cut_tool_call_drops_its_partial_state(self) -> None:
+        """A tool call cut short by a truncated attempt must not leak into the retry."""
+        attempts = [
+            [
+                RawContentBlockStartEvent(
+                    type="content_block_start",
+                    index=0,
+                    content_block=ToolUseBlock(type="tool_use", id="call_1", name="f", input={}),
+                ),
+                RawContentBlockDeltaEvent(
+                    type="content_block_delta",
+                    index=0,
+                    delta=InputJSONDelta(type="input_json_delta", partial_json='{"a":'),
+                ),
+            ],
+            [
+                RawContentBlockDeltaEvent(
+                    type="content_block_delta",
+                    index=0,
+                    delta=TextDelta(type="text_delta", text="Hi"),
+                ),
+                RawContentBlockStopEvent(type="content_block_stop", index=0),
+                RawMessageStopEvent(type="message_stop"),
+            ],
+        ]
+
+        async def next_stream():
+            return _FakeAnthropicStream(attempts.pop(0))
+
+        stream = LLMStream(
+            _make_llm(),
+            create_anthropic_stream=next_stream,
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[],
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+        )
+
+        response = await stream.collect()
+
+        assert response.text == "Hi"
+        assert response.tool_calls == []

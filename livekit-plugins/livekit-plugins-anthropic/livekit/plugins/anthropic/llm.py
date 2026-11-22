@@ -347,14 +347,31 @@ class LLMStream(llm.LLMStream):
         self._output_tokens = 0
 
     async def _run(self) -> None:
+        # a retried attempt must not inherit the parse state of one that was cut short
+        self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+        self._ignoring_cot = False
+        self._input_tokens = self._output_tokens = 0
+        self._cache_creation_tokens = self._cache_read_tokens = 0
+
         retryable = True
+        completed = False
         try:
             async with await self._create_anthropic_stream() as stream:
                 async for event in stream:
+                    if event.type == "message_stop" or (
+                        event.type == "message_delta" and event.delta.stop_reason is not None
+                    ):
+                        completed = True
                     chat_chunk = self._parse_event(event)
                     if chat_chunk is not None:
                         self._event_ch.send_nowait(chat_chunk)
                         retryable = False
+
+                if not completed:
+                    # the body ended before the message did, so the response is truncated
+                    raise APIConnectionError(
+                        "anthropic stream ended before message_stop", retryable=retryable
+                    )
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
                 prompt_token = (
@@ -382,6 +399,8 @@ class LLMStream(llm.LLMStream):
                 request_id=e.request_id,
                 body=e.body,
             ) from e
+        except APIConnectionError:
+            raise
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
