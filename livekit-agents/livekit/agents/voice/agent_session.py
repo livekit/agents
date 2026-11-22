@@ -73,6 +73,7 @@ from .events import (
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
+    ErrorEvent,
     EventTypes,
     ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
@@ -636,6 +637,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
+        self._deferred_error_events: list[ErrorEvent] = []
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -954,6 +956,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            self._deferred_error_events.clear()
+
             self._started_at = time.time()
 
             # configure observability first
@@ -1196,6 +1200,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started = True
             self._update_agent_state("listening")
+            for error_event in self._deferred_error_events:
+                self.emit("error", error_event)
+            self._deferred_error_events.clear()
             if self._room_io and self._room_io.subscribed_fut:
 
                 def on_room_io_subscribed(_: asyncio.Future[None]) -> None:
@@ -2071,6 +2078,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # super().emit bypasses AgentSession.emit's narrowed AgentEvent type;
         # debug messages ride the proto, not the Pydantic event union.
         super().emit("debug_message", agent_pb.DebugMessage(payload=st))
+
+    def _emit_error(self, event: ErrorEvent) -> None:
+        # update_agent only hands off once the session has started, so an error raised while
+        # it starts reaches the handlers right after, where a fallback handoff can still run
+        if self._started:
+            self.emit("error", event)
+        else:
+            self._deferred_error_events.append(event)
 
     def _on_error(
         self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError

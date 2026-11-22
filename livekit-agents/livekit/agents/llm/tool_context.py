@@ -61,7 +61,7 @@ class ProviderTool(Tool):
 
 
 class ToolsetError(BaseModel):
-    """A toolset failed to set up; the session continues without its tools."""
+    """A toolset failed to set up; it is recoverable and the session keeps running."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["toolset_error"] = "toolset_error"

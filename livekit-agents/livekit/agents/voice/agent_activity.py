@@ -1236,7 +1236,7 @@ class AgentActivity(RecognitionHooks):
                 error = llm.ToolsetError(
                     timestamp=time.time(), label=toolset.id, error=e, recoverable=True
                 )
-                self._session.emit("error", ErrorEvent(error=error, source=toolset))
+                self._session._emit_error(ErrorEvent(error=error, source=toolset))
 
         await asyncio.gather(
             *(_do_setup(ts) for ts in all_toolsets),
