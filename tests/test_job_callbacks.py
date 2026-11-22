@@ -107,6 +107,24 @@ async def test_shutdown_callback_reason_detection_for_functions_and_methods() ->
     assert calls == ["function", "function:bye", "method", "method:bye"]
 
 
+async def test_shutdown_callback_uses_the_wrappers_own_signature() -> None:
+    ctx = _job_ctx()
+    calls: list[str] = []
+
+    async def save_transcript(path: str) -> None:
+        calls.append(path)
+
+    # a zero-argument wrapper whose __wrapped__ takes a positional parameter
+    @functools.wraps(save_transcript)
+    async def save_default_transcript() -> None:
+        await save_transcript("default.json")
+
+    ctx.add_shutdown_callback(save_default_transcript)
+    await _run_shutdown_callbacks(ctx, "room deleted")
+
+    assert calls == ["default.json"]
+
+
 async def test_participant_entrypoint_accepts_partial() -> None:
     participant = MagicMock()
     participant.identity = "caller"

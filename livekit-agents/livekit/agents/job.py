@@ -1018,10 +1018,12 @@ def _takes_positional_arg(fnc: Callable[..., Any]) -> bool:
 
     Read from the signature rather than ``__code__``: a ``functools.partial`` or a
     callable object has no ``__code__``, and the signature already leaves out a bound
-    method's ``self`` and the arguments a partial has filled in.
+    method's ``self`` and the arguments a partial has filled in. ``__wrapped__`` is not
+    followed: a decorated callback is called with the wrapper's own parameters, which
+    may differ from the function it wraps.
     """
     try:
-        params = inspect.signature(fnc).parameters.values()
+        params = inspect.signature(fnc, follow_wrapped=False).parameters.values()
     except (TypeError, ValueError):
         return False
     return any(
