@@ -1,0 +1,686 @@
+livekit-plugins/livekit-plugins-hume/livekit/plugins/hume/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-zoom-ai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 23
+livekit-agents/livekit/agents/voice/remote_session.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 565-567,569
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-clova/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-typesafe/livekit/plugins/typesafe/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-anthropic/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/log.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-3
+livekit-plugins/livekit-plugins-reson8/livekit/plugins/reson8/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-anthropic/livekit/plugins/anthropic/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-gladia/livekit/plugins/gladia/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-palabra/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-avatartalk/livekit/plugins/avatartalk/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_session_host.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 32,508-529
+  s_64f4ed07eec395::t_09ba24758cd984 530-533
+livekit-agents/livekit/agents/llm/duplex.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 177-187
+livekit-agents/livekit/agents/utils/deprecation.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 22,28-29,44-47
+livekit-plugins/livekit-plugins-avatario/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/log.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 2,5-18
+livekit-agents/livekit/agents/beta/workflows/email_address.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 117,181-190
+  s_64f4ed07eec395::t_a110db662f3d4e 191
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-rime/livekit/plugins/rime/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 40,47,87-115,135-141,158-159,176-179,184,193-208,223,255-257,260,264,270,278,301,309-316,318,364,455,462-466,468-471,477-482,488,494,509-510,530,545,549-551,561,568-570,572-573,575-584,635-645,653,699,715,730,781-782,785,804,828,833,837,932-936,938-940,943,979-982
+livekit-plugins/livekit-plugins-inworld/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-vakyam/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 36
+livekit-plugins/livekit-plugins-tavus/tests/test_tavus.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 8,122,129,137,142
+examples/homepage/restaurant-ordering/src/suggested_replies.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 83,86-90
+  s_64f4ed07eec395::t_0be1036c54276e 91
+livekit-plugins/livekit-plugins-minimax/livekit/plugins/minimax/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+examples/homepage/frontdesk/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 35-38
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/decision_model.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-169
+tests/test_worker.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 161-255,517-519
+livekit-plugins/livekit-plugins-clova/livekit/plugins/clova/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+examples/inference/agent.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-cambai/livekit/plugins/cambai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-respeecher/livekit/plugins/respeecher/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/realtime/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-3
+livekit-plugins/livekit-plugins-simli/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-spitch/livekit/plugins/spitch/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/log.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-3
+livekit-plugins/livekit-plugins-anam/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-anthropic/livekit/plugins/anthropic/llm.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 398-406
+livekit-plugins/livekit-plugins-cerebras/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-phonic/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 132
+livekit-plugins/livekit-plugins-gradium/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 19-57
+livekit-agents/livekit/agents/inference/realtime/openai.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 3-6,35,58-63,90,113-115,173,200-201,211-212,214-215,222-224,227,232-305,313-315,400
+livekit-plugins/livekit-plugins-phonic/tests/test_config_options.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-2,4,38-90
+livekit-agents/livekit/agents/inference/tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 8,322,331-340,693-695,698-699,702-743,872,877,887-891,978,982,988,992-993
+tests/test_plugin_silma_tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-1131
+tests/test_plugin_assemblyai_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 221,226,229,231,237,239,556,558-560,625,627-628,635-641
+  s_64f4ed07eec395::t_fd73ca755a405f 642-643
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 400
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_boson_ai_realtime.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-1868
+examples/homepage/vehicle-service/src/agent.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 43
+tests/test_plugin_gradium.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 497-525
+livekit-plugins/livekit-plugins-boson-ai/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-176
+livekit-plugins/livekit-plugins-neuphonic/livekit/plugins/neuphonic/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_tavus.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 131-197
+livekit-plugins/livekit-plugins-reson8/livekit/plugins/reson8/_utils.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 45-63,71-75,107,114-117,128-136
+tests/test_telemetry_redaction.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 45,81-85,99-100,152-172,218-241,691-694,698-701,706-709
+  s_64f4ed07eec395::t_54add35c7c93cd 710
+livekit-plugins/livekit-plugins-protoface/livekit/plugins/protoface/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-upliftai/livekit/plugins/upliftai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 393-394
+livekit-plugins/livekit-plugins-resemble/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-boson-ai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-44
+livekit-plugins/livekit-plugins-fal/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-rtzr/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+tests/test_google_long_decode.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 31-42,44-46,134,268,270,272,281-283,286
+livekit-plugins/livekit-plugins-avatario/livekit/plugins/avatario/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-bland/livekit/plugins/bland/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  s_64f4ed07eec395::t_6228cf9445dfd0 1422,1424
+  s_64f4ed07eec395::t_ccbe63d6d5335d 56-60,277,287,471-472,485,524,657-658,846,936-954,1015-1020,1029,1220-1226,1247-1252,1318-1319,1327-1328,1330,1334,1371-1421,1423,1425-1470,1479,1488-1504,1506-1508,1518,1530,1534-1535,1717-1744,1748,1757-1758,1780,1785,1836-1840,1845-1848
+livekit-agents/livekit/agents/llm/_realtime/gpt_live.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 7,54-55,146,499-504,698,710-711,944-977,983,988-993,1005-1014,1016-1021,1046-1050,1055-1057,1085-1089,1164-1173,1345-1346,1349,1467-1471,1476-1477
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/request_id.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-26
+livekit-plugins/livekit-plugins-rtzr/livekit/plugins/rtzr/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+examples/homepage/restaurant-ordering/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 36-39
+livekit-plugins/livekit-plugins-tavus/livekit/plugins/tavus/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/models.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-67
+livekit-agents/livekit/agents/llm/_realtime/gpt_live_types.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 262-263
+livekit-plugins/livekit-plugins-cartesia/livekit/plugins/cartesia/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/_utils.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-325
+livekit-plugins/livekit-plugins-simli/livekit/plugins/simli/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-speechmatics/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+tests/test_inference_tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 3,14,135-141,263,393-553
+livekit-plugins/livekit-plugins-vlmrun/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-45
+livekit-plugins/livekit-plugins-fireworksai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+tests/test_plugin_neuphonic_tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 156-229
+livekit-agents/livekit/agents/inference/realtime/gpt_live.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15,103,120,136,149-151,185
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/llm.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-182
+livekit-plugins/livekit-plugins-avatartalk/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+tests/test_inference_decisions.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 187-226
+livekit-plugins/livekit-plugins-murf/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-palabra/livekit/plugins/palabra/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-microsoft-ai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 23
+livekit-plugins/livekit-plugins-hamming/livekit/plugins/hamming/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/realtime/realtime_model.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-1568
+livekit-plugins/livekit-plugins-simplismart/livekit/plugins/simplismart/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 97-99,206-211,263-267,276,279-284,323,384-389,456,458-460,707-711,718-720,750-760,770,972-977,981-983,985-986,1070
+livekit-plugins/livekit-plugins-nabrah/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 35
+livekit-plugins/livekit-plugins-nltk/livekit/plugins/nltk/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-gnani/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 35
+livekit-agents/livekit/agents/job.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 281,916-918
+livekit-plugins/livekit-plugins-keyframe/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+.oss-scanner/threat_model.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 113
+examples/homepage/frontdesk/src/agent.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 42
+livekit-plugins/livekit-plugins-lmnt/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+tests/test_utils/test_deprecation.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-65
+livekit-plugins/livekit-plugins-bithuman/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 30
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 40-41,107,123,137-140,182,298-299,336-337,432-433,477-478
+livekit-plugins/livekit-plugins-fishaudio/livekit/plugins/fishaudio/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-krisp/livekit/plugins/krisp/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-sarvam/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+tests/test_realtime/test_openai_inference_realtime_model.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 11,34-48,722-1112
+livekit-plugins/livekit-plugins-turn-detector/livekit/plugins/turn_detector/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-elevenlabs/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-kalpa/livekit/plugins/kalpa/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-turn-detector/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 28,75,96
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/models.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 3-7,12-23,35,37-40,43-45,50-56,58-188,203,205-217,221
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-65
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/realtime/utils.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-292
+livekit-agents/livekit/agents/llm/_responses_engine.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 20,266-268,300-302,383-386,431-432,454-459,466-474,530-531,533-544,616-624
+examples/expressive_agent/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 21
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-cambai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+examples/homepage/card-auth/src/suggested_replies.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 83,86-90
+  s_64f4ed07eec395::t_4967600ab6c050 91
+livekit-plugins/livekit-plugins-bey/livekit/plugins/bey/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-anam/livekit/plugins/anam/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-deepgram/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-soniox/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 33
+livekit-plugins/livekit-plugins-telnyx/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-speechify/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-silma/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-117
+livekit-agents/livekit/agents/worker.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 64-66,1120,1172-1177,1184,1202-1207,1233-1253,1312-1313,1323
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/log.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-3
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1674-1692,3104
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-53
+livekit-plugins/livekit-plugins-meta/livekit/plugins/meta/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-groq/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-browser/livekit/plugins/browser/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 27-29,31,34,54-65,67,83-135,140,144,149-160,179-375,383-389,393-398,403-416,422-423,431-440,445-446,452-455,458,463-486,488-493,498,517-566,571,576,584,587-591,597-598,600,603-604,628-630,637-639,656,662-665,670-672,677-678,689-693,696-709,723,735-808,810-843,847-852,864-867,873,885-889,891,893-901,903-917,926-977,981-983,989,994-995,1005-1036,1038-1041,1043-1044,1046-1052,1054-1063,1070-1072,1079-1086,1088,1091-1094,1096-1097,1099-1101,1103-1112
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-krisp/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 37
+livekit-agents/livekit/agents/llm/duplex_adapter.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 705-707,711
+examples/expressive_agent/agent.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 52
+examples/homepage/livekit-expert/knowledge_base/products/livekit-inference.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-speechmatics/livekit/plugins/speechmatics/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-zoom-ai/livekit/plugins/zoom_ai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_reson8_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 12,33,357-378,392,396,405-447,504-507,536-564,580-583
+  s_64f4ed07eec395::t_7437e50663d986 584-585
+livekit-plugins/livekit-plugins-upliftai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-agents/livekit/agents/stt/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 55-57
+livekit-plugins/livekit-plugins-vakyam/livekit/plugins/vakyam/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-reson8/livekit/plugins/reson8/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25,43,52,78,80,85-87,99-100,232-234,239-240,283,290-300,318,338-340,356,372-373,375,383,400,413-417,452-453,470,559-563
+livekit-plugins/livekit-plugins-spitch/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-tavus/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-atmee/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+livekit-plugins/livekit-plugins-lokutor/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-minimax/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-fishaudio/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-spatius/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+tests/test_inference_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1432-1883
+livekit-plugins/livekit-plugins-phonic/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25,28
+livekit-plugins/livekit-plugins-assemblyai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-cerebras/livekit/plugins/cerebras/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_speechmatics_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 39,48-49,163,167,169,174-182,352,355-357,365,369-374,378-379,383-384,407-463
+  s_64f4ed07eec395::t_2da2f75308818d 464-465
+livekit-plugins/livekit-plugins-azure/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-liveavatar/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-protoface/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-agents/livekit/agents/llm/decision_fallback_adapter.py
+  s_64f4ed07eec395::t_6228cf9445dfd0 200,261
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-199,201-260,262-277
+livekit-agents/livekit/agents/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-did/livekit/plugins/did/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-reson8/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 34,52,56,58,61,64-69,78-80,83-86,89-93,104,114,118-119,147-148,157
+livekit-agents/livekit/agents/llm/realtime.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 333-343
+livekit-plugins/livekit-plugins-microsoft-ai/livekit/plugins/microsoft_ai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 17
+livekit-plugins/livekit-plugins-fireworksai/livekit/plugins/fireworksai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/_common.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-66
+livekit-agents/livekit/agents/inference/llm.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 42,323,413,424-426,450
+livekit-agents/livekit/agents/llm/decisions.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 11,15,199-207
+livekit-plugins/livekit-plugins-smallestai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-agents/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 73-156
+livekit-plugins/livekit-plugins-rime/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 23,27
+livekit-plugins/livekit-plugins-inworld/livekit/plugins/inworld/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_inference_llm.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 36-52,300-332
+  s_64f4ed07eec395::t_1ff445c4f3e79c 333-334
+livekit-plugins/livekit-plugins-cartesia/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-simplismart/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-tavus/livekit/plugins/tavus/avatar.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 135-149
+livekit-plugins/livekit-plugins-keyframe/livekit/plugins/keyframe/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-nvidia/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 30,36
+livekit-plugins/livekit-plugins-ultravox/livekit/plugins/ultravox/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_sarvam_llm.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 104-173
+livekit-plugins/livekit-plugins-thunderphone/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-agents/livekit/agents/llm/_realtime/openai.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 936-937,1299,1310-1311,1313-1319,1321-1335,1337-1339,1343-1345
+  s_64f4ed07eec395::t_ee6cc0d4af4b45 1346
+livekit-plugins/livekit-plugins-gnani/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 117-187,195,200-219,286-302,313-323,332,341,343,349,351,359-365
+  s_64f4ed07eec395::t_d509902e67222d 366
+livekit-plugins/livekit-plugins-langchain/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 27
+livekit-plugins/livekit-plugins-mistralai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+tests/test_plugin_gnani_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 5-9,12,14-17,63,66,68,71,76-86,89,92-100,102-106,109,112-115,118-122,125-126,129-132,135-138,141-148,150,152,154-156,158-162,165-180,182-184,186-187,189-194,197-199,202,205,208-210,212-215,218-220,222-224,227-230,233-238,240-628,630-667,669-671,674-677,679-717,719-836,838-881,883-897,899-911,913-921,924-954,957-961,963-966,968,971-980,983-996,998-1000,1002-1003,1006-1052,1054-1056,1058,1061-1068,1070-1071,1074-1079,1081-1082,1085-1093,1095-1096,1099-1106,1108-1110,1113-1116,1118-1151,1155,1157-1170,1173-1339,1341-1342,1345-1348,1350-1427
+livekit-plugins/livekit-plugins-perplexity/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+examples/homepage/card-auth/src/agent.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 41
+tests/test_plugin_openai_responses.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 491-527,902-1023
+examples/homepage/vehicle-service/src/suggested_replies.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 83,86-90
+  s_64f4ed07eec395::t_e3f27f4a7ede44 91
+livekit-plugins/livekit-plugins-bey/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-boson-avatar/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-liveavatar/livekit/plugins/liveavatar/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-nvidia/livekit/plugins/nvidia/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/models.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 210
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 21,28
+livekit-plugins/livekit-plugins-perplexity/livekit/plugins/perplexity/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-fal/livekit/plugins/fal/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-nabrah/livekit/plugins/nabrah/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-agents/livekit/agents/inference/decision_model.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 23,27,37-39,73,82-85,97-99,131-133,140,144,150-154,159-161
+livekit-plugins/livekit-plugins-runway/livekit/plugins/runway/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-elevenlabs/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 37-95
+tests/test_plugin_mistralai_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 12,187-194
+  s_64f4ed07eec395::t_0a39ad916e1f7e 195-196
+livekit-agents/livekit/agents/inference/_utils.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 14-16,35-44
+livekit-plugins/livekit-plugins-hume/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 27
+tests/test_decisions.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 5,10,16,351-532
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-aws/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+examples/homepage/card-auth/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 38-41
+livekit-plugins/livekit-plugins-bland/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/models.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 5-6
+livekit-plugins/livekit-plugins-murf/livekit/plugins/murf/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-vlmrun/livekit/plugins/vlmrun/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-15
+tests/test_plugin_gradium_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 7-8,11,14-156,178,181,207-268,294-296,313,316,334,502,506,609-610,671-672,700-1080
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-15
+tests/test_realtime_metrics.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 652
+examples/homepage/vehicle-service/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 39-42
+livekit-plugins/livekit-plugins-speechmatics/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 28-31
+livekit-plugins/livekit-plugins-speechify/livekit/plugins/speechify/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-typesafe/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 22
+livekit-plugins/livekit-plugins-resemble/livekit/plugins/resemble/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-19
+livekit-plugins/livekit-plugins-silero/livekit/plugins/silero/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-browser/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+livekit-plugins/livekit-plugins-lemonslice/livekit/plugins/lemonslice/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_inference_responses.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 38-55
+tests/test_workflow_readback.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 31-43,56,80
+livekit-plugins/livekit-plugins-lemonslice/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-azure/livekit/plugins/azure/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-groq/livekit/plugins/groq/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-respeecher/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 27
+livekit-plugins/livekit-plugins-minimal/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24,55,61,72-77,161,171-172,230-232,243,263-264,306,327,358,372,381,399,451-454,463,552,803-805,810,895-896,969-987,997-1028,1042
+livekit-agents/livekit/agents/telemetry/utils.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 42-44
+livekit-plugins/livekit-plugins-lokutor/livekit/plugins/lokutor/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_sarvam_stt_streaming.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 68,159-190,521-546,2019-2101
+livekit-plugins/livekit-plugins-google/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 36
+tests/test_plugin_anthropic_request.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 161-232
+tests/test_plugin_sarvam_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 8,35-41,401-1081
+livekit-plugins/livekit-plugins-bithuman/livekit/plugins/bithuman/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 39-45
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 34,47-48,53-60,66-67,70,76,95-138,142,145,163-173,184,187,200-205,226,229,238,274,279-287,289-298,301-302,329,331-332,337,340-341,346-394,629,633-634,636,733,735-736,738
+livekit-plugins/livekit-plugins-did/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-nltk/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 23
+tests/test_plugin_elevenlabs_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 29,33,50,71,81-88,349-484,606,757-759,761,945-1994,2148-2172
+  s_64f4ed07eec395::t_34e7fbcc5059af 2173-2174
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/models.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-86
+livekit-agents/livekit/agents/inference/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 9-12,50-52,998-1046,1071-1188,1277-1281,1283-1284,1309,1324-1325,1348,1350-1352,1355,1358,1360,1366,1368,1370,1373-1387,1393-1396,1398-1399,1401-1410,1414-1415,1417-1418,1423,1425-1426,1454-1491,1495,1498,1500,1502,1504,1506-1507,1515,1517,1521,1524,1533-1536,1538-1545,1547-1548,1550,1552-1568,1570-1573,1575-1588,1593-1598,1601-1602,1605-1609,1611,1613-1614,1620,1622-1624,1631-1632,1634-1635,1637-1638,1640,1642,1646,1648-1649,1652,1657,1660-1661,1665,1672,1675,1682-1686
+examples/playground.yaml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 194,200
+livekit-agents/livekit/agents/inference/responses.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 48,158,168-173,179
+livekit-plugins/livekit-plugins-silero/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-baseten/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+livekit-plugins/livekit-plugins-synthesia/livekit/plugins/synthesia/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_vlmrun.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-450
+livekit-plugins/livekit-plugins-telnyx/livekit/plugins/telnyx/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+livekit-plugins/livekit-plugins-boson-ai/livekit/plugins/boson_ai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-15
+livekit-plugins/livekit-plugins-boson-avatar/livekit/plugins/boson_avatar/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-tavus/livekit/plugins/tavus/api.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25-26,93,98,103,106-107,163-169,176,202-203
+livekit-plugins/livekit-plugins-trugen/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+tests/test_user_turn.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24,867-901
+  s_64f4ed07eec395::t_68f99455e232dd 902-903
+tests/test_realtime/test_realtime.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 419,441
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-lmnt/livekit/plugins/lmnt/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-assemblyai/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24,39
+.github/workflows/publish.yml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 286-287
+livekit-plugins/livekit-plugins-hamming/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-assemblyai/livekit/plugins/assemblyai/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 64,163,316-319
+livekit-plugins/livekit-plugins-spatius/livekit/plugins/spatius/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1
+tests/test_plugin_elevenlabs_stt_live.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 12,20-23,44,56-61,112-209
+livekit-plugins/livekit-plugins-langchain/livekit/plugins/langchain/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_gpt_live_model.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 150-152,158,162-168,1637-1638,1673-1678,1701,1703,1705-1710,1717,1725,1728-1729,1739-1742,1749,1752-1816,1822-2109,2467-2481,2787
+tests/test_startup_spans.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 194-217
+livekit-plugins/livekit-plugins-vlmrun/README.md
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-69
+livekit-plugins/livekit-plugins-atmee/livekit/plugins/atmee/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 16
+livekit-plugins/livekit-plugins-neuphonic/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 123-126,732-733,991,1476-1479
+  s_64f4ed07eec395::t_5a40a5d1571897 1480
+livekit-plugins/livekit-plugins-gradium/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+livekit-plugins/livekit-plugins-asyncai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+examples/homepage/restaurant-ordering/src/agent.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 43
+examples/homepage/frontdesk/src/suggested_replies.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 83,86-90
+  s_64f4ed07eec395::t_c55c56d73e1076 91
+livekit-agents/livekit/agents/llm/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 17-20,163,165
+livekit-plugins/livekit-plugins-elevenlabs/livekit/plugins/elevenlabs/_turn_detection.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-302
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 14,19
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/llm.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24-25,28,74-75,354-368,375,661-664,674-676
+livekit-plugins/livekit-plugins-kalpa/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 23
+livekit-plugins/livekit-plugins-meta/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 32
+livekit-plugins/livekit-plugins-minimal/livekit/plugins/minimal/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-runway/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/llm/client.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 20,73-79,106-110,164-168,210-214,295-296,304,330-331,377-385
+livekit-plugins/livekit-plugins-trugen/livekit/plugins/trugen/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-ultravox/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 24
+livekit-plugins/livekit-plugins-smallestai/livekit/plugins/smallestai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-xai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+tests/test_recording.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 85,415-433,895-896,903,907,923-928,933,939,947,951,961,963,975,977-983
+livekit-plugins/livekit-plugins-reson8/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 32
+livekit-plugins/livekit-plugins-asyncai/livekit/plugins/asyncai/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+livekit-plugins/livekit-plugins-openai/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 25
+livekit-plugins/livekit-plugins-gradium/livekit/plugins/gradium/stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26,43-45,56-73,91-93,98-99,117,122,124-146,150,153,187,192,340-341,343-344,369,373,383,394-395,409-429,434,441-491,497-500,509-510,524-529,531-552,598-604,606,611,620-636,701-702
+livekit-plugins/livekit-plugins-silma/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-52
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/realtime/realtime_model.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 268,337-339,342,347,349,909-911,1062-1063,1186-1190,1204,1387-1388,1391-1393,1490-1492
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 1-674
+livekit-plugins/livekit-plugins-gladia/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 34
+livekit-plugins/livekit-plugins-thunderphone/livekit/plugins/thunderphone/version.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 15
+tests/test_plugin_baseten_stt.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 20,96,105-106,135-140
+  s_64f4ed07eec395::t_0ed512e549f820 141-142
+tests/test_plugin_gnani_tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 5-9,11,13-15,20-29,39,42,44,47,52-61,64,67-76,78-83,86,89-92,95-96,101-102,105,108-113,115-116,120-121,123-127,129-140,143-150,152,154-158,161-163,166-167,170-171,174,177-179,182-184,187-189,192,195-200,203-211,214-215,218-219,222-223,226-227,230-235,238,241-243,246,249-252,254-255,258-260,262-266,268-273,276-277,280-282,285-288,290,292,295,298-302,305-307,310-317,320,323-333,336,339-345,348-350,352-353,356-363,366-370,373-625,627-639,642-645,647-648,650-651,654-655,657-658,661-665,667-668,671-685,688-690,693-698,701-704,706,708-711,714-715,717,719-721,724-738,740,742-745,748-751,753,755-757,760-762,764,766-769
+livekit-agents/livekit/agents/llm/utils.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 339-341
+livekit-plugins/livekit-plugins-neuphonic/livekit/plugins/neuphonic/tts.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 402,404-409,412,420-423,426,428-436,473
+tests/test_plugin_google_llm.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 11,15-33,341-393
+  s_64f4ed07eec395::t_8106f7cf2fb94d 394
+livekit-plugins/livekit-plugins-reson8/livekit/plugins/reson8/__init__.py
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26,40
+livekit-plugins/livekit-plugins-synthesia/pyproject.toml
+  s_64f4ed07eec395::t_ccbe63d6d5335d 26
+uv.lock
+  s_64f4ed07eec395::t_c3ed594c37a131 45,97,116,2197-2198,2356-2358,2410-2412,2449,2499,2517,2543,3045-3046,3653,3786-3799,4039-4054,5114,5123,5125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a13afd59493e79792f71719cf1a975f3facf7ab1",
+  "prompts": {},
+  "sessions": {
+    "s_64f4ed07eec395": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1e9f7-b2d8-7663-a1e4-d6ecad76c415",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
