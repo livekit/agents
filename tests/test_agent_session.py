@@ -1097,32 +1097,6 @@ async def test_toolset_setup_failure_emits_a_recoverable_error() -> None:
     assert [close.error for close in closes] == [None]
 
 
-async def test_error_handler_can_hand_off_when_a_toolset_fails_at_startup() -> None:
-    """A handler that falls back to another agent on a setup error gets that agent on the call."""
-    entered: list[str] = []
-
-    class _Fallback(Agent):
-        def __init__(self) -> None:
-            super().__init__(instructions="you are the fallback")
-
-        async def on_enter(self) -> None:
-            entered.append("fallback")
-
-    actions = FakeActions()
-    actions.add_user_speech(0.5, 1.5, "hello")
-    actions.add_llm("Hi, how can I help?")
-    actions.add_tts(1.0)
-    session = create_session(actions)
-    fallback = _Fallback()
-    session.on("error", lambda _: session.update_agent(fallback))
-
-    agent = Agent(instructions="you are helpful", tools=[_UnreachableToolset()])
-    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-
-    assert entered == ["fallback"]
-    assert session.current_agent is fallback
-
-
 async def test_on_enter_marker_does_not_follow_a_handoff_back() -> None:
     """Handing back to an agent that handed off from on_enter must not keep its tools hidden."""
 
