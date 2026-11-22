@@ -170,30 +170,33 @@ async def test_option_update_during_connect_discards_stale_socket(
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts = 0
-    finished = asyncio.Event()
+    delays: list[float] = []
+    # `elevenlabs_tts.asyncio` is the asyncio module itself, so the patch below also
+    # replaces the sleep this test would use
+    real_sleep = asyncio.sleep
 
     async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
         nonlocal attempts
         attempts += 1
         raise elevenlabs_tts.APIStatusError("Unauthorized", status_code=401)
 
+    async def _sleep(delay: float) -> None:
+        delays.append(delay)
+        await real_sleep(0)  # yield, so a prewarm that keeps retrying times out below
+
     monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-    monkeypatch.setattr(
-        elevenlabs_tts.asyncio,
-        "sleep",
-        lambda _delay: finished.set(),
-    )
+    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", _sleep)
 
     tts = elevenlabs_tts.TTS(api_key="test-key")
     tts.prewarm()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-    assert attempts == 1
-    assert not finished.is_set()
+    assert tts._prewarm_task is not None
+    await asyncio.wait_for(tts._prewarm_task, timeout=1)
     await tts.aclose()
+
+    assert attempts == 1
+    assert delays == []  # gave up without waiting to retry
 
 
 async def test_prewarm_retries_with_exponential_backoff(
