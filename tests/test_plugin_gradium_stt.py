@@ -757,12 +757,13 @@ async def test_vad_flush_sends_the_buffered_partial_frame_first():
         assert [msg["type"] for msg in ws.sent[1:]] == ["audio", "flush"]
 
 
-async def test_vad_flush_and_caller_flush_in_one_turn_each_get_their_reply():
-    """A commit right after a trip: the two flushes have different ids, the first reply ends
-    the turn, and the commit still gets a final of its own. Without it the session waits
-    for its transcript timeout."""
+async def test_caller_flush_during_a_vad_flush_gets_the_whole_turn():
+    """A commit while a trip's flush is in flight: the commit takes the first final it sees,
+    so the trip's reply must not publish one. The words spoken between the two flushes
+    arrive after that reply, and only the caller's reply carries the whole turn."""
     async with _open_stream() as (ws, stream, collector):
-        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_text("book", 0.3))
+        ws.incoming.put_nowait(_text("a", 0.5))
         ws.incoming.put_nowait(_step(0.95))
         await ws.wait_sent("flush")
         stream.flush()
@@ -772,10 +773,47 @@ async def test_vad_flush_and_caller_flush_in_one_turn_each_get_their_reply():
         ]
 
         ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        ws.incoming.put_nowait(_text("flight", 0.9))
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == []
+
         ws.incoming.put_nowait({"type": "flushed", "flush_id": 2})
-        events = await collector.wait_for(6)
-        assert _final_texts(events) == ["hello", ""]
-        assert [ev.type for ev in events].count(SpeechEventType.END_OF_SPEECH) == 1
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["book a flight"]
+        assert [ev.type for ev in collector.events].count(SpeechEventType.END_OF_SPEECH) == 1
+
+
+async def test_caller_flush_still_queued_holds_back_the_vad_flush_final():
+    """The commit can sit behind audio still being sent when the trip's reply comes back:
+    the caller's flush is not on the wire yet, but the trip's reply must already leave the
+    turn to it."""
+    async with _open_stream() as (ws, stream, collector):
+        ws.incoming.put_nowait(_text("book", 0.3))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+
+        # stall the send loop on the audio ahead of the commit
+        gate = asyncio.Event()
+        send_str = ws.send_str
+
+        async def gated_send_str(message: str) -> None:
+            await gate.wait()
+            await send_str(message)
+
+        ws.send_str = gated_send_str
+        stream.push_frame(_audio_frame())
+        stream.flush()
+
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == []
+
+        gate.set()
+        await ws.wait_sent("flush", 2)
+        ws.incoming.put_nowait(_text("flight", 0.9))
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 2})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["book flight"]
 
 
 async def test_vad_trip_after_the_input_ended_is_left_to_end_of_stream(caplog):

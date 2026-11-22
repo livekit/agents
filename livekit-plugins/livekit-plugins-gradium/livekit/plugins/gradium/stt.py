@@ -299,6 +299,12 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         # counts the flush requests of the stream, so an id is never reused after a reconnect
         self._flush_count = 0
+        # caller flushes still in the input channel, not yet sent to the server
+        self._queued_manual_flushes = 0
+
+    def flush(self) -> None:
+        super().flush()
+        self._queued_manual_flushes += 1
 
     def update_options(
         self,
@@ -338,6 +344,7 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.flush()
                     flush_id = data.flush_id
                 elif isinstance(data, self._FlushSentinel):
+                    self._queued_manual_flushes -= 1
                     frames = audio_bstream.flush()
                     self._flush_count += 1
                     flush_id = self._flush_count
@@ -621,8 +628,13 @@ class SpeechStream(stt.SpeechStream):
                                     )
                                 )
                         elif pending_flush is not None and flush_id == pending_flush:
-                            flush_replied = True
-                            _end_turn_if_confirmed()
+                            # When the caller committed after this flush, words spoken in
+                            # between are still coming, and a final now would answer the
+                            # commit without them: the caller's reply ends the turn instead.
+                            # The deadline stays, so a lost reply can't hold it open.
+                            if not manual_flushes and self._queued_manual_flushes == 0:
+                                flush_replied = True
+                                _end_turn_if_confirmed()
                     elif type_ == "log":
                         log_server_message(data)
                     else:
