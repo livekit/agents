@@ -110,8 +110,7 @@ handles what participants send here.
 - **Secrets:** API keys, API secrets, worker tokens, and provider credentials
   must not appear in logs, traces, exception messages, health or metrics
   output, or data sent to the room. With redaction enabled, user PII must not
-  reach telemetry. The tests `test_ws_handshake_credential_redaction.py`,
-  `test_telemetry_pii_redaction.py`, and `test_toolerror_log_pii.py` encode
+  reach telemetry. The tests in `test_telemetry_redaction.py` encode
   part of this.
 - **Files and URLs:** participant-supplied values must not choose local file
   paths or make the agent fetch local files or internal addresses.

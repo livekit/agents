@@ -278,7 +278,7 @@ class JobContext:
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
         self._recording_initialized = False
-        self._redaction_enabled = info.job.enable_redaction
+        self._redaction_enabled = info.job.enable_redaction and self.simulation_context() is None
         self._early_log_handler: _BufferingHandler | None = None
         # this job's cloud-telemetry registration, set by init_recording():
         # span/log/metric attribution and upload gating resolve from it (the
@@ -913,7 +913,9 @@ class JobContext:
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def init_recording(self, options: RecordingOptions) -> None:
-        redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
+        redaction_enabled = options.get("redaction", False) or (
+            self.job.enable_redaction and self.simulation_context() is None
+        )
         if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
             raise ValueError("audio upload requires transcript upload when redaction is enabled")
 

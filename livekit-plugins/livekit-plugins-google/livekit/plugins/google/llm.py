@@ -21,8 +21,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
+import httpx
+
 import google.auth.credentials
 from google.auth._default_async import default_async
+from google.auth.transport import mtls
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
@@ -68,7 +71,8 @@ def _supports_thinking_level(model: str) -> bool:
 
 def _supports_xhigh_thinking(model: str) -> bool:
     """Check if model accepts thinking_level "xhigh", its maximum reasoning depth"""
-    return "gemini-4-hydrogen" in model.lower()
+    model = model.lower()
+    return "gemini-4-hydrogen" in model or "gemini-4-neon" in model
 
 
 def _validate_thinking_level(model: str, level: str | types.ThinkingLevel | None) -> None:
@@ -347,12 +351,28 @@ class LLM(llm.LLM):
             cached_content=cached_content,
             media_resolution=media_resolution,
         )
+        # use httpx, whose timeout limits each read and not the total request time like aiohttp's;
+        # a custom transport bypasses genai's SSL context, so it gets the Vertex client cert here
+        client_http_options = (
+            http_options.model_copy() if is_given(http_options) else types.HttpOptions()
+        )
+        client_async_args = dict(client_http_options.async_client_args or {})
+        if "transport" not in client_async_args and client_http_options.httpx_async_client is None:
+            ssl_ctx = None
+            if use_vertexai:
+                try:
+                    ssl_ctx = mtls.get_default_ssl_context()
+                except Exception:
+                    logger.warning("failed to load the default client certificate", exc_info=True)
+            client_async_args["transport"] = httpx.AsyncHTTPTransport(verify=ssl_ctx or True)
+            client_http_options.async_client_args = client_async_args
         self._client = Client(
             api_key=gemini_api_key,
             vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
             credentials=credentials,
+            http_options=client_http_options,
         )
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
@@ -638,6 +658,10 @@ class LLMStream(llm.LLMStream):
             if long_decode:
                 # a reasoning turn runs for minutes; a short read timeout drops a live request
                 timeout_ms = max(timeout_ms, LONG_DECODE_HTTP_TIMEOUT_MS)
+            # plugin set the timeout unless the caller passed their own http_options.timeout
+            plugin_set_timeout = not is_given(self._llm._opts.http_options) or (
+                self._llm._opts.http_options.timeout is None
+            )
             if is_given(self._llm._opts.http_options):
                 http_options = self._llm._opts.http_options.model_copy()
                 if http_options.timeout is None:
@@ -647,6 +671,9 @@ class LLMStream(llm.LLMStream):
 
             headers = dict(http_options.headers or {})
             headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+            if plugin_set_timeout and "X-Server-Timeout" not in headers:
+                # preset to stop genai deriving a whole-request deadline from the ms timeout (#7987)
+                headers["X-Server-Timeout"] = str(int(LONG_DECODE_HTTP_TIMEOUT_MS / 1000))
             http_options.headers = headers
             config = types.GenerateContentConfig(
                 system_instruction=(

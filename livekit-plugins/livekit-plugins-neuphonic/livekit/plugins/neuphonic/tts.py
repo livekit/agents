@@ -399,20 +399,41 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
+        # sentences sent and not yet answered with a stop
         chunks = 0
+        input_done = False
+        # set when a sentence is sent or the input ends. While no sentence is
+        # pending, recv_task waits on this rather than on the socket: the sentence
+        # tokenizer can still be holding the next sentence, so a pending count of
+        # zero only ends the segment once the input has ended.
+        input_changed = asyncio.Event()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal chunks, input_done
             async for sentence in chunks_stream:
                 self._mark_started()
 
-                nonlocal chunks
                 chunks += 1
 
                 msg = {"text": f"{sentence.token}<STOP>", "context_id": segment_id}
                 await ws.send_str(json.dumps(msg))
+                input_changed.set()
+
+            input_done = True
+            input_changed.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal chunks
             while True:
+                if chunks == 0:
+                    if input_done:
+                        output_emitter.end_segment()
+                        break
+
+                    input_changed.clear()
+                    await input_changed.wait()
+                    continue
+
                 msg = await ws.receive()
 
                 if msg.type in (
@@ -446,11 +467,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                         except Exception as e:
                             logger.warning("Failed to decode NeuPhonic audio data", exc_info=e)
 
-                    nonlocal chunks
                     if data.get("stop"):
                         chunks -= 1
 
-                    if data.get("context_id") != segment_id or chunks == 0:
+                    if data.get("context_id") != segment_id:
                         output_emitter.end_segment()
                         break
                 elif msg.type == aiohttp.WSMsgType.BINARY:

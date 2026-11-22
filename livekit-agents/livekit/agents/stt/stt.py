@@ -52,7 +52,9 @@ class SpeechEventType(str, Enum):
     RECOGNITION_USAGE = "recognition_usage"
     """usage event, emitted periodically to indicate usage metrics"""
     END_OF_SPEECH = "end_of_speech"
-    """indicate the end of speech, emitted when the user stops speaking"""
+    """indicate the end of speech, emitted when the user stops speaking.
+    alternatives are optional and provider-specific; they may contain only the latest segment.
+    build the complete transcript from FINAL_TRANSCRIPT events"""
 
 
 @dataclass
