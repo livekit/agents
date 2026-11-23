@@ -76,7 +76,7 @@ class STTOptions:
     encoding: str = "pcm_s16le"
     temperature: float | None = None
     language: LanguageCode = LanguageCode("en")
-    vad_threshold: float = 0.6
+    vad_threshold: float = 0.9
     vad_bucket: int | None = 2
     # Positive VAD steps (80 ms each) since the trip, or since the last new word, that the
     # turn needs besides the server's flush reply before it ends; 0 ends it on the reply.
