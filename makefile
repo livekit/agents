@@ -56,6 +56,7 @@ format-check: ## Check code formatting without making changes
 
 lint: ## Run ruff linter
 	@echo "$(BOLD)$(CYAN)Running linter...$(RESET)"
+	@uv run python scripts/check_exception_logging.py
 	@if uv run ruff check .; then \
 		echo "$(BOLD)$(GREEN)✓ No linting issues found$(RESET)"; \
 	else \

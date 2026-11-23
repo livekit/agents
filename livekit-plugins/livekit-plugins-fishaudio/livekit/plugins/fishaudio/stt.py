@@ -604,7 +604,10 @@ class SpeechStream(stt.SpeechStream):
 
         if msg_type == "configured":
             if not msg.get("ok"):
-                logger.warning("fish audio stt rejected an options update: %s", msg.get("message"))
+                logger.warning(
+                    "fish audio stt rejected an options update",
+                    extra={"lk.pii.error": msg.get("message")},
+                )
             return
 
         if msg_type == "error":
@@ -744,9 +747,12 @@ class SpeechStream(stt.SpeechStream):
         if msg.get("recoverable") or error_type in _RECONNECT_ERROR_TYPES:
             # the session continues, or closes with a code that starts a new one
             logger.warning(
-                "fish audio stt error: %s",
-                message,
-                extra={"error_type": error_type, "request_id": msg.get("request_id")},
+                "fish audio stt error",
+                extra={
+                    "error_type": error_type,
+                    "request_id": msg.get("request_id"),
+                    "lk.pii.error": message,
+                },
             )
             return
 

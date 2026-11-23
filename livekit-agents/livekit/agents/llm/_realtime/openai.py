@@ -1573,7 +1573,7 @@ class RealtimeSession(
             if rejected := [str(r) for r in results if isinstance(r, BaseException)]:
                 logger.warning(
                     f"{self._realtime_model._provider_label} rejected part of a chat context update",  # noqa: E501
-                    extra={"errors": rejected},
+                    extra={"lk.pii.errors": rejected},
                 )
 
     def _create_update_chat_ctx_events(
@@ -2047,9 +2047,7 @@ class RealtimeSession(
                 llm.RemoteItemAddedEvent(previous_item_id=event.previous_item_id, item=lk_item),
             )
         except ValueError as e:
-            logger.warning(
-                f"failed to insert item `{event.item.id}`: {str(e)}",
-            )
+            logger.warning(f"failed to insert item `{event.item.id}`", exc_info=e)
 
         if fut := self._item_create_future.pop(event.item.id, None):
             if fut.done():
@@ -2066,9 +2064,7 @@ class RealtimeSession(
         try:
             self._remote_chat_ctx.delete(event.item_id)
         except ValueError as e:
-            logger.warning(
-                f"failed to delete item `{event.item_id}`: {str(e)}",
-            )
+            logger.warning(f"failed to delete item `{event.item_id}`", exc_info=e)
 
         if fut := self._item_delete_future.pop(event.item_id, None):
             if fut.done():
@@ -2133,7 +2129,7 @@ class RealtimeSession(
     ) -> None:
         logger.error(
             f"{self._realtime_model._provider_label} failed to transcribe input audio",
-            extra={"error": event.error},
+            extra={"lk.pii.error": event.error},
         )
 
         # close any open partial stream so consumers waiting for is_final don't hang
@@ -2480,8 +2476,8 @@ class RealtimeSession(
 
         provider_label = self._realtime_model._provider_label
         logger.error(
-            f"{provider_label} returned an error: {event.error}",
-            extra={"error": event.error},
+            f"{provider_label} returned an error",
+            extra={"lk.pii.error": event.error},
         )
         recoverable = not self._is_fatal_error(event.error)
         error = APIError(

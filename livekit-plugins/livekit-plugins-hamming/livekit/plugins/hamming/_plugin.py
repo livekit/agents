@@ -393,8 +393,7 @@ class _SessionMonitor:
                     report=report,
                     payload_record=payload_record,
                 )
-        except Exception as exc:
-            logger.error("unhandled exception in hamming final payload task: %r", exc)
+        except Exception:
             logger.exception("unhandled exception in hamming final payload task")
         finally:
             self._runtime.remove_monitor(self._session_key)

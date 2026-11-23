@@ -25,7 +25,15 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from yarl import URL
 
-from livekit.agents import Agent, AgentSession, APIStatusError, function_tool, llm, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIConnectionError,
+    APIStatusError,
+    function_tool,
+    llm,
+    utils,
+)
 from livekit.agents.telemetry import pii, trace_types, utils as telemetry_utils
 from livekit.agents.telemetry.traces import (
     _DynamicTracer,
@@ -36,6 +44,7 @@ from livekit.agents.types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
     NOT_GIVEN,
+    APIConnectOptions,
     NotGivenOr,
 )
 
@@ -871,6 +880,131 @@ def test_logging_handler_omits_automatic_exception_details_when_redacted(
     else:
         assert translated.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == "secret transcript"
         assert "secret transcript" in translated.attributes[trace_types.ATTR_EXCEPTION_TRACE]
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("redaction_enabled", [False, True])
+async def test_llm_retry_keeps_exception_details_out_of_log_body(
+    monkeypatch: pytest.MonkeyPatch, redaction_enabled: bool
+) -> None:
+    secret = "provider rejected the request: canary@example.com"
+
+    class RetryStream(llm.LLMStream):
+        attempts = 0
+
+        async def _run(self) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise APIConnectionError(secret)
+
+    exporter = InMemoryLogRecordExporter()
+    provider = LoggerProvider()
+    provider.add_log_record_processor(pii._PIIFilteringLogProcessor())
+    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    handler = _TraceLevelLoggingHandler(logger_provider=provider)
+    logger = logging.getLogger("livekit.agents")
+    logger.addHandler(handler)
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redaction_enabled)
+    try:
+        async with RetryStream(
+            FakeLLM(),
+            chat_ctx=llm.ChatContext.empty(),
+            tools=[],
+            conn_options=APIConnectOptions(max_retry=1),
+        ) as stream:
+            async for _ in stream:
+                pass
+        assert stream.attempts == 2
+        [exported] = exporter.get_finished_logs()
+        record = exported.log_record
+        assert secret not in str(record.body)
+        assert record.attributes is not None
+        assert record.attributes[trace_types.ATTR_EXCEPTION_TYPE] == "APIConnectionError"
+        assert record.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == (
+            telemetry_utils.REDACTED_EXCEPTION_MESSAGE if redaction_enabled else secret
+        )
+        encoded = encode_logs([exported]).SerializeToString()
+        assert (secret.encode() in encoded) is not redaction_enabled
+    finally:
+        logger.removeHandler(handler)
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("redaction_enabled", [False, True])
+def test_exception_text_in_pii_extra_is_redacted(
+    monkeypatch: pytest.MonkeyPatch, redaction_enabled: bool
+) -> None:
+    secret = "provider rejected canary@example.com"
+    failure = ValueError(secret)
+    logger = logging.getLogger("livekit.agents.test")
+    record = logger.makeRecord(
+        logger.name,
+        logging.WARNING,
+        __file__,
+        1,
+        "provider failed",
+        (),
+        None,
+        extra={"lk.pii.error": str(failure)},
+    )
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redaction_enabled)
+    translated = _TraceLevelLoggingHandler()._translate(record)
+    assert secret not in str(translated.body)
+    assert (secret in str(dict(translated.attributes or {}))) is not redaction_enabled
+
+
+@pytest.mark.parametrize("redaction_enabled", [False, True])
+def test_selected_framework_diagnostics_survive_a_sensitive_exception(
+    monkeypatch: pytest.MonkeyPatch, redaction_enabled: bool
+) -> None:
+    secret = "provider body contains canary@example.com"
+    # The SDK owns this message; __str__ also includes an untrusted response body.
+    failure = APIStatusError(
+        "Server returned an error", status_code=503, request_id="request-123", body=secret
+    )
+    try:
+        raise failure
+    except APIStatusError:
+        exc_info = sys.exc_info()
+    logger = logging.getLogger("livekit.agents.test")
+    record = logger.makeRecord(
+        logger.name,
+        logging.WARNING,
+        __file__,
+        1,
+        "provider failed",
+        (),
+        exc_info,
+        extra={"error_message": failure.message, "code": failure.status_code},
+    )
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redaction_enabled)
+    translated = _TraceLevelLoggingHandler()._translate(record)
+    attributes = dict(translated.attributes or {})
+    assert attributes["error_message"] == "Server returned an error"
+    assert attributes["code"] == attributes["status_code"] == 503
+    assert attributes["request_id"] == "request-123"
+    assert attributes["retryable"] is True
+    assert (secret in str(attributes)) is not redaction_enabled
+
+
+def test_provider_message_is_not_trusted_by_exception_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = APIStatusError("provider rejected canary@example.com", status_code=429)
+    record = logging.LogRecord(
+        "livekit.agents.test",
+        logging.WARNING,
+        __file__,
+        1,
+        "provider failed",
+        (),
+        (type(failure), failure, None),
+    )
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: True)
+    translated = _TraceLevelLoggingHandler()._translate(record)
+    attributes = dict(translated.attributes or {})
+    assert attributes["status_code"] == 429
+    assert "canary@example.com" not in str(attributes)
 
 
 def test_redacted_exception_log_can_be_otlp_encoded(monkeypatch: pytest.MonkeyPatch) -> None:

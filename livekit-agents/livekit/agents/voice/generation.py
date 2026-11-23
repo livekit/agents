@@ -684,7 +684,7 @@ async def _audio_forwarding_task(
             try:
                 await tts_output.aclose()
             except Exception as e:
-                logger.warning("error while closing tts output: %s", e)
+                logger.warning("error while closing tts output", exc_info=e)
 
         if not cancelled and tts_data is not None and tts_data.error is not None:
             audio_output._mark_input_truncated()
@@ -951,8 +951,9 @@ async def _execute_tools_task(
                     extra={
                         "function": fnc_call.name,
                         "lk.pii.arguments": fnc_call.arguments,
-                        "lk.pii.error": str(e),
                         "speech_id": speech_handle.id,
+                        "lk.pii.error": str(e),
+                        "error_type": type(e).__name__,
                     },
                 )
                 _tool_completed(

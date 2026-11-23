@@ -465,7 +465,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             if b64data:
                                 output_emitter.push(b64data)
                         except Exception as e:
-                            logger.warning("Failed to decode NeuPhonic audio data: %s", e)
+                            logger.warning("Failed to decode NeuPhonic audio data", exc_info=e)
 
                     if data.get("stop"):
                         chunks -= 1

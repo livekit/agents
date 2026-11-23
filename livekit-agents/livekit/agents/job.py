@@ -791,7 +791,7 @@ class JobContext:
                 logger.warning("server disconnected while deleting room")
             except api.TwirpError as e:
                 if e.code != api.TwirpErrorCode.NOT_FOUND:
-                    logger.warning(f"error while deleting room: {e}")
+                    logger.warning("error while deleting room", exc_info=e)
             except Exception:
                 logger.exception("unknown error while deleting room")
 

@@ -108,7 +108,7 @@ class _KrispLicenseSDKManager:
                     cls._module.globalDestroy()
                     logger.debug("Krisp Audio SDK (license) destroyed")
                 except Exception as e:
-                    logger.error(f"Error during Krisp SDK cleanup: {e}")
+                    logger.error("Error during Krisp SDK cleanup", exc_info=e)
                 finally:
                     cls._module = None
                     cls._sample_rates = None
@@ -141,7 +141,9 @@ class _KrispLicenseSDKManager:
 
     @staticmethod
     def _licensing_error_callback(error: Any, error_message: str) -> None:
-        logger.error(f"[Krisp Licensing Error: {error}] {error_message}")
+        logger.error(
+            "Krisp licensing error", extra={"error_code": error, "lk.pii.error": error_message}
+        )
 
 
 class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
@@ -185,7 +187,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._module = _KrispLicenseSDKManager.acquire(license_key)
             self._sdk_acquired = True
         except Exception as e:
-            logger.error(f"Failed to acquire Krisp SDK: {e}")
+            logger.error("Failed to acquire Krisp SDK", exc_info=e)
             raise
 
         try:
@@ -243,7 +245,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._out_buf = np.empty(0, dtype=np.int16)
             logger.info("Krisp session created successfully")
         except Exception as e:
-            logger.error(f"Failed to create Krisp session: {e}")
+            logger.error("Failed to create Krisp session", exc_info=e)
             raise
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
@@ -285,7 +287,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 try:
                     chunk_out = self._session.process(chunk_in, self._noise_suppression_level)
                 except Exception as e:
-                    logger.error(f"Error processing frame: {e}")
+                    logger.error("Error processing frame", exc_info=e)
                     chunk_out = chunk_in
                 if chunk_out is None or len(chunk_out) != chunk:
                     logger.warning("Krisp returned unexpected output, using original audio")

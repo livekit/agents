@@ -836,7 +836,7 @@ class LLMStream(llm.LLMStream):
                     if stream_error is not None:
                         logger.warning(
                             "gemini llm: the stream ended early, resuming from the last checkpoint",
-                            extra={"model": self._model, "error": str(stream_error)},
+                            extra={"model": self._model, "lk.pii.error": str(stream_error)},
                         )
                     continuation_token = checkpoint
                     continue

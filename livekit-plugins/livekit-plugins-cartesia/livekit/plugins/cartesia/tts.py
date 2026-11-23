@@ -557,7 +557,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "error":
                     logger.error(
                         "Cartesia returned error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
-                        extra={"cartesia_context_id": cartesia_context_id, "error": data},
+                        extra={"cartesia_context_id": cartesia_context_id, "lk.pii.error": data},
                     )
                     raise APIError(f"Cartesia returned error: {data}")
                 elif data.get("type") == "flush_done":

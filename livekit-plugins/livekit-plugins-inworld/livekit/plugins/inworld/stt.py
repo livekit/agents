@@ -320,18 +320,18 @@ class SpeechStream(stt.SpeechStream):
                     tasks_group.exception()
 
             except asyncio.TimeoutError as e:
-                logger.error(f"Timeout during Inworld STT connection: {e}")
+                logger.error("Timeout during Inworld STT connection", exc_info=e)
                 raise APITimeoutError("Timeout connecting to Inworld STT API") from e
             except aiohttp.ClientResponseError as e:
-                logger.error(f"Inworld STT status error: {e.status} {e.message}")
+                logger.error("Inworld STT status error", exc_info=e)
                 raise APIStatusError(
                     message=e.message, status_code=e.status, request_id=None, body=None
                 ) from e
             except aiohttp.ClientError as e:
-                logger.error(f"Inworld STT connection error: {e}")
+                logger.error("Inworld STT connection error", exc_info=e)
                 raise APIConnectionError(f"Inworld STT connection error: {e}") from e
             except Exception as e:
-                logger.exception(f"Unexpected error in Inworld STT: {e}")
+                logger.exception("Unexpected error in Inworld STT")
                 raise APIConnectionError(f"Unexpected error: {e}") from e
             finally:
                 if self._ws is not None:
@@ -348,7 +348,7 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     await self._ws.send_str(json.dumps({"endTurn": {}}))
                 except Exception as e:
-                    logger.error(f"Error sending endTurn: {e}")
+                    logger.error("Error sending endTurn", exc_info=e)
                     break
             elif isinstance(data, rtc.AudioFrame):
                 self._audio_duration_collector.push(data.duration)
@@ -357,7 +357,7 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     await self._ws.send_str(json.dumps({"audioChunk": {"content": audio_b64}}))
                 except Exception as e:
-                    logger.error(f"Error sending audio chunk: {e}")
+                    logger.error("Error sending audio chunk", exc_info=e)
                     break
 
         self._audio_duration_collector.flush()
@@ -402,13 +402,13 @@ class SpeechStream(stt.SpeechStream):
                 ):
                     return
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Inworld STT WebSocket error: {self._ws.exception()}")
+                    logger.error("Inworld STT WebSocket error", exc_info=self._ws.exception())
                     return
         except aiohttp.ClientError as e:
-            logger.error(f"WebSocket error while receiving: {e}")
+            logger.error("WebSocket error while receiving", exc_info=e)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error receiving messages: {e}")
+            logger.error("Unexpected error receiving messages", exc_info=e)
             raise
 
     def _process_stream_event(self, data: dict) -> None:

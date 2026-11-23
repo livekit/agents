@@ -343,7 +343,7 @@ class AvatarSession(BaseAvatarSession):
             logger.error(
                 "avatar failed to start",
                 extra={
-                    "error": type(e).__name__,
+                    "error_type": type(e).__name__,
                     "type": error.type.value if error.type else None,
                     "status": error.status,
                     "request_id": error.request_id,

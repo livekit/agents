@@ -918,7 +918,7 @@ class SpeechStream(stt.RecognizeStream):
             except (AttributeError, OverflowError, TypeError, ValueError) as e:
                 logger.warning(
                     "Ignoring malformed Reson8 turn payload",
-                    extra={"error": type(e).__name__, "lk.pii.message": msg},
+                    extra={"error_type": type(e).__name__, "lk.pii.message": msg},
                 )
                 return
 

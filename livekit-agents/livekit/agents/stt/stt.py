@@ -269,12 +269,9 @@ class STT(
                 else:
                     self._emit_error(e, recoverable=True)
                     logger.warning(
-                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
-                        extra={
-                            "stt": self._label,
-                            "attempt": i + 1,
-                            "streamed": False,
-                        },
+                        f"failed to recognize speech, retrying in {retry_interval}s",
+                        extra={"stt": self._label, "attempt": i + 1, "streamed": False},
+                        exc_info=e,
                     )
 
                 await asyncio.sleep(retry_interval)
@@ -568,12 +565,13 @@ class RecognizeStream(ABC):
 
                     retry_interval = self._conn_options._interval_for_retry(self._num_retries)
                     logger.warning(
-                        f"failed to recognize speech: {e}, retrying in {retry_interval}s",
+                        f"failed to recognize speech, retrying in {retry_interval}s",
                         extra={
                             "stt": self._stt._label,
                             "attempt": self._num_retries,
                             "streamed": True,
                         },
+                        exc_info=e,
                     )
                     await asyncio.sleep(retry_interval)
 

@@ -197,7 +197,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
                     )
                 except APIError as e:
                     logger.warning(
-                        "%s failed, switching to next decision model: %s", _name(model), e
+                        "%s failed, switching to next decision model", _name(model), exc_info=e
                     )
                 except Exception:
                     logger.exception(
@@ -258,7 +258,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
                         input=input, decisions=decisions, conn_options=conn_options
                     )
                 except Exception as e:
-                    logger.debug("%s recovery attempt failed: %s", _name(model), e)
+                    logger.debug("%s recovery attempt failed", _name(model), exc_info=e)
                     return
             logger.info(f"{_name(model)} recovered")
             self._set_available(model, status, True)

@@ -65,6 +65,7 @@ from opentelemetry.util.types import AttributeValue
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
+from .._exceptions import APIError, APIStatusError
 from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
 from ..types import (
@@ -586,6 +587,21 @@ class _TraceLevelLoggingHandler(LoggingHandler):
 
     def _translate(self, record: logging.LogRecord) -> OTelLogRecord:
         log_record = super()._translate(record)
+        # Preserve independently useful API metadata. Rendering the entire exception can
+        # also include response bodies and chained provider errors.
+        if record.exc_info and (exception := record.exc_info[1]) is not None:
+            attributes = dict(log_record.attributes or {})
+            if isinstance(exception, APIError):
+                attributes.setdefault("retryable", exception.retryable)
+            if isinstance(exception, APIStatusError):
+                attributes.setdefault("status_code", exception.status_code)
+                if exception.request_id is not None:
+                    attributes.setdefault("request_id", exception.request_id)
+            elif isinstance(exception, aiohttp.ClientResponseError):
+                attributes.setdefault("status_code", exception.status)
+            elif isinstance(exception, OSError) and exception.errno is not None:
+                attributes.setdefault("errno", exception.errno)
+            log_record.attributes = attributes
         if telemetry_utils.redaction_enabled() and log_record.attributes:
             attributes = dict(log_record.attributes)
             if trace_types.ATTR_EXCEPTION_MESSAGE in attributes:

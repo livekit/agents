@@ -174,7 +174,7 @@ class SpeechStream(stt.SpeechStream):
         except asyncio.TimeoutError as e:
             raise APITimeoutError("WebSocket connection timeout") from e
         except RTZRStatusError as e:
-            logger.error("RTZR API status error: %s", e)
+            logger.error("RTZR API status error", exc_info=e)
             raise APIStatusError(
                 message=e.message,
                 status_code=e.status_code or 500,
@@ -182,7 +182,7 @@ class SpeechStream(stt.SpeechStream):
                 body=None,
             ) from e
         except RTZRConnectionError as e:
-            logger.error("RTZR API connection error: %s", e)
+            logger.error("RTZR API connection error", exc_info=e)
             raise APIConnectionError("RTZR API connection failed") from e
 
     async def _run(self) -> None:
@@ -407,7 +407,7 @@ class SpeechStream(stt.SpeechStream):
             ):
                 break
             elif msg.type == aiohttp.WSMsgType.ERROR:
-                logger.error("WebSocket error: %s", ws.exception())
+                logger.error("WebSocket error", exc_info=ws.exception())
                 raise APIConnectionError("WebSocket error occurred")
             else:
                 logger.debug("Ignored WebSocket message type: %s", msg.type)

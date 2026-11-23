@@ -536,7 +536,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if not ev.recoverable:
             logger.error(
                 "translation model error, closing the session",
-                extra={"label": ev.label, "error": str(ev.error)},
+                extra={"label": ev.label, "lk.pii.error": str(ev.error)},
             )
             self._close_soon(reason=CloseReason.ERROR)
 

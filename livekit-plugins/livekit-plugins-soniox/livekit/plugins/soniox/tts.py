@@ -545,10 +545,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         retry_interval = self._conn_options._interval_for_retry(active.attempt)
         logger.warning(
-            "Soniox TTS stream failed: %s, retrying in %ss",
-            exc,
+            "Soniox TTS stream failed, retrying in %ss",
             retry_interval,
             extra={"stream_id": active.stream_id, "attempt": active.attempt + 1},
+            exc_info=exc,
         )
         await asyncio.sleep(retry_interval)
 
@@ -909,7 +909,7 @@ class _Connection:
                 if self._ws is not None and not self._ws.closed:
                     await self._ws.send_str(KEEPALIVE_MESSAGE)
         except Exception as e:
-            logger.warning(f"Soniox TTS keepalive error: {e}")
+            logger.warning("Soniox TTS keepalive error", exc_info=e)
 
     def _fail_all(self, err: BaseException) -> None:
         """Fail all registered streams and mark the connection non-current."""
@@ -938,7 +938,7 @@ class _Connection:
             try:
                 await self._ws.close()
             except Exception as e:
-                logger.debug(f"Error closing Soniox TTS WebSocket: {e}")
+                logger.debug("Error closing Soniox TTS WebSocket", exc_info=e)
 
         # Cancel all loops except the current task (avoid self-deadlock).
         current = asyncio.current_task()

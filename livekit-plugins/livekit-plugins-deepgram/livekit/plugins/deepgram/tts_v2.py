@@ -220,7 +220,7 @@ class TTSv2(tts.TTS):
             except asyncio.TimeoutError:
                 pass
         except Exception as e:
-            logger.warning(f"Error during WebSocket close sequence: {e}")
+            logger.warning("Error during WebSocket close sequence", exc_info=e)
         finally:
             await ws.close()
 

@@ -390,7 +390,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                     )
 
             except Exception as e:
-                logger.error(f"PersonaPlex WebSocket error: {e}", exc_info=True)
+                logger.error("PersonaPlex WebSocket error", exc_info=True)
 
                 # Clean up any active generation and silence timer
                 if self._current_generation and not self._current_generation._done:
@@ -528,7 +528,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
                 with contextlib.suppress(utils.aio.channel.ChanClosed):
                     self._msg_ch.send_nowait(message)
         except (TypeError, ValueError) as e:
-            logger.warning(f"Skipping invalid audio frame in _encode_and_send: {e}")
+            logger.warning("Skipping invalid audio frame in _encode_and_send", exc_info=e)
 
     def _handle_audio_data(self, opus_payload: bytes) -> None:
         """Decode Opus audio from server and push to generation."""
@@ -566,7 +566,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             self._reset_silence_timer()
 
         except Exception as e:
-            logger.error(f"Error processing audio data: {e}")
+            logger.error("Error processing audio data", exc_info=e)
 
     def _handle_text_token(self, payload: bytes) -> None:
         """Handle text token from server."""
@@ -592,7 +592,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             gen.output_text += text
 
         except Exception as e:
-            logger.error(f"Error processing text token: {e}")
+            logger.error("Error processing text token", exc_info=e)
 
     # -- Internal: generation lifecycle --
 

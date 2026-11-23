@@ -31,7 +31,6 @@ from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import cli, inference, llm, stt, tts, utils, vad
-from .._exceptions import APIError
 from ..job import get_job_context
 from ..llm import (
     LLM,
@@ -1403,7 +1402,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._session_span = None
                 self._root_span_context = None
 
-        logger.debug("session closed", extra={"reason": reason.value, "error": error})
+        logger.debug("session closed", extra={"reason": reason.value, "lk.pii.error": error})
 
     async def _teardown_activity(self, *, reason: CloseReason, drain: bool) -> None:
         """Stop the activity and the models; the first step of closing."""
@@ -2091,13 +2090,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._tts_error_counts <= self.conn_options.max_unrecoverable_errors:
                 return
 
-        if isinstance(error.error, APIError):
-            logger.error(f"AgentSession is closing due to unrecoverable error: {error.error}")
-        else:
-            logger.error(
-                "AgentSession is closing due to unrecoverable error",
-                exc_info=error.error,
-            )
+        logger.error(
+            "AgentSession is closing due to unrecoverable error",
+            exc_info=error.error,
+        )
 
         def on_close_done(_: asyncio.Task[None]) -> None:
             self._closing_task = None
