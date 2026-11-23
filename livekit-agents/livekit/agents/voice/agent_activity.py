@@ -4505,40 +4505,6 @@ class AgentActivity(RecognitionHooks):
         except Exception:
             logger.exception("failed to reset tool_choice")
 
-    def _expect_auto_tool_reply(
-        self, *, after: asyncio.Future[Any] | None = None
-    ) -> asyncio.Future[None] | None:
-        """Make the active RunResult wait for the reply the realtime model generates on its own.
-
-        The next generation counts as that reply from now on; the timeout starts once ``after`` is
-        done, for a reply the model gives only then.
-        """
-        if (
-            self._pending_auto_tool_reply_fut is not None
-            or (run_state := self._session._global_run_state) is None
-            or run_state.done()
-        ):
-            return None
-
-        fut: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-        self._pending_auto_tool_reply_fut = fut
-        assert isinstance(self.llm, llm.RealtimeModel)
-        llm_label = self.llm._label
-
-        async def _wait_for_auto_tool_reply() -> None:
-            try:
-                if after is not None:
-                    await asyncio.wait([after])
-                await asyncio.wait_for(asyncio.shield(fut), 5.0)
-            except asyncio.TimeoutError:
-                logger.warning("timed out waiting for realtime auto tool reply from %s", llm_label)
-            finally:
-                if self._pending_auto_tool_reply_fut is fut:
-                    self._pending_auto_tool_reply_fut = None
-
-        run_state._watch_handle(asyncio.create_task(_wait_for_auto_tool_reply()))
-        return fut
-
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
@@ -4854,7 +4820,9 @@ class AgentActivity(RecognitionHooks):
             self._session._tool_items_added([fnc_call])
 
         # a model that wants tool outputs eagerly and replies on its own gets each as its tool
-        # returns, not after the speech that carried the calls; a handoff still waits for playout
+        # returns, not after the speech that carried the calls; a handoff still waits for playout.
+        # the reply may play inside this speech or open a new one, so the active RunResult does not
+        # wait for it: a reply that opens a new speech is left out of the run
         rt_session = self._rt_session
         eager_outputs = (
             rt_session.capabilities.eager_tool_outputs
@@ -4873,10 +4841,6 @@ class AgentActivity(RecognitionHooks):
                     function_calls=[out.fnc_call], function_call_outputs=[out.fnc_call_out]
                 ),
             )
-            if out.fnc_call_out.reply_required:
-                # set before the send so a reply that comes early still counts; the model answers
-                # once every tool is done and this speech is over, which is when exe_task ends
-                self._expect_auto_tool_reply(after=exe_task)
             self._restore_rt_tool_choice()
             try:
                 async with self._rt_chat_ctx_lock:
@@ -5155,14 +5119,34 @@ class AgentActivity(RecognitionHooks):
                     else:
                         await asyncio.sleep(0)
 
-                # if the realtime model auto-generates the tool reply, the active RunResult waits
-                # for that reply
+                # if the realtime model auto-generates the tool reply, install a
+                # placeholder so the active RunResult waits for that reply
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev.has_tool_reply
+                    and self._pending_auto_tool_reply_fut is None
+                    and (run_state := self._session._global_run_state) is not None
+                    and not run_state.done()
                 ):
-                    auto_reply_fut = self._expect_auto_tool_reply()
+                    auto_reply_fut = asyncio.get_event_loop().create_future()
+                    self._pending_auto_tool_reply_fut = auto_reply_fut
+                    llm_label = self.llm._label
+
+                    async def _wait_for_auto_tool_reply() -> None:
+                        try:
+                            await asyncio.wait_for(asyncio.shield(auto_reply_fut), 5.0)
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "timed out waiting for realtime auto tool reply from %s",
+                                llm_label,
+                            )
+                        finally:
+                            if self._pending_auto_tool_reply_fut is auto_reply_fut:
+                                self._pending_auto_tool_reply_fut = None
+
+                    task = asyncio.create_task(_wait_for_auto_tool_reply())
+                    run_state._watch_handle(task)
 
                 # a model that replies to tool output itself does so under the session's
                 # tool_choice, so an ask's forced one must not outlive the call that answered it
