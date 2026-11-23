@@ -1,0 +1,947 @@
+{
+  "measured_sessions": 72,
+  "excluded_warmups": 12,
+  "samples_per_case_per_arm": 6,
+  "browser_errors": 0,
+  "cold_measured_workers": 0,
+  "median_browser_ice_rtt_ms": 61.0,
+  "real_provider": false,
+  "runs": [
+    {
+      "run_id": "99ebb4c52c19",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9934,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "38107f9127fd",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9896,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "f7cef5f15178",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9941,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "c2ff7ddbc20f",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9953,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "bf42b7fff7e5",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 10087,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "acedda62215e",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9957,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "b5a2822e6a48",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9772,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "886c25e93aaf",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9894,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "e91e60387c02",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9741,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "83df6ac55776",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9862,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "2422b545655e",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9894,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "d49c48b07067",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9894,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "1b51ad64d871",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9876,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "16d590bff874",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9894,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "45f207909675",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9894,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "5675bb0f9e41",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9941,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "08e2cb35f34f",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9971,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "b5e7453a48e1",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9894,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "014cb61f90c3",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9897,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "b3c70428dcd5",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9864,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "9fedeb59219e",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9894,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "b3a954a8e882",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9741,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "fa8b363a7463",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9941,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "95ec24ba183f",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9856,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "fe79f5002466",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 10012,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "09a253fc48da",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9988,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "9b520664c99b",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9766,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "17b7c0c16841",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9866,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "af13be28fee2",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9868,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "48244babecbe",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9877,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "5db383ab5592",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9866,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "d5f45146af8d",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9934,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "673be9c19262",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9766,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "c2aadbc8505e",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9725,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "29aeb4d81ad3",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 10012,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "cd1241db21e6",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9974,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "c0856851ea9d",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9877,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "db6a8c5c83ff",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9795,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "485797a420fd",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9770,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "95f030e1dd52",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9780,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "5c0af4a79d84",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9983,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "ebbe316df9d7",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9820,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "6ada36b54069",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9839,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "293f3efcdcc8",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9782,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "98a6b12b364b",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9914,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "a41881e1efb0",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9766,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "5df75e40ee63",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9893,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "073dc8507697",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9918,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "9edd84fc61a0",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9866,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "5ab9c3fd8af7",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9996,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "64a1d17fc87b",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9870,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "2cf6324b1118",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9766,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "5ebc9ecb0e4b",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9770,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "e69eebfc3bcd",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9766,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "db48f644c9a5",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9766,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "529de2ea4542",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9730,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "44f863abf115",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9869,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "f2b734b99a0d",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9998,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "0f5d4aa941fb",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9771,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "9161eb104db8",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9838,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "b7b057636118",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9877,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "4c48d7e7e6d3",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9730,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "4076b562a52d",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9979,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "c1eabd7af7eb",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9866,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "48386e7c72a5",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9771,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "d03d7083e5f1",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9868,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "4defbc1c6e0a",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9839,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "9c8c0a115116",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9722,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "8160344c7f51",
+      "variant": "before",
+      "profile": "automatic",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9838,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "395e18ee8f8c",
+      "variant": "after",
+      "profile": "prepared",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9866,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "2062e5d1789c",
+      "variant": "after",
+      "profile": "prepared-custom",
+      "native_connect_initial_tracks": [
+        1
+      ],
+      "ordinary_publish_calls": 0,
+      "decoded_peak": 9951,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    },
+    {
+      "run_id": "aa44625e40bb",
+      "variant": "before",
+      "profile": "example-order",
+      "native_connect_initial_tracks": [
+        0
+      ],
+      "ordinary_publish_calls": 1,
+      "decoded_peak": 9729,
+      "warm_process": true,
+      "probe_ack": true,
+      "cleanup_complete": true
+    }
+  ]
+}

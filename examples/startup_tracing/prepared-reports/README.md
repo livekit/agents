@@ -1,5 +1,7 @@
 # Prepared agent audio publication
 
+**Newer actual pre-PR comparison:** [before/after report](../before-after-reports/README.md). That run finds a preparation regression against the existing automatic Session flow. The measurements below used the same new SDK/native build for both paths and must not be read as a pre-PR SDK comparison.
+
 Implemented across Rust FFI, Python RTC, Agents, and the local application. `AgentSession.start()` and the greeting API keep their existing signatures. The additive options are `rtc.RoomOptions.publish_tracks` and `JobContext.connect(publish_tracks=...)`; each entry contains a local track and its complete `TrackPublishOptions`, including codec/encoding settings. AgentSession prepares its RoomIO output automatically, without waiting for model PCM or opening capture devices.
 
 The local application patch removes the initial awaited room/participant connection, schedules connection, activity startup and custom-output startup concurrently, and starts greeting generation in `on_enter()`. It preserves its existing audio-source settings. See [application patch](../application-startup.patch). The installed older SDK still uses ordinary publication; prepared JOIN requires the matching Python/native build.

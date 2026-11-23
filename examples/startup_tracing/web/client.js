@@ -15,6 +15,25 @@ function mark(name) {
   document.querySelector('#events').append(row);
 }
 function paint(name) { requestAnimationFrame(() => requestAnimationFrame(() => mark(name))); }
+let probeStarted = false;
+function agentState(participant, state) {
+  if (!state) return;
+  mark('agent_state_'+state);
+  status.textContent = `Agent ${state}`;
+  paint('agent_state_'+state+'_painted');
+  if (['listening','thinking','speaking'].includes(state)) {
+    mark('agent_interaction_ready');
+    paint('agent_interaction_ready_painted');
+    if (!probeStarted && room?.state === 'connected') {
+      probeStarted = true;
+      mark('first_message_send');
+      void room.localParticipant.publishData(new TextEncoder().encode('startup-probe'), {
+        reliable: true, topic: 'startup.probe', destinationIdentities: [participant.identity],
+      }).then(()=>mark('first_message_sent')).catch(e=>report.errors.push(String(e)));
+    }
+  }
+}
+
 document.querySelector('#start').disabled = true;
 async function prepareProbe() {
   context = new AudioContext();
@@ -44,10 +63,11 @@ document.querySelector('#start').onclick = async () => {
     const credentials = await response.json(); mark('credentials_ready');
     room = new Room({ singlePeerConnection: true });
     room.on(RoomEvent.Connected,()=>{mark('room_connected');status.textContent='Connected — waiting for agent';paint('connected_ui_painted');});
-    room.on(RoomEvent.ParticipantConnected,p=>{if(p.kind===4||p.identity.startsWith('agent-')){mark('agent_visible');paint('agent_visible_ui_painted');}});
+    room.on(RoomEvent.ParticipantConnected,p=>{if(p.kind===4||p.identity.startsWith('agent-')){mark('agent_visible');paint('agent_visible_ui_painted');agentState(p,p.attributes['lk.agent.state']);}});
     room.on(RoomEvent.ParticipantAttributesChanged,(changed,p)=>{
-      if(changed['lk.agent.state']){mark('agent_state_'+changed['lk.agent.state']);status.textContent=`Agent ${changed['lk.agent.state']}`;paint('agent_state_'+changed['lk.agent.state']+'_painted');}
+      if(changed['lk.agent.state'])agentState(p,changed['lk.agent.state']);
     });
+    room.on(RoomEvent.DataReceived,(_payload,_participant,_kind,topic)=>{if(topic==='startup.ack')mark('first_message_ack');});
     room.on(RoomEvent.TrackSubscribed,async(track)=>{
       if(track.kind!==Track.Kind.Audio)return;
       mark('track_subscribed');
@@ -84,7 +104,7 @@ document.querySelector('#start').onclick = async () => {
     await room.connect(credentials.url,credentials.token);
     mark('connect_returned');
     const agent=[...room.remoteParticipants.values()].find(p=>p.kind===4||p.identity.startsWith('agent-'));
-    if(agent)mark('agent_visible');
+    if(agent){mark('agent_visible');agentState(agent,agent.attributes['lk.agent.state']);}
   }catch(e){report.errors.push(String(e));window.result=report;status.textContent=String(e);}
 };
 window.cleanup = async()=>{await room?.disconnect();await context?.close();};

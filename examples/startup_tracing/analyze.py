@@ -57,12 +57,25 @@ def analyze(inputs: list[Path], output: Path) -> None:
                 "run_id": case["run_id"],
                 "case": case["case"],
                 "profile": case["profile"],
+                "variant": case.get("variant", "after"),
                 "sample": case["sample"],
                 "connecting_paint_ms": client["marks"]["connecting_ui_painted"] - t0,
                 "client_connected_ms": client["marks"]["room_connected"] - t0,
+                "agent_ready_ui_ms": (
+                    client["marks"]["agent_interaction_ready_painted"] - t0
+                    if "agent_interaction_ready_painted" in client["marks"]
+                    else None
+                ),
+                "first_message_ack_ms": (
+                    client["marks"]["first_message_ack"] - t0
+                    if "first_message_ack" in client["marks"]
+                    else None
+                ),
                 "entrypoint_ms": first("entrypoint") - t0,
                 "agent_room_connected_ms": first("room_connect_end") - t0,
                 "activity_ready_ms": first("activity_start_end") - t0,
+                "activity_start_delay_ms": first("activity_start_begin")
+                - first("session_start_begin"),
                 "session_returned_ms": first("session_start_end") - t0,
                 "first_pcm_ms": pcm - t0,
                 "publication_ms": publication_duration,

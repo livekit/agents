@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
+import inspect
 import json
 import math
 import os
@@ -18,7 +19,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 from livekit import rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, room_io
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, room_io, utils
 from livekit.agents.telemetry import set_tracer_provider
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.room_io._output import _ParticipantAudioOutput
@@ -80,9 +81,18 @@ def wrap_async(cls: Any, method: str, label: str) -> None:
         if cls is JobContext:
             kwargs.setdefault("single_peer_connection", True)
             # A/B the ordinary and connect-time publication paths with the same native build.
-            if CURRENT.get("profile") == "automatic":
+            if (
+                CURRENT.get("profile") == "automatic"
+                and "publish_tracks" in inspect.signature(original).parameters
+            ):
                 kwargs["publish_tracks"] = ()
             record("connect_initial_tracks", count=len(kwargs.get("publish_tracks", ())))
+        if cls is rtc.Room:
+            options = kwargs.get("options")
+            record(
+                "native_connect_config",
+                initial_track_count=len(getattr(options, "publish_tracks", ())),
+            )
         try:
             if label == "toolsets_setup" and CURRENT.get("activity_delay_ms", 0):
                 record("injected_activity_delay_begin")
@@ -113,6 +123,7 @@ def instrument() -> None:
         (AgentActivity, "_setup_toolsets", "toolsets_setup"),
         (room_io.RoomIO, "start", "roomio_setup"),
         (_ParticipantAudioOutput, "start", "audio_output_start"),
+        (rtc.Room, "connect", "native_room_connect"),
         (rtc.LocalParticipant, "publish_track", "track_publish"),
         (rtc.LocalTrackPublication, "wait_for_subscription", "output_subscription"),
     ]:
@@ -137,7 +148,17 @@ def instrument() -> None:
 
 
 def setup_process(proc: Any) -> None:
-    record("process_prepared")
+    import livekit.agents
+
+    record(
+        "process_prepared",
+        agents_source=livekit.agents.__file__,
+        rtc_source=rtc.__file__,
+        native_library=os.environ.get("LIVEKIT_LIB_PATH"),
+        connect_accepts_initial_tracks="publish_tracks"
+        in inspect.signature(JobContext.connect).parameters,
+        rtc_accepts_initial_tracks="publish_tracks" in rtc.RoomOptions.__dataclass_fields__,
+    )
 
 
 async def tone_frames():
@@ -182,8 +203,9 @@ server.on("worker_registered", lambda *_: record("worker_registered"))
 
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
-    global CURRENT
+    global CURRENT, TRACE_DIR
     CURRENT = json.loads(ctx.job.metadata)
+    TRACE_DIR = Path(CURRENT.get("trace_dir", str(TRACE_DIR)))
     SEEN.clear()
     FIRST_FRAME_ACCEPTED.clear()
     record("entrypoint")
@@ -197,7 +219,27 @@ async def entrypoint(ctx: JobContext) -> None:
     provider.add_span_processor(SimpleSpanProcessor(FileExporter()))
     set_tracer_provider(provider, allow_pii=False)
     instrument()
-    if CURRENT["profile"] not in ("automatic", "prepared"):
+    probe_tasks: set[asyncio.Task[None]] = set()
+
+    def on_probe(packet: rtc.DataPacket) -> None:
+        if packet.topic != "startup.probe" or packet.participant is None:
+            return
+        record("client_probe_received")
+
+        async def echo() -> None:
+            await ctx.room.local_participant.publish_data(
+                packet.data,
+                topic="startup.ack",
+                destination_identities=[packet.participant.identity],
+            )
+            record("client_probe_ack_sent")
+
+        task = asyncio.create_task(echo(), name="startup_probe_echo")
+        probe_tasks.add(task)
+        task.add_done_callback(probe_tasks.discard)
+
+    ctx.room.on("data_received", on_probe)
+    if CURRENT["profile"] not in ("automatic", "prepared", "prepared-custom"):
         await ctx.connect(single_peer_connection=True)
         record("participant_wait_begin")
         await ctx.wait_for_participant()
@@ -268,6 +310,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     async def cleanup() -> None:
         record("session_cleanup_begin")
+        ctx.room.off("data_received", on_probe)
+        await utils.aio.cancel_and_wait(*probe_tasks)
         diagnostics.cancel()
         await asyncio.gather(diagnostics, return_exceptions=True)
         await session.aclose()
@@ -275,7 +319,7 @@ async def entrypoint(ctx: JobContext) -> None:
             await custom.aclose()
         provider.force_flush()
         provider.shutdown()
-        record("session_cleanup_end")
+        record("session_cleanup_end", probe_tasks_remaining=len(probe_tasks))
 
     ctx.add_shutdown_callback(cleanup)
     starting = session.start(
@@ -285,7 +329,18 @@ async def entrypoint(ctx: JobContext) -> None:
         record=False,
         session_host=False,
     )
-    if CURRENT["profile"] == "parallel-output":
+    if CURRENT["profile"] == "prepared-custom":
+
+        async def start_custom() -> None:
+            await ctx.connect(single_peer_connection=True, publish_tracks=[custom._prepare_track()])
+            await custom.start()
+
+        tasks = [asyncio.create_task(starting), asyncio.create_task(start_custom())]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            await utils.aio.cancel_and_wait(*tasks)
+    elif CURRENT["profile"] == "parallel-output":
         await asyncio.gather(starting, custom.start())
     else:
         await starting

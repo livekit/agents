@@ -20,7 +20,7 @@ from pathlib import Path
 from aiohttp import web
 from playwright.async_api import async_playwright
 
-from livekit import api
+from livekit import agents, api, rtc
 
 HERE = Path(__file__).resolve().parent
 
@@ -45,14 +45,39 @@ async def run(args):
         STARTUP_IDLE_PROCESSES=str(args.idle_processes),
         PYTHONUNBUFFERED="1",
     )
-    worker_log = (output / "worker.log").open("w")
+    # Comparison workers import different source trees and load different native binaries.
+    # The browser, dispatch path, instrumentation and Python dependency environment are shared.
+    worker_configs = {"after": {"name": worker_name, "env": env}}
+    if args.before_agents:
+        baseline_env = dict(env)
+        baseline_env.update(
+            STARTUP_AGENT_NAME=worker_name + "-before",
+            STARTUP_WORKER_PORT="18794",
+            STARTUP_TRACE_DIR=str(output / "before-worker"),
+            LIVEKIT_LIB_PATH=str(args.before_native.resolve()),
+            PYTHONPATH=os.pathsep.join(
+                [
+                    str(args.before_agents.resolve() / "livekit-agents"),
+                    str(args.before_rtc.resolve() / "livekit-rtc"),
+                ]
+            ),
+        )
+        (output / "before-worker").mkdir(exist_ok=True)
+        worker_configs["before"] = {"name": worker_name + "-before", "env": baseline_env}
+    workers = []
+    worker_logs = []
+    for variant, config in worker_configs.items():
+        log = (output / f"worker-{variant}.log").open("w")
+        worker_logs.append(log)
+        workers.append(
+            subprocess.Popen(
+                [sys.executable, str(HERE / "agent.py")],
+                env=config["env"],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+            )
+        )
     vite_log = (output / "browser-server.log").open("w")
-    worker = subprocess.Popen(
-        [sys.executable, str(HERE / "agent.py")],
-        env=env,
-        stdout=worker_log,
-        stderr=subprocess.STDOUT,
-    )
     vite = subprocess.Popen(
         ["node", str(HERE / "web/server.mjs")], env=env, stdout=vite_log, stderr=subprocess.STDOUT
     )
@@ -71,7 +96,10 @@ async def run(args):
             .with_room_config(
                 api.RoomConfiguration(
                     agents=[
-                        api.RoomAgentDispatch(agent_name=worker_name, metadata=json.dumps(scenario))
+                        api.RoomAgentDispatch(
+                            agent_name=worker_configs[scenario.get("variant", "after")]["name"],
+                            metadata=json.dumps(scenario),
+                        )
                     ]
                 )
             )
@@ -89,16 +117,16 @@ async def run(args):
     try:
         deadline = time.monotonic() + 90
         while True:
-            if worker.poll() is not None:
-                raise RuntimeError(
-                    f"Agent worker exited ({worker.returncode}); inspect {output / 'worker.log'}"
+            if any(worker.poll() is not None for worker in workers):
+                raise RuntimeError(f"Agent worker exited; inspect worker logs in {output}")
+            all_ready = True
+            for config in worker_configs.values():
+                path = Path(config["env"]["STARTUP_TRACE_DIR"]) / "worker.jsonl"
+                ready = path.read_text() if path.exists() else ""
+                all_ready &= '"worker_registered"' in ready and (
+                    args.idle_processes == 0 or '"process_prepared"' in ready
                 )
-            ready = (
-                (traces / "worker.jsonl").read_text() if (traces / "worker.jsonl").exists() else ""
-            )
-            if '"worker_registered"' in ready and (
-                args.idle_processes == 0 or '"process_prepared"' in ready
-            ):
+            if all_ready:
                 break
             if time.monotonic() > deadline:
                 raise TimeoutError("worker registration/prewarm timeout")
@@ -140,6 +168,43 @@ async def run(args):
                     and "reports" not in path.parts
                     and ".vite" not in path.parts
                 },
+                "after_source_revisions": {
+                    "agents": subprocess.check_output(
+                        ["git", "-C", str(Path(agents.__file__).parent), "rev-parse", "HEAD"],
+                        text=True,
+                    ).strip(),
+                    "rtc": subprocess.check_output(
+                        ["git", "-C", str(Path(rtc.__file__).parent), "rev-parse", "HEAD"],
+                        text=True,
+                    ).strip(),
+                },
+                "native_revisions": {
+                    "before": os.environ.get("STARTUP_BEFORE_NATIVE_REV"),
+                    "after": os.environ.get("STARTUP_AFTER_NATIVE_REV"),
+                },
+                "before_source_revisions": {
+                    "agents": subprocess.check_output(
+                        ["git", "-C", str(args.before_agents), "rev-parse", "HEAD"], text=True
+                    ).strip(),
+                    "rtc": subprocess.check_output(
+                        ["git", "-C", str(args.before_rtc), "rev-parse", "HEAD"], text=True
+                    ).strip(),
+                }
+                if args.before_agents
+                else None,
+                "worker_variants": {
+                    variant: {
+                        "worker_name": config["name"],
+                        "pythonpath": config["env"].get("PYTHONPATH"),
+                        "native_path": config["env"].get("LIVEKIT_LIB_PATH"),
+                        "native_sha256": hashlib.sha256(
+                            Path(config["env"]["LIVEKIT_LIB_PATH"]).read_bytes()
+                        ).hexdigest()
+                        if config["env"].get("LIVEKIT_LIB_PATH")
+                        else None,
+                    }
+                    for variant, config in worker_configs.items()
+                },
                 "method": "loaded browser UI; real token-triggered Cloud dispatch; synthetic tone in controlled cases; no artificial network relay",
                 "audio_input": False,
                 "requested_single_pc": True,
@@ -170,15 +235,27 @@ async def run(args):
                         profiles = order[offset:] + order[:offset]
                     elif args.profile != "both":
                         profiles = [args.profile]
-                    for profile in profiles:
+                    arms = [(profile, "after") for profile in profiles]
+                    if args.before_agents:
+                        arms = [
+                            ("example-order", "before"),
+                            ("automatic", "before"),
+                            ("prepared", "after"),
+                            ("prepared-custom", "after"),
+                        ]
+                        offset = sample % len(arms)
+                        arms = arms[offset:] + arms[:offset]
+                    for profile, variant in arms:
                         run_id = uuid.uuid4().hex[:12]
                         scenario = {
                             "run_id": run_id,
+                            "trace_dir": str(traces),
                             "room": f"agent-startup-trace-{run_id}",
                             "case": name,
                             "mode": mode,
                             "sample": sample,
                             "profile": profile,
+                            "variant": variant,
                             "activity_delay_ms": activity_delay,
                             "pcm_delay_ms": pcm_delay,
                         }
@@ -197,7 +274,8 @@ async def run(args):
                             await page.wait_for_function("window.probeReady === true")
                             await page.click("#start")
                             await page.wait_for_function(
-                                "window.result !== undefined", timeout=60000
+                                "window.result !== undefined && (window.result.errors.length || window.result.marks.first_message_ack !== undefined)",
+                                timeout=60000,
                             )
                             result = await page.evaluate("window.result")
                             audio = result.pop("audioRecording", None)
@@ -232,7 +310,7 @@ async def run(args):
                             samples.append(result)
                             t0 = result["marks"]["click"]
                             print(
-                                f"{name} {profile} #{sample}: connected={result['marks']['room_connected'] - t0:.0f}ms audio={result['marks']['first_rendered_audio'] - t0:.0f}ms",
+                                f"{name} {variant}/{profile} #{sample}: connected={result['marks']['room_connected'] - t0:.0f}ms audio={result['marks']['first_rendered_audio'] - t0:.0f}ms",
                                 flush=True,
                             )
                         except BaseException:
@@ -257,16 +335,17 @@ async def run(args):
     finally:
         await app_runner.cleanup()
         await lk.aclose()
-        for proc in (worker, vite):
+        for proc in (*workers, vite):
             if proc.poll() is None:
                 proc.send_signal(signal.SIGTERM)
-        for proc in (worker, vite):
+        for proc in (*workers, vite):
             try:
                 await asyncio.wait_for(asyncio.to_thread(proc.wait), 20)
             except asyncio.TimeoutError:
                 proc.kill()
                 await asyncio.to_thread(proc.wait)
-        worker_log.close()
+        for log in worker_logs:
+            log.close()
         vite_log.close()
 
 
@@ -275,7 +354,15 @@ def main():
     parser.add_argument("--mode", choices=["controlled", "realtime", "all"], default="controlled")
     parser.add_argument(
         "--profile",
-        choices=["example-order", "parallel-output", "automatic", "prepared", "both", "all"],
+        choices=[
+            "example-order",
+            "parallel-output",
+            "automatic",
+            "prepared",
+            "prepared-custom",
+            "both",
+            "all",
+        ],
         default="both",
     )
     parser.add_argument("--repetitions", type=int, default=3)
@@ -283,7 +370,14 @@ def main():
     parser.add_argument("--output", default="/tmp/agent-startup-trace")
     parser.add_argument("--provider-env", type=Path)
     parser.add_argument("--case")
+    parser.add_argument("--before-agents", type=Path)
+    parser.add_argument("--before-rtc", type=Path)
+    parser.add_argument("--before-native", type=Path)
     args = parser.parse_args()
+    if any((args.before_agents, args.before_rtc, args.before_native)) and not all(
+        (args.before_agents, args.before_rtc, args.before_native)
+    ):
+        parser.error("all three --before-* paths are required together")
     if args.provider_env:
         from dotenv import dotenv_values
 
