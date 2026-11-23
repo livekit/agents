@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from unittest.mock import MagicMock, patch
 
@@ -1893,3 +1895,243 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+# ---------------------------------------------------------------------------
+# mode="manual"
+#
+# Manual mode turns off AssemblyAI's turn detection so LiveKit ends every turn.
+# The STT advertises manual_flush, and a flush sends the buffered audio and
+# then a ForceEndpoint, which AssemblyAI answers with exactly one final (empty
+# if nothing was said). Only assemblyai-stt-3-7-realtime-agent supports it; the
+# server closes any other model's connection with code 3006.
+# ---------------------------------------------------------------------------
+
+_MANUAL_MODEL = "assemblyai-stt-3-7-realtime-agent"
+_FORCE_ENDPOINT = {"type": "ForceEndpoint"}
+# the plugin's default 50 ms chunk at 16 kHz, in bytes of 16-bit samples
+_CHUNK_BYTES = 800 * 2
+
+
+async def test_mode_manual_accepted_on_stt_3_7_realtime_agent():
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model=_MANUAL_MODEL, mode="manual")
+    assert stt._opts.mode == "manual"
+    assert stt.capabilities.manual_flush is True
+
+
+async def test_mode_manual_accepted_with_deprecated_u3_pro_alias():
+    """'u3-pro' is rewritten to the 3.7 agent model, which supports manual mode."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-pro", mode="manual")
+    assert stt._opts.speech_model == _MANUAL_MODEL
+    assert stt.capabilities.manual_flush is True
+
+
+@pytest.mark.parametrize(
+    "model", ["u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"]
+)
+async def test_mode_manual_rejected_on_other_u3_pro_models(model):
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="manual"):
+        STT(api_key="test-key", model=model, mode="manual")
+
+
+async def test_mode_manual_rejected_on_universal_streaming():
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="mode"):
+        STT(api_key="test-key", model="universal-streaming-english", mode="manual")
+
+
+@pytest.mark.parametrize("mode", [NOT_GIVEN, "min_latency", "balanced", "max_accuracy"])
+async def test_manual_flush_off_outside_manual_mode(mode):
+    """The framework only flushes when the flush ends the turn on AssemblyAI's side."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", mode=mode)
+    assert stt.capabilities.manual_flush is False
+
+
+async def _manual_connect_query(**kwargs):
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **_):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model=_MANUAL_MODEL, mode="manual", **kwargs)
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+    return parse_qs(urlparse(captured["url"]).query)
+
+
+async def test_mode_manual_leaves_turn_silence_to_the_server():
+    """No 100 ms defaults: max_turn_silence is manual mode's fallback turn end
+    (10000 ms by default), and 100 ms would end turns on every short pause."""
+    query = await _manual_connect_query()
+    assert query["mode"] == ["manual"]
+    assert "min_turn_silence" not in query
+    assert "max_turn_silence" not in query
+
+
+async def test_mode_manual_does_not_copy_min_turn_silence_into_max():
+    query = await _manual_connect_query(min_turn_silence=400)
+    assert query["min_turn_silence"] == ["400"]
+    assert "max_turn_silence" not in query
+
+
+async def test_mode_manual_sends_explicit_max_turn_silence():
+    query = await _manual_connect_query(max_turn_silence=5000)
+    assert query["max_turn_silence"] == ["5000"]
+
+
+async def test_empty_final_still_emits_final_transcript():
+    """A ForceEndpoint with nothing to end gets an empty final. It must still reach
+    the framework as a FINAL_TRANSCRIPT, which releases a commit waiting on it."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="", words=[]))
+
+    finals = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].text == ""
+
+
+class _FakeWS:
+    """Records what the stream sends. receive() parks so recv_task stays alive."""
+
+    def __init__(self) -> None:
+        self.sent: list[bytes | dict] = []
+        self._never = asyncio.Event()
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def receive(self):
+        await self._never.wait()
+
+    async def close(self) -> None:
+        pass
+
+
+def _live_stream(ws: _FakeWS, **kwargs):
+    """A real SpeechStream running its real _run loop against a fake socket."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", http_session=MagicMock(), **kwargs)
+    stream = stt.stream()
+
+    async def _fake_connect():
+        return ws
+
+    # patched before the _run task gets its first tick, so no real socket is opened
+    stream._connect_ws = _fake_connect
+    return stream
+
+
+def _frame(ms: int):
+    from livekit import rtc
+
+    samples = 16000 * ms // 1000
+    return rtc.AudioFrame(
+        data=b"\x01\x00" * samples, sample_rate=16000, num_channels=1, samples_per_channel=samples
+    )
+
+
+async def _wait_until(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting for the stream to send"
+        await asyncio.sleep(0.01)
+
+
+async def test_manual_flush_sends_force_endpoint_after_the_buffered_audio():
+    """The tail of the turn reaches AssemblyAI before the ForceEndpoint, so the
+    final covers all of it."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(130))  # two full 50 ms chunks and a 30 ms tail
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 4)
+
+        assert all(isinstance(msg, bytes) for msg in ws.sent[:3])
+        assert ws.sent[3] == _FORCE_ENDPOINT
+    finally:
+        await stream.aclose()
+
+
+async def test_manual_flush_sends_force_endpoint_when_no_audio_is_left():
+    """A flush on a whole number of chunks has no tail to send, and must still end
+    the turn: the caller is waiting on its final."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(100))
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 3)
+        assert ws.sent[2] == _FORCE_ENDPOINT
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_pads_a_short_tail_to_a_full_chunk():
+    """AssemblyAI rejects audio chunks under 20 ms (close code 3007), and every
+    turn flush can leave a shorter tail."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        for _ in range(3):
+            stream.push_frame(_frame(10))
+            stream.flush()
+        await _wait_until(lambda: ws.sent.count(_FORCE_ENDPOINT) == 3)
+
+        audio = [msg for msg in ws.sent if isinstance(msg, bytes)]
+        assert [len(chunk) for chunk in audio] == [_CHUNK_BYTES] * 3
+        # the 10 ms of speech is kept and the rest is silence
+        assert audio[0][:320] == b"\x01\x00" * 160
+        assert audio[0][320:] == b"\x00" * (_CHUNK_BYTES - 320)
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_outside_manual_mode_does_not_end_the_turn():
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="balanced")
+    try:
+        stream.push_frame(_frame(130))
+        stream.flush()
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: len(ws.sent) == 4)
+
+        assert all(isinstance(msg, bytes) for msg in ws.sent)
+    finally:
+        await stream.aclose()
+
+
+async def test_manual_end_input_terminates_without_force_endpoint():
+    """Terminate finalizes the open turn, so ending input sends no ForceEndpoint."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(130))
+        stream.end_input()
+        await _wait_until(lambda: {"type": "Terminate"} in ws.sent)
+
+        assert _FORCE_ENDPOINT not in ws.sent
+        assert sum(isinstance(msg, bytes) for msg in ws.sent) == 3
+    finally:
+        await stream.aclose()
