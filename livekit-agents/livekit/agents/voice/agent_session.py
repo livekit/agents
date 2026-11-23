@@ -2265,7 +2265,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     "agent_speaking", context=otel_context, start_time=start_time_ns
                 )
 
-                if self._room_io:
+                if self._room_io and self._room_io.room.isconnected():
                     _set_participant_attributes(
                         self._agent_speaking_span, self._room_io.room.local_participant
                     )
