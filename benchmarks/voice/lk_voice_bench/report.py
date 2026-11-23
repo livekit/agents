@@ -68,23 +68,32 @@ class Tau2Stats:
     by_task: dict[str, list[float]] = field(default_factory=dict)
     termination: Counter[str] = field(default_factory=Counter)
     infra_errors: int = 0
+    hallucination_discarded: int = 0
+    """Calls tau2 threw away and re-ran because its simulated caller hallucinated."""
     durations: list[float] = field(default_factory=list)
-    domains: Counter[str] = field(default_factory=Counter)
 
 
 _INFRA = {"infrastructure_error", "agent_error", "user_error", "unexpected_error"}
 
 
 def read_tau2(run_dir: Path) -> Tau2Stats | None:
-    results = run_dir / "results.json"
-    if not results.exists():
+    # a custom run keeps its results at the top; a released frame has one dir per cell (en-airline)
+    cells = [d for d in [run_dir, *sorted(run_dir.iterdir())] if (d / "results.json").exists()]
+    if not cells:
         return None
-    data = json.loads(results.read_text())
-    sims: list[dict[str, Any]] = list(data.get("simulations") or [])
-    if not sims:
-        sims = [json.loads(p.read_text()) for p in sorted((run_dir / "simulations").glob("*.json"))]
-    domain = (data.get("info") or {}).get("environment_info", {}).get("domain_name")
     stats = Tau2Stats()
+    sims: list[dict[str, Any]] = []
+    for cell in cells:
+        data = json.loads((cell / "results.json").read_text())
+        cell_sims = list(data.get("simulations") or [])
+        if not cell_sims:
+            cell_sims = [
+                json.loads(p.read_text()) for p in sorted((cell / "simulations").glob("*.json"))
+            ]
+        sims += cell_sims
+        stats.hallucination_discarded += len(
+            list((cell / "hallucination_discarded").glob("*.json"))
+        )
     for sim in sims:
         stats.simulations += 1
         reason = str(sim.get("termination_reason"))
@@ -95,7 +104,6 @@ def read_tau2(run_dir: Path) -> Tau2Stats | None:
         reward = float(((sim.get("reward_info") or {}).get("reward")) or 0.0)
         stats.by_task.setdefault(str(sim["task_id"]), []).append(reward)
         stats.durations.append(float(sim.get("duration") or 0.0))
-        stats.domains[domain or "?"] += 1
     return stats
 
 
@@ -127,6 +135,7 @@ def summarize(run_dir: Path) -> dict[str, Any]:
                 "simulations": tau2.simulations,
                 "tasks": len(tau2.by_task),
                 "infra_errors": tau2.infra_errors,
+                "hallucination_discarded": tau2.hallucination_discarded,
                 "pass^1": pass_hat_k(tau2.by_task, 1),
                 **{f"pass^{k}": pass_hat_k(tau2.by_task, k) for k in range(2, trials + 1)},
                 "termination": dict(tau2.termination),

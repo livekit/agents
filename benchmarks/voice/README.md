@@ -7,7 +7,7 @@ callers, tools and graders.
 | Benchmark | Status | What it measures |
 |---|---|---|
 | [tau2-bench voice](https://github.com/sierra-research/tau2-bench) (τ-Voice, `voice-v1`) | wired up | task success (final DB state + required info said) on airline / retail / telecom, plus turn-taking metrics |
-| [EVA-Bench](https://github.com/ServiceNow/eva) | planned | task accuracy (EVA-A) and conversational experience (EVA-X) on airline / ITSM / medical HR |
+| [EVA-Bench](https://github.com/ServiceNow/eva) | wired up, not yet run (needs caller + judge credentials) | task accuracy (EVA-A) and conversational experience (EVA-X) on airline / ITSM / medical HR |
 
 ## How the agent is run
 
@@ -82,6 +82,35 @@ cascade (nova-3 + gpt-4.1 + aura) 28.9 / 48.0 / 16.7; gpt-realtime-2 47.4 / 58.0
 gpt-live-1 78.9 / 82.0 / 84.2. Sierra's `livekit` provider is a hand-built STT→LLM→TTS loop on
 LiveKit plugins, not `AgentSession`, so it does not measure this SDK.
 
+Summarize one or more runs side by side (pass^k, terminations, calls tau2 discarded for caller
+hallucinations, and the agent's own latency / interruption / tool stats):
+
+```bash
+cd benchmarks/voice && ../../.venv/bin/python -m lk_voice_bench.report results/tau2/v1-airline results/tau2/<other-run>
+```
+
+## EVA-Bench
+
+EVA pins litellm to a version that needs `openai<3`, so it cannot share a venv with
+livekit-agents. The agent therefore runs as its own websocket service,
+[`lk_voice_bench/ws_agent.py`](lk_voice_bench/ws_agent.py) (one `BenchAgent` per call, audio sent as
+it plays), and EVA gets a thin `livekit` framework server,
+[`eva/livekit_server.py`](eva/livekit_server.py), that relays the caller's Twilio stream, runs
+tools against EVA's scenario database and writes EVA's audit and framework logs, like EVA's own
+Cartesia bridge to a hosted agent. It is scored as a cascade (the text it reports is what it
+spoke).
+
+```bash
+benchmarks/voice/eva/setup.sh                                   # .vendor/eva + .venv-eva, pinned
+cd benchmarks/voice && ../../.venv/bin/python -m lk_voice_bench.ws_agent --port 8765 --log-dir results/eva/<run>/agent_logs
+```
+
+EVA run config: `framework: livekit`, `model: {s2s: livekit, s2s_params: {model: <preset>}}`.
+Still needed before a scored run: caller agents (`EVA_EN_USER_F` / `EVA_EN_USER_M`, ElevenLabs
+agents per EVA's `docs/experiment_setup.md`, or its OpenAI Realtime caller), and judge access —
+text judges can be pointed at OpenAI with `JUDGE_MODEL`, but the audio judge behind
+`agent_speech_fidelity` (part of EVA-A pass) needs Gemini on Vertex.
+
 ## Live checks
 
 Not unit tests: they call the LiveKit gateway.
@@ -89,4 +118,5 @@ Not unit tests: they call the LiveKit gateway.
 ```bash
 uv run python benchmarks/voice/tests/live_smoke.py                          # BenchAgent alone, with a barge-in
 benchmarks/voice/.venv-tau2/bin/python benchmarks/voice/tests/tau2_adapter_smoke.py  # tau2 tick protocol, no paid caller
+cd benchmarks/voice && PYTHONPATH=. ../../.venv/bin/python tests/ws_agent_smoke.py  # ws_agent (start it first)
 ```
