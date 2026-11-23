@@ -542,9 +542,8 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
             fallback (FallbackModelType | list[FallbackModelType], optional): Fallback models that
                 LiveKit Inference tries in order if the primary model fails. Pass a single entry
                 or a list. Each entry is a "provider/model[:voice]" string or a FallbackModel.
-            disable_system_default_fallback (bool, optional): Opt out of the gateway's
-                system-default fallback models. Models in ``fallback`` still apply. Set only at
-                construction; ``update_options`` does not change it.
+            disable_system_default_fallback (bool, optional): Opt out of LiveKit Inference's
+                system-default fallback models. Models in ``fallback`` still apply.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE

@@ -90,7 +90,7 @@ async def entrypoint(ctx: JobContext) -> None:
             voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
             # if the primary model fails, LiveKit Inference tries these models in order
             # See more at https://docs.livekit.io/agents/logic/fallback-strategies/
-            fallback=[{"model": "rime/coda", "voice": "luna"}],
+            fallback=[{"model": "rime/coda", "voice": "astra"}],
         ),
         turn_handling=TurnHandlingOptions(
             interruption={
