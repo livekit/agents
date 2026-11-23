@@ -1,0 +1,37 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_f1897fb3dfb2d9::t_9456083ba8f255 96,112,1840,1842-1847,1857-1858,1926,2969-2970,2976-2979,2991-3006,3036-3038,3070-3071,3624,3639,3652,3655-3659,3746-3765,4020-4021,4277-4289,4291,4302,4344
+tests/test_guardrail_session.py
+  s_f1897fb3dfb2d9::t_f72a9f5604e8a3 4-5,11,16,18-19,21,23,66,68,76-77,79-82,92-188,259-399
+examples/voice_agents/decision_guardrail.py
+  s_f1897fb3dfb2d9::t_09e036e9506fe5 10-11,31,86-91,128-133
+livekit-agents/livekit/agents/voice/guardrail.py
+  s_f1897fb3dfb2d9::t_504c783a0bdec2 6,8-9,13,15-16,46,48-77,135,209-210,374-379,382-384,402-408,436,491-501,518-522,526-618,626-627,629-634,637-642
+tests/test_guardrail.py
+  s_9087a294f502ce::t_8a76053192ac84 10-18,90-107,109-113,123-201,230,323,334
+livekit-agents/livekit/agents/voice/generation.py
+  s_9087a294f502ce::t_8398d95fd4e35f 189-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ea0bc55bfb0aa92240797786da585725d9ce991",
+  "prompts": {},
+  "sessions": {
+    "s_9087a294f502ce": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1fa00-ebe3-7d60-9223-21015e792fb8",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_f1897fb3dfb2d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2352c374-fdf0-4e8b-94ae-7ed464c02847",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
