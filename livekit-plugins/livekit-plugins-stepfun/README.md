@@ -36,6 +36,8 @@ the other.
   stream preserves those interims and ends without inventing a final transcript.
   A pending item with no usable text still raises a timeout. `aclose()` cancels
   the stream without waiting or draining it.
+  Speech starts remain pending until a transcription item arrives, even after
+  speech stops, so an earlier final cannot hide a delayed later turn.
   A connection lost after any audio was consumed, or while a turn is still
   pending, is reported as non-retryable: the SDK cannot replay that audio, and
   guessing which part the server finalized would risk dropping or repeating
@@ -49,6 +51,9 @@ the other.
   usable boundary is hard-split to respect the provider's limit. Independent
   requests do not share pronunciation/prosody context. Each request has an
   idle-read timeout plus a total deadline that scales with its text length.
+  WebSocket synthesis waits up to `conn_options.timeout` for completion after
+  text input ends, resetting the idle deadline on audio progress. Waiting for
+  the caller's next text chunk does not start this deadline.
 - For chat, install `livekit-plugins-openai` and use `openai.LLM` with StepFun's
   OpenAI-compatible endpoint, for example:
   `openai.LLM(model="step-3.7-flash", base_url="https://api.stepfun.ai/v1", api_key=os.environ["STEPFUN_API_KEY"])`.

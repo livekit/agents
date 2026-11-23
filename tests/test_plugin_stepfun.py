@@ -57,8 +57,6 @@ class _FakeWebSocket:
         self.ack_commits = True
         self._acks: list[_FakeWSMessage] = []
 
-    # -- the interface the plugin calls ------------------------------------
-
     async def send_str(self, data: str) -> None:
         self.sent.append(json.loads(data))
         if self.ack_commits and self.sent[-1].get("type") == "input_audio_buffer.commit":
@@ -76,13 +74,8 @@ class _FakeWebSocket:
             return self._acks.pop(0)
         return await self._incoming.get()
 
-    # -- the interface tests drive -----------------------------------------
-
     def queue_server_event(self, event: dict[str, Any]) -> None:
         self._incoming.put_nowait(_FakeWSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event)))
-
-    def queue_binary(self, data: bytes) -> None:
-        self._incoming.put_nowait(_FakeWSMessage(aiohttp.WSMsgType.BINARY, data))
 
     def queue_close(self, code: int | None = None, reason: str | None = None) -> None:
         self._incoming.put_nowait(_FakeWSMessage(aiohttp.WSMsgType.CLOSED, code, extra=reason))
@@ -92,18 +85,12 @@ class _FakeWebSocket:
             _FakeWSMessage(aiohttp.WSMsgType.ERROR, ConnectionResetError("connection reset"))
         )
 
-    # -- assertion helpers -------------------------------------------------
-
     def frames_of_type(self, type_: str) -> list[dict[str, Any]]:
         """Every frame we sent with the given ``type``."""
         return [f for f in self.sent if f.get("type") == type_]
 
     def data_of_type(self, type_: str) -> list[dict[str, Any]]:
-        """The ``data`` payloads of frames with the given ``type``.
-
-        The streaming TTS protocol wraps every field in ``data``, so asserting
-        on the payload directly keeps tests readable.
-        """
+        """The nested TTS payloads for the requested frame type."""
         return [f.get("data") or {} for f in self.sent if f.get("type") == type_]
 
     def types_sent(self) -> list[str]:
@@ -111,12 +98,7 @@ class _FakeWebSocket:
 
 
 class _FakeConnectionPool:
-    """Stands in for ``utils.ConnectionPool``.
-
-    Hands out one preconfigured connection and records whether the plugin
-    returned it to the pool or dropped it. Both streaming surfaces are supposed
-    to drop theirs, since neither socket is safe to reuse afterwards.
-    """
+    """Hand out a configured connection and record retirement and invalidation."""
 
     last_acquire_time = 0.25
     last_connection_reused = False
@@ -259,12 +241,7 @@ def test_env_cluster_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_sends_session_update_before_audio() -> None:
-    """The endpoint accepts no query parameters.
-
-    Model, audio format and turn detection are configured by this frame alone,
-    so skipping it leaves the session unconfigured and nothing is ever
-    recognized.
-    """
+    """Configure model, audio format and turn detection before sending audio."""
     s = stepfun.STT(language="zh", prompt="livekit, webrtc")
     ws, _ = await _drive(s, [_SESSION_READY, {"type": _COMPLETED, "transcript": ""}])
 
@@ -586,6 +563,100 @@ class _ReadyPeer(_FakeWebSocket):
             self.queue_server_event(_SESSION_READY)
 
 
+@pytest.mark.parametrize("overlap", [False, True])
+@pytest.mark.parametrize("result", ["final", "interim", "missing"])
+async def test_later_vad_turn_waits_for_transcription(
+    overlap: bool,
+    result: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.stepfun import stt as stt_impl
+
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(stt_impl, "time", SimpleNamespace(monotonic=loop.time))
+
+    class Peer(_ReadyPeer):
+        async def send_str(self, data: str) -> None:
+            await super().send_str(data)
+            if self.sent[-1]["type"] != "input_audio_buffer.append" or hasattr(self, "delivery"):
+                return
+            first_final = {"type": _COMPLETED, "item_id": "first", "transcript": "first"}
+            for event in (
+                {"type": "input_audio_buffer.speech_started", "item_id": "vad-first"},
+                {
+                    "type": "conversation.item.created",
+                    "item": {"id": "first", "status": "in_progress"},
+                },
+                {"type": "input_audio_buffer.speech_stopped"},
+                *([] if overlap else [first_final]),
+                {"type": "input_audio_buffer.speech_started", "item_id": "vad-second"},
+                {"type": "input_audio_buffer.speech_stopped"},
+                *([first_final] if overlap else []),
+            ):
+                self.queue_server_event(event)
+
+            async def deliver() -> None:
+                await asyncio.sleep(1.5)  # later than the old one-second settle
+                if result == "missing":
+                    return
+                self.queue_server_event(
+                    {
+                        "type": "conversation.item.created",
+                        "item": {"id": "second", "status": "in_progress"},
+                    }
+                )
+                self.queue_server_event({"type": _DELTA, "item_id": "second", "text": "second"})
+                if result == "final":
+                    self.queue_server_event(
+                        {"type": _COMPLETED, "item_id": "second", "transcript": "second"}
+                    )
+
+            self.delivery = asyncio.create_task(deliver())
+
+    engine = stepfun.STT()
+    peer = Peer()
+    engine._pool = _FakeConnectionPool(peer)  # type: ignore[assignment]
+    stream = engine.stream(conn_options=APIConnectOptions(timeout=3, max_retry=0))
+    stream.push_frame(_frame())
+    stream.end_input()
+    try:
+        if result == "missing":
+            with pytest.raises(APIConnectionError):
+                await _collect(stream)
+        else:
+            events = await _collect(stream)
+            assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == (
+                ["first", "second"] if result == "final" else ["first"]
+            )
+            assert _texts(events, stt.SpeechEventType.INTERIM_TRANSCRIPT) == ["second"]
+    finally:
+        await engine.aclose()
+        await peer.delivery
+
+
+@pytest.mark.parametrize("identified_final", [False, True])
+async def test_anonymous_item_does_not_consume_later_speech(identified_final: bool) -> None:
+    _, events = await _drive(
+        stepfun.STT(),
+        [
+            _SESSION_READY,
+            {"type": "input_audio_buffer.speech_started"},
+            {"type": "conversation.item.created", "item": {"status": "in_progress"}},
+            {"type": _DELTA, "text": "first"},
+            {"type": "input_audio_buffer.speech_stopped"},
+            {"type": "input_audio_buffer.speech_started"},
+            {
+                "type": _COMPLETED,
+                "item_id": "first" if identified_final else "",
+                "transcript": "first",
+            },
+            {"type": "input_audio_buffer.speech_stopped"},
+            {"type": _COMPLETED, "item_id": "second", "transcript": "second"},
+        ],
+    )
+    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["first", "second"]
+
+
 async def test_connection_loss_after_audio_is_not_retried_even_after_final() -> None:
     """Without audio offsets, retrying can still drop or duplicate speech."""
 
@@ -812,6 +883,47 @@ async def test_audio_deltas_decoded_and_emitted() -> None:
     assert frames[0].segment_id == _SESSION
 
 
+@pytest.mark.parametrize("case", ["stall", "partial-stall", "progress", "caller-pause"])
+async def test_tts_completion_idle_deadline(case: str) -> None:
+    class Peer(_ScriptedWebSocket):
+        async def send_str(self, data: str) -> None:
+            await super().send_str(data)
+            if self.sent[-1]["type"] == "tts.text.done":
+
+                async def deliver() -> None:
+                    if case == "stall":
+                        return
+                    for _ in range(3 if case == "progress" else 1):
+                        await asyncio.sleep(0.3)
+                        self.queue_server_event(_audio_delta())
+                    if case != "partial-stall":
+                        self.queue_server_event(_AUDIO_DONE)
+
+                self.delivery = asyncio.create_task(deliver())
+
+    engine = stepfun.TTS()
+    peer = Peer([_CREATED])
+    engine._pool = _FakeConnectionPool(_Connection(ws=peer, session_id=_SESSION))  # type: ignore[assignment]
+    stream = engine.stream(conn_options=APIConnectOptions(timeout=0.5, max_retry=0))
+    try:
+        if case == "caller-pause":
+            await asyncio.sleep(1.0)  # caller idle is not a provider timeout
+        stream.push_text("hello")
+        stream.end_input()
+        if "stall" in case:
+            with pytest.raises(
+                APIConnectionError, match="timed out waiting for synthesis completion"
+            ):
+                _ = [frame async for frame in stream]
+        else:
+            assert [frame async for frame in stream]
+        assert peer.closed
+    finally:
+        await engine.aclose()
+        if hasattr(peer, "delivery"):
+            await peer.delivery
+
+
 _SESSION = "sess-abc"
 _CREATED = {"type": "tts.response.created", "data": {"session_id": _SESSION}}
 
@@ -838,12 +950,7 @@ _AUDIO_DONE = {
 
 
 class _ScriptedWebSocket(_FakeWebSocket):
-    """Answers only after the client sends what a real server waits for.
-
-    Events up to tts.response.created are released by tts.create; the rest are
-    released by tts.text.done. Pre-queuing everything would let a stream pass
-    even if it never sent its text or finished input.
-    """
+    """Release creation/audio events only after the corresponding client request."""
 
     def __init__(self, server_events: list[dict]) -> None:
         super().__init__()

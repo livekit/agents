@@ -524,6 +524,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+        self._last_audio_at = 0.0
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -569,10 +570,31 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._recv_task(conn, output_emitter), name="stepfun_tts_recv"
                     ),
                 ]
+                self._last_audio_at = 0.0
+
+                async def watch_input() -> None:
+                    await tasks[0]
+                    # Start the receive deadline only after text.done was sent.
+                    # Waiting for more caller text is not a provider stall.
+                    loop = asyncio.get_running_loop()
+                    input_done_at = loop.time()
+                    while not tasks[1].done():
+                        remaining = (
+                            max(input_done_at, self._last_audio_at)
+                            + self._conn_options.timeout
+                            - loop.time()
+                        )
+                        if remaining <= 0:
+                            raise APIConnectionError(
+                                "stepfun tts: timed out waiting for synthesis completion"
+                            )
+                        await asyncio.wait([tasks[1]], timeout=remaining)
+
+                watcher = asyncio.create_task(watch_input(), name="stepfun_tts_drain")
                 try:
-                    await asyncio.gather(*tasks)
+                    await asyncio.gather(*tasks, watcher)
                 finally:
-                    await utils.aio.cancel_and_wait(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks, watcher)
             finally:
                 # remove() alone defers close until another acquisition.
                 await conn.ws.close()
@@ -729,6 +751,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             if self._handle_event(event, output_emitter):
                 return
+            if event.get("type") == _EV_AUDIO_DELTA and (event.get("data") or {}).get("audio"):
+                self._last_audio_at = asyncio.get_running_loop().time()
 
     def _handle_event(self, event: dict[str, Any], output_emitter: tts.AudioEmitter) -> bool:
         """Returns True once the segment is complete."""

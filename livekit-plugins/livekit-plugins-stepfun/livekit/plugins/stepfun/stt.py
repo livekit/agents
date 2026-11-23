@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import weakref
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -496,6 +497,10 @@ class SpeechStream(stt.RecognizeStream):
         self._open_items: set[str] = set()
         self._anonymous_open = False  # speech reported without an item_id
         self._speech_active = False
+        # VAD IDs are not transcription IDs. Match new transcription items to
+        # speech starts in arrival order, never clear a later start on an old final.
+        self._unassigned_speech: deque[str | None] = deque()
+        self._seen_items: set[str] = set()
         # Commit and transcription IDs differ, so each acknowledgement keeps
         # its own item-arrival window.
         self._commits: list[_PendingCommit] = []
@@ -559,6 +564,8 @@ class SpeechStream(stt.RecognizeStream):
         self._open_items.clear()
         self._anonymous_open = False
         self._speech_active = False
+        self._unassigned_speech.clear()
+        self._seen_items.clear()
         self._commits.clear()
         self._expected_finals = 0
         self._finals_received = 0
@@ -822,6 +829,7 @@ class SpeechStream(stt.RecognizeStream):
         """Whether the server may still owe a final for audio already sent."""
         return bool(
             self._speech_active
+            or self._unassigned_speech
             or self._open_items
             or self._anonymous_open
             or self._interim_texts
@@ -878,6 +886,7 @@ class SpeechStream(stt.RecognizeStream):
                         self._input_done
                         and self._opts.server_vad
                         and not self._speech_active
+                        and not self._unassigned_speech
                         and self._interim_texts
                         and all(text.strip() for text in self._interim_texts.values())
                         and all(item_id in self._interim_texts for item_id in self._open_items)
@@ -1021,6 +1030,7 @@ class SpeechStream(stt.RecognizeStream):
 
         if etype == _EV_SPEECH_STARTED:
             self._speech_active = True
+            self._unassigned_speech.append(event.get("item_id"))
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
@@ -1076,14 +1086,22 @@ class SpeechStream(stt.RecognizeStream):
         `speech_started` without an id cannot outlive the final for its item.
         """
         if item_id:
+            if item_id not in self._seen_items:
+                self._seen_items.add(item_id)
+                if self._unassigned_speech and not self._anonymous_open:
+                    self._unassigned_speech.popleft()
             self._open_items.add(item_id)
             self._anonymous_open = False
         else:
+            if not self._anonymous_open and self._unassigned_speech:
+                self._unassigned_speech.popleft()
             self._anonymous_open = True
 
     def _handle_delta(self, event: dict[str, Any]) -> None:
         text = event.get("text") or ""
         item_id = event.get("item_id") or ""
+        if item_id not in self._interim_texts:
+            self._open_item(item_id or None)
 
         if self._opts.deltas_are_cumulative:
             # Replaces, never appends — the payload is the full transcript so
@@ -1107,6 +1125,10 @@ class SpeechStream(stt.RecognizeStream):
         # The completed frame carries the final text under `transcript`, not
         # `text`.
         item_id = event.get("item_id") or ""
+        if item_id and item_id not in self._seen_items:
+            self._open_item(item_id)
+        elif not item_id and not self._anonymous_open:
+            self._open_item(None)
         self._open_items.discard(item_id)
         self._expected_finals = max(0, self._expected_finals - 1)
         self._finals_received += 1
