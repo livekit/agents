@@ -998,10 +998,18 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             ),
         ]
         self.__closed = False
+        # text captured before the first participant is set waits for one rather than being
+        # dropped, as audio waits for its track to be subscribed
+        self.__participant_set = asyncio.Event()
+        if participant is not None:
+            self.__participant_set.set()
 
     def set_participant(self, participant: rtc.Participant | str | None) -> None:
         for source in self.__outputs:
             source.set_participant(participant)
+
+        if participant is not None:
+            self.__participant_set.set()
 
     def set_track(self, track_sid: str | None) -> None:
         for source in self.__outputs:
@@ -1017,6 +1025,7 @@ class _ParticipantTranscriptionOutput(io.TextOutput):
             source.set_attributes(attributes)
 
     async def capture_text(self, text: str) -> None:
+        await self.__participant_set.wait()
         await asyncio.gather(*[sink.capture_text(text) for sink in self.__outputs])
 
         if self.next_in_chain:
