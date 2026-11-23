@@ -69,6 +69,12 @@ SUPPORTED_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 # not a send cadence, and the contract sets no client chunk size. Matches the
 # non-realtime Sarvam websocket plugin so audio reaches server VAD promptly.
 AUDIO_CHUNK_MS = 50
+# Sarvam closes a stream that receives no audio for 60 s (`inactivity_timeout`), and this
+# stream never reconnects. When the caller stops pushing audio (muted or gated input), a
+# short chunk of silence is sent after this many idle seconds to keep the session open.
+# In manual endpointing it goes out between utterances, outside a speech_start/speech_end
+# pair: Sarvam accepts that, opens no utterance for it, and counts it on its audio clock.
+KEEPALIVE_INTERVAL_S = 30.0
 
 
 def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
@@ -442,8 +448,10 @@ class STTRealtime(stt.STT):
 
         Args:
             language: Overrides the instance language for this stream only.
-            conn_options: Connection options. ``max_retry`` is forced to ``0`` because this
-                endpoint bills per connection and must not silently reconnect.
+            conn_options: Connection options. ``max_retry`` is forced to ``0``: a retry
+                would open a new Sarvam session and lose the open utterance and the audio
+                already sent, so a failure is raised to the caller (for example a
+                ``FallbackAdapter``) instead.
 
         Returns:
             A stream that accepts audio frames and yields speech events.
@@ -541,6 +549,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             callback=self._on_audio_duration_report,
             duration=5.0,
         )
+        self._last_audio_sent_at = time.monotonic()
         self._logger = logger
 
     @property
@@ -791,12 +800,14 @@ class RealtimeSpeechStream(stt.SpeechStream):
             await super().aclose()
 
     async def _run(self) -> None:
-        # A single connection attempt: this endpoint bills per connection, so the
-        # stream never reconnects on its own (`stream()` also forces max_retry=0).
+        # A single connection attempt: a new connection is a new Sarvam session, which
+        # would lose the open utterance and the audio already sent, so the stream never
+        # reconnects on its own (`stream()` also forces max_retry=0).
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
             self._ws = ws
+            self._last_audio_sent_at = time.monotonic()
             tasks = [
                 asyncio.create_task(self._process_audio(ws)),
                 asyncio.create_task(self._process_messages(ws)),
@@ -881,6 +892,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         if ws.closed:
             return
 
+        self._last_audio_sent_at = time.monotonic()
+
         try:
             await ws.send_bytes(payload)
         except (aiohttp.ClientConnectionResetError, ConnectionError):
@@ -943,6 +956,25 @@ class RealtimeSpeechStream(stt.SpeechStream):
         )
         return ws
 
+    async def _send_keepalive_silence(
+        self, ws: aiohttp.ClientWebSocketResponse, samples_per_channel: int
+    ) -> None:
+        """Send a chunk of silence so Sarvam's inactivity timeout doesn't close the stream.
+
+        That timeout counts audio only, so pings alone don't keep the stream open. The
+        silence is real audio on Sarvam's clock: it advances the audio position and is
+        metered like any other audio.
+        """
+        self._logger.debug(
+            "No audio for a while, sending silence to keep the Sarvam stream open",
+            extra=self._build_log_context(),
+        )
+        chunk = np.zeros(samples_per_channel, dtype=np.int16).tobytes()
+        duration = samples_per_channel / self._opts.sample_rate
+        self._audio_duration_collector.push(duration)
+        self._audio_position += duration
+        await self._safe_send_bytes(ws, _encode_pcm_for_wire(self._opts.encoding, chunk))
+
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
@@ -952,7 +984,38 @@ class RealtimeSpeechStream(stt.SpeechStream):
             samples_per_channel=samples_per_channel,
         )
 
-        async for data in self._input_ch:
+        async def send_frames(frames: list[rtc.AudioFrame]) -> None:
+            for frame in frames:
+                if self._active_endpointing == "manual" and not self._manual_speech_started:
+                    await self._safe_send_str(ws, {"event": "speech_start"})
+                    self._manual_speech_started = True
+                    self._begin_manual_utterance()
+
+                self._audio_duration_collector.push(frame.duration)
+                self._audio_position += frame.duration
+                await self._safe_send_bytes(
+                    ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
+                )
+
+        input_frames = aiter(self._input_ch)
+        while True:
+            idle = time.monotonic() - self._last_audio_sent_at
+            try:
+                # wake up for the keepalive too, so this stays the only audio writer
+                data = await asyncio.wait_for(
+                    anext(input_frames), timeout=max(KEEPALIVE_INTERVAL_S - idle, 0.0)
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                if self._session_ended or ws.closed:
+                    break
+                # what's pending goes out first, so the silence follows the last audio
+                await self._send_pending_config_update(ws)
+                await send_frames(audio_bstream.flush())
+                await self._send_keepalive_silence(ws, samples_per_channel)
+                continue
+
             # The server is done reading, so stop the pump instead of writing into a
             # socket whose reset would fail the whole stream (max_retry is forced to 0).
             if self._session_ended or ws.closed:
@@ -966,17 +1029,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                 self._flush_observed = True
                 frames.extend(audio_bstream.flush())
 
-            for frame in frames:
-                if self._active_endpointing == "manual" and not self._manual_speech_started:
-                    await self._safe_send_str(ws, {"event": "speech_start"})
-                    self._manual_speech_started = True
-                    self._begin_manual_utterance()
-
-                self._audio_duration_collector.push(frame.duration)
-                self._audio_position += frame.duration
-                await self._safe_send_bytes(
-                    ws, _encode_pcm_for_wire(self._opts.encoding, frame.data.tobytes())
-                )
+            await send_frames(frames)
 
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()

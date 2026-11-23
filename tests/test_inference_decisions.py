@@ -184,6 +184,46 @@ async def test_model_falls_back_to_configured_model() -> None:
     assert response.model == "livekit/clef-omni"
 
 
+@pytest.mark.parametrize(
+    ("fallback", "sent"),
+    [
+        ("typesafe/jev", [{"model": "typesafe/jev"}]),
+        (
+            ["typesafe/jev", "livekit/clef-omni"],
+            [{"model": "typesafe/jev"}, {"model": "livekit/clef-omni"}],
+        ),
+        ([], []),  # turns off the gateway's default fallback
+    ],
+)
+async def test_fallback_models_are_sent_to_the_gateway(
+    fallback: str | list[str], sent: list[dict[str, str]]
+) -> None:
+    captured: dict[str, Any] = {}
+    async with _gateway(_json_handler(response_body(), captured=captured)) as (url, session):
+        await _model(url, session, fallback=fallback).evaluate(input="", decisions=QUESTIONS)
+    assert captured["body"]["fallback"] == {"models": sent}
+
+
+@pytest.mark.parametrize(
+    ("body_model", "reported"), [("jev-1.13.0", "jev-1.13.0"), (None, "typesafe/jev")]
+)
+async def test_response_names_the_fallback_model_that_answered(
+    body_model: str | None, reported: str
+) -> None:
+    body = response_body()
+    if body_model is None:
+        del body["model"]
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response(
+            body, headers={"X-Livekit-Inference-Decisions-Model-Fallback": "typesafe/jev"}
+        )
+
+    async with _gateway(handler) as (url, session):
+        response = await _model(url, session).evaluate(input="", decisions=QUESTIONS)
+    assert response.model == reported
+
+
 async def test_positional_legend_is_accepted() -> None:
     # The gateway's OpenAI adapter sends the legend as an array, not keyed by index.
     body = response_body()

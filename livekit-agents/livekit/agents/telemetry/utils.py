@@ -39,8 +39,9 @@ def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:
 
     Set in the LiveKit Cloud dashboard (or per session with
     ``record={"redaction": True}``) and never weakened from here — when it is on, PII is
-    stripped for every destination, LiveKit Cloud included. ``span_attributes`` lets a
-    span ended off the job's thread resolve from the flag stamped on it at span start.
+    stripped for every destination, LiveKit Cloud included. Simulations ignore the
+    project setting but can opt in with the per-session option. ``span_attributes``
+    lets a span ended off the job's thread resolve from the flag stamped at span start.
 
     Stripping PII for *third-party* exporters is not this flag: that is the default, and
     is lifted per provider with ``set_tracer_provider(..., allow_pii=True)``.
