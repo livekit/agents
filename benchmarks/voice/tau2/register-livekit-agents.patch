@@ -1,0 +1,134 @@
+diff --git a/src/tau2/agent/discrete_time_audio_native_agent.py b/src/tau2/agent/discrete_time_audio_native_agent.py
+index dc7a38fc..2c9d8389 100644
+--- a/src/tau2/agent/discrete_time_audio_native_agent.py
++++ b/src/tau2/agent/discrete_time_audio_native_agent.py
+@@ -95,6 +95,7 @@ AudioNativeProvider = Literal[
+     "avartha_pipecat",
+     "phonic",
+     "livekit",
++    "livekit_agents",
+ ]
+ 
+ # VAD config union type (string annotations for lazy resolution)
+@@ -349,6 +350,9 @@ class DiscreteTimeAudioNativeAgent(FullDuplexAgent[DiscreteTimeAgentState]):
+         elif provider == "phonic":
+             # Phonic does its own turn detection.
+             self.vad_config = None
++        elif provider == "livekit_agents":
++            # The AgentSession does its own turn detection.
++            self.vad_config = None
+         elif provider == "livekit":
+             from tau2.voice.audio_native.livekit.discrete_time_adapter import (
+                 LiveKitVADConfig,
+@@ -437,6 +441,9 @@ class DiscreteTimeAudioNativeAgent(FullDuplexAgent[DiscreteTimeAgentState]):
+ 
+         # Connect adapter if not connected
+         if not self.adapter.is_connected:
++            # an adapter that keeps its own chat history can record the (unspoken) opener
++            if message_history and hasattr(self.adapter, "set_opening_message"):
++                self.adapter.set_opening_message(message_history[0].content)
+             self.adapter.connect(
+                 system_prompt=self.system_prompt,
+                 tools=self.tools,
+diff --git a/src/tau2/cli.py b/src/tau2/cli.py
+index 312fffc3..4d3608f7 100644
+--- a/src/tau2/cli.py
++++ b/src/tau2/cli.py
+@@ -281,6 +281,7 @@ def add_run_args(parser):
+             "phonic",
+             "livekit",
+             "launa",
++            "livekit_agents",
+         ],
+         default=DEFAULT_AUDIO_NATIVE_PROVIDER,
+         help=f"Audio native API provider. Default is '{DEFAULT_AUDIO_NATIVE_PROVIDER}'.",
+diff --git a/src/tau2/config.py b/src/tau2/config.py
+index c7f20968..14e62fe6 100644
+--- a/src/tau2/config.py
++++ b/src/tau2/config.py
+@@ -275,6 +275,9 @@ DEFAULT_AUDIO_NATIVE_MODELS = {
+     "avartha_pipecat": DEFAULT_AVARTHA_MODEL,
+     "phonic": DEFAULT_PHONIC_MODEL,
+     "livekit": "dummy",
++    # a LiveKit Agents AgentSession run in-process; the model names an agent preset
++    # from benchmarks/voice/lk_voice_bench/config.py in the livekit/agents repo
++    "livekit_agents": "baseline-gemma4",
+ }
+ 
+ DEFAULT_AUDIO_NATIVE_REASONING_EFFORT: dict[str, str | None] = {
+@@ -288,6 +291,7 @@ DEFAULT_AUDIO_NATIVE_REASONING_EFFORT: dict[str, str | None] = {
+     "avartha_pipecat": None,
+     "phonic": "high",  # intelligence level; low/medium/minimal map to standard
+     "livekit": None,
++    "livekit_agents": None,
+ }
+ 
+ AUDIO_NATIVE_PROVIDER_TYPES = {
+@@ -301,6 +305,7 @@ AUDIO_NATIVE_PROVIDER_TYPES = {
+     "avartha_pipecat": "cascaded",
+     "phonic": "audio_native",
+     "livekit": "cascaded",
++    "livekit_agents": "cascaded",
+ }
+ 
+ # =============================================================================
+diff --git a/src/tau2/data_model/run_config.py b/src/tau2/data_model/run_config.py
+index ac8a8afc..b979de8a 100644
+--- a/src/tau2/data_model/run_config.py
++++ b/src/tau2/data_model/run_config.py
+@@ -93,6 +93,7 @@ class AudioNativeConfig(BaseModel):
+         "phonic",
+         "livekit",
+         "launa",
++        "livekit_agents",
+     ] = Field(
+         default=DEFAULT_AUDIO_NATIVE_PROVIDER,
+         description="Audio native API provider: 'openai' (OpenAI Realtime), 'openai_live' (OpenAI Live), 'gemini' (Gemini Live), 'xai' (xAI Grok Voice Agent), 'nova' (Amazon Nova Sonic), 'qwen' (Alibaba Qwen Omni), 'avartha_pipecat' (hosted Avartha agent over Pipecat SmallWebRTC), 'phonic' (Phonic 1), 'launa' (Salesforce Launa), or 'livekit' (LiveKit cascaded STT→LLM→TTS)",
+@@ -156,7 +157,7 @@ class AudioNativeConfig(BaseModel):
+         """Resolve the provider-aware default for real-time user generation."""
+         if self.realtime_generation is not None:
+             return self.realtime_generation
+-        return self.provider in ("openai_live", "avartha_pipecat")
++        return self.provider in ("openai_live", "avartha_pipecat", "livekit_agents")
+ 
+     @model_validator(mode="after")
+     def validate_live_config(self):
+diff --git a/src/tau2/runner/batch.py b/src/tau2/runner/batch.py
+index bdba0be6..1a7c3691 100644
+--- a/src/tau2/runner/batch.py
++++ b/src/tau2/runner/batch.py
+@@ -1000,6 +1000,13 @@ def preregister_voice_plugins(config: RunConfig) -> None:
+         from tau2.voice.audio_native.livekit import preregister_livekit_plugins
+ 
+         preregister_livekit_plugins()
++    elif (
++        isinstance(config, VoiceRunConfig)
++        and config.audio_native_config is not None
++        and config.audio_native_config.provider == "livekit_agents"
++    ):
++        # import (and register) livekit.agents on the main thread, like the branch above
++        import lk_voice_bench.tau2_adapter  # noqa: F401
+ 
+ 
+ # =============================================================================
+diff --git a/src/tau2/voice/audio_native/adapter.py b/src/tau2/voice/audio_native/adapter.py
+index f43ee7f0..34276947 100644
+--- a/src/tau2/voice/audio_native/adapter.py
++++ b/src/tau2/voice/audio_native/adapter.py
+@@ -577,6 +577,16 @@ def create_adapter(
+             send_audio_instant=send_audio_instant,
+             audio_format=audio_format,
+         )
++    elif provider == "livekit_agents":
++        # lives in the livekit/agents repo (benchmarks/voice), installed next to tau2
++        from lk_voice_bench.tau2_adapter import LiveKitAgentsAdapter
++
++        adapter = LiveKitAgentsAdapter(
++            tick_duration_ms=tick_duration_ms,
++            send_audio_instant=send_audio_instant,
++            model=model,
++            audio_format=audio_format,
++        )
+     else:
+         raise ValueError(f"Unknown provider: {provider}")
+ 
