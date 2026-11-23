@@ -1087,9 +1087,9 @@ def _estimate_probability(
     if probabilities is None:
         return 0.0
 
-    n_th = math.ceil(window_size / 0.025)  # 25ms per frame
-    if len(probabilities) < n_th:
+    n_frames = max(1, math.ceil(window_size / 0.025))  # 25ms per frame
+    if len(probabilities) < n_frames:
         return 0.0
 
-    # return the n-th maximum of the probabilities
-    return float(np.partition(probabilities, -n_th)[-n_th])
+    windows = np.lib.stride_tricks.sliding_window_view(probabilities, n_frames)
+    return float(windows.min(axis=1).max())

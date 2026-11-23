@@ -22,6 +22,7 @@ from livekit.agents.inference.interruption import (
     InterruptionWebSocketStream,
     _AgentSpeechEndedSentinel,
     _AgentSpeechStartedSentinel,
+    _estimate_probability,
     _OverlapSpeechEndedSentinel,
     _OverlapSpeechStartedSentinel,
 )
@@ -91,6 +92,33 @@ def test_overlapping_speech_event_does_not_serialize_audio() -> None:
     assert ev.model_dump()["speech_input"] is None
     assert ev.model_dump(mode="json")["speech_input"] is None
     assert ev.speech_input is not None
+
+
+@pytest.mark.parametrize(
+    ("probabilities", "window_size", "expected"),
+    [
+        # two high frames that are not adjacent: every 2-frame window has a low frame
+        ([0.95, 0.05, 0.90, 0.05], 0.05, 0.05),
+        # two adjacent high frames: the best window is (0.95, 0.90)
+        ([0.05, 0.95, 0.90, 0.05], 0.05, 0.90),
+        # the best window is the one with the highest minimum, not the highest frame
+        ([0.99, 0.10, 0.70, 0.80, 0.20], 0.05, 0.70),
+        # a 3-frame window needs 3 consecutive high frames
+        ([0.90, 0.90, 0.10, 0.90, 0.90], 0.075, 0.10),
+        ([0.10, 0.90, 0.80, 0.70, 0.10], 0.075, 0.70),
+        # fewer frames than the window
+        ([0.95], 0.05, 0.0),
+    ],
+)
+def test_estimate_probability_is_max_of_window_minimums(
+    probabilities: list[float], window_size: float, expected: float
+) -> None:
+    probs = np.array(probabilities, dtype=np.float32)
+    assert _estimate_probability(probs, window_size=window_size) == pytest.approx(expected)
+
+
+def test_estimate_probability_without_probabilities_is_zero() -> None:
+    assert _estimate_probability(None) == 0.0
 
 
 async def test_agent_ended_overlap_is_not_counted_as_backchannel() -> None:
