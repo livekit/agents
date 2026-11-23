@@ -209,6 +209,23 @@ def test_thread_job_output_closes_and_warns_when_a_rename_fails(
     assert _jobs(hosted_env) == ["job-AJ_1.log"]
 
 
+def test_thread_job_output_closes_and_warns_when_the_flush_fails(
+    hosted_env: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    hand_off()
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
+    assert isinstance(out, _hosted_logs._ThreadJobOutput)
+    _route(out, logging.LogRecord("t", logging.INFO, __file__, 1, "held", None, None))
+
+    def fail() -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(out._stream, "flush", fail)
+    out.decide(logs=True, redaction=False)
+    assert out._closed
+    assert "failed to write the hosted log file" in caplog.text
+
+
 def test_install_thread_router_filters_every_root_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

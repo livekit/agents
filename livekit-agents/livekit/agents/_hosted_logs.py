@@ -326,15 +326,24 @@ class _ThreadJobOutput:
             self.redaction = self.redaction or redaction
             held, self._held = list(self._held or ()), None
             renamed = self._rename(f"job-{self._job_id}.{_decision(logs=logs).value}")
+            flushed = True
             if renamed and self._router is not None:
                 for record in held:
                     try:
                         self._stream.write(self._router.line(record, self) + "\n")
                     except Exception:
                         self._router.handleError(record)
-                self._stream.flush()
+                try:
+                    self._stream.flush()
+                except OSError:
+                    flushed = False
+                    self._closed = True
+                    with contextlib.suppress(OSError):
+                        self._stream.close()
         if not renamed:
-            self._warn_rename_failed()
+            self._warn_output_dropped("rename")
+        if not flushed:
+            self._warn_output_dropped("write")
         _warn_dropped_held_records(self._dropped)
 
     def close(self) -> None:
@@ -347,7 +356,7 @@ class _ThreadJobOutput:
             with contextlib.suppress(OSError):
                 self._stream.close()
         if not renamed:
-            self._warn_rename_failed()
+            self._warn_output_dropped("rename")
 
     def _rename(self, stem: str) -> bool:
         new_path = os.path.join(os.path.dirname(self._path), f"{stem}.log")
@@ -361,13 +370,14 @@ class _ThreadJobOutput:
         self._path = new_path
         return True
 
-    def _warn_rename_failed(self) -> None:
+    def _warn_output_dropped(self, failed_action: str) -> None:
         from .log import logger
 
         token = current_job_output.set(None)
         try:
             logger.warning(
-                "failed to rename the hosted log file, dropping the rest of this job's output",
+                f"failed to {failed_action} the hosted log file, "
+                "dropping the rest of this job's output",
                 extra={"job_id": self._job_id},
             )
         finally:
