@@ -15,7 +15,7 @@
      @function_tool()
      async def save_note(self, context: RunContext, note: str) -> str:
          """Save a short user note to a local file.
-@@ -113,23 +117,10 @@
+@@ -113,23 +117,11 @@
  @server.rtc_session()
  async def entrypoint(ctx: JobContext):
      logger.info("joining room", extra={"room_name": ctx.room.name})
@@ -26,10 +26,8 @@
 -    )
 -    participant = await ctx.wait_for_participant()
 -    room_sid = await ctx.room.sid
-+    # Session connects alongside activity initialization. The output track is prepared
-+    # before connect; neither input-participant discovery nor greeting PCM is required.
-     convo_log_path = _LOG_DIR / f"{ctx.room.name}_conversation.jsonl"
-     metrics_log_path = _LOG_DIR / f"{ctx.room.name}_metrics.jsonl"
+-    convo_log_path = _LOG_DIR / f"{ctx.room.name}_conversation.jsonl"
+-    metrics_log_path = _LOG_DIR / f"{ctx.room.name}_metrics.jsonl"
 -    logger.info(
 -        "room connected",
 -        extra={
@@ -38,10 +36,15 @@
 -            "participant_identity": participant.identity,
 -        },
 -    )
++    # Session connects alongside activity initialization. The output track is prepared
++    # before connect; neither input-participant discovery nor greeting PCM is required.
++    room_name = ctx.job.room.name
++    convo_log_path = _LOG_DIR / f"{room_name}_conversation.jsonl"
++    metrics_log_path = _LOG_DIR / f"{room_name}_metrics.jsonl"
  
      llm = openai.realtime.RealtimeModel(
          voice="marin",
-@@ -309,16 +300,49 @@
+@@ -309,16 +301,49 @@
      
      agent = MyAgent()
  
