@@ -27,6 +27,32 @@ index bb325212..01047234 100644
      ] = Field(
          "pipecat",
          description=(
+diff --git a/src/eva/orchestrator/validation_runner.py b/src/eva/orchestrator/validation_runner.py
+index d1fd693f..66df556d 100644
+--- a/src/eva/orchestrator/validation_runner.py
++++ b/src/eva/orchestrator/validation_runner.py
+@@ -1,5 +1,6 @@
+ """Validation metrics runner for benchmark validation mode."""
+ 
++import os
+ import asyncio
+ import json
+ from dataclasses import dataclass, field
+@@ -13,7 +14,13 @@ from eva.utils.logging import get_logger
+ logger = get_logger(__name__)
+ 
+ GATE_METRIC = "conversation_valid_end"
+-LLM_METRICS = ["user_behavioral_fidelity", "user_speech_fidelity"]
++# EVA_SKIP_VALIDATION_METRICS (comma-separated) drops validation metrics a run cannot compute,
++# e.g. user_speech_fidelity without Gemini audio-judge access; a metric that errors fails the record
++LLM_METRICS = [
++    m
++    for m in ["user_behavioral_fidelity", "user_speech_fidelity"]
++    if m not in os.environ.get("EVA_SKIP_VALIDATION_METRICS", "").split(",")
++]
+ 
+ 
+ @dataclass
 diff --git a/src/eva/orchestrator/worker.py b/src/eva/orchestrator/worker.py
 index 29a19b29..bfb07d8b 100644
 --- a/src/eva/orchestrator/worker.py
