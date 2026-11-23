@@ -97,6 +97,7 @@ livekit-plugins-vlmrun = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
 livekit-plugins-xai = { workspace = true }
 livekit-plugins-phonic = { workspace = true }
+livekit-plugins-polyai = { workspace = true }
 livekit-plugins-did = { workspace = true }
 livekit-plugins-zoom-ai = { workspace = true }
 
