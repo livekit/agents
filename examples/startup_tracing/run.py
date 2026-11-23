@@ -233,6 +233,12 @@ async def run(args):
                         order = ["example-order", "parallel-output", "automatic", "prepared"]
                         offset = sample % len(order)
                         profiles = order[offset:] + order[:offset]
+                    elif args.profile == "native-pair":
+                        profiles = (
+                            ["automatic", "prepared"]
+                            if sample % 2 == 0
+                            else ["prepared", "automatic"]
+                        )
                     elif args.profile != "both":
                         profiles = [args.profile]
                     arms = [(profile, "after") for profile in profiles]
@@ -360,6 +366,7 @@ def main():
             "automatic",
             "prepared",
             "prepared-custom",
+            "native-pair",
             "both",
             "all",
         ],

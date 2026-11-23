@@ -62,6 +62,26 @@ document.querySelector('#start').onclick = async () => {
     const response = await fetch(`http://127.0.0.1:18790/token/${runId}`);
     const credentials = await response.json(); mark('credentials_ready');
     room = new Room({ singlePeerConnection: true });
+    report.signalEvents = [];
+    const signal = room.engine.client;
+    const handleSignal = signal.handleSignalResponse.bind(signal);
+    signal.handleSignalResponse = (response) => {
+      const message = response.message;
+      const entry = { at_ms: clock(), direction: 'received', type: message?.case };
+      if(message?.case === 'update') {
+        entry.agentTracks = (message.value.participants || []).filter(p=>p.kind===4||p.identity.startsWith('agent-')).map(p=>(p.tracks||[]).length);
+      }
+      if(message?.case === 'answer') entry.mappedTracks = Object.keys(message.value.midToTrackId || {}).length;
+      if(['answer','offer','update','mediaSectionsRequirement'].includes(entry.type)) report.signalEvents.push(entry);
+      return handleSignal(response);
+    };
+    const sendSignal = signal.sendRequest.bind(signal);
+    signal.sendRequest = (message, ...args) => {
+      if(['offer','answer','subscription'].includes(message.case)) report.signalEvents.push({at_ms:clock(),direction:'sent',type:message.case});
+      return sendSignal(message,...args);
+    };
+    room.on(RoomEvent.TrackPublished,()=>mark('remote_track_announced'));
+
     room.on(RoomEvent.Connected,()=>{mark('room_connected');status.textContent='Connected — waiting for agent';paint('connected_ui_painted');});
     room.on(RoomEvent.ParticipantConnected,p=>{if(p.kind===4||p.identity.startsWith('agent-')){mark('agent_visible');paint('agent_visible_ui_painted');agentState(p,p.attributes['lk.agent.state']);}});
     room.on(RoomEvent.ParticipantAttributesChanged,(changed,p)=>{

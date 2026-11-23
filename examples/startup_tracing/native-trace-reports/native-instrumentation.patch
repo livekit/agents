@@ -1,0 +1,261 @@
+diff --git a/livekit-signaling/src/lib.rs b/livekit-signaling/src/lib.rs
+index 0af7775b..6cd8b888 100644
+--- a/livekit-signaling/src/lib.rs
++++ b/livekit-signaling/src/lib.rs
+@@ -1036,6 +1036,19 @@ fn client_info_sdk_for_name(sdk: &str) -> proto::client_info::Sdk {
+     }
+ }
+ 
++/// Emit sanitized timestamps for a temporary publication diagnostic build.
++fn publication_trace(name: &str, fields: &str) {
++    if std::env::var_os("LIVEKIT_PUBLICATION_TRACE").is_none() {
++        return;
++    }
++    let now = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_micros() as f64
++        / 1000.0;
++    log::info!(target: "publication_trace", "{{\"name\":\"{}\",\"at_ms\":{},\"fields\":{}}}", name, now, fields);
++}
++
+ /// Create the base64-encoded WrappedJoinRequest parameter required for v1 path
+ ///
+ /// Parameters:
+@@ -1092,6 +1105,15 @@ fn create_join_request_param(
+         join_request.reconnect_reason = reason;
+     }
+ 
++    publication_trace(
++        "join_encoded",
++        &format!(
++            "{{\"tracks\":{},\"publisher_offer\":{},\"reconnect\":{}}}",
++            join_request.add_track_requests.len(),
++            join_request.publisher_offer.is_some(),
++            reconnect
++        ),
++    );
+     // Serialize JoinRequest to bytes
+     let join_request_bytes = join_request.encode_to_vec();
+ 
+diff --git a/livekit-signaling/src/signal_stream.rs b/livekit-signaling/src/signal_stream.rs
+index faabb8f2..b47a8ba5 100644
+--- a/livekit-signaling/src/signal_stream.rs
++++ b/livekit-signaling/src/signal_stream.rs
+@@ -60,6 +60,7 @@ impl SignalStream {
+         token: &str,
+         connect_timeout: Duration,
+     ) -> SignalResult<(Self, mpsc::UnboundedReceiver<Box<proto::signal_response::Message>>)> {
++        super::publication_trace("websocket_connect_begin", "{}");
+         log::info!("connecting to {}", livekit_net::redact_url(&url));
+ 
+         // Reject a malformed token before touching the transport, so it surfaces
+@@ -83,6 +84,7 @@ impl SignalStream {
+         .map_err(|_| SignalError::Timeout("signal connection timed out".into()))??
+         .connection;
+ 
++        super::publication_trace("websocket_open", "{}");
+         Ok(Self::spawn(conn))
+     }
+ 
+@@ -141,6 +143,11 @@ impl SignalStream {
+         while let Some(msg) = internal_rx.recv().await {
+             match msg {
+                 InternalMessage::Signal { signal, response_chn } => {
++                    let kind = match &signal {
++                        proto::signal_request::Message::AddTrack(_) => "add_track",
++                        proto::signal_request::Message::Offer(_) => "offer",
++                        _ => "other",
++                    };
+                     let data = proto::SignalRequest { message: Some(signal) }.encode_to_vec();
+ 
+                     if let Err(err) = conn.send(data).await {
+@@ -151,6 +158,12 @@ impl SignalStream {
+                         break;
+                     }
+ 
++                    if kind != "other" {
++                        super::publication_trace(
++                            "signal_written",
++                            &format!("{{\"type\":\"{}\"}}", kind),
++                        );
++                    }
+                     let _ = response_chn.send(Ok(()));
+                 }
+                 InternalMessage::Close => break,
+@@ -173,6 +186,23 @@ impl SignalStream {
+                     match proto::SignalResponse::decode(bytes.as_slice()) {
+                         Ok(res) => {
+                             if let Some(msg) = res.message {
++                                let kind = match &msg {
++                                    proto::signal_response::Message::Join(_) => "join",
++                                    proto::signal_response::Message::Answer(_) => "answer",
++                                    proto::signal_response::Message::TrackPublished(_) => {
++                                        "track_published"
++                                    }
++                                    proto::signal_response::Message::TrackSubscribed(_) => {
++                                        "track_subscribed"
++                                    }
++                                    _ => "other",
++                                };
++                                if kind != "other" {
++                                    super::publication_trace(
++                                        "signal_received",
++                                        &format!("{{\"type\":\"{}\"}}", kind),
++                                    );
++                                }
+                                 let _ = emitter.send(Box::new(msg));
+                             }
+                         }
+diff --git a/livekit/src/room/mod.rs b/livekit/src/room/mod.rs
+index 45b13866..d03b05a6 100644
+--- a/livekit/src/room/mod.rs
++++ b/livekit/src/room/mod.rs
+@@ -628,6 +628,19 @@ impl Drop for CloseOnDrop {
+     }
+ }
+ 
++/// Emit sanitized timestamps for a temporary publication diagnostic build.
++fn publication_trace(name: &str, fields: &str) {
++    if std::env::var_os("LIVEKIT_PUBLICATION_TRACE").is_none() {
++        return;
++    }
++    let now = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_micros() as f64
++        / 1000.0;
++    log::info!(target: "publication_trace", "{{\"name\":\"{}\",\"at_ms\":{},\"fields\":{}}}", name, now, fields);
++}
++
+ impl Room {
+     pub async fn connect(
+         url: &str,
+@@ -996,6 +1009,7 @@ impl Room {
+         for (track, options) in tracks {
+             let cid = track.rtc_track().id();
+             let Some(rx) = receivers.remove(&cid) else {
++                publication_trace("initial_track_fallback", "{\"reason\":\"not_sent_in_join\"}");
+                 local_participant.publish_track(track, options).await?;
+                 continue;
+             };
+@@ -1007,8 +1021,11 @@ impl Room {
+                 })
+                 .await;
+             match completed {
+-                Ok(true) => {}
++                Ok(true) => {
++                    publication_trace("join_track_committed", "{}");
++                }
+                 Ok(false) => {
++                    publication_trace("initial_track_fallback", "{\"reason\":\"session_changed\"}");
+                     local_participant.publish_track(track, options).await?;
+                 }
+                 Err(err) => {
+diff --git a/livekit/src/rtc_engine/rtc_session.rs b/livekit/src/rtc_engine/rtc_session.rs
+index f02a8dd9..c6bf6589 100644
+--- a/livekit/src/rtc_engine/rtc_session.rs
++++ b/livekit/src/rtc_engine/rtc_session.rs
+@@ -90,6 +90,19 @@ pub const TRACK_PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
+ /// The server confirms join-time tracks before it answers the join offer, so the confirmation
+ /// has normally arrived once the connection is up; this only bounds a missing one.
+ const JOIN_TRACK_CONFIRM_TIMEOUT: Duration = Duration::from_secs(1);
++
++/// Emit sanitized timestamps for a temporary publication diagnostic build.
++fn publication_trace(name: &str, fields: &str) {
++    if std::env::var_os("LIVEKIT_PUBLICATION_TRACE").is_none() {
++        return;
++    }
++    let now = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .unwrap_or_default()
++        .as_micros() as f64
++        / 1000.0;
++    log::info!(target: "publication_trace", "{{\"name\":\"{}\",\"at_ms\":{},\"fields\":{}}}", name, now, fields);
++}
+ pub const LOSSY_DC_LABEL: &str = "_lossy";
+ pub const RELIABLE_DC_LABEL: &str = "_reliable";
+ 
+@@ -718,6 +731,10 @@ impl RtcSession {
+         let mut options = options;
+         options.rtc_config.enable_sctp_snap = true;
+ 
++        publication_trace(
++            "session_connect_begin",
++            &format!("{{\"tracks\":{}}}", publish_tracks.len()),
++        );
+         let use_single_pc = options.signal_options.single_peer_connection;
+ 
+         let early_publisher = if use_single_pc {
+@@ -760,6 +777,7 @@ impl RtcSession {
+ 
+         // Determine if single PC mode is active based on the path used
+         let single_pc_mode = signal_client.is_single_pc_mode_active();
++        publication_trace("join_processed", &format!("{{\"single_pc\":{}}}", single_pc_mode));
+ 
+         let Some(participant_info) = SessionParticipantInfo::from_join(&join_response) else {
+             Err(EngineError::Internal("Join response missing participant info".into()))?
+@@ -795,6 +813,14 @@ impl RtcSession {
+             early => early,
+         };
+         let sent_publisher_offer = early_publisher.is_some();
++        publication_trace(
++            "initial_offer_mode",
++            &format!(
++                "{{\"offer_sent_in_join\":{},\"tracks\":{}}}",
++                sent_publisher_offer,
++                publish_tracks.len()
++            ),
++        );
+         let (mut publisher_pc, mut reliable_dc, mut lossy_dc, data_track_dc) =
+             if let Some(EarlyPublisher { pc, data_channels: mut dcs, .. }) = early_publisher {
+                 if !use_negotiated_dcs {
+@@ -1723,6 +1749,7 @@ impl SessionInner {
+     ) -> EngineResult<()> {
+         match event {
+             proto::signal_response::Message::Answer(answer) => {
++                publication_trace("answer_apply_begin", "{}");
+                 log::debug!("received publisher answer: {:?}", answer);
+ 
+                 // Store mid_to_track_id mapping in single PC mode
+@@ -1744,6 +1771,7 @@ impl SessionInner {
+                 let answer =
+                     SessionDescription::parse(&answer.sdp, answer.r#type.parse().unwrap()).unwrap(); // Unwrap is ok, the server shouldn't give us an invalid sdp
+                 self.publisher_pc.set_remote_description(answer).await?;
++                publication_trace("answer_apply_end", "{}");
+                 let _ = self.emitter.send(SessionEvent::RefreshPublishingLayers);
+ 
+                 if self.single_pc_mode {
+@@ -1852,6 +1880,13 @@ impl SessionInner {
+             }
+             proto::signal_response::Message::TrackPublished(publish_res) => {
+                 let mut pending_tracks = self.pending_tracks.lock();
++                publication_trace(
++                    "track_ack_processed",
++                    &format!(
++                        "{{\"waiter_found\":{}}}",
++                        pending_tracks.contains_key(&publish_res.cid)
++                    ),
++                );
+                 if let Some(tx) = pending_tracks.remove(&publish_res.cid) {
+                     let _ = tx.send(Ok(publish_res.track.unwrap()));
+                 }
+@@ -1981,6 +2016,10 @@ impl SessionInner {
+                     .await;
+             }
+             RtcEvent::ConnectionChange { state, target } => {
++                publication_trace(
++                    "pc_state",
++                    &format!("{{\"state\":\"{:?}\",\"target\":\"{:?}\"}}", state, target),
++                );
+                 log::debug!("connection change, {:?} {:?}", state, target);
+ 
+                 // Durably record leaving `Connected` before waking waiters: a resume that
+@@ -2310,6 +2349,7 @@ impl SessionInner {
+         let sender_config = SenderConfiguration::new(track, options, encodings);
+         // fast_publish controls join-time warm-up, not whether AddTrack and SDP may overlap.
+         let fast = sender_config.can_fast_publish(&request, options, &self.enabled_publish_codecs);
++        publication_trace("ordinary_publish_mode", &format!("{{\"parallel\":{}}}", fast));
+         let (mut pending, rx) = PendingTrackPublish::new(self, track, &request.cid)?;
+         let cid = request.cid.clone();
+         let mut close_rx = self.close_rx.clone();

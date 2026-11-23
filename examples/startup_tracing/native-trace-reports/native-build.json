@@ -1,0 +1,7 @@
+{
+  "base_revision": "34d114b0",
+  "build": "cargo build -p livekit-ffi (dev profile)",
+  "native_sha256": "4064e7e6479f687e36dde3416adcecaf81650fd4a06c30c611e3b5282edbfc05",
+  "instrumentation_patch_sha256": "3d7b0e8221119fbf4121efffac7d3c47f00492f640598a47280e0f0327c54224",
+  "purpose": "sanitized signal and transport timeline; not a production SDK behavior change"
+}

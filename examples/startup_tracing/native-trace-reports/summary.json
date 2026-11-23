@@ -1,0 +1,188 @@
+{
+  "publisher": {
+    "automatic": {
+      "n": 4,
+      "medians": {
+        "registration_after_join_ms": 424.9,
+        "final_sdp_after_join_ms": 464.3,
+        "publisher_connected_after_join_ms": 273.2,
+        "subscription_after_join_ms": 645.7,
+        "post_sdp_subscription_ms": 180.4,
+        "browser_ice_rtt_ms": 147.5
+      },
+      "runs": [
+        {
+          "run_id": "a0ce646535aa",
+          "profile": "automatic",
+          "registration_after_join_ms": 294.9599609375,
+          "final_sdp_after_join_ms": 437.747802734375,
+          "publisher_connected_after_join_ms": 157.768798828125,
+          "subscription_after_join_ms": 611.64599609375,
+          "post_sdp_subscription_ms": 173.898193359375,
+          "browser_ice_rtt_ms": 117
+        },
+        {
+          "run_id": "5afdd77ae45b",
+          "profile": "automatic",
+          "registration_after_join_ms": 419.425048828125,
+          "final_sdp_after_join_ms": 466.0791015625,
+          "publisher_connected_after_join_ms": 263.22412109375,
+          "subscription_after_join_ms": 651.39013671875,
+          "post_sdp_subscription_ms": 185.31103515625,
+          "browser_ice_rtt_ms": 151
+        },
+        {
+          "run_id": "200cfc7abfcd",
+          "profile": "automatic",
+          "registration_after_join_ms": 430.35302734375,
+          "final_sdp_after_join_ms": 462.488037109375,
+          "publisher_connected_after_join_ms": 283.237060546875,
+          "subscription_after_join_ms": 639.98388671875,
+          "post_sdp_subscription_ms": 177.495849609375,
+          "browser_ice_rtt_ms": 158
+        },
+        {
+          "run_id": "5fad0fc89344",
+          "profile": "automatic",
+          "registration_after_join_ms": 453.52099609375,
+          "final_sdp_after_join_ms": 474.14306640625,
+          "publisher_connected_after_join_ms": 287.385009765625,
+          "subscription_after_join_ms": 657.35498046875,
+          "post_sdp_subscription_ms": 183.2119140625,
+          "browser_ice_rtt_ms": 144
+        }
+      ]
+    },
+    "prepared": {
+      "n": 4,
+      "medians": {
+        "registration_after_join_ms": 0.0,
+        "final_sdp_after_join_ms": 127.1,
+        "publisher_connected_after_join_ms": 282.0,
+        "subscription_after_join_ms": 606.1,
+        "post_sdp_subscription_ms": 473.2,
+        "browser_ice_rtt_ms": 143.5
+      },
+      "runs": [
+        {
+          "run_id": "6a645804e042",
+          "profile": "prepared",
+          "registration_after_join_ms": 0.094970703125,
+          "final_sdp_after_join_ms": 129.291015625,
+          "publisher_connected_after_join_ms": 268.252197265625,
+          "subscription_after_join_ms": 604.43603515625,
+          "post_sdp_subscription_ms": 475.14501953125,
+          "browser_ice_rtt_ms": 146
+        },
+        {
+          "run_id": "5c59e0e67ed4",
+          "profile": "prepared",
+          "registration_after_join_ms": 0.02490234375,
+          "final_sdp_after_join_ms": 7.364013671875,
+          "publisher_connected_after_join_ms": 153.162841796875,
+          "subscription_after_join_ms": 476.68994140625,
+          "post_sdp_subscription_ms": 469.325927734375,
+          "browser_ice_rtt_ms": 141
+        },
+        {
+          "run_id": "d68cd032ee9e",
+          "profile": "prepared",
+          "registration_after_join_ms": 0.030029296875,
+          "final_sdp_after_join_ms": 136.43505859375,
+          "publisher_connected_after_join_ms": 295.801025390625,
+          "subscription_after_join_ms": 607.72900390625,
+          "post_sdp_subscription_ms": 471.2939453125,
+          "browser_ice_rtt_ms": 140
+        },
+        {
+          "run_id": "1ad8e60bc71f",
+          "profile": "prepared",
+          "registration_after_join_ms": 0.02197265625,
+          "final_sdp_after_join_ms": 124.984130859375,
+          "publisher_connected_after_join_ms": 314.34912109375,
+          "subscription_after_join_ms": 1186.9541015625,
+          "post_sdp_subscription_ms": 1061.969970703125,
+          "browser_ice_rtt_ms": 860
+        }
+      ]
+    }
+  },
+  "subscriber": {
+    "automatic": {
+      "n": 2,
+      "medians": {
+        "registration_after_join_ms": 359.7,
+        "final_sdp_after_join_ms": 397.9,
+        "publisher_connected_after_join_ms": 205.0,
+        "subscription_after_join_ms": 571.3,
+        "post_sdp_subscription_ms": 173.4,
+        "browser_ice_rtt_ms": 262.5,
+        "browser_subscription_offer_after_announcement_ms": 30.7
+      },
+      "runs": [
+        {
+          "run_id": "5f7cbd440b0a",
+          "profile": "automatic",
+          "registration_after_join_ms": 304.260986328125,
+          "final_sdp_after_join_ms": 312.036865234375,
+          "publisher_connected_after_join_ms": 153.97802734375,
+          "subscription_after_join_ms": 493.599853515625,
+          "post_sdp_subscription_ms": 181.56298828125,
+          "browser_ice_rtt_ms": 140,
+          "browser_subscription_offer_after_announcement_ms": 34.89990234375,
+          "outbound_rtp_before_application_pcm": true
+        },
+        {
+          "run_id": "776b0ca034c0",
+          "profile": "automatic",
+          "registration_after_join_ms": 415.2109375,
+          "final_sdp_after_join_ms": 483.779052734375,
+          "publisher_connected_after_join_ms": 256.031005859375,
+          "subscription_after_join_ms": 648.932861328125,
+          "post_sdp_subscription_ms": 165.15380859375,
+          "browser_ice_rtt_ms": 385,
+          "browser_subscription_offer_after_announcement_ms": 26.599853515625,
+          "outbound_rtp_before_application_pcm": true
+        }
+      ]
+    },
+    "prepared": {
+      "n": 2,
+      "medians": {
+        "registration_after_join_ms": 0.0,
+        "final_sdp_after_join_ms": 132.4,
+        "publisher_connected_after_join_ms": 429.5,
+        "subscription_after_join_ms": 947.4,
+        "post_sdp_subscription_ms": 815.0,
+        "browser_ice_rtt_ms": 175.0,
+        "browser_subscription_offer_after_announcement_ms": 30.7
+      },
+      "runs": [
+        {
+          "run_id": "fc4ceba315b1",
+          "profile": "prepared",
+          "registration_after_join_ms": 0.02880859375,
+          "final_sdp_after_join_ms": 135.27587890625,
+          "publisher_connected_after_join_ms": 592.58984375,
+          "subscription_after_join_ms": 1304.072998046875,
+          "post_sdp_subscription_ms": 1168.797119140625,
+          "browser_ice_rtt_ms": 207,
+          "browser_subscription_offer_after_announcement_ms": 28.199951171875,
+          "outbound_rtp_before_application_pcm": true
+        },
+        {
+          "run_id": "7527e0aeb650",
+          "profile": "prepared",
+          "registration_after_join_ms": 0.023193359375,
+          "final_sdp_after_join_ms": 129.611083984375,
+          "publisher_connected_after_join_ms": 266.467041015625,
+          "subscription_after_join_ms": 590.732177734375,
+          "post_sdp_subscription_ms": 461.12109375,
+          "browser_ice_rtt_ms": 143,
+          "browser_subscription_offer_after_announcement_ms": 33.199951171875,
+          "outbound_rtp_before_application_pcm": true
+        }
+      ]
+    }
+  }
+}

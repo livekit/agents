@@ -7,6 +7,7 @@ import dataclasses
 import functools
 import inspect
 import json
+import logging
 import math
 import os
 import signal
@@ -149,6 +150,30 @@ def instrument() -> None:
 
 def setup_process(proc: Any) -> None:
     import livekit.agents
+
+    if os.environ.get("STARTUP_NATIVE_TRACE"):
+
+        class NativeTraceHandler(logging.Handler):
+            def emit(self, entry: logging.LogRecord) -> None:
+                # Native diagnostics contain only event names, counts and timestamps.
+                # Drop every other native log; never persist SDP, tokens or ICE credentials.
+                if (
+                    isinstance(entry.args, tuple)
+                    and len(entry.args) == 4
+                    and entry.args[0] == "publication_trace"
+                ):
+                    event = json.loads(entry.args[3])
+                    record(
+                        "native_" + event["name"],
+                        at_ms=event["at_ms"],
+                        native_fields=event["fields"],
+                    )
+
+        rtc_logger = logging.getLogger("livekit")
+        rtc_logger.handlers.clear()
+        rtc_logger.addHandler(NativeTraceHandler())
+        rtc_logger.propagate = False
+        rtc_logger.setLevel(logging.INFO)
 
     record(
         "process_prepared",
@@ -308,9 +333,31 @@ async def entrypoint(ctx: JobContext) -> None:
         collect_transport_stats(), name="startup_transport_diagnostics"
     )
 
+    async def observe_outbound() -> None:
+        while not ctx.room.isconnected():
+            await asyncio.sleep(0.01)
+        while not FIRST_FRAME_ACCEPTED.is_set():
+            stats = await ctx.room.get_rtc_stats()
+            packets = sum(
+                s.outbound_rtp.sent.packets_sent
+                for s in stats.publisher_stats
+                if s.WhichOneof("stats") == "outbound_rtp"
+            )
+            if packets:
+                record("outbound_rtp_before_pcm", packets=packets)
+                return
+            await asyncio.sleep(0.02)
+        record("no_outbound_rtp_observed_before_pcm")
+
+    outbound_observer = (
+        asyncio.create_task(observe_outbound()) if os.environ.get("STARTUP_NATIVE_TRACE") else None
+    )
+
     async def cleanup() -> None:
         record("session_cleanup_begin")
         ctx.room.off("data_received", on_probe)
+        if outbound_observer is not None:
+            await utils.aio.cancel_and_wait(outbound_observer)
         await utils.aio.cancel_and_wait(*probe_tasks)
         diagnostics.cancel()
         await asyncio.gather(diagnostics, return_exceptions=True)

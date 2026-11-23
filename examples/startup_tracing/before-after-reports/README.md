@@ -4,6 +4,8 @@
 
 72 measured browser-triggered staging sessions, 12 excluded warmups, six repetitions per arm/case. All 72 received non-silent audio and a client-to-agent message acknowledgement. All assigned agent processes were warm. Median browser ICE RTT: **61 ms**. No browser errors or excluded measured trials.
 
+**Follow-up native signaling verification:** [staging trace report](../native-trace-reports/README.md) confirms JOIN publication is active and publisher signaling is faster; receiver subscription remains a separate wait.
+
 ## Application before/after
 
 Both sides use custom audio output. Before: connect and wait for the user, start Session/activity, then start the output. After: start connection, activity and prepared output concurrently, as in the local application patch. Both generate the same greeting from `on_enter()`.
