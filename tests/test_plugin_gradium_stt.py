@@ -499,10 +499,11 @@ class _FakeMessage:
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.incoming: asyncio.Queue[dict] = asyncio.Queue()
+        self.sent: list[dict] = []
         self.close_code = None
 
     async def send_str(self, message: str) -> None:
-        pass
+        self.sent.append(json.loads(message))
 
     async def ping(self) -> None:
         pass
@@ -786,6 +787,28 @@ async def test_pending_text_is_finalized_when_the_server_closes_instead_of_reply
     assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
 
 
+async def test_error_frame_keeps_the_words_already_transcribed():
+    """An error frame after end_input() still delivers the buffered words."""
+    error = {"type": "error", "message": "Worker failure", "code": 1011}
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1)], after_eos=[error, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    events: list[Any] = []
+    try:
+        with pytest.raises(APIStatusError, match="Worker failure"):
+            async for ev in stream:
+                events.append(ev)
+    finally:
+        await stream.aclose()
+
+    finals = [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert finals == ["hello"]
+
+
 async def test_server_ending_the_session_mid_input_finalizes_then_reconnects():
     """The server's end_of_stream while audio still flows: keep the words, and raise so
     the base class reconnects rather than the next audio write failing raw."""
@@ -831,3 +854,227 @@ async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
         ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
     ]
     assert finals == ["hello"]
+
+
+async def test_preflight_transcript_is_emitted_when_the_vad_first_trips():
+    """The first positive VAD step sends the words so far as a preflight transcript, so the
+    session can start generating before the model delay elapses and the turn is finalized."""
+    frames = [READY, _text("hello", 0.1), _text("world", 0.4)] + [
+        _vad_step(i, SILENT) for i in range(4)
+    ]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    types = [ev.type for ev in events]
+    assert types == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert events[3].alternatives[0].text == "hello world"
+    assert events[4].alternatives[0].text == "hello world"
+
+
+def _preflights(events: list[Any]) -> list[str]:
+    return [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT
+    ]
+
+
+async def test_preflight_transcript_is_resent_when_speech_resumes_with_new_words():
+    """A pause, more words, then another pause: each pause previews the words so far."""
+    frames = [READY, _text("hello", 0.1), _vad_step(0, SILENT)]
+    frames += [_vad_step(1, (0.1,) * len(VAD_HORIZONS)), _text("world", 0.4)]
+    frames += [_vad_step(i, SILENT) for i in range(2, 6)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == ["hello", "hello world"]
+    assert events[-1].alternatives[0].text == "hello world"
+
+
+async def test_preflight_transcript_is_not_resent_when_the_vad_flickers_without_new_words():
+    """A VAD drop and trip with no new words keeps the preview: resending it would make the
+    session cancel the reply it started from the first one."""
+    frames = [READY, _text("hello", 0.1), _vad_step(0, SILENT)]
+    frames += [_vad_step(1, (0.1,) * len(VAD_HORIZONS))]
+    frames += [_vad_step(i, SILENT) for i in range(2, 6)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == ["hello"]
+    assert events[-1].alternatives[0].text == "hello"
+
+
+async def test_preflight_transcript_carries_the_end_text_timing():
+    """When the server already sent `end_text` at the trip, the preview reports the same
+    end_time as the final transcript of the turn."""
+    frames = [READY, _text("hello", 0.1), {"type": "end_text", "stop_s": 0.4}]
+    frames += [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.start_time_offset = 7.0
+    # the boundary lies within audio already sent, as a real `end_text` always does
+    stream.push_frame(_audio_frame(1.0))
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    preflight = next(ev for ev in events if ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT)
+    final = events[-1]
+    # the offset is anchored at the first frame's capture time: its push minus its duration
+    assert final.alternatives[0].end_time == pytest.approx(7.0 - 1.0 + 0.4, abs=0.01)
+    assert preflight.alternatives[0].end_time == pytest.approx(final.alternatives[0].end_time)
+
+
+async def test_preflight_transcript_has_no_end_time_before_end_text():
+    """Words still being transcribed at the trip have no end timing yet."""
+    frames = [READY, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.start_time_offset = 7.0
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert events[-1].alternatives[0].end_time == 0.0
+
+
+async def test_no_preflight_transcript_without_words():
+    """A VAD-only turn (vad_start_threshold) has nothing to preview."""
+    frames = [READY, _vad_step(1, (0.1,) * len(VAD_HORIZONS))]
+    frames += [_vad_step(i, SILENT) for i in range(2, 6)]
+    stt, _, _ = _make_stt(frames, vad_start_threshold=0.5)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(stream, lambda ev: ev.type == SpeechEventType.END_OF_SPEECH)
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == []
+
+
+async def test_preflight_transcript_can_be_disabled():
+    """`preflight_trigger=None` keeps the interim and final events but previews nothing."""
+    frames = [READY, _text("hello", 0.1)] + [_vad_step(i, SILENT) for i in range(4)]
+    stt, _, _ = _make_stt(frames, preflight_trigger=None)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == []
+    assert [ev.type for ev in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+
+
+def test_unknown_preflight_trigger_is_rejected():
+    """A misspelt trigger raises instead of silently disabling the preview."""
+    with pytest.raises(ValueError, match="preflight_trigger"):
+        _make_stt([READY], preflight_trigger="VAD_TRIP")
+
+
+@pytest.mark.asyncio
+async def test_manual_flush_asks_the_server_and_finalizes_on_its_reply():
+    """A flush (`commit_user_turn`) asks the server for the words the model delay still holds
+    and finalizes on its `flushed` reply, so they make it into the final transcript instead
+    of the next turn."""
+    from livekit.agents.stt import SpeechEventType
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stt = STT(api_key="test-key", http_session=session)
+    assert stt.capabilities.manual_flush
+    stream = stt.stream()
+    collector = _EventCollector(stream)
+    try:
+        session.ws.incoming.put_nowait(READY)
+        session.ws.incoming.put_nowait(_text("hello", 0.1))
+        await collector.wait_for(2)
+
+        stream.flush()
+        await collector.drain(session.ws)
+        assert session.ws.sent[-1] == {"type": "flush", "flush_id": 1}
+
+        # the held word comes out before the server confirms the flush
+        session.ws.incoming.put_nowait(_text("world", 0.4))
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        events = await collector.wait_for(5)
+        assert [ev.type for ev in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert events[3].alternatives[0].text == "hello world"
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manual_flush_without_speech_answers_with_an_empty_final():
+    """A commit while nothing was heard must not wait for its transcript timeout."""
+    from livekit.agents.stt import SpeechEventType
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stt = STT(api_key="test-key", http_session=session)
+    stream = stt.stream()
+    collector = _EventCollector(stream)
+    try:
+        session.ws.incoming.put_nowait(READY)
+        await collector.drain(session.ws)
+
+        stream.flush()
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        events = await collector.wait_for(1)
+        assert [ev.type for ev in events] == [SpeechEventType.FINAL_TRANSCRIPT]
+        assert events[0].alternatives[0].text == ""
+    finally:
+        await stream.aclose()

@@ -562,22 +562,11 @@ class SessionHost:
         )
 
     def _on_function_tools_executed(self, event: FunctionToolsExecutedEvent) -> None:
-        pb_calls = [
-            agent_pb.FunctionCall(
-                name=fc.name,
-                arguments=fc.arguments,
-                call_id=fc.call_id,
-            )
-            for fc in event.function_calls
-        ]
+        # encoded as the chat history encodes them, so a consumer can match each
+        # item to the history by id
+        pb_calls = [encode_chat_item(fc).function_call for fc in event.function_calls]
         pb_outputs = [
-            agent_pb.FunctionCallOutput(
-                call_id=fco.call_id,
-                name=fco.name,
-                output=fco.output,
-                is_error=fco.is_error,
-            )
-            for fco in event.function_call_outputs
+            encode_chat_item(fco).function_call_output for fco in event.function_call_outputs
         ]
         self._send_event(
             agent_pb.AgentSessionEvent(

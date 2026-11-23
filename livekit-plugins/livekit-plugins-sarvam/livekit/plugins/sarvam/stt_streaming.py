@@ -475,8 +475,10 @@ class STTRealtime(stt.STT):
 
         Args:
             language: Overrides the instance language for this stream only.
-            conn_options: Connection options. ``max_retry`` is forced to ``0`` because this
-                endpoint bills per connection and must not silently reconnect.
+            conn_options: Connection options. ``max_retry`` is forced to ``0``: a retry
+                would open a new Sarvam session and lose the open utterance and the audio
+                already sent, so a failure is raised to the caller (for example a
+                ``FallbackAdapter``) instead.
 
         Returns:
             A stream that accepts audio frames and yields speech events.
@@ -842,8 +844,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
             await super().aclose()
 
     async def _run(self) -> None:
-        # A single connection attempt: this endpoint bills per connection, so the
-        # stream never reconnects on its own (`stream()` also forces max_retry=0).
+        # A single connection attempt: a new connection is a new Sarvam session, which
+        # would lose the open utterance and the audio already sent, so the stream never
+        # reconnects on its own (`stream()` also forces max_retry=0).
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
