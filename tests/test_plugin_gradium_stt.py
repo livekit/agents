@@ -835,6 +835,49 @@ async def test_caller_flush_without_a_reply_does_not_hold_back_later_turns(caplo
         assert _final_texts(collector.events) == ["hello", "again"]
 
 
+async def _commit_while_confirming(ws: _FakeWebSocket, stream: Any, collector: Any) -> None:
+    """With `vad_confirm_steps=1`: the trip's flush is answered, the caller commits, and the
+    step that confirms the pause arrives while the commit's flush is still unanswered."""
+    ws.incoming.put_nowait(_text("book", 0.3))
+    ws.incoming.put_nowait(_step(0.95))
+    await ws.wait_sent("flush")
+    ws.incoming.put_nowait(FLUSHED)
+    await collector.drain(ws)
+    stream.flush()
+    await ws.wait_sent("flush", 2)
+    ws.incoming.put_nowait(_step(0.95))
+    await collector.drain(ws)
+
+
+async def test_commit_during_the_pause_confirmation_gets_the_whole_turn():
+    """A commit after the trip's flush was answered, but before `vad_confirm_steps` confirmed
+    the pause: the commit takes the first final it sees, so the confirmation must not publish
+    one without the words only the commit's flush recovers."""
+    async with _open_stream(vad_confirm_steps=1) as (ws, stream, collector):
+        await _commit_while_confirming(ws, stream, collector)
+        assert _final_texts(collector.events) == []
+
+        ws.incoming.put_nowait(_text("a flight", 0.9))
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 2})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["book a flight"]
+
+
+async def test_commit_during_the_pause_confirmation_without_a_reply_ends_at_the_timeout(caplog):
+    """The confirmed pause leaves the turn to the commit, so a commit whose reply never comes
+    must not hold the turn open: it ends at the connection timeout."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    timeout = DEFAULT_API_CONNECT_OPTIONS.timeout
+    async with _open_stream(vad_confirm_steps=1) as (ws, stream, collector):
+        await _commit_while_confirming(ws, stream, collector)
+        await _keep_alive(ws, int(timeout) - 1)
+        assert _final_texts(collector.events) == []
+        await _keep_alive(ws, 2)
+        assert _final_texts(collector.events) == ["book"]
+        assert "did not answer a flush" in caplog.text
+
+
 async def test_caller_flush_still_queued_holds_back_the_vad_flush_final():
     """The commit can sit behind audio still being sent when the trip's reply comes back:
     the caller's flush is not on the wire yet, but the trip's reply must already leave the

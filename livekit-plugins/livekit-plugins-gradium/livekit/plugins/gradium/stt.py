@@ -442,9 +442,27 @@ class SpeechStream(stt.SpeechStream):
                 )
                 speech_end = 0.0
 
+            def _commit_after_pending_flush() -> bool:
+                # A caller flush queued after the VAD flush: words spoken in between may still
+                # be held by the model, and a final now would answer the commit without them.
+                # One sent before the VAD flush does not count: its reply was due first, and
+                # one the server never sent would otherwise hold back every later turn.
+                assert pending_flush is not None
+                return any(
+                    manual_id > pending_flush
+                    for manual_id in (*manual_flushes, *self._queued_manual_flushes)
+                )
+
             def _end_turn_if_confirmed() -> None:
-                if flush_replied and confirmed_steps >= self._opts.vad_confirm_steps:
-                    _finalize()
+                nonlocal flush_deadline
+                if not flush_replied or confirmed_steps < self._opts.vad_confirm_steps:
+                    return
+                if _commit_after_pending_flush():
+                    # the caller's reply ends the turn instead; bound the wait for it
+                    if flush_deadline is None:
+                        flush_deadline = loop.time() + self._conn_options.timeout
+                    return
+                _finalize()
 
             def _send_preflight() -> None:
                 nonlocal preflight_text
@@ -630,17 +648,10 @@ class SpeechStream(stt.SpeechStream):
                                     )
                                 )
                         elif pending_flush is not None and flush_id == pending_flush:
-                            # When the caller committed after this flush, words spoken in
-                            # between are still coming, and a final now would answer the
-                            # commit without them: the caller's reply ends the turn instead.
-                            # The deadline stays, so a lost reply can't hold it open. A
-                            # caller flush sent before this one never blocks it: its reply
-                            # was due first, and one the server never sent would otherwise
-                            # hold back every later turn on the connection.
-                            if not any(
-                                manual_id > pending_flush
-                                for manual_id in (*manual_flushes, *self._queued_manual_flushes)
-                            ):
+                            # When the caller committed after this flush, its reply ends the
+                            # turn instead. The deadline stays, so a lost reply can't hold the
+                            # turn open.
+                            if not _commit_after_pending_flush():
                                 # the server answered: only `vad_confirm_steps` can end the
                                 # turn now, not the missing-reply timeout
                                 flush_deadline = None
