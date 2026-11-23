@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import time
 import weakref
@@ -528,34 +529,6 @@ async def test_own_playback_started_resolves_first_frame_fut() -> None:
     audio_output.clear_buffer()
 
 
-class _GatedTextOutput(FakeTextOutput):
-    def __init__(self) -> None:
-        super().__init__()
-        self.open = asyncio.Event()
-
-    async def capture_text(self, text: str) -> None:
-        await self.open.wait()
-        await super().capture_text(text)
-
-
-async def _text(*chunks: str) -> AsyncIterator[str]:
-    for chunk in chunks:
-        yield chunk
-
-
-async def test_first_text_fut_waits_for_the_output_to_accept_text() -> None:
-    text_output = _GatedTextOutput()
-    task, out = perform_text_forwarding(text_output=text_output, source=_text("hello"))
-
-    await asyncio.sleep(1.0)
-    assert not out.first_text_fut.done()
-
-    text_output.open.set()
-    await task
-    assert out.first_text_fut.done()
-    assert text_output._messages == ["hello"]
-
-
 async def test_own_event_forwarded_before_wrapper_counts_still_resolves() -> None:
     audio_output = _ForwardFirstWrapper(FakeAudioOutput())
     frames_ch: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue()
@@ -848,3 +821,48 @@ async def test_audio_forwarding_reconciles_playout_pause_before_first_frame() ->
 
     assert order == ["reconcile", "frame", "flush"]
     audio_output.resume.assert_not_called()
+
+
+# --- text forwarding ---
+
+
+class _GatedTextOutput(FakeTextOutput):
+    def __init__(self) -> None:
+        super().__init__()
+        self.open = asyncio.Event()
+
+    async def capture_text(self, text: str) -> None:
+        await self.open.wait()
+        await super().capture_text(text)
+
+
+async def _text(*chunks: str) -> AsyncIterator[str]:
+    for chunk in chunks:
+        yield chunk
+
+
+async def test_first_text_fut_waits_for_the_output_to_accept_text() -> None:
+    text_output = _GatedTextOutput()
+    task, out = perform_text_forwarding(text_output=text_output, source=_text("", "hello"))
+
+    await asyncio.sleep(1.0)
+    assert not out.first_text_fut.done()
+
+    text_output.open.set()
+    await task
+    assert out.first_text_fut.done()
+    assert out.text == "hello"
+    assert text_output._messages == ["hello"]
+
+
+async def test_text_the_output_never_accepted_is_not_counted() -> None:
+    text_output = _GatedTextOutput()
+    task, out = perform_text_forwarding(text_output=text_output, source=_text("hello"))
+
+    await asyncio.sleep(1.0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    assert out.text == ""
+    assert not out.first_text_fut.done()

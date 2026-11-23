@@ -568,11 +568,13 @@ async def _text_forwarding_task(
     # expression as the segment's lk.expression attribute) — see TranscriptMarkupStripper.
     try:
         async for delta in source:
-            out.text += delta
-            if text_output is not None and delta:
+            if not delta:
+                continue
+            if text_output is not None:
                 await text_output.capture_text(delta)
-            # resolved once the output has accepted the text, as first_frame_fut waits for
-            # playback to start
+            # out.text and first_text_fut only count text the output has accepted, as audio
+            # only counts what has played
+            out.text += delta
             if not out.first_text_fut.done():
                 out.first_text_fut.set_result(None)
     finally:
