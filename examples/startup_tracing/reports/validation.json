@@ -1,0 +1,24 @@
+{
+  "measured_starts": 45,
+  "warmup_starts": 9,
+  "median_browser_ice_rtt_ms": 62,
+  "browser_errors": 0,
+  "native_ffi_sha256": "f7ef1bb6803a43559382dc72a5447fb6743dcacdad194edd065140af85078eb4",
+  "real_provider_status": {
+    "successful_runs": 0,
+    "reason": "The configured OpenAI API key was rejected with invalid_api_key. No production model latency is inferred from controlled delays."
+  },
+  "warm_assignments": 45,
+  "native_transport_observations": 45,
+  "native_subscriber_stats_counts": [
+    0
+  ],
+  "received_audio_files": 45,
+  "non_silent_received_audio_files": 45,
+  "client_checkout_captured_at_analysis": {
+    "version": "2.22.3",
+    "git_revision": "04f3556a922def768a1af273d39149221ac40415",
+    "dirty": true,
+    "note": "Same existing local JS SDK checkout used across all profiles; snapshot metadata captured after the run."
+  }
+}

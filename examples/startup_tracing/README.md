@@ -2,6 +2,8 @@
 
 This example starts a real named `AgentServer`, uses a browser button to join a room with an agent dispatch in its token, and runs a real `AgentSession`. It measures the path to non-silent audio in a browser AudioWorklet. It changes no SDK implementation. Instrumentation wraps existing startup and output methods and collects the SDK's OpenTelemetry spans.
 
+[Measured staging results and limitations](reports/README.md) · [Phase timelines](reports/timeline.html)
+
 The profiles use existing APIs:
 
 - `example-order`: follows the connection/output ordering in the local `myAgent_perplexity.py`: connect and find the participant first, construct/start the session, then start a custom audio output. The name of that local file is historical; it actually uses OpenAI Realtime. The reproduction isolates startup ordering and omits that app's VAD/video/tools.

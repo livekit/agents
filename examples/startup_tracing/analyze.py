@@ -7,6 +7,7 @@ import csv
 import html
 import json
 import math
+import random
 import statistics
 from collections import defaultdict
 from pathlib import Path
@@ -81,6 +82,7 @@ def analyze(inputs: list[Path], output: Path) -> None:
                     first("activity_start_begin"),
                     first("activity_start_end"),
                 ),
+                ("Produce first PCM", first("on_enter"), pcm),
                 ("Publication", first("track_publish_begin"), first("track_publish_end")),
                 ("Subscription wait", first("output_subscription_begin"), subscribed),
                 ("First PCM waits for media", pcm, max(pcm, subscribed)),
@@ -143,9 +145,47 @@ def analyze(inputs: list[Path], output: Path) -> None:
             "instant registration bound",
             summary["instant_registration_saving_bound_ms"],
         )
+    comparisons = []
+    lookup = {(row["case"], row["profile"], row["sample"]): row for row in rows}
+    for case in sorted({row["case"] for row in rows}):
+        for variant in ["parallel-output", "automatic"]:
+            ids = sorted(
+                {
+                    row["sample"]
+                    for row in rows
+                    if row["case"] == case
+                    and (case, "example-order", row["sample"]) in lookup
+                    and (case, variant, row["sample"]) in lookup
+                }
+            )
+            if not ids:
+                continue
+            differences = [
+                lookup[(case, "example-order", index)]["first_rendered_audio_ms"]
+                - lookup[(case, variant, index)]["first_rendered_audio_ms"]
+                for index in ids
+            ]
+            rng = random.Random(3610)
+            bootstrap = sorted(
+                statistics.median(rng.choices(differences, k=len(ids))) for _ in range(10000)
+            )
+            comparisons.append(
+                {
+                    "case": case,
+                    "baseline": "example-order",
+                    "variant": variant,
+                    "pairs": len(ids),
+                    "median_paired_saving_ms": round(statistics.median(differences), 1),
+                    "paired_bootstrap_95_interval_ms": [
+                        round(bootstrap[249], 1),
+                        round(bootstrap[9749], 1),
+                    ],
+                }
+            )
     (output / "results.json").write_text(
-        json.dumps({"summary": summaries, "samples": rows}, indent=2)
+        json.dumps({"summary": summaries, "samples": rows, "comparisons": comparisons}, indent=2)
     )
+
     with (output / "samples.csv").open("w") as target:
         writer = csv.DictWriter(target, fieldnames=rows[0], lineterminator="\n")
         writer.writeheader()

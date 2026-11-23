@@ -1,4 +1,4 @@
-"""Instrument the existing agent startup paths; no SDK optimizations are enabled."""
+"""Instrument existing agent startup paths without introducing a new publication path."""
 
 from __future__ import annotations
 

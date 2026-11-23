@@ -1,0 +1,175 @@
+<!doctype html><meta charset="utf-8"><title>Agent startup critical paths</title>
+<style>body{font:15px system-ui;background:#101827;color:#f1f5f9;margin:32px}section{margin:30px 0;padding:20px;background:#182334;border-radius:12px}svg{width:100%;max-width:1200px}text{fill:#ddd;font-size:12px}h2{font-size:19px}.note{max-width:1100px;color:#b8c5d8}</style>
+<h1>Agent startup: measured browser and agent timelines</h1>
+<p class="note">Real browser-triggered Cloud agent dispatch and real audio transport. Controlled cases use synthetic audio and explicit activity/PCM delays; they are not production model measurements. Bars use measured timestamps on this host. “Instant registration” is a counterfactual upper bound, not a measured optimization.</p>
+<section><h2>controlled-activity-1200 / automatic — median first audio 1830.8 ms</h2>
+<p>First PCM: 1685 ms · media ready: 1312 ms · wait: 0 ms · media slack: 373 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="138.9" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–429.7 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="351.3" y="55" width="22.5" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 359.7–429.4 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="375.1" y="95" width="182.6" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 433.6–998.7 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="375.4" y="135" width="403.3" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 434.3–1682.2 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="778.9" y="175" width="2.0" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 1682.8–1684.9 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="558.1" y="215" width="44.1" height="22" rx="4" fill="#60a5fa"><title>Publication: 999.6–1136.1 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="602.3" y="255" width="56.6" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1136.3–1311.6 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="779.6" y="295" width="2.0" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 1684.9–1684.9 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="779.6" y="335" width="47.1" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 1684.9–1830.8 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-activity-1200 / example-order — median first audio 2634.6 ms</h2>
+<p>First PCM: 2264 ms · media ready: 2509 ms · wait: 245 ms · media slack: 0 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="137.4" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–425.1 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="349.7" y="55" width="22.5" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 354.9–424.5 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="372.6" y="95" width="183.6" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 425.7–993.9 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="557.1" y="135" width="409.2" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 996.4–2262.4 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="966.3" y="175" width="2.0" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 2262.7–2264.4 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="966.6" y="215" width="21.5" height="22" rx="4" fill="#60a5fa"><title>Publication: 2263.7–2330.3 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="988.3" y="255" width="57.6" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 2330.6–2508.9 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="966.9" y="295" width="79.0" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 2264.4–2508.9 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="1045.9" y="335" width="40.6" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 2508.9–2634.6 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-activity-1200 / parallel-output — median first audio 2388.4 ms</h2>
+<p>First PCM: 2258 ms · media ready: 1311 ms · wait: 0 ms · media slack: 947 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="139.9" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–432.9 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="351.2" y="55" width="22.1" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 359.6–428.0 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="373.6" y="95" width="179.9" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 428.8–985.4 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="554.7" y="135" width="409.3" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 989.3–2255.6 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="964.2" y="175" width="2.0" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 2256.0–2258.1 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="554.5" y="215" width="50.0" height="22" rx="4" fill="#60a5fa"><title>Publication: 988.4–1143.2 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="604.5" y="255" width="54.1" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1143.3–1310.7 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="964.8" y="295" width="2.0" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 2258.1–2258.1 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="964.8" y="335" width="42.1" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 2258.1–2388.4 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-fast / automatic — median first audio 1461.0 ms</h2>
+<p>First PCM: 515 ms · media ready: 1337 ms · wait: 822 ms · media slack: 0 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="150.0" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–464.2 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="358.5" y="55" width="22.1" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 382.0–450.3 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="382.4" y="95" width="179.9" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 455.9–1012.4 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="382.6" y="135" width="18.3" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 456.7–513.2 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="401.0" y="175" width="2.0" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 513.6–515.0 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="562.5" y="215" width="48.1" height="22" rx="4" fill="#60a5fa"><title>Publication: 1013.3–1162.1 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="610.7" y="255" width="56.4" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1162.3–1336.8 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="401.4" y="295" width="265.6" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 515.0–1336.8 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="667.1" y="335" width="40.1" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 1336.8–1461.0 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-fast / example-order — median first audio 1460.6 ms</h2>
+<p>First PCM: 1085 ms · media ready: 1335 ms · wait: 250 ms · media slack: 0 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="152.0" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–470.4 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="359.9" y="55" width="22.7" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 386.5–456.6 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="382.9" y="95" width="181.9" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 457.5–1020.2 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="565.9" y="135" width="18.8" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 1023.8–1082.1 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="585.0" y="175" width="2.0" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 1082.9–1084.9 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="585.4" y="215" width="27.8" height="22" rx="4" fill="#60a5fa"><title>Publication: 1084.3–1170.4 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="613.3" y="255" width="53.2" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1170.6–1335.1 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="585.7" y="295" width="80.8" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 1084.9–1335.1 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="666.5" y="335" width="40.6" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 1335.1–1460.6 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-fast / parallel-output — median first audio 1435.4 ms</h2>
+<p>First PCM: 1069 ms · media ready: 1330 ms · wait: 262 ms · media slack: 0 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="151.6" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–469.0 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="363.4" y="55" width="21.9" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 397.4–465.0 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="385.7" y="95" width="176.8" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 466.2–1013.4 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="563.8" y="135" width="16.0" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 1017.4–1067.0 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="580.0" y="175" width="2.0" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 1067.3–1068.7 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="563.5" y="215" width="47.1" height="22" rx="4" fill="#60a5fa"><title>Publication: 1016.5–1162.1 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="610.6" y="255" width="54.3" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1162.3–1330.4 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="580.4" y="295" width="84.6" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 1068.7–1330.4 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="665.0" y="335" width="33.9" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 1330.4–1435.4 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-pcm-1200 / automatic — median first audio 1846.5 ms</h2>
+<p>First PCM: 1712 ms · media ready: 1323 ms · wait: 0 ms · media slack: 389 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="143.8" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–444.9 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="356.9" y="55" width="22.8" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 377.2–447.7 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="381.5" y="95" width="195.0" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 453.4–1056.6 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="381.8" y="135" width="18.1" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 454.1–510.2 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="400.0" y="175" width="388.4" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 510.4–1712.3 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="576.8" y="215" width="31.0" height="22" rx="4" fill="#60a5fa"><title>Publication: 1057.4–1153.4 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="607.9" y="255" width="54.8" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1153.6–1323.2 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="788.4" y="295" width="2.0" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 1712.3–1712.3 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="788.4" y="335" width="43.4" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 1712.3–1846.5 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-pcm-1200 / example-order — median first audio 2424.0 ms</h2>
+<p>First PCM: 2295 ms · media ready: 1377 ms · wait: 0 ms · media slack: 918 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="140.8" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–435.6 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="349.5" y="55" width="23.3" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 354.1–426.2 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="373.2" y="95" width="200.7" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 427.7–1048.7 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="574.7" y="135" width="12.8" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 1051.0–1090.5 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="587.6" y="175" width="389.2" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 1091.0–2295.1 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="587.9" y="215" width="37.1" height="22" rx="4" fill="#60a5fa"><title>Publication: 1092.0–1206.8 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="625.1" y="255" width="55.0" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1207.0–1377.2 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="976.8" y="295" width="2.0" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 2295.1–2295.1 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="976.8" y="335" width="41.7" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 2295.1–2424.0 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
+<section><h2>controlled-pcm-1200 / parallel-output — median first audio 2392.9 ms</h2>
+<p>First PCM: 2259 ms · media ready: 1335 ms · wait: 0 ms · media slack: 924 ms</p>
+<svg viewBox="0 0 1200 405" role="img">
+<text x="0" y="30">Client joins</text><rect x="235.0" y="15" width="143.8" height="22" rx="4" fill="#60a5fa"><title>Client joins: 0.0–444.8 ms</title></rect>
+<text x="0" y="70">Dispatch → entrypoint</text><rect x="354.9" y="55" width="22.3" height="22" rx="4" fill="#60a5fa"><title>Dispatch → entrypoint: 371.0–440.1 ms</title></rect>
+<text x="0" y="110">Agent connects</text><rect x="377.6" y="95" width="179.9" height="22" rx="4" fill="#60a5fa"><title>Agent connects: 441.3–997.9 ms</title></rect>
+<text x="0" y="150">Activity initialization</text><rect x="558.8" y="135" width="17.2" height="22" rx="4" fill="#60a5fa"><title>Activity initialization: 1001.9–1055.1 ms</title></rect>
+<text x="0" y="190">Produce first PCM</text><rect x="576.1" y="175" width="389.0" height="22" rx="4" fill="#60a5fa"><title>Produce first PCM: 1055.5–2258.9 ms</title></rect>
+<text x="0" y="230">Publication</text><rect x="558.5" y="215" width="50.7" height="22" rx="4" fill="#60a5fa"><title>Publication: 1001.0–1158.0 ms</title></rect>
+<text x="0" y="270">Subscription wait</text><rect x="609.3" y="255" width="57.3" height="22" rx="4" fill="#f6ad55"><title>Subscription wait: 1158.1–1335.4 ms</title></rect>
+<text x="0" y="310">First PCM waits for media</text><rect x="965.1" y="295" width="2.0" height="22" rx="4" fill="#f6ad55"><title>First PCM waits for media: 2258.9–2258.9 ms</title></rect>
+<text x="0" y="350">Ready PCM → browser render</text><rect x="965.1" y="335" width="43.3" height="22" rx="4" fill="#60a5fa"><title>Ready PCM → browser render: 2258.9–2392.9 ms</title></rect>
+<line x1="235.0" x2="235.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="235.0" y="385">0 ms</text>
+<line x1="396.6" x2="396.6" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="396.6" y="385">500 ms</text>
+<line x1="558.2" x2="558.2" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="558.2" y="385">1000 ms</text>
+<line x1="719.8" x2="719.8" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="719.8" y="385">1500 ms</text>
+<line x1="881.4" x2="881.4" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="881.4" y="385">2000 ms</text>
+<line x1="1043.0" x2="1043.0" y1="10" y2="360" stroke="#94a3b8" opacity=".15"/><text x="1043.0" y="385">2500 ms</text>
+</svg></section>
