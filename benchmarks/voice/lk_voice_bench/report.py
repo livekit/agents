@@ -32,12 +32,16 @@ class AgentStats:
     tool_calls: int = 0
     tool_errors: int = 0
     errors: Counter[str] = field(default_factory=Counter)
+    rate_limited_sessions: int = 0
+    """Sessions that hit a provider rate/concurrency limit (HTTP 429): their calls measure the
+    quota as much as the agent, and are candidates for a rerun."""
 
 
 def read_agent_logs(run_dir: Path) -> AgentStats:
     stats = AgentStats()
     for path in sorted((run_dir / "agent_logs").glob("*.jsonl")):
         stats.sessions += 1
+        rate_limited = False
         for line in path.read_text().splitlines():
             ev = json.loads(line)
             kind = ev["kind"]
@@ -60,6 +64,8 @@ def read_agent_logs(run_dir: Path) -> AgentStats:
                 stats.tool_errors += 1
             elif kind == "error":
                 stats.errors[ev.get("source", "?")] += 1
+                rate_limited |= "429" in ev.get("error", "")
+        stats.rate_limited_sessions += rate_limited
     return stats
 
 
@@ -242,6 +248,7 @@ def summarize(run_dir: Path) -> dict[str, Any]:
             ),
             "tool_errors": agent.tool_errors,
             "session_errors": dict(agent.errors),
+            "rate_limited_sessions": agent.rate_limited_sessions,
         }
     )
     return out
