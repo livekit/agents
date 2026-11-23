@@ -1,0 +1,19 @@
+livekit-agents/livekit/agents/inference/interruption.py
+  s_3bf7f5b5a43fdd::t_53a1798012ae75 52,1085-1086,1093
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "437305dcb7b12f808e25fb93b0a93dcdd6917ff8",
+  "prompts": {},
+  "sessions": {
+    "s_3bf7f5b5a43fdd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a20854-4271-7e42-acc1-c8144ace7041",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
