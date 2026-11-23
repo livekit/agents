@@ -6,18 +6,26 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
+import numpy as np
 import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, stt
 from livekit.plugins import stepfun
 from livekit.plugins.stepfun import _utils
-from livekit.plugins.stepfun.tts import _await_connection_done, _Connection
+from livekit.plugins.stepfun.tts import (
+    _await_connection_done,
+    _Connection,
+    _escape_text,
+    _split_for_synthesis,
+    _split_for_wire,
+)
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 @pytest.fixture(autouse=True)
@@ -162,6 +170,7 @@ async def _drive(
     server_events: list[dict],
     *,
     frames: int = 1,
+    close_socket: bool = True,
 ) -> tuple[_FakeWebSocket, list[stt.SpeechEvent]]:
     """Run one stream end to end against a scripted server."""
     ws = _FakeWebSocket()
@@ -169,29 +178,18 @@ async def _drive(
 
     for event in server_events:
         ws.queue_server_event(event)
-    # Finalize every pending item before closing; truncation tests script their
-    # own socket and omit these responses.
-    item_ids = {event.get("item_id") or "" for event in server_events}
-    for item_id in item_ids | {""}:
-        ws.queue_server_event(
-            {
-                "type": "conversation.item.input_audio_transcription.completed",
-                "item_id": item_id,
-                "transcript": "",
-            }
-        )
-    # A stop closes the last reported utterance so the stream can settle. No
-    # end position is sent: nothing consumes one.
-    ws.queue_server_event({"type": "input_audio_buffer.speech_stopped"})
-    ws.queue_close()
+    if close_socket:
+        ws.queue_close()
 
     stream = s.stream()
     for _ in range(frames):
         stream.push_frame(_frame())
     stream.end_input()
 
-    events = [ev async for ev in stream]
-    await stream.aclose()
+    try:
+        events = [ev async for ev in stream]
+    finally:
+        await stream.aclose()
     return ws, events
 
 
@@ -231,9 +229,11 @@ class _FakeHTTPSession:
         self.url = ""
         self.payload: dict[str, Any] = {}
         self.headers: dict[str, str] = {}
+        self.requests: list[dict[str, Any]] = []
 
     def post(self, url: str, *, json: dict, headers: dict, **kwargs: object):
         self.url, self.payload, self.headers = url, json, headers
+        self.requests.append(dict(json))
         return self.response
 
     async def close(self) -> None:
@@ -266,7 +266,7 @@ async def test_sends_session_update_before_audio() -> None:
     recognized.
     """
     s = stepfun.STT(language="zh", prompt="livekit, webrtc")
-    ws, _ = await _drive(s, [_SESSION_READY])
+    ws, _ = await _drive(s, [_SESSION_READY, {"type": _COMPLETED, "transcript": ""}])
 
     assert ws.types_sent()[0] == "session.update"
 
@@ -291,7 +291,7 @@ async def test_sends_session_update_before_audio() -> None:
 
 async def test_audio_is_sent_as_base64_pcm() -> None:
     s = stepfun.STT()
-    ws, _ = await _drive(s, [_SESSION_READY], frames=1)
+    ws, _ = await _drive(s, [_SESSION_READY, {"type": _COMPLETED, "transcript": ""}], frames=1)
 
     appends = ws.frames_of_type("input_audio_buffer.append")
     assert appends, "no audio was sent"
@@ -301,6 +301,59 @@ async def test_audio_is_sent_as_base64_pcm() -> None:
         _SAMPLE_RATE * s._opts.vad_silence_duration_ms // 1000 * 2
     )
     assert _utils.b64_to_pcm(appends[0]["audio"]) == b"\x00\x00" * (_SAMPLE_RATE // 20)
+
+
+@pytest.mark.parametrize("sample_rate", [16000, 48000])
+@pytest.mark.parametrize("channels", [1, 2, 3])
+async def test_stream_downmixes_before_resampling(sample_rate: int, channels: int) -> None:
+    count = sample_rate // 10
+    # Loud channels catch int16 overflow; averaging must not double duration.
+    samples = np.tile(np.array([30000, 10000, -10000][:channels], dtype=np.int16), (count, 1))
+    frame = rtc.AudioFrame(
+        data=samples.tobytes(),
+        sample_rate=sample_rate,
+        num_channels=channels,
+        samples_per_channel=count,
+    )
+    mono = rtc.AudioFrame(
+        data=samples.mean(axis=1).astype(np.int16).tobytes(),
+        sample_rate=sample_rate,
+        num_channels=1,
+        samples_per_channel=count,
+    )
+    expected = mono.data.tobytes()
+    if sample_rate != _SAMPLE_RATE:
+        resampler = rtc.AudioResampler(
+            sample_rate, _SAMPLE_RATE, quality=rtc.AudioResamplerQuality.HIGH
+        )
+        expected = b"".join(f.data.tobytes() for f in [*resampler.push(mono), *resampler.flush()])
+    engine = stepfun.STT()
+    ws = _FakeWebSocket()
+    for event in (_SESSION_READY, {"type": _COMPLETED, "transcript": "hello"}):
+        ws.queue_server_event(event)
+    ws.queue_close()
+    engine._pool = _FakeConnectionPool(ws)  # type: ignore[assignment]
+    stream = engine.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        stream.push_frame(frame)
+        stream.end_input()
+        await _collect(stream)
+        pcm = b"".join(
+            _utils.b64_to_pcm(f["audio"]) for f in ws.frames_of_type("input_audio_buffer.append")
+        )
+        padding = _SAMPLE_RATE * (engine._opts.vad_silence_duration_ms + 50) // 1000 * 2
+        assert len(pcm) == len(expected) + padding
+        assert pcm[len(expected) :] == b"\x00" * padding
+        if sample_rate == _SAMPLE_RATE:
+            assert pcm[: len(expected)] == expected
+        else:
+            # Independent resamplers dither PCM quantization by a sample unit.
+            actual_samples = np.frombuffer(pcm[: len(expected)], dtype=np.int16).astype(np.int32)
+            expected_samples = np.frombuffer(expected, dtype=np.int16).astype(np.int32)
+            assert np.max(np.abs(actual_samples - expected_samples)) <= 2
+        assert len(expected) / 2 / _SAMPLE_RATE == pytest.approx(0.1, abs=0.002)
+    finally:
+        await engine.aclose()
 
 
 async def test_final_transcript_read_from_transcript_field() -> None:
@@ -363,7 +416,11 @@ async def test_stash_delta_only_emits_interim_transcript() -> None:
     s = stepfun.STT()
     _, events = await _drive(
         s,
-        [_SESSION_READY, {"type": _DELTA, "text": "hello world", "stash": "world"}],
+        [
+            _SESSION_READY,
+            {"type": _DELTA, "text": "hello world", "stash": "world"},
+            {"type": _COMPLETED, "transcript": "hello world"},
+        ],
     )
 
     assert _texts(events, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT) == []
@@ -377,6 +434,7 @@ async def test_server_vad_turn_settles_without_a_final() -> None:
     stream._input_finished_at = 0.0
     stream._last_event_at = 0.0
     stream._consumed_audio = True
+    stream._open_items.add("transcription-item")
     stream._interim_texts["transcription-item"] = "partial"
     receiver = asyncio.create_task(asyncio.Event().wait())
     try:
@@ -386,6 +444,67 @@ async def test_server_vad_turn_settles_without_a_final() -> None:
         receiver.cancel()
         await asyncio.gather(receiver, return_exceptions=True)
         await stream.aclose()
+
+
+@pytest.mark.parametrize("result", ["final", "interim", "textless"])
+async def test_scripted_stream_drains_without_synthetic_results(
+    result: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.plugins.stepfun import stt as stt_impl
+
+    # Drive idle deadlines with the virtual loop, not real wall time.
+    monkeypatch.setattr(
+        stt_impl, "time", SimpleNamespace(monotonic=asyncio.get_running_loop().time)
+    )
+    events = [
+        _SESSION_READY,
+        {"type": "input_audio_buffer.speech_started", "item_id": "vad"},
+        {"type": "conversation.item.created", "item": {"id": "turn", "status": "in_progress"}},
+        {"type": "input_audio_buffer.speech_stopped", "item_id": "vad"},
+    ]
+    if result != "textless":
+        events.append({"type": _DELTA, "item_id": "turn", "text": "hello"})
+    if result == "final":
+        events.append({"type": _COMPLETED, "item_id": "turn", "transcript": "hello"})
+    if result == "textless":
+        with pytest.raises(APIConnectionError, match="cannot be recovered"):
+            await _drive(stepfun.STT(), events, close_socket=False)
+    else:
+        _, output = await _drive(stepfun.STT(), events, close_socket=False)
+        assert _texts(output, stt.SpeechEventType.INTERIM_TRANSCRIPT) == ["hello"]
+        assert _texts(output, stt.SpeechEventType.FINAL_TRANSCRIPT) == (
+            ["hello"] if result == "final" else []
+        )
+
+
+@pytest.mark.parametrize(
+    "case", ["empty", "whitespace", "another-item", "earlier-final", "active", "anonymous"]
+)
+async def test_untranscribed_pending_turn_does_not_succeed(case: str) -> None:
+    engine = stepfun.STT()
+    stream = engine.stream(conn_options=APIConnectOptions(timeout=0.01))
+    stream._input_done = True
+    stream._consumed_audio = True
+    stream._open_items.add("pending")
+    if case == "whitespace":
+        stream._interim_texts["pending"] = "  "
+    elif case == "another-item":
+        stream._interim_texts["other"] = "hello"
+    elif case == "earlier-final":
+        stream._finals_received = 1
+    elif case in ("active", "anonymous"):
+        stream._interim_texts["pending"] = "hello"
+        stream._speech_active = case == "active"
+        stream._anonymous_open = case == "anonymous"
+    receiver = asyncio.create_task(asyncio.Event().wait())
+    try:
+        with pytest.raises(APIConnectionError, match="timed out waiting for final"):
+            await stream._await_finalization(receiver)
+    finally:
+        receiver.cancel()
+        await asyncio.gather(receiver, return_exceptions=True)
+        await engine.aclose()
 
 
 async def test_update_options_refreshes_active_stream_options() -> None:
@@ -399,6 +518,22 @@ async def test_update_options_refreshes_active_stream_options() -> None:
 
     assert stream._opts.language == "ja"
     await stream.aclose()
+
+
+async def test_prompt_update_preserves_stream_language_override() -> None:
+    engine = stepfun.STT(language="en")
+    stream = engine.stream(language="ja")
+    try:
+        engine.update_options(prompt="LiveKit")
+        config = stream._session_update_message()["session"]["audio"]["input"]["transcription"]
+        assert config["language"] == "ja"
+        assert config["prompt"] == "LiveKit"
+        engine.update_options(model="custom-model")
+        assert stream._opts.language == "ja"
+        engine.update_options(language="zh")
+        assert stream._opts.language == "zh"
+    finally:
+        await engine.aclose()
 
 
 async def test_active_stream_sends_full_acknowledged_option_update() -> None:
@@ -525,8 +660,15 @@ async def test_stream_send_error_after_audio_is_not_retryable() -> None:
     stream.push_frame(_frame())
     stream.end_input()
     try:
-        with pytest.raises(APIConnectionError, match="upload failed") as excinfo:
+        with pytest.raises(APIConnectionError) as excinfo:
             await asyncio.wait_for(anext(stream), 1)
+        assert excinfo.value.message == (
+            "stepfun stt: connection lost before final transcription; "
+            "in-flight speech cannot be recovered by a retry"
+        )
+        cause = excinfo.value.__cause__
+        assert isinstance(cause, APIConnectionError)
+        assert cause.message == "stepfun stt stream: upload failed"
         assert excinfo.value.retryable is False
         assert ws.closed
     finally:
@@ -566,6 +708,62 @@ async def test_http_tts_streams_sse_audio() -> None:
     assert audio
     assert sum(chunk.frame.samples_per_channel for chunk in audio) >= 1200
     await stream.aclose()
+
+
+@pytest.mark.parametrize("word", ["weather", "weather."])
+async def test_long_http_synthesis_keeps_word_intact(word: str) -> None:
+    text = "A " * 499 + word + " tomorrow."
+    session = _FakeHTTPSession(
+        [
+            b'data: {"type":"speech.audio.delta","audio":"'
+            + _utils.pcm_to_b64(_PCM).encode()
+            + b'"}\n',
+            b'data: {"type":"speech.audio.done"}\n',
+        ]
+    )
+    engine = stepfun.TTS(http_session=session)  # type: ignore[arg-type]
+    stream = engine.synthesize(text, conn_options=APIConnectOptions(max_retry=0))
+    try:
+        assert [chunk async for chunk in stream]
+        chunks = [request["input"] for request in session.requests]
+        assert "".join(chunks) == text
+        assert all(len(chunk) <= 1000 for chunk in chunks)
+        assert any(word in chunk for chunk in chunks)
+    finally:
+        await engine.aclose()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "One sentence. " + "word " * 250,
+        "中文。" + "字" * 1200,
+        "x" * 2301,
+        " " * 1200 + "word",
+        "",
+        "word " * 400,
+        "word " * 198 + "end." + " " * 10,
+    ],
+)
+def test_synthesis_split_preserves_text_and_respects_cap(text: str) -> None:
+    chunks = _split_for_synthesis(text)
+    assert "".join(chunks) == text
+    assert all(len(chunk) <= 1000 for chunk in chunks)
+    if text.startswith("One sentence."):
+        assert chunks[0] == "One sentence."
+    if text.startswith("word "):
+        assert all(chunk.strip() for chunk in chunks)
+    assert "".join(_split_for_wire(text)) == text
+
+
+@pytest.mark.parametrize(
+    "text,expected", [("select(yes)", "select yes "), ("select（yes）", "select yes ")]
+)
+def test_parentheses_do_not_merge_spoken_words(text: str, expected: str) -> None:
+    engine = stepfun.TTS()
+    assert _escape_text(text, engine._opts) == expected
+    assert _escape_text(text, stepfun.TTS(enable_inline_instruction=True)._opts) == text
+    assert _escape_text(text, stepfun.TTS(model="step-tts-mini")._opts) == text
 
 
 async def test_handshake_close_reports_code_and_reason() -> None:
@@ -667,30 +865,6 @@ class _ScriptedWebSocket(_FakeWebSocket):
             return
         for event in batch:
             self.queue_server_event(event)
-
-
-async def _drive_tts(
-    t: stepfun.TTS,
-    tokens: list[str],
-    server_events: list[dict],
-    *,
-    flush_between: bool = False,
-    conn_options: APIConnectOptions | None = None,
-) -> tuple[_FakeWebSocket, list]:
-    """Run one streaming segment end to end against a scripted server."""
-    ws = _ScriptedWebSocket(server_events)
-    t._pool = _FakeConnectionPool(_Connection(ws=ws, session_id=_SESSION))  # type: ignore[assignment]
-
-    stream = t.stream(conn_options=conn_options or APIConnectOptions())
-    for token in tokens:
-        stream.push_text(token)
-        if flush_between:
-            stream.flush()
-    stream.end_input()
-
-    frames = [frame async for frame in stream]
-    await stream.aclose()
-    return ws, frames
 
 
 async def _drive_tts(

@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -284,10 +285,14 @@ class STT(stt.STT):
         if is_given(prompt):
             self._opts.prompt = prompt
 
-        # Existing streams hold an option snapshot. Refresh it so their next
-        # session update (or reconnect) uses the updated model, language, and prompt.
+        # Preserve stream-specific options unless that field was explicitly updated.
         for stream in list(self._streams):
-            stream._opts = replace(self._opts)
+            if is_given(model):
+                stream._opts.model = model
+            if is_given(language):
+                stream._opts.language = language
+            if is_given(prompt):
+                stream._opts.prompt = prompt
             stream._options_version += 1
             stream._options_changed.set()
 
@@ -509,6 +514,20 @@ class SpeechStream(stt.RecognizeStream):
 
         self._audio_duration = 0.0
         self._pending_tokens = (0, 0)
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        # The wire format is mono. Normalize channels before the base class
+        # resamples, since its resampler also expects mono input.
+        if frame.num_channels != NUM_CHANNELS:
+            samples = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+            mono = samples.mean(axis=1).astype(np.int16)
+            frame = rtc.AudioFrame(
+                data=mono.tobytes(),
+                sample_rate=frame.sample_rate,
+                num_channels=NUM_CHANNELS,
+                samples_per_channel=frame.samples_per_channel,
+            )
+        super().push_frame(frame)
 
     # -- main loop ---------------------------------------------------------
 
@@ -837,12 +856,11 @@ class SpeechStream(stt.RecognizeStream):
         return self._expected_finals > 0 and time.monotonic() < self._end_input_grace_deadline()
 
     async def _await_finalization(self, recv_task: asyncio.Task[None]) -> None:
-        """Finish only on evidence that the sent audio was processed.
+        """Drain provider results after input ends, with bounded idle waits.
 
-        A delivered final is that evidence: with it, a short quiet period is
-        enough. Without it, silence is indistinguishable from an unreported
-        turn, so the stream waits a bounded interval and then reports that
-        completion cannot be confirmed. A manual commit whose item window
+        Finals allow completion after a short quiet period. Stopped server-VAD
+        turns with usable text for every pending item may settle as interim-only;
+        textless pending turns remain errors. A manual commit whose item window
         elapsed inside the deadline completes without a transcript.
         """
         timeout_at = self._input_finished_at + self._conn_options.timeout
@@ -856,10 +874,19 @@ class SpeechStream(stt.RecognizeStream):
                 # so the limit is idle time rather than time since input ended.
                 idle_at = self._last_event_at + self._conn_options.timeout
                 if now >= idle_at:
-                    if self._input_done and self._opts.server_vad:
-                        # The streaming API does not guarantee that every
-                        # utterance produces a completed event. Preserve any
-                        # interim already emitted, but do not invent a final.
+                    if (
+                        self._input_done
+                        and self._opts.server_vad
+                        and not self._speech_active
+                        and self._interim_texts
+                        and all(text.strip() for text in self._interim_texts.values())
+                        and all(item_id in self._interim_texts for item_id in self._open_items)
+                        and (not self._anonymous_open or self._interim_texts.get("", "").strip())
+                        and not any(commit.acknowledged_at is None for commit in self._commits)
+                    ):
+                        # Preserve interim-only results only when every pending
+                        # transcription item has usable text and speech stopped.
+                        # A different item's interim cannot cover a textless turn.
                         logger.warning(
                             "stepfun stt: no final transcription arrived after the turn went idle"
                         )

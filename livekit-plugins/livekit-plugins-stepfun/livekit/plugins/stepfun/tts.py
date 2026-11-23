@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import weakref
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
@@ -80,7 +81,7 @@ else:
 
 #: Characters that open or close an inline directive on the models that parse
 #: them. Both the ASCII and the full-width forms appear in provider examples.
-_INLINE_DIRECTIVE_CHARS = str.maketrans({"(": None, ")": None, "（": None, "）": None})
+_INLINE_DIRECTIVE_CHARS = str.maketrans({"(": " ", ")": " ", "（": " ", "）": " "})
 
 
 @dataclass
@@ -460,7 +461,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             initialized = False
-            for text in _split_for_wire(_escape_text(self.input_text, self._opts)):
+            for text in _split_for_synthesis(_escape_text(self.input_text, self._opts)):
                 payload["input"] = text
                 async with self._tts._ensure_session().post(
                     url,
@@ -800,3 +801,35 @@ def _split_for_wire(text: str) -> list[str]:
     if len(text) <= TTS_MAX_INPUT_CHARS:
         return [text]
     return [text[i : i + TTS_MAX_INPUT_CHARS] for i in range(0, len(text), TTS_MAX_INPUT_CHARS)]
+
+
+def _split_for_synthesis(text: str) -> list[str]:
+    """Split independent HTTP requests at sentence/word boundaries where possible.
+
+    Unlike WebSocket text frames, separate HTTP requests do not share pronunciation
+    context. Keep all characters, including whitespace, and hard-cut only when no
+    usable boundary fits within the provider's character cap.
+    """
+    if not text:
+        return [""]
+
+    chunks: list[str] = []
+    while len(text) > TTS_MAX_INPUT_CHARS:
+        split_at = 0
+        for pattern in (r"[.!?](?=\s|$)|[。！？]", r"\s+"):
+            boundaries = [
+                match.end()
+                for match in re.finditer(pattern, text[: TTS_MAX_INPUT_CHARS + 1])
+                if match.end() <= TTS_MAX_INPUT_CHARS
+                and text[: match.end()].strip()
+                and text[match.end() :].strip()
+            ]
+            if boundaries:
+                split_at = boundaries[-1]
+                break
+        split_at = split_at or TTS_MAX_INPUT_CHARS
+        chunks.append(text[:split_at])
+        text = text[split_at:]
+    if text:
+        chunks.append(text)
+    return chunks
