@@ -310,15 +310,12 @@ class _JobProc:
         hosted_fields = {"job_id": job.id, "room": job.room.name, "room_id": job.room.sid}
         if job.agent_name:
             hosted_fields["agent_name"] = job.agent_name
+        # The session decides redaction: a simulation ignores the project setting.
         hosted_output: _hosted_logs.JobOutput | None
         if self._executor_type == JobExecutorType.THREAD:
-            hosted_output = _hosted_logs.thread_job_output(
-                job.id, hosted_fields, redaction=job.enable_redaction
-            )
+            hosted_output = _hosted_logs.thread_job_output(job.id, hosted_fields, redaction=False)
         else:
-            hosted_output = _hosted_logs.redirect_job_output(
-                job.id, hosted_fields, redaction=job.enable_redaction
-            )
+            hosted_output = _hosted_logs.redirect_job_output(job.id, hosted_fields, redaction=False)
 
         if msg.running_job.fake_job:
             from .mock_room import create_mock_room
