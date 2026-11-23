@@ -48,9 +48,9 @@ class DuplexCapabilities:
     """Whether the model transcribes the user's speech"""
     auto_tool_reply_generation: bool
     """Whether the model automatically continues speaking after receiving tool results"""
-    per_call_tool_output: bool = False
-    """Whether each tool result can be sent as soon as its tool returns, the model waiting for
-    every open call's result before it continues"""
+    eager_tool_outputs: bool = False
+    """Whether the model wants each tool output as soon as its tool returns, and decides itself
+    when to continue"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False

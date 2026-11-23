@@ -4853,11 +4853,11 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(fnc_call)
             self._session._tool_items_added([fnc_call])
 
-        # a model that replies on its own and takes results one by one gets each as its tool
+        # a model that wants tool outputs eagerly and replies on its own gets each as its tool
         # returns, not after the speech that carried the calls; a handoff still waits for playout
         rt_session = self._rt_session
-        per_call_output = (
-            rt_session.capabilities.per_call_tool_output
+        eager_outputs = (
+            rt_session.capabilities.eager_tool_outputs
             and rt_session.capabilities.auto_tool_reply_generation
         )
         sent_call_ids: set[str] = set()
@@ -4888,7 +4888,7 @@ class AgentActivity(RecognitionHooks):
 
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             speech_handle._item_added([out.fnc_call_out])
-            if per_call_output and out.agent_task is None and not speech_handle.interrupted:
+            if eager_outputs and out.agent_task is None and not speech_handle.interrupted:
                 sent_call_ids.add(out.fnc_call.call_id)
                 send_tasks.append(asyncio.create_task(_send_tool_output(out)))
 

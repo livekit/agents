@@ -486,9 +486,9 @@ async def test_tool_result_reply_required_reaches_realtime_session(
     assert model.active_session.generate_reply_calls == 1
 
 
-@pytest.mark.parametrize("per_call", [True, False])
-async def test_per_call_tool_output_is_sent_before_the_speech_plays_out(per_call: bool) -> None:
-    """A model taking results one by one gets each as its tool returns, not after playout."""
+@pytest.mark.parametrize("eager", [True, False])
+async def test_an_eager_tool_output_is_sent_before_the_speech_plays_out(eager: bool) -> None:
+    """A model that wants tool outputs eagerly gets each as its tool returns, not after playout."""
 
     class ToolAgent(Agent):
         def __init__(self) -> None:
@@ -506,7 +506,7 @@ async def test_per_call_tool_output_is_sent_before_the_speech_plays_out(per_call
     _, model = await run_realtime_tool_turn(
         agent,
         tool_executed=agent.tool_executed,
-        capabilities=fake_capabilities(per_call_tool_output=per_call),
+        capabilities=fake_capabilities(eager_tool_outputs=eager),
         on_session=lambda s: s.on("function_tools_executed", lambda _: sent_at.append(time.time())),
     )
 
@@ -515,7 +515,7 @@ async def test_per_call_tool_output_is_sent_before_the_speech_plays_out(per_call
     assert [o.call_id for o in synced] == ["1"]
     # the turn plays a second of audio after the tool returns
     played_out_at = time.time()
-    assert (played_out_at - sent_at[0] > 0.5) is per_call
+    assert (played_out_at - sent_at[0] > 0.5) is eager
 
 
 async def test_an_early_tool_result_leaves_the_agent_listening() -> None:
@@ -537,7 +537,7 @@ async def test_an_early_tool_result_leaves_the_agent_listening() -> None:
     await run_realtime_tool_turn(
         agent,
         tool_executed=agent.tool_executed,
-        capabilities=fake_capabilities(per_call_tool_output=True),
+        capabilities=fake_capabilities(eager_tool_outputs=True),
         on_session=lambda s: s.on("agent_state_changed", lambda ev: states.append(ev.new_state)),
     )
 

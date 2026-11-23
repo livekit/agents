@@ -80,10 +80,10 @@ class RealtimeCapabilities:
     """Whether the model and the caller may speak at once, the model deciding when to yield. The
     framework then never holds the model's speech back for silence, nor cuts it when the caller
     starts, so its output reaches the caller as it is generated"""
-    per_call_tool_output: bool = False
-    """Whether each tool result can be sent as soon as its tool returns, rather than after the
-    speech that carried the call. Applies with ``auto_tool_reply_generation`` only: the model
-    waits for every open call's result and decides itself when to reply"""
+    eager_tool_outputs: bool = False
+    """Whether the model wants each tool output as soon as its tool returns, rather than after the
+    speech that carried the call, and decides itself when to reply. Applies with
+    ``auto_tool_reply_generation`` only"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
