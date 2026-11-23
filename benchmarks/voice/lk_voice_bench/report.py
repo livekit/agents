@@ -2,8 +2,9 @@
 
     python -m lk_voice_bench.report benchmarks/voice/results/tau2/<run> [<run> ...]
 
-For tau2 it reads ``results.json`` (and ``simulations/*.json``); for every run it reads the
-agent-side JSONL logs in ``agent_logs/`` written by ``BenchAgent.dump_log``.
+For tau2 it reads ``results.json`` (and ``simulations/*.json``), for EVA ``records/*/metrics.json``;
+for every run it reads the agent-side JSONL logs in ``agent_logs/`` written by
+``BenchAgent.dump_log``.
 """
 
 from __future__ import annotations
@@ -118,6 +119,85 @@ def pass_hat_k(by_task: dict[str, list[float]], k: int) -> float | None:
     return sum(scores) / len(scores) if scores else None
 
 
+# EVA's pass definitions (eva/metrics/aggregation.py). EVA-A also requires
+# agent_speech_fidelity >= 0.95, which needs EVA's Gemini audio judge; it is left out when absent.
+_EVA_A = {"task_completion": ("==", 1.0), "faithfulness": (">=", 0.5)}
+_EVA_X = {
+    "conversation_progression": (">=", 0.5),
+    "turn_taking": (">=", 0.8),
+    "conciseness": (">=", 0.5),
+}
+_EVA_MEANS = (
+    "task_completion",
+    "faithfulness",
+    "agent_speech_fidelity",
+    "conversation_progression",
+    "turn_taking",
+    "conciseness",
+    "stt_wer",
+    "transcription_accuracy_key_entities",
+    "tool_call_validity",
+)
+
+
+def _passes(scores: dict[str, float], checks: dict[str, tuple[str, float]]) -> bool | None:
+    ok = True
+    for name, (op, threshold) in checks.items():
+        v = scores.get(name)
+        if v is None:
+            return None
+        ok &= math.isclose(v, threshold) if op == "==" else v >= threshold - 1e-9
+    return ok
+
+
+def read_eva(run_dir: Path) -> dict[str, Any] | None:
+    records_dir = run_dir / "records"
+    if not records_dir.is_dir():
+        return None
+    metric_files = [
+        p
+        for p in sorted(records_dir.glob("**/metrics.json"))
+        if "_failed_attempt_" not in str(p.relative_to(records_dir))
+    ]
+    per_record: list[dict[str, float]] = []
+    response_speed: list[float] = []
+    for path in metric_files:
+        metrics = json.loads(path.read_text()).get("metrics", {})
+        scores: dict[str, float] = {}
+        for name, m in metrics.items():
+            if not isinstance(m, dict) or m.get("error") or m.get("skipped"):
+                continue
+            # EVA normalizes stt_wer to 1 - WER; keep the WER itself
+            v = m.get("score") if name == "stt_wer" else m.get("normalized_score")
+            if v is None:
+                v = m.get("score")
+            if v is not None:
+                scores[name] = float(v)
+        if "response_speed" in metrics and metrics["response_speed"].get("score") is not None:
+            response_speed.append(float(metrics["response_speed"]["score"]))
+        per_record.append(scores)
+
+    def rate(checks: dict[str, tuple[str, float]]) -> float | None:
+        verdicts = [v for v in (_passes(r, checks) for r in per_record) if v is not None]
+        return sum(verdicts) / len(verdicts) if verdicts else None
+
+    has_fidelity = any("agent_speech_fidelity" in r for r in per_record)
+    a_checks = dict(_EVA_A)
+    if has_fidelity:
+        a_checks["agent_speech_fidelity"] = (">=", 0.95)
+    out: dict[str, Any] = {
+        "records": len(per_record),
+        "EVA-A_pass" if has_fidelity else "EVA-A_pass (no speech fidelity)": rate(a_checks),
+        "EVA-X_pass": rate(_EVA_X),
+    }
+    for name in _EVA_MEANS:
+        vals = [r[name] for r in per_record if name in r]
+        if vals:
+            out[f"mean_{name}"] = sum(vals) / len(vals)
+    out["response_speed_p50"] = _pct(response_speed, 0.5)
+    return out
+
+
 def _pct(xs: list[float], q: float) -> str:
     if not xs:
         return "-"
@@ -127,6 +207,8 @@ def _pct(xs: list[float], q: float) -> str:
 
 def summarize(run_dir: Path) -> dict[str, Any]:
     out: dict[str, Any] = {"run": run_dir.name}
+    if (eva := read_eva(run_dir)) is not None:
+        out.update(eva)
     tau2 = read_tau2(run_dir)
     if tau2 is not None:
         trials = max((len(r) for r in tau2.by_task.values()), default=0)
