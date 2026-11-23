@@ -1,0 +1,27 @@
+[
+  {
+    "run": "v1-airline-rerun8",
+    "simulations": 8,
+    "tasks": 8,
+    "infra_errors": 0,
+    "hallucination_discarded": 2,
+    "pass^1": 0.625,
+    "termination": {
+      "agent_stop": 6,
+      "user_stop": 2
+    },
+    "median_call_s": 207.60777781499974,
+    "agent_sessions": 10,
+    "replies": 101,
+    "interrupted_reply_rate": 0.3069306930693069,
+    "e2e_latency_p50": "2.09",
+    "e2e_latency_p90": "5.31",
+    "end_of_turn_delay_p50": "1.11",
+    "llm_ttft_p50": "0.28",
+    "tts_ttfb_p50": "0.15",
+    "tool_calls_per_session": 6.2,
+    "tool_errors": 12,
+    "session_errors": {},
+    "rate_limited_sessions": 0
+  }
+]

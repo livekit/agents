@@ -1,0 +1,32 @@
+[
+  {
+    "run": "airline",
+    "records": 49,
+    "EVA-A_pass (no speech fidelity)": 0.46938775510204084,
+    "EVA-X_pass": 0.8163265306122449,
+    "mean_task_completion": 0.673469387755102,
+    "mean_faithfulness": 0.5408163265306123,
+    "mean_conversation_progression": 0.7551020408163265,
+    "mean_turn_taking": 0.9248224489795918,
+    "mean_conciseness": 0.8471020408163266,
+    "mean_stt_wer": 0.07942857142857143,
+    "mean_transcription_accuracy_key_entities": 0.9555510204081633,
+    "mean_tool_call_validity": 0.9722224489795919,
+    "response_speed_p50": "1.46",
+    "agent_sessions": 50,
+    "replies": 500,
+    "interrupted_reply_rate": 0.048,
+    "e2e_latency_p50": "1.38",
+    "e2e_latency_p90": "2.42",
+    "end_of_turn_delay_p50": "0.50",
+    "llm_ttft_p50": "0.65",
+    "tts_ttfb_p50": "0.15",
+    "tool_calls_per_session": 4.1,
+    "tool_errors": 0,
+    "session_errors": {
+      "STT": 4,
+      "TTS": 11
+    },
+    "rate_limited_sessions": 1
+  }
+]
