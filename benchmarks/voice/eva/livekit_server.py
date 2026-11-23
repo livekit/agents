@@ -219,7 +219,7 @@ class LiveKitAssistantServer(AbstractAssistantServer):
                         msg = json.loads(raw)
                         event = msg.get("event")
                         if event == "start":
-                            stream_sid = msg["start"].get("streamSid", stream_sid)
+                            stream_sid = msg.get("start", {}).get("streamSid", stream_sid)
                         elif event == "media":
                             ulaw = parse_twilio_media_message(raw)
                             if not ulaw:
