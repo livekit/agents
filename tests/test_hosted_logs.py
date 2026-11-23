@@ -371,6 +371,41 @@ def test_thread_job_records_without_a_decision_are_never_written(hosted_env: Pat
     assert (hosted_env / "jobs" / "job-AJ_1.done.log").read_text() == ""
 
 
+def test_thread_job_keeps_only_the_newest_held_records(
+    hosted_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_hosted_logs, "_MAX_HELD_RECORDS", 2)
+    hand_off()
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
+    assert out is not None
+    for i in range(5):
+        _route(out, logging.LogRecord("t", logging.INFO, __file__, 1, f"line {i}", None, None))
+    out.decide(logs=True, redaction=False)
+    out.close()
+    lines = (hosted_env / "jobs" / "job-AJ_1.export.done.log").read_text().splitlines()
+    assert [json.loads(line)["message"] for line in lines] == ["line 3", "line 4"]
+
+
+def test_job_process_keeps_only_the_newest_held_records(hosted_env: Path) -> None:
+    script = textwrap.dedent(
+        """
+        import logging
+        from livekit.agents import _hosted_logs
+        _hosted_logs._MAX_HELD_RECORDS = 2
+        logging.getLogger().setLevel(logging.INFO)
+        out = _hosted_logs.redirect_job_output("AJ_1", {}, redaction=False)
+        for i in range(5):
+            logging.getLogger("t").info(f"line {i}")
+        out.decide(logs=True, redaction=False)
+        """
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+    lines = (hosted_env / "jobs" / "job-AJ_1.export.log").read_text().splitlines()
+    records = list(map(json.loads, lines))
+    assert [r["message"] for r in records[:2]] == ["line 3", "line 4"]
+    assert records[2]["dropped"] == 3
+
+
 @pytest.mark.parametrize(("project", "session"), [(True, False), (False, True)])
 def test_job_process_redacts_every_thread(hosted_env: Path, project: bool, session: bool) -> None:
     script = textwrap.dedent(

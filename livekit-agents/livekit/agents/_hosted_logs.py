@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import threading
+from collections import deque
 from collections.abc import Callable
 from typing import Any, Protocol, TextIO
 
@@ -21,6 +22,10 @@ HOSTED_LOGS_ENABLED = "true"
 HOSTED_LOGS_HANDOFF_FILE_ENV = "LIVEKIT_HOSTED_LOGS_HANDOFF_FILE"
 HOSTED_LOGS_JOBS_DIR_ENV = "LIVEKIT_HOSTED_LOGS_JOBS_DIR"
 _HANDED_OFF_ENV = "LIVEKIT_HOSTED_LOGS_HANDED_OFF"
+
+# A job that never starts a session gets its decision only when it ends, so the held
+# records need a limit. The newest records are kept.
+_MAX_HELD_RECORDS = 10_000
 
 _handed_off = False
 
@@ -180,17 +185,28 @@ class _ProcessOutput:
         pass
 
 
+def _warn_dropped_held_records(dropped: int) -> None:
+    if dropped:
+        logging.getLogger("livekit.agents").warning(
+            "dropped the oldest log records held before the session started",
+            extra={"dropped": dropped},
+        )
+
+
 class _JobStreamHandler(logging.StreamHandler):
     """Writes records to stdout, which is the job file, holding them until the decision."""
 
     def __init__(self, output: _ProcessOutput) -> None:
         super().__init__(sys.stdout)
         self._output = output
-        self._held: list[logging.LogRecord] | None = []
+        self._held: deque[logging.LogRecord] | None = deque(maxlen=_MAX_HELD_RECORDS)
+        self._dropped = 0
         output.on_decided = self.write_held
 
     def emit(self, record: logging.LogRecord) -> None:
         if self._held is not None:
+            if len(self._held) == _MAX_HELD_RECORDS:
+                self._dropped += 1
             self._held.append(record)
             return
         super().emit(record)
@@ -199,11 +215,12 @@ class _JobStreamHandler(logging.StreamHandler):
         """Write the records held before the decision, redacted when the job requires it."""
         self.acquire()
         try:
-            held, self._held = self._held or [], None
+            held, self._held = list(self._held or ()), None
             for record in held:
                 super().emit(record)
         finally:
             self.release()
+        _warn_dropped_held_records(self._dropped)
 
     def format(self, record: logging.LogRecord) -> str:
         return super().format(_redact(record) if self._output.redaction else record)
@@ -282,7 +299,8 @@ class _ThreadJobOutput:
         self._decided = False
         self._closed = False
         self._lock = threading.Lock()
-        self._held: list[logging.LogRecord] | None = []
+        self._held: deque[logging.LogRecord] | None = deque(maxlen=_MAX_HELD_RECORDS)
+        self._dropped = 0
         self._router: _ThreadJobRouter | None = None
         self.redaction = redaction
         self.fields = fields
@@ -293,6 +311,8 @@ class _ThreadJobOutput:
                 return
             if self._held is not None:
                 self._router = router
+                if len(self._held) == _MAX_HELD_RECORDS:
+                    self._dropped += 1
                 self._held.append(record)
                 return
             self._stream.write(router.line(record, self) + "\n")
@@ -304,7 +324,7 @@ class _ThreadJobOutput:
                 return
             self._decided = True
             self.redaction = self.redaction or redaction
-            held, self._held = self._held or [], None
+            held, self._held = list(self._held or ()), None
             renamed = self._rename(f"job-{self._job_id}.{_decision(logs=logs).value}")
             if renamed and self._router is not None:
                 for record in held:
@@ -315,6 +335,7 @@ class _ThreadJobOutput:
                 self._stream.flush()
         if not renamed:
             self._warn_rename_failed()
+        _warn_dropped_held_records(self._dropped)
 
     def close(self) -> None:
         with self._lock:
