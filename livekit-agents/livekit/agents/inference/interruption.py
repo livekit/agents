@@ -49,7 +49,7 @@ from ._utils import (
 )
 
 SAMPLE_RATE = 16000
-MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
+MIN_INTERRUPTION_DURATION = 0.025 * 2  # Two 25 ms frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
@@ -1080,9 +1080,12 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
 def _estimate_probability(
     probabilities: npt.NDArray[np.float32] | None, window_size: float = MIN_INTERRUPTION_DURATION
 ) -> float:
-    """
-    Estimate the probability of the interruption event based on the probabilities of the frames.
-    The estimated probability is the maximum of the minimum of every window_size consecutive frames.
+    """Estimate the reported interruption probability from the returned frame scores.
+
+    Return the nth-highest score across all frames. Compute n by dividing
+    ``window_size`` in seconds by the 25 ms frame duration and rounding up.
+    Return 0.0 if the probabilities are missing or there are fewer than n frames.
+    The server determines the interruption verdict separately.
     """
     if probabilities is None:
         return 0.0
