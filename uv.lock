@@ -95,6 +95,7 @@ members = [
     "livekit-plugins-runway",
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
+    "livekit-plugins-silma",
     "livekit-plugins-simli",
     "livekit-plugins-simplismart",
     "livekit-plugins-smallestai",
@@ -2356,6 +2357,9 @@ sarvam = [
 silero = [
     { name = "livekit-plugins-silero" },
 ]
+silma = [
+    { name = "livekit-plugins-silma" },
+]
 simli = [
     { name = "livekit-plugins-simli" },
 ]
@@ -2497,6 +2501,7 @@ requires-dist = [
     { name = "livekit-plugins-runway", marker = "extra == 'runway'", editable = "livekit-plugins/livekit-plugins-runway" },
     { name = "livekit-plugins-sarvam", marker = "extra == 'sarvam'", editable = "livekit-plugins/livekit-plugins-sarvam" },
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-silma", marker = "extra == 'silma'", editable = "livekit-plugins/livekit-plugins-silma" },
     { name = "livekit-plugins-simli", marker = "extra == 'simli'", editable = "livekit-plugins/livekit-plugins-simli" },
     { name = "livekit-plugins-simplismart", marker = "extra == 'simplismart'", editable = "livekit-plugins/livekit-plugins-simplismart" },
     { name = "livekit-plugins-smallestai", marker = "extra == 'smallestai'", editable = "livekit-plugins/livekit-plugins-smallestai" },
@@ -2540,7 +2545,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "convozen", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "convozen", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "silma", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3660,7 +3665,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "phonic", specifier = ">=0.33.4" },
+    { name = "phonic", specifier = ">=0.33.9" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 
@@ -3791,6 +3796,20 @@ requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = ">=1.18" },
+]
+
+[[package]]
+name = "livekit-plugins-silma"
+source = { editable = "livekit-plugins/livekit-plugins-silma" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
@@ -5107,7 +5126,7 @@ wheels = [
 
 [[package]]
 name = "phonic"
-version = "0.33.4"
+version = "0.33.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -5116,9 +5135,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/15/2c6697c2469a24df47e20ad3ff128ec1261692f138cdca6133c35ae1cf66/phonic-0.33.4.tar.gz", hash = "sha256:f1763cc14f6eab65986f664058f80c90011b8aecab4dda53322a9ad3726f584b", size = 249379, upload-time = "2026-11-11T00:12:09.918Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/49/7aa861f6a8a430492eb41f4e10f8b6627875e0d8f6ac5d97a16fccf6e15d/phonic-0.33.9.tar.gz", hash = "sha256:c97c6b52ba4e7cc656600525ec0b358c00a4fd48f408175611eab75b40986410", size = 271470, upload-time = "2026-11-19T02:29:22.51Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/e1/af73f7ab45b9d457e99d3ffc7fa0bbd3d4f724cadf388e57331fc64d8f26/phonic-0.33.4-py3-none-any.whl", hash = "sha256:d07d3af2088abf96af025ed2ea681c23df7bc833df3609520d40c695d4e24826", size = 527758, upload-time = "2026-11-11T00:12:08.163Z" },
+    { url = "https://files.pythonhosted.org/packages/59/51/d377b519897f49dd92f1fd2e6510635110c50497e5c97a9114620a0b8371/phonic-0.33.9-py3-none-any.whl", hash = "sha256:0b7d73c9382267c586c8bc9e709840282d711bc0b4e5022aecc240aed3bdcc8c", size = 567764, upload-time = "2026-11-19T02:29:20.775Z" },
 ]
 
 [[package]]

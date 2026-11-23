@@ -1228,9 +1228,15 @@ class AgentActivity(RecognitionHooks):
             if isinstance(ts, AsyncToolset):
                 ts._attach_activity(activity=self, session=self._session)
 
-        @utils.log_exceptions(logger=logger)
         async def _do_setup(toolset: llm.Toolset) -> None:
-            await toolset.setup()
+            try:
+                await toolset.setup()
+            except Exception as e:
+                logger.exception("failed to set up toolset", extra={"toolset_id": toolset.id})
+                error = llm.ToolsetError(
+                    timestamp=time.time(), label=toolset.id, error=e, recoverable=True
+                )
+                self._session.emit("error", ErrorEvent(error=error, source=toolset))
 
         await asyncio.gather(
             *(_do_setup(ts) for ts in all_toolsets),

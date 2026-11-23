@@ -23,7 +23,7 @@ import os
 import weakref
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias, get_args
 
 import aiohttp
 
@@ -57,6 +57,9 @@ SUPPORTED_SAMPLE_RATE = 24000
 DEFAULT_DELAY_IN_FRAMES = 10
 
 
+PreflightTrigger: TypeAlias = Literal["vad_trip"]
+
+
 def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
     """Build the error for a `{"type": "error"}` frame.
 
@@ -85,6 +88,9 @@ class STTOptions:
     # When set, a VAD inactivity probability below this threshold signals the start of
     # speech before any text is transcribed, which allows a faster barge-in.
     vad_start_threshold: float | None = None
+    # When to preview the words of the turn as a PREFLIGHT_TRANSCRIPT so the session can
+    # start generating before the turn is finalized; None disables the preview.
+    preflight_trigger: PreflightTrigger | None = "vad_trip"
     # Words or phrases to favor in the transcript, such as product names or jargon.
     keywords: list[str] | None = None
     # How strongly to favor the keywords, the server defaults to 2.0.
@@ -108,6 +114,7 @@ class STT(stt.STT):
         vad_bucket: int | None = 2,
         vad_flush: bool = True,
         vad_start_threshold: float | None = None,
+        preflight_trigger: PreflightTrigger | None = "vad_trip",
         temperature: float | None = None,
         language: str = "en",
         keywords: list[str] | None = None,
@@ -118,17 +125,32 @@ class STT(stt.STT):
         Create a Gradium STT.
 
         Args:
+            preflight_trigger: When to emit a `PREFLIGHT_TRANSCRIPT` with the words heard
+                so far, or None to never emit one. The only trigger at the moment is the
+                default, `"vad_trip"`: when the VAD trips. The session starts the LLM
+                request from the preview and only restarts it if the final transcript
+                differs: a turn where the user resumes after the pause, or where words were
+                still held by the model delay at the trip, costs one cancelled request. The
+                preview is only sent again when new words arrive, so a VAD flicker during a
+                silence keeps the request already started.
             log_level: Opt in to the server's log messages, such as a warning about an
                 unknown or deprecated setup option: the lowest level to receive ("debug",
                 "info", "warning" or "error"). They are written to the
                 `livekit.plugins.gradium` logger at their own level. Off by default.
         """
+        if preflight_trigger is not None and preflight_trigger not in get_args(PreflightTrigger):
+            raise ValueError(
+                f"unknown preflight_trigger {preflight_trigger!r}, "
+                f"expected one of {get_args(PreflightTrigger)} or None"
+            )
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,  # only final transcripts
+                interim_results=True,
                 aligned_transcript=False,  # only chunk start times are available
                 offline_recognize=False,
+                manual_flush=True,
             ),
         )
 
@@ -162,6 +184,7 @@ class STT(stt.STT):
             vad_bucket=vad_bucket,
             vad_flush=vad_flush,
             vad_start_threshold=vad_start_threshold,
+            preflight_trigger=preflight_trigger,
             temperature=temperature,
             language=LanguageCode(language),
             keywords=list(keywords) if keywords is not None else None,
@@ -343,10 +366,11 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
+        flush_count = 0
         timeline = _PaddedTimeline(self._opts.sample_rate)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, flush_count
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -356,6 +380,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
             async for data in self._input_ch:
+                flush_id: int | None = None
                 if isinstance(data, self._VADFlush):
                     zeros = AudioFrame.create(
                         sample_rate=self._opts.sample_rate,
@@ -366,6 +391,8 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.write(zeros.data.tobytes())
                 elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
+                    flush_count += 1
+                    flush_id = flush_count
                 else:
                     timeline.add_audio(data.samples_per_channel)
                     frames = audio_bstream.write(data.data.tobytes())
@@ -385,6 +412,13 @@ class SpeechStream(stt.SpeechStream):
                         # the server closed first; recv_task raises the retryable error
                         return
 
+                if flush_id is not None:
+                    try:
+                        await ws.send_str(json.dumps({"type": "flush", "flush_id": flush_id}))
+                        flush_id = None
+                    except (aiohttp.ClientError, ConnectionError):
+                        return
+
             # Input ended: tell the server, then let recv_task drain the model's last
             # words until the server replies with its own end_of_stream.
             closing_ws = True
@@ -397,6 +431,7 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
+            preflight_text = ""
             speech_end = 0.0
             speaking = False
             remaining_vad_steps: int | None = None
@@ -404,21 +439,26 @@ class SpeechStream(stt.SpeechStream):
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
 
+            def _end_time() -> float:
+                # the `end_text` timing when the server already sent it, else unknown
+                if speech_end > 0:
+                    return timeline.remove_padding(speech_end) + self.start_time_offset
+                return 0.0
+
             def _finalize() -> None:
-                nonlocal speaking, remaining_vad_steps, buffered_text, speech_end
+                nonlocal speaking, remaining_vad_steps, buffered_text, speech_end, preflight_text
                 if not speaking:
                     return
                 speaking = False
                 remaining_vad_steps = None
+                preflight_text = ""
                 event = stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                     alternatives=[
                         stt.SpeechData(
                             text=" ".join(buffered_text),
                             language=self._opts.language,
-                            end_time=timeline.remove_padding(speech_end) + self.start_time_offset
-                            if speech_end > 0
-                            else 0.0,
+                            end_time=_end_time(),
                         )
                     ],
                 )
@@ -431,6 +471,23 @@ class SpeechStream(stt.SpeechStream):
                     )
                 )
                 speech_end = 0.0
+
+            def _send_preflight() -> None:
+                nonlocal preflight_text
+                text = " ".join(buffered_text)
+                if not text or text == preflight_text:
+                    return
+                preflight_text = text
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                        alternatives=[
+                            stt.SpeechData(
+                                text=text, language=self._opts.language, end_time=_end_time()
+                            )
+                        ],
+                    )
+                )
 
             while True:
                 try:
@@ -473,6 +530,8 @@ class SpeechStream(stt.SpeechStream):
 
                 type_ = data.get("type", "")
                 if type_ == "error":
+                    # the words the model already produced are still valid
+                    _finalize()
                     raise _api_error(data)
                 if type_ == "end_of_stream":
                     # The model has consumed all the audio: whatever is still buffered
@@ -537,6 +596,11 @@ class SpeechStream(stt.SpeechStream):
                             if positive_vad:
                                 if remaining_vad_steps is None:
                                     remaining_vad_steps = self.delay_in_frames
+                                    if self._opts.preflight_trigger == "vad_trip":
+                                        # the words so far are what the turn will most likely end
+                                        # with, so trigger preemptive generation while the model
+                                        # delay elapses and the flush recovers the pending text
+                                        _send_preflight()
                                     if self._opts.vad_flush and not self._input_ch.closed:
                                         await self._input_ch.send(
                                             self._VADFlush(self.frame_size * self.delay_in_frames)
@@ -553,6 +617,21 @@ class SpeechStream(stt.SpeechStream):
                     elif type_ == "end_text":
                         if speaking:
                             speech_end = data.get("stop_s", 0.0)
+                    elif type_ == "flushed":
+                        # the server returned every word the model delay held at the flush
+                        if speaking:
+                            _finalize()
+                        else:
+                            # nothing was heard, but the flush still needs an answer or the
+                            # commit waits for its transcript timeout
+                            self._event_ch.send_nowait(
+                                stt.SpeechEvent(
+                                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                                    alternatives=[
+                                        stt.SpeechData(text="", language=self._opts.language)
+                                    ],
+                                )
+                            )
                     elif type_ == "log":
                         log_server_message(data)
                     else:

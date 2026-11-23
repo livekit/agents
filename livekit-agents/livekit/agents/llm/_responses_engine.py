@@ -380,6 +380,10 @@ class ResponsesLLMStream(llm.LLMStream):
                         if chunk is not None and chunk.has_response():
                             retryable = False
 
+                if not self._response_completed:
+                    # the body ended without response.completed/failed/incomplete
+                    raise APIConnectionError(retryable=True)
+
             except openai.APITimeoutError:
                 raise APITimeoutError(retryable=retryable)  # noqa: B904
             except openai.APIStatusError as e:
@@ -579,6 +583,16 @@ class ResponsesLLMStream(llm.LLMStream):
     def _handle_output_items_done(self, event: ResponseOutputItemDoneEvent) -> llm.ChatChunk | None:
         chunk = None
         if event.item.type == "function_call":
+            # output_item.done also closes a call that was cut off (e.g. by
+            # max_output_tokens), with truncated arguments. response.incomplete follows,
+            # but a call sent here is already on its way to the tool executor.
+            # Items without a status (some compatible providers) are sent as before.
+            if event.item.status not in (None, "completed"):
+                logger.debug(
+                    "ignoring function call that did not complete",
+                    extra={"function": event.item.name, "status": event.item.status},
+                )
+                return None
             chunk = llm.ChatChunk(
                 id=self._response_id,
                 delta=llm.ChoiceDelta(
