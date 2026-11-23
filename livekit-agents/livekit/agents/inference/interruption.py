@@ -49,7 +49,7 @@ from ._utils import (
 )
 
 SAMPLE_RATE = 16000
-MIN_INTERRUPTION_DURATION = 0.025 * 2  # Two 25 ms frames
+MIN_INTERRUPTION_DURATION = 0.025 * 2  # The SDK default maps to two frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
@@ -1082,15 +1082,15 @@ def _estimate_probability(
 ) -> float:
     """Estimate the reported interruption probability from the returned frame scores.
 
-    Return the nth-highest score across all frames. Compute n by dividing
-    ``window_size`` in seconds by the 25 ms frame duration and rounding up.
+    Return the nth-highest score across all frames. Divide ``window_size``
+    in seconds by 0.025 and round up to get n.
     Return 0.0 if the probabilities are missing or there are fewer than n frames.
     The server determines the interruption verdict separately.
     """
     if probabilities is None:
         return 0.0
 
-    n_th = math.ceil(window_size / 0.025)  # 25ms per frame
+    n_th = math.ceil(window_size / 0.025)
     if len(probabilities) < n_th:
         return 0.0
 
