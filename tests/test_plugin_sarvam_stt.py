@@ -1524,6 +1524,32 @@ async def test_stt_stream_waits_for_the_utterance_to_end(ws_session: _KeytermSes
 
 
 @pytest.mark.virtual_time
+async def test_stt_stream_keeps_keyterms_that_arrive_while_a_reconnect_settles(
+    ws_session: _KeytermSession,
+) -> None:
+    """The settle step cancels the audio task; a keyterm update then still applies."""
+    async with sarvam_stt.STT(api_key="sk_test") as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.update_options(language="en-IN", model="saaras:v4")
+        await _wait_until(lambda: stream._settling_for_reconnect)
+        assert stream._audio_task is not None
+        await _wait_until(stream._audio_task.done)
+        stt._update_session_keyterms(["Vistaar"])
+
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "Vistaar", "language_code": "hi-IN"}}
+        )
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) == ["Vistaar"]
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 2  # picked up by the reconnect already under way
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_stt_stream_waits_past_a_final_that_arrives_mid_utterance(
     ws_session: _KeytermSession,
 ) -> None:
