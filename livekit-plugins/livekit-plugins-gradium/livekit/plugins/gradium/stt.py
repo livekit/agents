@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import collections
 import dataclasses
 import json
 import os
@@ -297,14 +298,17 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
 
         self._reconnect_event = asyncio.Event()
-        # counts the flush requests of the stream, so an id is never reused after a reconnect
+        # counts the flush requests of the stream, so an id is never reused after a reconnect.
+        # Both kinds of flush take their id when queued on the input channel, so the ids
+        # follow the order the server receives the flushes in.
         self._flush_count = 0
-        # caller flushes still in the input channel, not yet sent to the server
-        self._queued_manual_flushes = 0
+        # ids of the caller flushes still in the input channel, not yet sent to the server
+        self._queued_manual_flushes: collections.deque[int] = collections.deque()
 
     def flush(self) -> None:
         super().flush()
-        self._queued_manual_flushes += 1
+        self._flush_count += 1
+        self._queued_manual_flushes.append(self._flush_count)
 
     def update_options(
         self,
@@ -344,10 +348,8 @@ class SpeechStream(stt.SpeechStream):
                     frames = audio_bstream.flush()
                     flush_id = data.flush_id
                 elif isinstance(data, self._FlushSentinel):
-                    self._queued_manual_flushes -= 1
                     frames = audio_bstream.flush()
-                    self._flush_count += 1
-                    flush_id = self._flush_count
+                    flush_id = self._queued_manual_flushes.popleft()
                     manual_flushes.add(flush_id)
                 else:
                     frames = audio_bstream.write(data.data.tobytes())
@@ -631,8 +633,14 @@ class SpeechStream(stt.SpeechStream):
                             # When the caller committed after this flush, words spoken in
                             # between are still coming, and a final now would answer the
                             # commit without them: the caller's reply ends the turn instead.
-                            # The deadline stays, so a lost reply can't hold it open.
-                            if not manual_flushes and self._queued_manual_flushes == 0:
+                            # The deadline stays, so a lost reply can't hold it open. A
+                            # caller flush sent before this one never blocks it: its reply
+                            # was due first, and one the server never sent would otherwise
+                            # hold back every later turn on the connection.
+                            if not any(
+                                manual_id > pending_flush
+                                for manual_id in (*manual_flushes, *self._queued_manual_flushes)
+                            ):
                                 # the server answered: only `vad_confirm_steps` can end the
                                 # turn now, not the missing-reply timeout
                                 flush_deadline = None

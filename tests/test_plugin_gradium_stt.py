@@ -807,6 +807,34 @@ async def test_caller_flush_during_a_vad_flush_gets_the_whole_turn():
         assert [ev.type for ev in collector.events].count(SpeechEventType.END_OF_SPEECH) == 1
 
 
+async def test_caller_flush_without_a_reply_does_not_hold_back_later_turns(caplog):
+    """A commit the server never answers can only cost its own turn, which ends at the
+    connection timeout. The next turn ends as soon as its own flush is answered: a stale
+    commit left in flight must not make every later turn on the connection wait out the
+    timeout."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    timeout = DEFAULT_API_CONNECT_OPTIONS.timeout
+    async with _open_stream() as (ws, stream, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        stream.flush()
+        await ws.wait_sent("flush", 2)
+        # the trip's reply leaves the turn to the commit, whose reply never comes
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        await _keep_alive(ws, int(timeout) + 1)
+        assert _final_texts(collector.events) == ["hello"]
+        assert "did not answer a flush" in caplog.text
+
+        ws.incoming.put_nowait(_text("again", 15.0))
+        ws.incoming.put_nowait(_step(0.95))
+        assert [m["flush_id"] for m in await ws.wait_sent("flush", 3)] == [1, 2, 3]
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 3})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["hello", "again"]
+
+
 async def test_caller_flush_still_queued_holds_back_the_vad_flush_final():
     """The commit can sit behind audio still being sent when the trip's reply comes back:
     the caller's flush is not on the wire yet, but the trip's reply must already leave the
