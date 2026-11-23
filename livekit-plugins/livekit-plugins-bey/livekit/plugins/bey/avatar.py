@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Any, Literal
 
 import aiohttp
 
@@ -30,6 +31,8 @@ SAMPLE_RATE = 16000
 _AVATAR_AGENT_IDENTITY = "bey-avatar-agent"
 _AVATAR_AGENT_NAME = "bey-avatar-agent"
 
+VideoResolution = Literal["native", "720p"]
+
 
 class BeyException(Exception):
     """Exception for Beyond Presence errors"""
@@ -46,8 +49,21 @@ class AvatarSession(BaseAvatarSession):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        video_resolution: NotGivenOr[VideoResolution] = NOT_GIVEN,
+        max_video_bitrate_bps: NotGivenOr[int] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """Create a Beyond Presence avatar session.
+
+        Args:
+            video_resolution: Resolution of the avatar's video. ``"native"`` (the API's
+                default) is the size of the avatar's own frames, 1080p for most avatars.
+                ``"720p"`` lowers data use for viewers on mobile networks; only
+                genesis-3 avatars render it.
+            max_video_bitrate_bps: Cap on the bitrate of the full-resolution video
+                layer, in bits per second, from 500000 to 5000000. Defaults to
+                LiveKit's bitrate for the resolution.
+        """
         super().__init__()
         self._avatar_id = avatar_id or EGE_STOCK_AVATAR_ID
         self._api_url = api_url or os.getenv("BEY_API_URL", _DEFAULT_API_URL)
@@ -60,6 +76,8 @@ class AvatarSession(BaseAvatarSession):
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
         self._avatar_participant_name = avatar_participant_name or _AVATAR_AGENT_NAME
+        self._video_resolution = video_resolution
+        self._max_video_bitrate_bps = max_video_bitrate_bps
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
 
@@ -125,6 +143,17 @@ class AvatarSession(BaseAvatarSession):
     async def _start_agent(self, livekit_url: str, livekit_token: str) -> None:
         assert self._api_key is not None
 
+        body: dict[str, Any] = {
+            "transport": "livekit",
+            "avatar_id": self._avatar_id,
+            "url": livekit_url,
+            "token": livekit_token,
+        }
+        if utils.is_given(self._video_resolution):
+            body["video_resolution"] = self._video_resolution
+        if utils.is_given(self._max_video_bitrate_bps):
+            body["max_video_bitrate_bps"] = self._max_video_bitrate_bps
+
         for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
@@ -132,12 +161,7 @@ class AvatarSession(BaseAvatarSession):
                     headers={
                         "x-api-key": self._api_key,
                     },
-                    json={
-                        "transport": "livekit",
-                        "avatar_id": self._avatar_id,
-                        "url": livekit_url,
-                        "token": livekit_token,
-                    },
+                    json=body,
                     timeout=aiohttp.ClientTimeout(sock_connect=self._conn_options.timeout),
                 ) as response:
                     if not response.ok:
