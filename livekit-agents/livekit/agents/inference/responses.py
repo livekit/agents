@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -45,7 +45,10 @@ from ..utils import is_given
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
+    _resolve_provider,
+    _terminal_denial,
     create_access_token,
+    create_api_error_from_response,
     extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
@@ -81,12 +84,6 @@ _GATEWAY_ERROR_STATUS: dict[str, tuple[int, bool | None]] = {
     "moderation_blocked": (400, False),
     "in_flight_response": (400, False),
 }
-
-
-def _terminal_denial(headers: Mapping[str, str] | None) -> bool:
-    # quota denials a retry cannot clear (out of credits, project suspended);
-    # httpx and aiohttp header maps are both case-insensitive
-    return (headers or {}).get("X-Should-Retry", "").strip().lower() == "false"
 
 
 class ResponsesOptions(TypedDict, total=False):
@@ -158,7 +155,7 @@ class LLM(llm.LLM):
         self,
         model: LLMModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -168,12 +165,18 @@ class LLM(llm.LLM):
         use_websocket: bool = False,
         reasoning: NotGivenOr[ReasoningSetting] = NOT_GIVEN,
     ) -> None:
+        """
+        Args:
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
+        """
         super().__init__()
 
         lk_api_key, lk_api_secret = resolve_credentials(api_key, api_secret)
         self._opts = _LLMOptions(
             model=model,
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             base_url=base_url if base_url else get_default_inference_url(),
             api_key=lk_api_key,
             api_secret=lk_api_secret,
@@ -544,11 +547,7 @@ class _GatewayResponsesWebsocket(ResponsesWebsocket):
         except aiohttp.WSServerHandshakeError as e:
             if e.status == 429:
                 self._log_rate_limited(e)
-            raise APIStatusError(
-                f"inference gateway refused the WebSocket: {e.message}",
-                status_code=e.status,
-                retryable=False if _terminal_denial(e.headers) else None,
-            ) from e
+            raise create_api_error_from_response(e) from e
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to inference gateway WebSocket") from e
         except asyncio.TimeoutError as e:

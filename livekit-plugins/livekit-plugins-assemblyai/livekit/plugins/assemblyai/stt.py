@@ -60,7 +60,8 @@ class STTOptions:
         "u3-pro",
         "universal-3-5-pro",
         "universal-3-6-pro",
-    ] = "universal-3-6-pro"
+        "assemblyai-stt-3-7-realtime-agent",
+    ] = "assemblyai-stt-3-7-realtime-agent"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     language_codes: NotGivenOr[list[str]] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -86,7 +87,13 @@ class STTOptions:
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
-_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro")
+_U3_PRO_MODELS = (
+    "u3-rt-pro",
+    "u3-rt-pro-beta-1",
+    "universal-3-5-pro",
+    "universal-3-6-pro",
+    "assemblyai-stt-3-7-realtime-agent",
+)
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
@@ -152,7 +159,8 @@ class STT(stt.STT):
             "u3-pro",
             "universal-3-5-pro",
             "universal-3-6-pro",
-        ] = "universal-3-6-pro",
+            "assemblyai-stt-3-7-realtime-agent",
+        ] = "assemblyai-stt-3-7-realtime-agent",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
         language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
@@ -305,8 +313,10 @@ class STT(stt.STT):
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'universal-3-6-pro' instead.")
-            model = "universal-3-6-pro"
+            logger.warning(
+                "'u3-pro' is deprecated, use 'assemblyai-stt-3-7-realtime-agent' instead."
+            )
+            model = "assemblyai-stt-3-7-realtime-agent"
 
         # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:

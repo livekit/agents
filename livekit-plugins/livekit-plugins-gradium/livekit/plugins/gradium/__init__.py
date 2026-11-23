@@ -11,11 +11,12 @@
 # limitations under the License.
 
 from .log import logger
-from .stt import STT, SpeechStream
+from .stt import STT, PreflightTrigger, SpeechStream
 from .tts import TTS
 from .version import __version__
 
 __all__ = [
+    "PreflightTrigger",
     "STT",
     "SpeechStream",
     "logger",

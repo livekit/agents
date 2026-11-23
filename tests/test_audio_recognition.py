@@ -359,8 +359,8 @@ def _vad_event(type_: VADEventType, *, speech_duration: float = 0.0) -> VADEvent
     )
 
 
-async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
-    """The turn starts at its first burst; only the per-burst speech start moves."""
+def _vad_recognition() -> AudioRecognition:
+    """An ``AudioRecognition`` with only the state its VAD events touch."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._speech_start_time = None
     ar._vad_speech_started = False
@@ -397,6 +397,12 @@ async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
     ar._session.amd = None
     ar._session._room_io = None
     ar._session.options.transcription_timeout = None
+    return ar
+
+
+async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
+    """The turn starts at its first burst; only the per-burst speech start moves."""
+    ar = _vad_recognition()
 
     first_sos_at = time.time()
     await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=5.0))
@@ -411,3 +417,31 @@ async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
     assert ar._user_turn_start == turn_start
     assert first_burst_start is not None and ar._speech_start_time is not None
     assert ar._speech_start_time > first_burst_start
+
+
+async def test_turn_detector_hears_the_user_turn_start_once() -> None:
+    """The audio turn detector counts the turn length from ``_user_turn_start``, so it gets
+    that value on the first start of speech and nothing on later bursts of the same turn."""
+    ar = _vad_recognition()
+    stream = MagicMock()
+    ar._turn_detector_stream = stream
+
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=5.0))
+    await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH, speech_duration=5.0))
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH))
+
+    stream.on_start_of_turn.assert_called_once_with(ar._user_turn_start)
+
+
+async def test_turn_without_a_known_start_keeps_the_detector_count() -> None:
+    """A turn opened by end of speech (its start of speech fell in the previous turn) has no
+    known start: the turn detector keeps counting from its last flush instead of hearing a
+    start of now."""
+    ar = _vad_recognition()
+    stream = MagicMock()
+    ar._turn_detector_stream = stream
+
+    await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH, speech_duration=3.0))
+
+    assert ar._user_turn_start is not None
+    stream.on_start_of_turn.assert_not_called()
