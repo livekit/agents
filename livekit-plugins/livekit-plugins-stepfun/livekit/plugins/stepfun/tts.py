@@ -381,10 +381,10 @@ class TTS(tts.TTS):
 def _close_detail(msg: Any) -> str:
     """Extract the close code and reason when available."""
     parts: list[str] = []
-    code = getattr(msg, "extra", None)
+    code = getattr(msg, "data", None)
     if isinstance(code, int):
         parts.append(f"close_code={code}")
-    reason = getattr(msg, "data", None)
+    reason = getattr(msg, "extra", None)
     if isinstance(reason, str) and reason:
         parts.append(f"reason={reason!r}")
     return f" ({', '.join(parts)})" if parts else ""

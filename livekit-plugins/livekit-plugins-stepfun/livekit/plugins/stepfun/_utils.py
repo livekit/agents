@@ -22,7 +22,6 @@ from .models import (
     CLUSTER_WS_BASE_URLS,
     DEFAULT_CLUSTER,
     GLOBAL_TTS_VOICES,
-    OPENAI_COMPAT_SUFFIX,
     Cluster,
     TTSVoices,
 )
@@ -62,14 +61,6 @@ def resolve_ws_base_url(base_url: str | None, cluster: Cluster) -> str:
 
 def resolve_http_base_url(base_url: str | None, cluster: Cluster) -> str:
     return (base_url or CLUSTER_HTTP_BASE_URLS[cluster]).rstrip("/")
-
-
-def resolve_llm_base_url(base_url: str | None, cluster: Cluster) -> str:
-    """Append `/v1` unless the explicit OpenAI-compatible base URL already has it."""
-    resolved = resolve_http_base_url(base_url, cluster)
-    if resolved.endswith(OPENAI_COMPAT_SUFFIX):
-        return resolved
-    return f"{resolved}{OPENAI_COMPAT_SUFFIX}"
 
 
 def auth_headers(api_key: str) -> dict[str, str]:

@@ -207,7 +207,7 @@ class STT(stt.STT):
         )
 
         self._session = http_session
-        self._streams = weakref.WeakSet[RecognizeStream]()
+        self._streams = weakref.WeakSet[SpeechStream]()
         self._pool = utils.ConnectionPool[_WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -284,6 +284,13 @@ class STT(stt.STT):
         if is_given(prompt):
             self._opts.prompt = prompt
 
+        # Existing streams hold an option snapshot. Refresh it so their next
+        # session update (or reconnect) uses the updated model, language, and prompt.
+        for stream in list(self._streams):
+            stream._opts = replace(self._opts)
+            stream._options_version += 1
+            stream._options_changed.set()
+
         # Pooled sockets were configured by a session.update built from the old
         # options, so stop handing them out.
         self._pool.invalidate()
@@ -295,7 +302,7 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> RecognizeStream:
+    ) -> SpeechStream:
         if not self._use_streaming:
             raise RuntimeError(
                 "this STT was constructed with use_streaming=False, so it has no "
@@ -308,7 +315,7 @@ class STT(stt.STT):
         if is_given(language):
             opts.language = language
 
-        stream = RecognizeStream(stt=self, opts=opts, conn_options=conn_options)
+        stream = SpeechStream(stt=self, opts=opts, conn_options=conn_options)
         self._streams.add(stream)
         return stream
 
@@ -465,7 +472,7 @@ class _PendingCommit:
     acknowledged_at: float | None = None
 
 
-class RecognizeStream(stt.RecognizeStream):
+class SpeechStream(stt.RecognizeStream):
     def __init__(
         self,
         *,
@@ -490,9 +497,14 @@ class RecognizeStream(stt.RecognizeStream):
         self._expected_finals = 0
         self._finals_received = 0
         self._consumed_audio = False
+        self._ever_consumed_audio = False
         self._input_finished_at = 0.0
         self._last_event_at = 0.0
         self._progress = asyncio.Event()
+        self._options_changed = asyncio.Event()
+        self._options_version = 0
+        self._configured_options_version = -1
+        self._session_update_ack: asyncio.Future[dict[str, Any]] | None = None
         self._attempt_audio = 0.0
 
         self._audio_duration = 0.0
@@ -505,9 +517,13 @@ class RecognizeStream(stt.RecognizeStream):
             await self._run_impl()
         except Exception as exc:
             translated = _utils.translate_exception(exc, context="stepfun stt stream")
-            if isinstance(translated, APIError) and translated.retryable and self._speech_at_risk():
-                # A fresh session cannot recover consumed audio, so do not
-                # silently retry once any was sent.
+            if (
+                isinstance(translated, APIError)
+                and translated.retryable
+                and (self._ever_consumed_audio or self._final_pending())
+            ):
+                # The protocol does not identify which uploaded audio a final
+                # covers, so replaying or dropping it on a retry is unsafe.
                 raise APIConnectionError(
                     "stepfun stt: connection lost before final transcription; "
                     "in-flight speech cannot be recovered by a retry",
@@ -534,6 +550,9 @@ class RecognizeStream(stt.RecognizeStream):
         self._last_event_at = 0.0
         self._uncommitted_audio = False
         self._attempt_audio = 0.0
+        self._options_changed.clear()
+        self._configured_options_version = -1
+        self._session_update_ack = None
 
         async with self._stt_impl._pool.connection(timeout=self._conn_options.timeout) as ws:
             self._report_connection_acquired(
@@ -554,8 +573,13 @@ class RecognizeStream(stt.RecognizeStream):
                 asyncio.create_task(self._recv_task(ws), name="stepfun_stt_recv"),
             ]
             keepalive = asyncio.create_task(self._keepalive_task(ws), name="stepfun_stt_keepalive")
+            options_task = asyncio.create_task(
+                self._update_session_options(ws), name="stepfun_stt_update_options"
+            )
             try:
-                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                await asyncio.wait([*tasks, options_task], return_when=asyncio.FIRST_COMPLETED)
+                if options_task.done():
+                    options_task.result()
 
                 send_task, recv_task = tasks
                 if send_task.done() and not recv_task.done():
@@ -567,7 +591,7 @@ class RecognizeStream(stt.RecognizeStream):
                         # since the receiver is about to be cancelled.
                         self._report_usage()
             finally:
-                await utils.aio.cancel_and_wait(*tasks, keepalive)
+                await utils.aio.cancel_and_wait(*tasks, keepalive, options_task)
 
                 # Discarding a pooled connection does not close it immediately.
                 await ws.close()
@@ -578,14 +602,8 @@ class RecognizeStream(stt.RecognizeStream):
                 if not task.cancelled():
                     task.result()
 
-    async def _configure_session(self, ws: _WebSocket) -> None:
-        """Send session.update and wait for the server to acknowledge it.
-
-        This endpoint accepts no query parameters: the model, audio format and
-        turn detection are configured entirely by this frame. Skipping it leaves
-        the session unconfigured, which is why pumping audio straight after
-        connecting cannot work.
-        """
+    def _session_update_message(self) -> dict[str, Any]:
+        """Build the complete session configuration required by StepFun."""
         transcription: dict[str, Any] = {
             "model": self._opts.model,
             "enable_itn": self._opts.enable_itn,
@@ -614,15 +632,22 @@ class RecognizeStream(stt.RecognizeStream):
                 "threshold": self._opts.vad_threshold,
             }
 
-        await ws.send_str(
-            json.dumps(
-                {
-                    "event_id": _utils.event_id(),
-                    "type": "session.update",
-                    "session": {"audio": {"input": audio_input}},
-                }
-            )
-        )
+        return {
+            "event_id": _utils.event_id(),
+            "type": "session.update",
+            "session": {"audio": {"input": audio_input}},
+        }
+
+    async def _configure_session(self, ws: _WebSocket) -> None:
+        """Send session.update and wait for the server to acknowledge it.
+
+        This endpoint accepts no query parameters: the model, audio format and
+        turn detection are configured entirely by this frame. Skipping it leaves
+        the session unconfigured, which is why pumping audio straight after
+        connecting cannot work.
+        """
+        version = self._options_version
+        await ws.send_str(json.dumps(self._session_update_message()))
 
         # Wait for the ack before sending audio, so a rejected configuration
         # surfaces as a configuration error rather than as silence.
@@ -632,6 +657,27 @@ class RecognizeStream(stt.RecognizeStream):
             raise APIConnectionError(
                 "stepfun stt: timed out waiting for session.update acknowledgement"
             ) from exc
+        self._configured_options_version = version
+
+    async def _update_session_options(self, ws: _WebSocket) -> None:
+        """Apply option changes to the current session using full updates."""
+        while True:
+            await self._options_changed.wait()
+            self._options_changed.clear()
+            while self._options_version != self._configured_options_version:
+                version = self._options_version
+                ack = asyncio.get_running_loop().create_future()
+                self._session_update_ack = ack
+                try:
+                    await ws.send_str(json.dumps(self._session_update_message()))
+                    await asyncio.wait_for(ack, _SESSION_ACK_TIMEOUT)
+                except asyncio.TimeoutError as exc:
+                    raise APIConnectionError(
+                        "stepfun stt: timed out waiting for updated session configuration"
+                    ) from exc
+                finally:
+                    self._session_update_ack = None
+                self._configured_options_version = version
 
     async def _await_session_ack(self, ws: _WebSocket) -> None:
         while True:
@@ -701,6 +747,7 @@ class RecognizeStream(stt.RecognizeStream):
             # Even a sub-frame tail has left the input channel and cannot be
             # recovered by the base class on retry.
             self._consumed_audio = self._consumed_audio or data.samples_per_channel > 0
+            self._ever_consumed_audio = self._ever_consumed_audio or data.samples_per_channel > 0
             frames.extend(bstream.write(data.data.tobytes()))
         elif isinstance(data, self._FlushSentinel):
             # Drain the sub-frame tail held by AudioByteStream, or that
@@ -789,14 +836,6 @@ class RecognizeStream(stt.RecognizeStream):
             return self._consumed_audio and not self._finals_received
         return self._expected_finals > 0 and time.monotonic() < self._end_input_grace_deadline()
 
-    def _speech_at_risk(self) -> bool:
-        """Whether a retry could lose speech.
-
-        A fresh session cannot replay what this attempt already uploaded, and
-        speech detection is asynchronous, so any consumed audio counts.
-        """
-        return self._consumed_audio or self._final_pending()
-
     async def _await_finalization(self, recv_task: asyncio.Task[None]) -> None:
         """Finish only on evidence that the sent audio was processed.
 
@@ -817,6 +856,14 @@ class RecognizeStream(stt.RecognizeStream):
                 # so the limit is idle time rather than time since input ended.
                 idle_at = self._last_event_at + self._conn_options.timeout
                 if now >= idle_at:
+                    if self._input_done and self._opts.server_vad:
+                        # The streaming API does not guarantee that every
+                        # utterance produces a completed event. Preserve any
+                        # interim already emitted, but do not invent a final.
+                        logger.warning(
+                            "stepfun stt: no final transcription arrived after the turn went idle"
+                        )
+                        return
                     raise APIConnectionError(
                         "stepfun stt: timed out waiting for final transcription"
                     )
@@ -947,7 +994,6 @@ class RecognizeStream(stt.RecognizeStream):
 
         if etype == _EV_SPEECH_STARTED:
             self._speech_active = True
-            self._open_item(event.get("item_id"))
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
                     type=stt.SpeechEventType.START_OF_SPEECH,
@@ -982,7 +1028,15 @@ class RecognizeStream(stt.RecognizeStream):
                 self._open_item(item.get("id") or event.get("item_id"))
             return
 
-        if etype in (_EV_SESSION_CREATED, _EV_SESSION_UPDATED):
+        if etype == _EV_SESSION_UPDATED:
+            ack = self._session_update_ack
+            if ack is not None and not ack.done():
+                ack.set_result(event)
+            else:
+                logger.debug("stepfun stt: %s", etype)
+            return
+
+        if etype == _EV_SESSION_CREATED:
             logger.debug("stepfun stt: %s", etype)
             return
 
@@ -1014,12 +1068,6 @@ class RecognizeStream(stt.RecognizeStream):
         interim_text = self._interim_texts[item_id]
         if not interim_text:
             return
-
-        stash = event.get("stash") or ""
-        if stash and interim_text.endswith(stash):
-            stable = interim_text[: -len(stash)]
-            if stable:
-                self._emit(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, stable, event, words=None)
 
         self._emit(
             stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -1150,8 +1198,3 @@ class RecognizeStream(stt.RecognizeStream):
                 # failing transport with no trace at all.
                 logger.warning("stepfun stt: keepalive ping failed: %s", exc)
                 return
-
-
-# Deprecated alias. The base class renamed SpeechStream to RecognizeStream and
-# kept its own alias; this mirrors that so existing imports keep working.
-SpeechStream = RecognizeStream
