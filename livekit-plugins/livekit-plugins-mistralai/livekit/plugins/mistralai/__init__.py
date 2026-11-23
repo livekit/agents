@@ -5,11 +5,11 @@ from livekit.agents import Plugin
 from . import tools
 from .llm import LLM, ApiMode
 from .log import logger
-from .stt import STT
+from .stt import STT, TurnDetection
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["ApiMode", "LLM", "STT", "TTS", "tools", "__version__"]
+__all__ = ["ApiMode", "LLM", "STT", "TTS", "TurnDetection", "tools", "__version__"]
 
 
 class MistralAIPlugin(Plugin):

@@ -367,7 +367,7 @@ def test_text_only_response_ends_the_turn() -> None:
 
 def test_pause_within_a_turn_yields_one_final() -> None:
     # the item outlives the pause and is re-transcribed from the start, "ones" to "once",
-    # so there is no delta to send and only the last commit is the final (#6710)
+    # so there is no delta to send and only the last commit is the final
     session, emitted = _make_session()
 
     _commit(session, "item_1", "Hello, how are you? Last ones.")

@@ -42,6 +42,7 @@ class FakeTTS(TTS):
         num_channels: int = 1,
         fake_timeout: float | None = None,
         fake_audio_duration: float | None = None,
+        fake_audio_data: bytes | None = None,
         fake_exception: Exception | None = None,
         fake_exception_count: int | None = None,
         fake_responses: list[FakeTTSResponse] | None = None,
@@ -54,6 +55,7 @@ class FakeTTS(TTS):
 
         self._fake_timeout = fake_timeout
         self._fake_audio_duration = fake_audio_duration
+        self._fake_audio_data = fake_audio_data
         self._fake_exception = fake_exception
         # None means raise fake_exception on every attempt
         self._fake_exception_count = fake_exception_count
@@ -170,7 +172,13 @@ class FakeChunkedStream(ChunkedStream):
             )
             while pushed_samples < max_samples:
                 num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
-                output_emitter.push(b"\x00\x00" * num_samples)
+                output_emitter.push(
+                    self._tts._fake_audio_data[
+                        pushed_samples * 2 : (pushed_samples + num_samples) * 2
+                    ]
+                    if self._tts._fake_audio_data is not None
+                    else b"\x00\x00" * num_samples
+                )
                 pushed_samples += num_samples
                 # yield control so the emitter delivers audio downstream, like a
                 # real provider awaiting on the network between chunks
@@ -253,7 +261,13 @@ class FakeSynthesizeStream(SynthesizeStream):
             )
             while pushed_samples < max_samples:
                 num_samples = min(self._tts.sample_rate // 100, max_samples - pushed_samples)
-                output_emitter.push(b"\x00\x00" * num_samples)
+                output_emitter.push(
+                    self._tts._fake_audio_data[
+                        pushed_samples * 2 : (pushed_samples + num_samples) * 2
+                    ]
+                    if self._tts._fake_audio_data is not None
+                    else b"\x00\x00" * num_samples
+                )
                 pushed_samples += num_samples
 
             delay = resp.duration - (time.perf_counter() - start_time)

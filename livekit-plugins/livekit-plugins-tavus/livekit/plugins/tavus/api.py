@@ -22,10 +22,9 @@ class TavusException(Exception):
 
 
 DEFAULT_API_URL = "https://tavusapi.com/v2"
-# Stock Tavus PAL. Use create_pal() to create a PAL with the appearance you'd like.
+# Stock Tavus PAL, used when no pal is given. Its own default face is used unless a face is given.
+# Use create_pal() to create a PAL with the appearance you'd like.
 DEFAULT_PAL_ID = "pb87e71797da"
-# Stock Tavus face ("Lucy - Home", phoenix-4.5) used with DEFAULT_PAL_ID when no face is given.
-DEFAULT_FACE_ID = "r4067604db72"
 
 
 def _coalesce_with_deprecated(
@@ -91,27 +90,21 @@ class TavusAPI:
             or _deprecated_env("TAVUS_REPLICA_ID", "TAVUS_FACE_ID")
             or NOT_GIVEN
         )
+        # no pal supplied — use the stock pal (extra_payload may still override it below)
         pal_id = (
             pal_id
             or os.getenv("TAVUS_PAL_ID")
             or _deprecated_env("TAVUS_PERSONA_ID", "TAVUS_PAL_ID")
-            or NOT_GIVEN
+            or DEFAULT_PAL_ID
         )
-
-        # extra_payload overrides the payload wholesale, so a pal named there counts
-        # as user-supplied when deciding whether to fill in the stock face.
-        extra = dict(extra_payload) if utils.is_given(extra_payload) else {}
-        if not pal_id and not extra.get("pal_id"):
-            # no pal supplied — use the default stock pal and, unless overridden, its stock face
-            pal_id = DEFAULT_PAL_ID
-            face_id = face_id or DEFAULT_FACE_ID
 
         properties = properties or {}
         payload: dict[str, Any] = {"pal_id": pal_id, "properties": properties}
-        # a user-supplied pal carries its own default face, so only send face_id when we have one
+        # every pal carries its own default face, so only send face_id to override it
         if face_id:
             payload["face_id"] = face_id
-        payload.update(extra)
+        if utils.is_given(extra_payload):
+            payload.update(extra_payload)
 
         if "conversation_name" not in payload:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")
@@ -167,13 +160,20 @@ class TavusAPI:
         response_data = await self._post("personas", payload)
         return response_data["persona_id"]  # type: ignore
 
-    async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def end_conversation(self, conversation_id: str) -> None:
+        """End a conversation, releasing its replica."""
+        await self._post(f"conversations/{conversation_id}/end", {}, expect_json=False)
+
+    async def _post(
+        self, endpoint: str, payload: dict[str, Any], *, expect_json: bool = True
+    ) -> dict[str, Any]:
         """
         Make a POST request to the Tavus API with retry logic.
 
         Args:
             endpoint: API endpoint path (without leading slash)
             payload: JSON payload for the request
+            expect_json: Whether the response carries a JSON body to return
 
         Returns:
             Response data as a dictionary
@@ -199,6 +199,8 @@ class TavusAPI:
                         raise APIStatusError(
                             "Server returned an error", status_code=response.status, body=text
                         )
+                    if not expect_json:
+                        return {}
                     try:
                         return await response.json()  # type: ignore
                     except ValueError as e:

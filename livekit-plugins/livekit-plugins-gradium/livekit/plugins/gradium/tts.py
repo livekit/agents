@@ -26,21 +26,75 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
 from .api import ws_headers
-from .log import logger
+from .log import log_server_message, logger
+from .models import LogLevel
 
 SUPPORTED_SAMPLE_RATE = 48000
 # Catalog voice "Everly" (en-us), used when neither `voice` nor `voice_id` is given.
 DEFAULT_VOICE_ID = "vjFyp2BcCyTlUmYb"
+
+# Websocket close codes the server uses for requests it would reject again verbatim:
+# protocol error and unsupported data (unknown model, setup validation). Everything
+# else is worth a retry. 1008 (policy violation) covers the org's concurrency cap,
+# which frees up when another session ends, next to credits and API-key failures
+# that will not; the frame does not tell them apart, so the transient reading wins.
+# 1011 covers worker failures and "no worker available" (but also unknown voice ids,
+# which the server does not distinguish for clients either). The server's idle and
+# duration limits close with 1008 after an error frame; a 1000/1001 before
+# end_of_stream means the server shut the socket mid-session, also worth a retry.
+_NON_RETRYABLE_CLOSE_CODES = frozenset({1002, 1003})
+
+
+def _close_error(
+    message: str, *, code: int | None, body: Any, reason: Any = None
+) -> APIStatusError:
+    code = code if isinstance(code, int) else -1
+    if isinstance(reason, str) and reason:
+        # the close frame's reason is the server's own explanation of the failure
+        message = f"{message}: {reason}"
+    return APIStatusError(
+        message,
+        status_code=code,
+        body=body,
+        retryable=code not in _NON_RETRYABLE_CLOSE_CODES,
+    )
+
+
+def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
+    """Build the error for a `{"type": "error"}` frame.
+
+    The server sends it right before closing the socket, so the message is the only
+    place the actual failure reason (invalid voice, no credits, worker failure, ...)
+    shows up. Its `code` is the websocket close code that follows.
+    """
+    message = msg_data.get("message") or "unknown error"
+    return _close_error(
+        f"Gradium returned error: {message}", code=msg_data.get("code"), body=msg_data
+    )
+
+
+def _timed_text(msg_data: dict[str, Any]) -> TimedString:
+    """Build the timed transcript for a `{"type": "text"}` frame.
+
+    The server sends the synthesized text word by word (the first frame can hold a few
+    words), with timings in seconds from the start of the stream.
+    """
+    return TimedString(
+        text=f"{msg_data['text']} ",
+        start_time=msg_data.get("start_s", NOT_GIVEN),
+        end_time=msg_data.get("stop_s", NOT_GIVEN),
+    )
 
 
 @dataclass
@@ -50,6 +104,7 @@ class _TTSOptions:
     pronunciation_id: str | None
     word_tokenizer: tokenize.WordTokenizer
     json_config: dict[str, Any] | None = None
+    log_level: LogLevel | None = None
 
 
 class TTS(tts.TTS):
@@ -65,6 +120,7 @@ class TTS(tts.TTS):
         json_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
         word_tokenizer: tokenize.WordTokenizer | None = None,
+        log_level: LogLevel | None = None,
     ) -> None:
         """
         Initialize the Gradium TTS.
@@ -78,9 +134,13 @@ class TTS(tts.TTS):
                 default (`DEFAULT_VOICE_ID`) when neither is given.
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
+            log_level (LogLevel): Opt in to the server's log messages, such as a warning about an
+                unknown or deprecated `json_config` key: the lowest level to receive ("debug",
+                "info", "warning" or "error"). They are written to the `livekit.plugins.gradium`
+                logger at their own level. Off by default.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
             sample_rate=SUPPORTED_SAMPLE_RATE,
             num_channels=1,
         )
@@ -119,6 +179,7 @@ class TTS(tts.TTS):
             pronunciation_id=pronunciation_id,
             word_tokenizer=word_tokenizer,
             json_config=json_config,
+            log_level=log_level,
         )
         self._session = http_session
 
@@ -234,6 +295,8 @@ class ChunkedStream(tts.ChunkedStream):
                     setup_msg["pronunciation_id"] = self._opts.pronunciation_id
                 if self._opts.json_config is not None:
                     setup_msg["json_config"] = json.dumps(self._opts.json_config)
+                if self._opts.log_level is not None:
+                    setup_msg["log_level"] = self._opts.log_level
                 await ws.send_str(json.dumps(setup_msg))
                 text_msg = {"type": "text", "text": self._input_text}
                 await ws.send_str(json.dumps(text_msg))
@@ -242,21 +305,25 @@ class ChunkedStream(tts.ChunkedStream):
 
                 while True:
                     msg = await ws.receive()
+                    if msg.type == aiohttp.WSMsgType.ERROR:
+                        raise APIConnectionError("Gradium websocket error") from ws.exception()
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        # TODO(laurent): once we support returning eos in the api, we should enable this back.
-                        # raise APIStatusError("Gradium websocket connection closed unexpectedly")
-                        break
+                        raise _close_error(
+                            "Gradium connection closed unexpectedly",
+                            code=ws.close_code,
+                            body=f"{msg.data=} {msg.extra=}",
+                            reason=msg.extra,
+                        )
 
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         msg_data = json.loads(msg.data)
                         type_ = msg_data.get("type")
                         if type_ == "text":
-                            # TODO(laurent): handle text timestamps?
-                            pass
+                            output_emitter.push_timed_transcript(_timed_text(msg_data))
                         elif type_ == "ready":
                             pass
                         elif type_ == "audio":
@@ -264,12 +331,18 @@ class ChunkedStream(tts.ChunkedStream):
                             output_emitter.push(audio)
                         elif type_ == "end_of_stream":
                             break
+                        elif type_ == "error":
+                            raise _api_error(msg_data)
+                        elif type_ == "log":
+                            log_server_message(msg_data)
                         else:
                             logger.warning(f"unknown message type: {type_}")
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
@@ -325,6 +398,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
@@ -354,6 +429,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 setup_msg["pronunciation_id"] = self._opts.pronunciation_id
             if self._opts.json_config is not None:
                 setup_msg["json_config"] = json.dumps(self._opts.json_config)
+            if self._opts.log_level is not None:
+                setup_msg["log_level"] = self._opts.log_level
 
             await ws.send_str(json.dumps(setup_msg))
 
@@ -368,22 +445,25 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 msg = await ws.receive()
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError("Gradium websocket error") from ws.exception()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    # TODO(laurent): once we support returning eos in the api, we should enable this back.
-                    # raise APIStatusError("Gradium websocket connection closed unexpectedly")
-                    output_emitter.end_segment()
-                    break
+                    raise _close_error(
+                        "Gradium connection closed unexpectedly",
+                        code=ws.close_code,
+                        body=f"{msg.data=} {msg.extra=}",
+                        reason=msg.extra,
+                    )
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     msg_data = json.loads(msg.data)
                     type_ = msg_data.get("type")
                     if type_ == "text":
-                        # TODO(laurent): handle text timestamps?
-                        pass
+                        output_emitter.push_timed_transcript(_timed_text(msg_data))
                     elif type_ == "ready":
                         pass
                     elif type_ == "audio":
@@ -392,6 +472,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif type_ == "end_of_stream":
                         output_emitter.end_segment()
                         break
+                    elif type_ == "error":
+                        raise _api_error(msg_data)
+                    elif type_ == "log":
+                        log_server_message(msg_data)
                     else:
                         logger.warning(f"unknown message type: {type_}")
 

@@ -60,7 +60,8 @@ class STTOptions:
         "u3-pro",
         "universal-3-5-pro",
         "universal-3-6-pro",
-    ] = "universal-3-6-pro"
+        "assemblyai-stt-3-7-realtime-agent",
+    ] = "assemblyai-stt-3-7-realtime-agent"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     language_codes: NotGivenOr[list[str]] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -86,19 +87,28 @@ class STTOptions:
 # (prompt, agent_context, previous_context_n_turns, continuous_partials,
 # interruption_delay, voice_focus, voice_focus_threshold) and connect-time
 # defaults. Mirrors the server-side `SpeechModel.is_u3_pro`.
-_U3_PRO_MODELS = ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro")
+_U3_PRO_MODELS = (
+    "u3-rt-pro",
+    "u3-rt-pro-beta-1",
+    "universal-3-5-pro",
+    "universal-3-6-pro",
+    "assemblyai-stt-3-7-realtime-agent",
+)
 
 # Server-side cap on the number of steering codes, mirrored client-side so bad
 # input fails at construction/update time instead of as a websocket error.
+# Universal-3.6 Pro has no documented cap.
 _MAX_LANGUAGE_CODES = 10
+_UNCAPPED_LANGUAGE_CODES_MODELS = ("universal-3-6-pro",)
 
 
-def _normalize_language_codes(language_codes: str | list[str]) -> list[str]:
+def _normalize_language_codes(language_codes: str | list[str], model: str) -> list[str]:
     """Normalize code(s) to bare ISO 639-1 and dedup preserving order.
 
     Accepts a single code or a list, mirroring the server, which takes either.
-    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes,
-    and 'multi' (the unsteered multilingual default) must be sent alone.
+    Mirrors the AssemblyAI streaming API's validation rules: at most 10 codes
+    (except on Universal-3.6 Pro), and 'multi' (the unsteered multilingual
+    default) must be sent alone.
     """
     if isinstance(language_codes, str):
         # A bare code is shorthand for a one-element list; wrapping here (the
@@ -106,7 +116,7 @@ def _normalize_language_codes(language_codes: str | list[str]) -> list[str]:
         # being iterated per-character. "" means "no codes", like [].
         language_codes = [language_codes] if language_codes else []
     normalized = list(dict.fromkeys(LanguageCode(code).language for code in language_codes))
-    if len(normalized) > _MAX_LANGUAGE_CODES:
+    if model not in _UNCAPPED_LANGUAGE_CODES_MODELS and len(normalized) > _MAX_LANGUAGE_CODES:
         raise ValueError(
             f"language_codes accepts at most {_MAX_LANGUAGE_CODES} codes "
             f"(got {len(normalized)} after normalization)"
@@ -149,7 +159,8 @@ class STT(stt.STT):
             "u3-pro",
             "universal-3-5-pro",
             "universal-3-6-pro",
-        ] = "universal-3-6-pro",
+            "assemblyai-stt-3-7-realtime-agent",
+        ] = "assemblyai-stt-3-7-realtime-agent",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
         language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
@@ -196,13 +207,13 @@ class STT(stt.STT):
                 normalization are dropped, preserving order. One code biases the model
                 toward that language — several codes, toward that set — instead of
                 automatically detecting/code-switching across all supported languages.
-                At most 10 codes; 'multi' (the unsteered multilingual default) cannot
-                be combined with other codes. Leave unset to use the model's default
-                multilingual behavior. Only supported with the Universal-3 Pro family
-                models. Can be updated mid-session via ``update_options``; pass an
-                empty list (or empty string) there to clear steering back to the model
-                default. At construction an empty value is equivalent to leaving it
-                unset.
+                At most 10 codes, except on universal-3-6-pro; 'multi' (the unsteered
+                multilingual default) cannot be combined with other codes. Leave unset to
+                use the model's default multilingual behavior. Only supported with the
+                Universal-3 Pro family models. Can be updated mid-session via
+                ``update_options``; pass an empty list (or empty string) there to clear
+                steering back to the model default. At construction an empty value is
+                equivalent to leaving it unset.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
             min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
@@ -302,8 +313,10 @@ class STT(stt.STT):
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'universal-3-6-pro' instead.")
-            model = "universal-3-6-pro"
+            logger.warning(
+                "'u3-pro' is deprecated, use 'assemblyai-stt-3-7-realtime-agent' instead."
+            )
+            model = "assemblyai-stt-3-7-realtime-agent"
 
         # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:
@@ -357,9 +370,9 @@ class STT(stt.STT):
         # language_code is shorthand for a one-element list.
         normalized_language_codes: NotGivenOr[list[str]] = NOT_GIVEN
         if is_given(language_code):
-            normalized_language_codes = _normalize_language_codes(language_code)
+            normalized_language_codes = _normalize_language_codes(language_code, model)
         elif is_given(language_codes):
-            normalized_language_codes = _normalize_language_codes(language_codes)
+            normalized_language_codes = _normalize_language_codes(language_codes, model)
 
         self._opts = STTOptions(
             sample_rate=sample_rate,
@@ -466,7 +479,7 @@ class STT(stt.STT):
                     "The 'language_codes' parameter is only supported with the "
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
-            language_codes = _normalize_language_codes(language_codes)
+            language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
@@ -612,7 +625,7 @@ class SpeechStream(stt.SpeechStream):
                     "The 'language_codes' parameter is only supported with the "
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
-            language_codes = _normalize_language_codes(language_codes)
+            language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
@@ -717,9 +730,12 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             consecutive_timeouts = 0
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
                 try:
-                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    msg = await asyncio.wait_for(monitor.receive(), timeout=5)
                     consecutive_timeouts = 0
                 except asyncio.TimeoutError:
                     if closing_ws:
@@ -777,7 +793,10 @@ class SpeechStream(stt.SpeechStream):
                     continue
 
                 try:
-                    self._process_stream_event(json.loads(msg.data))
+                    data = json.loads(msg.data)
+                    self._process_stream_event(data)
+                    if data.get("type") in ("SpeechStarted", "Turn"):
+                        self._mark_provider_progress()
                 except Exception:
                     logger.exception(
                         "failed to process AssemblyAI message session=%s",
@@ -900,7 +919,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.speech_model,
             self._base_url,
         )
-        ws = await self._session.ws_connect(url, headers=headers)
+        ws = await self._session.ws_connect(url, headers=headers, autoping=False)
         logger.debug(
             "AssemblyAI WebSocket connected status=%s",
             ws._response.status if ws._response is not None else None,
@@ -1113,7 +1132,14 @@ class SpeechStream(stt.SpeechStream):
                     self._session_id,
                 )
 
-            self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=final_event.alternatives
+                    if words and words[-1].get("end", 0) > 0
+                    else [],
+                )
+            )
 
             if self._speech_duration > 0.0:
                 usage_event = stt.SpeechEvent(

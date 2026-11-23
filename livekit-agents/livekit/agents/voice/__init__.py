@@ -5,6 +5,7 @@ from .agent_session import (
     ExpressiveOptions,
     NonverbalOptions,
     RecordingOptions,
+    SessionConnectOptions,
     SpeechSteeringOptions,
     VoiceActivityVideoSampler,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "ExpressiveOptions",
     "NonverbalOptions",
     "RecordingOptions",
+    "SessionConnectOptions",
     "SpeechSteeringOptions",
     "RunOutputOptions",
     "VoiceActivityVideoSampler",

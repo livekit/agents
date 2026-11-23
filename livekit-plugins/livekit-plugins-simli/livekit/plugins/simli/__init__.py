@@ -17,12 +17,13 @@
 See https://docs.livekit.io/agents/integrations/avatar/simli/ for more information.
 """
 
-from .avatar import AvatarSession, SimliConfig
+from .avatar import AvatarSession, CameraSetting, SimliConfig
 from .version import __version__
 
 __all__ = [
     "AvatarSession",
     "__version__",
+    "CameraSetting",
     "SimliConfig",
 ]
 

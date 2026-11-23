@@ -281,6 +281,38 @@ async def test_invalid_stream_idle_timeout_rejected() -> None:
         soniox.TTS(api_key="fake-key", stream_idle_timeout=-1.0)
 
 
+@pytest.mark.parametrize("client_reference_id", [None, "session-123"])
+async def test_client_reference_id_in_config(client_reference_id: str | None) -> None:
+    sent: asyncio.Queue[str] = asyncio.Queue()
+    received: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.closed = False
+    ws.send_str = AsyncMock(side_effect=sent.put)
+    ws.receive = AsyncMock(side_effect=received.get)
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    tts = soniox.TTS(
+        api_key="test-key", http_session=session, client_reference_id=client_reference_id
+    )
+
+    try:
+        connection, _, _ = await tts._current_connection(timeout=1.0)
+        waiter = asyncio.get_running_loop().create_future()
+        connection.register_stream("s1", MagicMock(), waiter, opts=tts._opts)
+        try:
+            connection.send_text("s1", "Hello!", text_end=True)
+            config = json.loads(await asyncio.wait_for(sent.get(), timeout=1.0))
+            if client_reference_id is None:
+                assert "client_reference_id" not in config
+            else:
+                assert config["client_reference_id"] == client_reference_id
+        finally:
+            connection.unregister_stream("s1")
+            waiter.cancel()
+    finally:
+        await tts.aclose()
+
+
 async def test_reduce_silence_propagates_to_options() -> None:
     tts = soniox.TTS(api_key="fake-key", model="tts-rt-v2")
     assert tts._opts.reduce_silence is False

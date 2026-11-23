@@ -217,6 +217,10 @@ class ConnectionPool(Generic[T]):
 
         This method starts a background task that creates a new connection if none exist.
         The task automatically cleans itself up when the connection pool is closed.
+
+        Without a running event loop (for example in an ``AgentServer`` ``setup_fnc``) it
+        logs a warning and does nothing, since a connection opened there could not be
+        reused by the job; call it from the job entrypoint instead.
         """
         if self._prewarm_task is not None:
             task = self._prewarm_task()
@@ -225,6 +229,15 @@ class ConnectionPool(Generic[T]):
             self._prewarm_task = None
 
         if self._connections:
+            return
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "prewarm() needs a running event loop and was skipped; "
+                "call it from the job entrypoint"
+            )
             return
 
         async def _prewarm_impl() -> None:

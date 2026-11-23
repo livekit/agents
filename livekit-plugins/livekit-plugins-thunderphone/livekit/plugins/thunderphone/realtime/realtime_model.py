@@ -46,7 +46,7 @@ from openai.types.realtime.conversation_item_input_audio_transcription_completed
 from pydantic import BaseModel, ValidationError
 
 from livekit.agents import APIConnectionError, llm, utils
-from livekit.agents.llm._realtime.openai_utils import _shorten_call_id
+from livekit.agents.llm._realtime.openai_utils import _shorten_id
 from livekit.agents.metrics import STTMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -422,7 +422,7 @@ class RealtimeSession(_openai.RealtimeSession):
             if isinstance(item, dict) and item.get("type") == "function_call":
                 call_id = item.get("call_id")
                 if isinstance(call_id, str):
-                    self._tp_call_ids[_shorten_call_id(call_id)] = call_id
+                    self._tp_call_ids[_shorten_id(call_id)] = call_id
             return
         if event_type in ("session.created", "session.updated"):
             session = event.get("session") or {}

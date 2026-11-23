@@ -99,6 +99,7 @@ from .openai_utils import (
     AZURE_DEFAULT_TURN_DETECTION,
     DEFAULT_MAX_RESPONSE_OUTPUT_TOKENS,
     DEFAULT_MAX_SESSION_DURATION,
+    _ItemIdMap,
     calculate_confidence_from_logprobs,
     livekit_item_to_openai_item,
     openai_item_to_livekit_item,
@@ -932,6 +933,8 @@ class RealtimeSession(
         self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        # set to close the current connection at a quiet point and reconnect with a replay
+        self._recycle_requested = asyncio.Event()
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
@@ -940,6 +943,7 @@ class RealtimeSession(
         # the in-flight chat ctx events already sent, by event id, so a reconnection can send
         # again the ones the lost connection never confirmed
         self._sent_chat_ctx_events: dict[str, dict[str, Any]] = {}
+        self._item_ids = _ItemIdMap()
 
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
@@ -1028,6 +1032,7 @@ class RealtimeSession(
 
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(ev)
+                    self._item_ids.shorten(ev)
 
                     self.emit("openai_client_event_queued", ev)
                     await ws_conn.send_str(json.dumps(ev))
@@ -1158,6 +1163,7 @@ class RealtimeSession(
                     # the new API uses "output_text" for assistant content.
                     if self._opts.is_azure and self._opts.api_version:
                         _normalize_azure_client_event(msg)
+                    self._item_ids.shorten(msg)
 
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
@@ -1206,6 +1212,7 @@ class RealtimeSession(
                     normalized = _AZURE_EVENT_MAPPING.get(event_type)
                     if normalized is not None:
                         event["type"] = normalized
+                self._item_ids.restore(event)
 
                 # emit the raw json dictionary instead of the BaseModel because different
                 # providers can have different event types that are not part of the OpenAI Realtime API  # noqa: E501
@@ -1289,7 +1296,7 @@ class RealtimeSession(
                         event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"lk.pii.event": event})
 
-        tasks = [
+        tasks: list[asyncio.Task[Any]] = [
             asyncio.create_task(_recv_task(), name="_recv_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
         ]
@@ -1300,26 +1307,42 @@ class RealtimeSession(
                 name="_timeout_task",
             )
             tasks.append(wait_reconnect_task)
+        self._recycle_requested.clear()
+        recycle_task: asyncio.Task[bool] | None = None
         try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            while True:
+                recycle_task = asyncio.create_task(
+                    self._recycle_requested.wait(), name="_recycle_task"
+                )
+                done, _ = await asyncio.wait(
+                    [*tasks, recycle_task], return_when=asyncio.FIRST_COMPLETED
+                )
 
-            # propagate exceptions from completed tasks
-            for task in done:
-                if task != wait_reconnect_task:
-                    task.result()
+                for task in done:
+                    if task not in (wait_reconnect_task, recycle_task):
+                        task.result()
+                if done.intersection(tasks):
+                    if wait_reconnect_task in done and isinstance(
+                        self._current_generation, _ResponseGeneration
+                    ):
+                        await self._current_generation._done_fut
+                        closing = True
+                    break
 
-            if (
-                wait_reconnect_task
-                and wait_reconnect_task in done
-                and isinstance(self._current_generation, _ResponseGeneration)
-            ):
-                # wait for the current generation to complete before reconnecting
-                await self._current_generation._done_fut
-                closing = True
-
+                self._recycle_requested.clear()
+                if await self._before_recycle(ws_conn):
+                    closing = True
+                    break
         finally:
+            # Cancel the reader before yielding after the final quiet check.
+            if recycle_task is not None:
+                tasks.append(recycle_task)
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
+
+    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> bool:
+        """Return whether to close the old connection or wait for another request to recycle."""
+        return True
 
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest
@@ -1959,8 +1982,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "message":
             item_generation = _MessageGeneration(
@@ -1987,8 +2012,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item_id) is not None, "item_id is None"
-        assert (item_type := event.part.type) is not None, "part.type is None"
+        item_id = event.item_id
+        assert item_id is not None, "item_id is None"
+        item_type = event.part.type
+        assert item_type is not None, "part.type is None"
 
         if item_type == "text" and self._realtime_model.capabilities.audio_output:
             logger.warning(
@@ -2248,8 +2275,10 @@ class RealtimeSession(
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
-        assert (item_id := event.item.id) is not None, "item.id is None"
-        assert (item_type := event.item.type) is not None, "item.type is None"
+        item_id = event.item.id
+        assert item_id is not None, "item.id is None"
+        item_type = event.item.type
+        assert item_type is not None, "item.type is None"
 
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall
@@ -2308,17 +2337,10 @@ class RealtimeSession(
 
         self._current_generation._close()
 
+        # _done_fut only tells the reconnect branch of _run_ws that the generation ended.
+        # _handle_response_done_but_not_complete reports a failed response.
         with contextlib.suppress(asyncio.InvalidStateError):
-            if event.response.status in ("failed", "incomplete"):
-                details = event.response.status_details
-                msg = f"response {event.response.status}"
-                if details and details.error:
-                    msg = f"{msg}: [{details.error.type}] {details.error.code}"
-                elif details and details.reason:
-                    msg = f"{msg}: {details.reason}"
-                self._current_generation._done_fut.set_exception(llm.RealtimeError(msg))
-            else:
-                self._current_generation._done_fut.set_result(None)
+            self._current_generation._done_fut.set_result(None)
 
         self._current_generation = None
 
@@ -2474,7 +2496,7 @@ class RealtimeSession(
             raise error
         self._emit_error(error, recoverable=True)
 
-        # response errors are handled by _handle_response_done via _done_fut.
+        # a failed response is reported by _handle_response_done_but_not_complete.
         # error events here are for non-response errors (e.g. invalid request).
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:

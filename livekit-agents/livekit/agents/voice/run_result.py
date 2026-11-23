@@ -94,6 +94,25 @@ class AgentHandoffEvent:
 RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent | AgentHandoffEvent
 
 
+@dataclass
+class _RunSuspension:
+    """Handles of an AgentTask's awaiter, which cannot finish while the task runs.
+
+    While ``until`` (the task's result) is pending they don't hold a run open; once it
+    resolves they do again. Being a predicate rather than an unwatch/re-watch pair, a run
+    never sees the gap between the task completing and its awaiter resuming.
+    """
+
+    handles: list[SpeechHandle | asyncio.Future[Any]]
+    until: asyncio.Future[Any]
+    # false until the task's on_enter is guarded, so the awaiter keeps the run open meanwhile
+    active: bool = False
+
+    def suspends(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
+        """Return whether a pending task releases this handle from holding the run open."""
+        return self.active and not self.until.done() and handle in self.handles
+
+
 class RunResult(Generic[Run_T]):
     def __init__(
         self,
@@ -122,6 +141,13 @@ class RunResult(Generic[Run_T]):
         self._final_output: Run_T | None = None
 
         self.__last_speech_handle: SpeechHandle | None = None
+        self.__last_final_output: Any = None
+
+        # an awaiter suspended before this run started resumes into it
+        if session is not None:
+            for suspension in session._run_suspensions:
+                for handle in suspension.handles:
+                    self._watch_handle(handle)
 
     @property
     def events(self) -> list[RunEvent]:
@@ -172,7 +198,7 @@ class RunResult(Generic[Run_T]):
         if not self._done_fut.done():
             raise RuntimeError("cannot retrieve final_output, RunResult is not done")
 
-        if not self._final_output:
+        if self._final_output is None:
             raise RuntimeError("no final output")
 
         return self._final_output
@@ -226,6 +252,7 @@ class RunResult(Generic[Run_T]):
         handle.add_done_callback(self._mark_done_if_needed)
 
     def _unwatch_handle(self, handle: SpeechHandle | asyncio.Future[Any]) -> bool:
+        """Detach this run's callbacks and return whether the handle was tracked."""
         if handle not in self._handles:
             return False
 
@@ -240,8 +267,16 @@ class RunResult(Generic[Run_T]):
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
 
-        if all(handle.done() for handle in self._handles):
+        suspensions = self._session._run_suspensions if self._session is not None else []
+        if all(
+            handle.done() or any(s.suspends(handle) for s in suspensions)
+            for handle in self._handles
+        ):
             self._mark_done()
+
+    def _set_final_output(self, output: Any) -> None:
+        """Preserve task values across speech without retaining handled errors."""
+        self.__last_final_output = None if isinstance(output, BaseException) else output
 
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
@@ -255,6 +290,8 @@ class RunResult(Generic[Run_T]):
                 return
 
             final_output = self.__last_speech_handle._maybe_run_final_output
+            if not isinstance(final_output, BaseException):
+                final_output = self.__last_final_output
             if not isinstance(final_output, BaseException):
                 if self._output_type and not isinstance(final_output, self._output_type):
                     # only the no-output case is retryable: a completed task is

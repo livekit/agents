@@ -156,6 +156,9 @@ class JsonFormatter(logging.Formatter):
         log_record.update(message_dict)
         _merge_record_extra(record, log_record)
         log_record.setdefault("pid", record.process)
+        log_record.setdefault("code.file.path", record.pathname)
+        log_record.setdefault("code.function.name", record.funcName)
+        log_record.setdefault("code.line.number", record.lineno)
 
         log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
