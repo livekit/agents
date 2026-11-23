@@ -569,10 +569,12 @@ async def _text_forwarding_task(
     try:
         async for delta in source:
             out.text += delta
-            if not out.first_text_fut.done():
-                out.first_text_fut.set_result(None)
             if text_output is not None and delta:
                 await text_output.capture_text(delta)
+            # resolved once the output has accepted the text, as first_frame_fut waits for
+            # playback to start
+            if not out.first_text_fut.done():
+                out.first_text_fut.set_result(None)
     finally:
         if isinstance(source, _ACloseable):
             await source.aclose()

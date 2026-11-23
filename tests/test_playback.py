@@ -18,11 +18,12 @@ from livekit.agents.voice.generation import (
     _AudioOutput,
     forward_generation,
     perform_audio_forwarding,
+    perform_text_forwarding,
 )
 from livekit.agents.voice.room_io._output import _ParticipantAudioOutput
 from livekit.agents.voice.speech_handle import SpeechHandle
 
-from .fake_io import FakeAudioOutput
+from .fake_io import FakeAudioOutput, FakeTextOutput
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -525,6 +526,34 @@ async def test_own_playback_started_resolves_first_frame_fut() -> None:
     assert out.first_frame_fut.done()
     assert audio_output.captured_playout_segments > out.captured_segments_before
     audio_output.clear_buffer()
+
+
+class _GatedTextOutput(FakeTextOutput):
+    def __init__(self) -> None:
+        super().__init__()
+        self.open = asyncio.Event()
+
+    async def capture_text(self, text: str) -> None:
+        await self.open.wait()
+        await super().capture_text(text)
+
+
+async def _text(*chunks: str) -> AsyncIterator[str]:
+    for chunk in chunks:
+        yield chunk
+
+
+async def test_first_text_fut_waits_for_the_output_to_accept_text() -> None:
+    text_output = _GatedTextOutput()
+    task, out = perform_text_forwarding(text_output=text_output, source=_text("hello"))
+
+    await asyncio.sleep(1.0)
+    assert not out.first_text_fut.done()
+
+    text_output.open.set()
+    await task
+    assert out.first_text_fut.done()
+    assert text_output._messages == ["hello"]
 
 
 async def test_own_event_forwarded_before_wrapper_counts_still_resolves() -> None:
