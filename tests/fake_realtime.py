@@ -215,12 +215,13 @@ async def run_realtime_tool_turn(
     tool_executed: asyncio.Event,
     interrupt: bool = False,
     on_session: Callable[[AgentSession], None] | None = None,
+    capabilities: RealtimeCapabilities | None = None,
 ) -> tuple[AgentSession, FakeRealtimeModel]:
     """Drive one realtime turn that speaks a second of audio and calls the agent's first tool.
 
     With ``interrupt`` the turn is cut short as soon as the tool returns; otherwise it plays out.
     """
-    model = FakeRealtimeModel(capabilities=fake_capabilities())
+    model = FakeRealtimeModel(capabilities=capabilities or fake_capabilities())
 
     async with AgentSession(llm=model) as session:
         session.output.audio = FakeAudioOutput()

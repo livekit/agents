@@ -240,6 +240,8 @@ class GPTLiveModel(llm.DuplexModel):
                 user_transcription=True,
                 # the model continues on its own once every tool result reaches the backend
                 auto_tool_reply_generation=True,
+                # the backend takes results one at a time and continues once every call has one
+                per_call_tool_output=True,
                 mutable_chat_context=False,
                 mutable_instructions=False,
                 # tools live on the backend model, and a client delegation has none

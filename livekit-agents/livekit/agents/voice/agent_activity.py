@@ -4819,8 +4819,38 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(fnc_call)
             self._session._tool_items_added([fnc_call])
 
+        # results the model takes one by one go out as each tool returns, not after the speech
+        # that carried the calls; a handoff still waits, since it replaces the agent
+        rt_session = self._rt_session
+        per_call_output = rt_session.capabilities.per_call_tool_output
+        sent_call_ids: set[str] = set()
+        send_tasks: list[asyncio.Task[None]] = []
+
+        async def _send_tool_output(out: ToolExecutionOutput) -> None:
+            self._agent._chat_ctx._upsert_item(out.fnc_call)
+            self._agent._chat_ctx._upsert_item(out.fnc_call_out)
+            self._session._tool_items_added([out.fnc_call, out.fnc_call_out])
+            self._session.emit(
+                "function_tools_executed",
+                FunctionToolsExecutedEvent(
+                    function_calls=[out.fnc_call], function_call_outputs=[out.fnc_call_out]
+                ),
+            )
+            if rt_session.capabilities.auto_tool_reply_generation:
+                self._restore_rt_tool_choice()
+            try:
+                async with self._rt_chat_ctx_lock:
+                    chat_ctx = rt_session.chat_ctx.copy()
+                    chat_ctx.items.append(out.fnc_call_out)
+                    await rt_session.update_chat_ctx(chat_ctx)
+            except llm.RealtimeError as e:
+                logger.warning("failed to send the tool result", extra={"error": str(e)})
+
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             speech_handle._item_added([out.fnc_call_out])
+            if per_call_output and out.agent_task is None:
+                sent_call_ids.add(out.fnc_call.call_id)
+                send_tasks.append(asyncio.create_task(_send_tool_output(out)))
 
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
@@ -4973,6 +5003,8 @@ class AgentActivity(RecognitionHooks):
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call.call_id in sent_call_ids:
+                    continue
                 interrupted_calls.append(sanitized_out.fnc_call)
                 interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
@@ -4998,6 +5030,7 @@ class AgentActivity(RecognitionHooks):
                         "failed to sync the tool results of an interrupted generation",
                         extra={"error": str(e)},
                     )
+            await asyncio.gather(*send_tasks)
             if timeout_cancel is not None:
                 raise timeout_cancel
             return
@@ -5009,6 +5042,7 @@ class AgentActivity(RecognitionHooks):
 
         self._background_speeches.add(speech_handle)
         await exe_task
+        await asyncio.gather(*send_tasks)
         self._background_speeches.discard(speech_handle)
 
         # important: no agent output should be used after this point
@@ -5024,8 +5058,12 @@ class AgentActivity(RecognitionHooks):
             )
             new_agent_task: Agent | None = None
             ignore_task_switch = False
+            sent_reply_required = False
 
             for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call.call_id in sent_call_ids:
+                    sent_reply_required |= sanitized_out.fnc_call_out.reply_required
+                    continue
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
@@ -5051,7 +5089,8 @@ class AgentActivity(RecognitionHooks):
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
 
-            self._session.emit("function_tools_executed", fnc_executed_ev)
+            if fnc_executed_ev.function_calls:
+                self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
@@ -5125,7 +5164,7 @@ class AgentActivity(RecognitionHooks):
 
             # a model that replies to tool output itself does so even for an interrupted speech
             auto_reply = self._rt_session.capabilities.auto_tool_reply_generation
-            tool_reply_expected = fnc_executed_ev.has_tool_reply and (
+            tool_reply_expected = (fnc_executed_ev.has_tool_reply or sent_reply_required) and (
                 auto_reply or not speech_handle.interrupted
             )
             if tool_reply_expected and not auto_reply:

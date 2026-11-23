@@ -272,6 +272,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
                 turn_detection=True,
                 user_transcription=caps.user_transcription,
                 auto_tool_reply_generation=caps.auto_tool_reply_generation,
+                per_call_tool_output=caps.per_call_tool_output,
                 audio_output=True,
                 manual_function_calls=False,
                 supports_overlapping_speech=True,
@@ -619,11 +620,11 @@ class _DuplexRealtimeSession(RealtimeSession):
                 "duplex context is append-only; the model keeps what it has been told",
                 extra={"item_ids": edited},
             )
-        if new_items := [
-            item for _, item_id in diff.to_create if (item := chat_ctx.get_by_id(item_id))
-        ]:
-            await self._duplex._append_items(new_items)
+        new_items = [item for _, item_id in diff.to_create if (item := chat_ctx.get_by_id(item_id))]
+        # before the await, so a burst that closes meanwhile lands in the new context
         self._chat_ctx = chat_ctx
+        if new_items:
+            await self._duplex._append_items(new_items)
 
     async def update_tools(self, tools: list[Tool]) -> None:
         await self._duplex._update_tools(tools)
