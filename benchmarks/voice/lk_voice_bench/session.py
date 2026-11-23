@@ -5,7 +5,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import time
+import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,8 +24,13 @@ from livekit.agents.llm import ToolError, function_tool
 from livekit.agents.utils import http_context
 from livekit.agents.voice.transcription import TranscriptSynchronizer
 
+from . import tracing
 from .audio_io import CallerAudioInput, PlayedChunk, SpeakerOutput, SpokenTextOutput
 from .config import AgentConfig
+
+SAVE_AUDIO_ENV = "LK_BENCH_SAVE_AUDIO"
+"""If set, the caller audio each session's microphone received is kept and written next to its
+agent log (``<log>.caller.wav``), e.g. to replay it through the VAD offline."""
 
 logger = logging.getLogger("lk_voice_bench")
 
@@ -122,6 +129,13 @@ class BenchAgent:
         self.config = config
         self._external_clock = external_clock
         self.log = SessionLog()
+        self._trace_id: int | None = None
+        if tracing.enabled():
+            tracing.install()  # before the session creates its first span
+        self._caller_audio: bytearray | None = (
+            bytearray() if os.environ.get(SAVE_AUDIO_ENV) else None
+        )
+        self._caller_rate: int | None = None
         self.mic = CallerAudioInput()
         self.speaker = SpeakerOutput(sample_rate=output_sample_rate, on_played=on_played)
         self.spoken_text = SpokenTextOutput(self.speaker)
@@ -185,9 +199,15 @@ class BenchAgent:
         if not self._external_clock:
             self.speaker.start()
         await self.session.start(agent=self.agent, record=False)
+        if (span := self.session._session_span) is not None:
+            self._trace_id = span.get_span_context().trace_id
         self.log.add("started", config=self.config.to_dict())
 
     def push_caller_audio(self, pcm: bytes, sample_rate: int) -> None:
+        if self._caller_audio is not None:
+            self._caller_rate = self._caller_rate or sample_rate
+            if sample_rate == self._caller_rate:
+                self._caller_audio.extend(pcm)
         self.mic.push_pcm(pcm, sample_rate)
 
     async def aclose(self) -> None:
@@ -207,3 +227,14 @@ class BenchAgent:
         with open(path, "w") as f:
             for ev in self.log.events:
                 f.write(json.dumps(ev, default=str) + "\n")
+            # the session's own spans, once it has closed and they have all ended
+            if self._trace_id is not None:
+                for span in tracing.pop_trace(self._trace_id):
+                    f.write(json.dumps({"t": span["start"], "kind": "span", **span}, default=str))
+                    f.write("\n")
+        if self._caller_audio and self._caller_rate:
+            with wave.open(path.removesuffix(".jsonl") + ".caller.wav", "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(self._caller_rate)
+                w.writeframes(bytes(self._caller_audio))
