@@ -1717,3 +1717,73 @@ async def test_modern_stream_still_published_when_legacy_is_skipped() -> None:
 
     assert "".join(writer.chunks) == "hello"
     assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.parametrize("published_on_join", [False, True])
+async def test_prepared_audio_output_publishes_once_without_pcm(published_on_join: bool) -> None:
+    """Both connect-time and ordinary publication use the same empty source/track."""
+    room = _FakeRoom()
+    publication = SimpleNamespace(track=None, sid="TR_initial", wait_for_subscription=AsyncMock())
+    room.local_participant.track_publications = {}
+    room.local_participant.publish_track = AsyncMock(return_value=publication)
+    output = _ParticipantAudioOutput(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        track_publish_options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+    )
+    try:
+        track, options = output._prepare_track()
+        assert output._prepare_track()[0] is track
+        publication.track = track
+        if published_on_join:
+            room.local_participant.track_publications["TR_initial"] = publication
+        await output.start()
+        assert output._publication is publication
+        assert output.subscribed.done()
+        if published_on_join:
+            room.local_participant.publish_track.assert_not_awaited()
+        else:
+            room.local_participant.publish_track.assert_awaited_once_with(track, options)
+        # Repeated starts do not republish or replace the forwarding task.
+        forwarding = output._forwarding_task
+        await output.start()
+        assert output._forwarding_task is forwarding
+        assert room.local_participant.publish_track.await_count == (0 if published_on_join else 1)
+    finally:
+        await output.aclose()
+    assert forwarding is not None and forwarding.done()
+
+
+async def test_audio_output_starts_before_input_participant_and_is_cancelled_on_close() -> None:
+    """Participant discovery must not delay output publication or leak its startup task."""
+    room = _FakeRoom()
+    session = MagicMock(spec=AgentSession)
+    room_io = RoomIO(
+        session,
+        room,
+        options=RoomOptions(
+            audio_input=False,
+            audio_output=False,
+            text_output=False,
+            close_on_disconnect=False,
+        ),
+    )
+    publishing = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def start_output(**kwargs: object) -> None:
+        publishing.set()
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
+
+    await room_io.start()
+    room_io._audio_output = SimpleNamespace(start=start_output, aclose=AsyncMock())
+    await publishing.wait()
+    assert not room_io._participant_available_fut.done()
+    assert not room_io._ready_fut.done()
+    await room_io.aclose()
+    assert stopped.is_set()
+    assert room_io._init_atask.done()

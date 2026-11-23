@@ -24,7 +24,7 @@ import multiprocessing as mp
 import os
 import tempfile
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from enum import Enum, unique
 from pathlib import Path
@@ -699,6 +699,7 @@ class JobContext:
         auto_subscribe: AutoSubscribe = AutoSubscribe.SUBSCRIBE_ALL,
         rtc_config: rtc.RtcConfiguration | None = None,
         single_peer_connection: bool | None = None,
+        publish_tracks: Sequence[tuple[rtc.LocalTrack, rtc.TrackPublishOptions]] = (),
         # deprecated
         e2ee: rtc.E2EEOptions | None = None,
     ) -> None:
@@ -708,7 +709,9 @@ class JobContext:
             encryption: End-to-end encryption options. If provided, the Agent will utilize end-to-end encryption. Note: clients will also need to handle E2EE.
             auto_subscribe: Whether to automatically subscribe to tracks. Default is AutoSubscribe.SUBSCRIBE_ALL.
             rtc_config: Custom RTC configuration to use when connecting to the room.
-            single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the default (False).
+            single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the RTC default.
+            publish_tracks: Prepared tracks and publication options to publish during connection.
+                Ignored when already connected; callers must then publish tracks normally.
         """  # noqa: E501
         async with self._lock:
             if self._connected:
@@ -722,6 +725,11 @@ class JobContext:
                 rtc_config=rtc_config,
                 single_peer_connection=single_peer_connection,
             )
+
+            # Older RTC wheels keep the ordinary publish path. Newer wheels can publish
+            # the prepared tracks as part of connect without changing Session's API.
+            if hasattr(room_options, "publish_tracks"):
+                room_options.publish_tracks = list(publish_tracks)
 
             with session_context.session_span(
                 "room_connect",

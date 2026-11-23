@@ -1,0 +1,1751 @@
+{
+  "summary": [
+    {
+      "case": "controlled-activity-1200",
+      "profile": "automatic",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 36.5,
+        "p95": 36.6
+      },
+      "client_connected_ms": {
+        "median": 429.3,
+        "p95": 432.1
+      },
+      "entrypoint_ms": {
+        "median": 421.9,
+        "p95": 430.2
+      },
+      "agent_room_connected_ms": {
+        "median": 997.1,
+        "p95": 1022.2
+      },
+      "activity_ready_ms": {
+        "median": 1767.0,
+        "p95": 1786.8
+      },
+      "session_returned_ms": {
+        "median": 1768.2,
+        "p95": 1788.2
+      },
+      "first_pcm_ms": {
+        "median": 1768.8,
+        "p95": 1789.2
+      },
+      "publication_ms": {
+        "median": 69.1,
+        "p95": 69.6
+      },
+      "subscription_ready_ms": {
+        "median": 1172.4,
+        "p95": 1191.1
+      },
+      "first_rendered_audio_ms": {
+        "median": 1899.5,
+        "p95": 1921.1
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 607.5,
+        "p95": 616.8
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 170.1,
+        "p95": 174.4
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 61,
+        "p95": 67
+      }
+    },
+    {
+      "case": "controlled-activity-1200",
+      "profile": "example-order",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 38.0,
+        "p95": 39.3
+      },
+      "client_connected_ms": {
+        "median": 421.3,
+        "p95": 430.3
+      },
+      "entrypoint_ms": {
+        "median": 419.8,
+        "p95": 426.2
+      },
+      "agent_room_connected_ms": {
+        "median": 995.0,
+        "p95": 1081.6
+      },
+      "activity_ready_ms": {
+        "median": 2261.0,
+        "p95": 2347.2
+      },
+      "session_returned_ms": {
+        "median": 2262.1,
+        "p95": 2348.5
+      },
+      "first_pcm_ms": {
+        "median": 2262.7,
+        "p95": 2349.7
+      },
+      "publication_ms": {
+        "median": 60.5,
+        "p95": 64.7
+      },
+      "subscription_ready_ms": {
+        "median": 2435.2,
+        "p95": 2524.0
+      },
+      "first_rendered_audio_ms": {
+        "median": 2538.5,
+        "p95": 2659.6
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 172.5,
+        "p95": 174.3
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 60.5,
+        "p95": 64.7
+      },
+      "post_join_media_setup_ms": {
+        "median": 173.0,
+        "p95": 175.4
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 172.5,
+        "p95": 174.3
+      },
+      "browser_ice_rtt_ms": {
+        "median": 63,
+        "p95": 64
+      }
+    },
+    {
+      "case": "controlled-activity-1200",
+      "profile": "parallel-output",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 42.0,
+        "p95": 45.6
+      },
+      "client_connected_ms": {
+        "median": 431.4,
+        "p95": 485.7
+      },
+      "entrypoint_ms": {
+        "median": 429.3,
+        "p95": 481.3
+      },
+      "agent_room_connected_ms": {
+        "median": 1047.6,
+        "p95": 1066.7
+      },
+      "activity_ready_ms": {
+        "median": 2319.3,
+        "p95": 2327.8
+      },
+      "session_returned_ms": {
+        "median": 2320.5,
+        "p95": 2328.9
+      },
+      "first_pcm_ms": {
+        "median": 2321.0,
+        "p95": 2329.6
+      },
+      "publication_ms": {
+        "median": 68.8,
+        "p95": 75.4
+      },
+      "subscription_ready_ms": {
+        "median": 1228.5,
+        "p95": 1251.1
+      },
+      "first_rendered_audio_ms": {
+        "median": 2450.3,
+        "p95": 2463.5
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 1078.5,
+        "p95": 1092.5
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 181.4,
+        "p95": 181.6
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 64,
+        "p95": 67
+      }
+    },
+    {
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 37.9,
+        "p95": 39.6
+      },
+      "client_connected_ms": {
+        "median": 433.2,
+        "p95": 476
+      },
+      "entrypoint_ms": {
+        "median": 416.4,
+        "p95": 436.0
+      },
+      "agent_room_connected_ms": {
+        "median": 1051.3,
+        "p95": 1060.3
+      },
+      "activity_ready_ms": {
+        "median": 1773.7,
+        "p95": 1788.6
+      },
+      "session_returned_ms": {
+        "median": 1774.9,
+        "p95": 1790.8
+      },
+      "first_pcm_ms": {
+        "median": 1775.8,
+        "p95": 1791.8
+      },
+      "subscription_ready_ms": {
+        "median": 1212.6,
+        "p95": 1216.4
+      },
+      "first_rendered_audio_ms": {
+        "median": 1902.4,
+        "p95": 1925.2
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 568.4,
+        "p95": 575.4
+      },
+      "post_join_media_setup_ms": {
+        "median": 156.1,
+        "p95": 171.1
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 62,
+        "p95": 64
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "profile": "automatic",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 41.6,
+        "p95": 45.4
+      },
+      "client_connected_ms": {
+        "median": 442.2,
+        "p95": 465.4
+      },
+      "entrypoint_ms": {
+        "median": 439.1,
+        "p95": 465.9
+      },
+      "agent_room_connected_ms": {
+        "median": 1060.4,
+        "p95": 1086.4
+      },
+      "activity_ready_ms": {
+        "median": 588.3,
+        "p95": 616.4
+      },
+      "session_returned_ms": {
+        "median": 1061.7,
+        "p95": 1087.5
+      },
+      "first_pcm_ms": {
+        "median": 590.1,
+        "p95": 622.0
+      },
+      "publication_ms": {
+        "median": 69.9,
+        "p95": 72.6
+      },
+      "subscription_ready_ms": {
+        "median": 1231.0,
+        "p95": 1259.5
+      },
+      "first_rendered_audio_ms": {
+        "median": 1357.9,
+        "p95": 1381.6
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 637.5,
+        "p95": 643.8
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 69.9,
+        "p95": 72.6
+      },
+      "post_join_media_setup_ms": {
+        "median": 172.4,
+        "p95": 173.1
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 172.4,
+        "p95": 173.1
+      },
+      "browser_ice_rtt_ms": {
+        "median": 65,
+        "p95": 65
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "profile": "example-order",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 34.8,
+        "p95": 37.3
+      },
+      "client_connected_ms": {
+        "median": 447.9,
+        "p95": 460.4
+      },
+      "entrypoint_ms": {
+        "median": 431.4,
+        "p95": 456.0
+      },
+      "agent_room_connected_ms": {
+        "median": 1044.9,
+        "p95": 1051.1
+      },
+      "activity_ready_ms": {
+        "median": 1101.4,
+        "p95": 1103.2
+      },
+      "session_returned_ms": {
+        "median": 1103.4,
+        "p95": 1104.8
+      },
+      "first_pcm_ms": {
+        "median": 1104.0,
+        "p95": 1106.1
+      },
+      "publication_ms": {
+        "median": 66.8,
+        "p95": 74.8
+      },
+      "subscription_ready_ms": {
+        "median": 1269.0,
+        "p95": 1281.4
+      },
+      "first_rendered_audio_ms": {
+        "median": 1376.4,
+        "p95": 1406.7
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 171.9,
+        "p95": 175.3
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 66.8,
+        "p95": 74.8
+      },
+      "post_join_media_setup_ms": {
+        "median": 172.6,
+        "p95": 176.2
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 171.9,
+        "p95": 175.3
+      },
+      "browser_ice_rtt_ms": {
+        "median": 64,
+        "p95": 66
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "profile": "parallel-output",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 37.1,
+        "p95": 46.9
+      },
+      "client_connected_ms": {
+        "median": 439.8,
+        "p95": 473.9
+      },
+      "entrypoint_ms": {
+        "median": 432.5,
+        "p95": 451.6
+      },
+      "agent_room_connected_ms": {
+        "median": 1047.5,
+        "p95": 1049.5
+      },
+      "activity_ready_ms": {
+        "median": 1096.4,
+        "p95": 1107.3
+      },
+      "session_returned_ms": {
+        "median": 1098.9,
+        "p95": 1116.5
+      },
+      "first_pcm_ms": {
+        "median": 1099.5,
+        "p95": 1117.9
+      },
+      "publication_ms": {
+        "median": 66.6,
+        "p95": 70.7
+      },
+      "subscription_ready_ms": {
+        "median": 1224.7,
+        "p95": 1226.4
+      },
+      "first_rendered_audio_ms": {
+        "median": 1345.5,
+        "p95": 1348.5
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 125.2,
+        "p95": 126.9
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 66.6,
+        "p95": 70.7
+      },
+      "post_join_media_setup_ms": {
+        "median": 176.3,
+        "p95": 177.9
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 125.2,
+        "p95": 126.9
+      },
+      "browser_ice_rtt_ms": {
+        "median": 63,
+        "p95": 72
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 36.2,
+        "p95": 37.7
+      },
+      "client_connected_ms": {
+        "median": 427.6,
+        "p95": 451.5
+      },
+      "entrypoint_ms": {
+        "median": 428.9,
+        "p95": 447.7
+      },
+      "agent_room_connected_ms": {
+        "median": 1076.2,
+        "p95": 1078.4
+      },
+      "activity_ready_ms": {
+        "median": 578.6,
+        "p95": 600.3
+      },
+      "session_returned_ms": {
+        "median": 1077.5,
+        "p95": 1080.7
+      },
+      "first_pcm_ms": {
+        "median": 583.7,
+        "p95": 601.7
+      },
+      "subscription_ready_ms": {
+        "median": 1231.7,
+        "p95": 1232.3
+      },
+      "first_rendered_audio_ms": {
+        "median": 1352.6,
+        "p95": 1357.0
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 641.2,
+        "p95": 648.7
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 155.5,
+        "p95": 157.8
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 155.5,
+        "p95": 157.8
+      },
+      "browser_ice_rtt_ms": {
+        "median": 62,
+        "p95": 64
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "profile": "automatic",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 35.2,
+        "p95": 36.3
+      },
+      "client_connected_ms": {
+        "median": 417.8,
+        "p95": 431.4
+      },
+      "entrypoint_ms": {
+        "median": 434.7,
+        "p95": 441.6
+      },
+      "agent_room_connected_ms": {
+        "median": 1048.5,
+        "p95": 1445.1
+      },
+      "activity_ready_ms": {
+        "median": 592.7,
+        "p95": 990.2
+      },
+      "session_returned_ms": {
+        "median": 1050.1,
+        "p95": 1446.9
+      },
+      "first_pcm_ms": {
+        "median": 1798.9,
+        "p95": 2195.3
+      },
+      "publication_ms": {
+        "median": 72.1,
+        "p95": 72.8
+      },
+      "subscription_ready_ms": {
+        "median": 1224.7,
+        "p95": 1619.5
+      },
+      "first_rendered_audio_ms": {
+        "median": 1933.4,
+        "p95": 2309.9
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 575.8,
+        "p95": 604.3
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 175.4,
+        "p95": 177.8
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 63,
+        "p95": 66
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "profile": "example-order",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 35.3,
+        "p95": 41.9
+      },
+      "client_connected_ms": {
+        "median": 431.5,
+        "p95": 448.6
+      },
+      "entrypoint_ms": {
+        "median": 421.7,
+        "p95": 445.6
+      },
+      "agent_room_connected_ms": {
+        "median": 1001.5,
+        "p95": 1043.6
+      },
+      "activity_ready_ms": {
+        "median": 1056.4,
+        "p95": 1096.5
+      },
+      "session_returned_ms": {
+        "median": 1060.1,
+        "p95": 1099.0
+      },
+      "first_pcm_ms": {
+        "median": 2262.2,
+        "p95": 2300.3
+      },
+      "publication_ms": {
+        "median": 69.0,
+        "p95": 73.3
+      },
+      "subscription_ready_ms": {
+        "median": 1231.8,
+        "p95": 1271.4
+      },
+      "first_rendered_audio_ms": {
+        "median": 2377.8,
+        "p95": 2431.0
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 1030.3,
+        "p95": 1034.9
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 171.6,
+        "p95": 172.2
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 67,
+        "p95": 78
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "profile": "parallel-output",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 40.2,
+        "p95": 47.4
+      },
+      "client_connected_ms": {
+        "median": 442.8,
+        "p95": 446.3
+      },
+      "entrypoint_ms": {
+        "median": 426.4,
+        "p95": 448.8
+      },
+      "agent_room_connected_ms": {
+        "median": 1030.1,
+        "p95": 1092.4
+      },
+      "activity_ready_ms": {
+        "median": 1096.7,
+        "p95": 1144.0
+      },
+      "session_returned_ms": {
+        "median": 1102.8,
+        "p95": 1146.0
+      },
+      "first_pcm_ms": {
+        "median": 2309.7,
+        "p95": 2347.7
+      },
+      "publication_ms": {
+        "median": 71.5,
+        "p95": 74.6
+      },
+      "subscription_ready_ms": {
+        "median": 1208.6,
+        "p95": 1264.5
+      },
+      "first_rendered_audio_ms": {
+        "median": 2450.1,
+        "p95": 2481.1
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 1083.2,
+        "p95": 1101.1
+      },
+      "instant_registration_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 174.2,
+        "p95": 176.0
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 65,
+        "p95": 80
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "n": 3,
+      "sample": {
+        "median": 1,
+        "p95": 2
+      },
+      "connecting_paint_ms": {
+        "median": 36.0,
+        "p95": 44.0
+      },
+      "client_connected_ms": {
+        "median": 440.4,
+        "p95": 441.6
+      },
+      "entrypoint_ms": {
+        "median": 440.8,
+        "p95": 447.8
+      },
+      "agent_room_connected_ms": {
+        "median": 1026.4,
+        "p95": 1791.3
+      },
+      "activity_ready_ms": {
+        "median": 597.8,
+        "p95": 976.8
+      },
+      "session_returned_ms": {
+        "median": 1027.7,
+        "p95": 1794.6
+      },
+      "first_pcm_ms": {
+        "median": 1803.8,
+        "p95": 2180.2
+      },
+      "subscription_ready_ms": {
+        "median": 1186.7,
+        "p95": 1948.9
+      },
+      "first_rendered_audio_ms": {
+        "median": 1933.5,
+        "p95": 2333.1
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 586.6,
+        "p95": 617.2
+      },
+      "post_join_media_setup_ms": {
+        "median": 160.3,
+        "p95": 173.1
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 61,
+        "p95": 65
+      }
+    }
+  ],
+  "samples": [
+    {
+      "run_id": "ccdbb3ad084c",
+      "case": "controlled-fast",
+      "profile": "example-order",
+      "sample": 0,
+      "connecting_paint_ms": 34.800048828125,
+      "client_connected_ms": 447.89990234375,
+      "entrypoint_ms": 431.44921875,
+      "agent_room_connected_ms": 1051.13818359375,
+      "activity_ready_ms": 1101.412109375,
+      "session_returned_ms": 1103.43017578125,
+      "first_pcm_ms": 1104.011962890625,
+      "publication_ms": 65.744140625,
+      "subscription_ready_ms": 1269.028076171875,
+      "first_rendered_audio_ms": 1376.39990234375,
+      "pcm_waiting_for_media_ms": 165.01611328125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 65.744140625,
+      "post_join_media_setup_ms": 165.4541015625,
+      "instant_post_join_media_saving_bound_ms": 165.01611328125,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "94127e0c098d",
+      "case": "controlled-fast",
+      "profile": "parallel-output",
+      "sample": 0,
+      "connecting_paint_ms": 37.099853515625,
+      "client_connected_ms": 473.89990234375,
+      "entrypoint_ms": 451.56591796875,
+      "agent_room_connected_ms": 1043.509033203125,
+      "activity_ready_ms": 1094.964111328125,
+      "session_returned_ms": 1096.931884765625,
+      "first_pcm_ms": 1098.78515625,
+      "publication_ms": 63.901123046875,
+      "subscription_ready_ms": 1224.012939453125,
+      "first_rendered_audio_ms": 1348.5,
+      "pcm_waiting_for_media_ms": 125.227783203125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 63.901123046875,
+      "post_join_media_setup_ms": 177.9130859375,
+      "instant_post_join_media_saving_bound_ms": 125.227783203125,
+      "browser_ice_rtt_ms": 63
+    },
+    {
+      "run_id": "eb13e35293ef",
+      "case": "controlled-fast",
+      "profile": "automatic",
+      "sample": 0,
+      "connecting_paint_ms": 45.400146484375,
+      "client_connected_ms": 465.400146484375,
+      "entrypoint_ms": 465.855224609375,
+      "agent_room_connected_ms": 1086.439208984375,
+      "activity_ready_ms": 616.368896484375,
+      "session_returned_ms": 1087.50439453125,
+      "first_pcm_ms": 621.999267578125,
+      "publication_ms": 72.5869140625,
+      "subscription_ready_ms": 1259.504150390625,
+      "first_rendered_audio_ms": 1381.60009765625,
+      "pcm_waiting_for_media_ms": 637.5048828125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 72.5869140625,
+      "post_join_media_setup_ms": 172.36376953125,
+      "instant_post_join_media_saving_bound_ms": 172.36376953125,
+      "browser_ice_rtt_ms": 65
+    },
+    {
+      "run_id": "b465f29299cf",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "sample": 0,
+      "connecting_paint_ms": 36.199951171875,
+      "client_connected_ms": 417.89990234375,
+      "entrypoint_ms": 412.618896484375,
+      "agent_room_connected_ms": 1043.88671875,
+      "activity_ready_ms": 558.02099609375,
+      "session_returned_ms": 1047.44482421875,
+      "first_pcm_ms": 560.501953125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1201.7080078125,
+      "first_rendered_audio_ms": 1317.5,
+      "pcm_waiting_for_media_ms": 641.2060546875,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 157.8212890625,
+      "instant_post_join_media_saving_bound_ms": 157.8212890625,
+      "browser_ice_rtt_ms": 58
+    },
+    {
+      "run_id": "ef3f045bb6e4",
+      "case": "controlled-fast",
+      "profile": "parallel-output",
+      "sample": 1,
+      "connecting_paint_ms": 46.89990234375,
+      "client_connected_ms": 439.800048828125,
+      "entrypoint_ms": 432.47216796875,
+      "agent_room_connected_ms": 1047.5390625,
+      "activity_ready_ms": 1096.407958984375,
+      "session_returned_ms": 1098.947021484375,
+      "first_pcm_ms": 1099.541015625,
+      "publication_ms": 66.591796875,
+      "subscription_ready_ms": 1226.430908203125,
+      "first_rendered_audio_ms": 1345.5,
+      "pcm_waiting_for_media_ms": 126.889892578125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 66.591796875,
+      "post_join_media_setup_ms": 176.252685546875,
+      "instant_post_join_media_saving_bound_ms": 126.889892578125,
+      "browser_ice_rtt_ms": 72
+    },
+    {
+      "run_id": "a0d5781f7b67",
+      "case": "controlled-fast",
+      "profile": "automatic",
+      "sample": 1,
+      "connecting_paint_ms": 37.5,
+      "client_connected_ms": 433.60009765625,
+      "entrypoint_ms": 431.5390625,
+      "agent_room_connected_ms": 1060.35400390625,
+      "activity_ready_ms": 581.221923828125,
+      "session_returned_ms": 1061.697265625,
+      "first_pcm_ms": 587.203857421875,
+      "publication_ms": 66.93603515625,
+      "subscription_ready_ms": 1230.9580078125,
+      "first_rendered_audio_ms": 1357.900146484375,
+      "pcm_waiting_for_media_ms": 643.754150390625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 66.93603515625,
+      "post_join_media_setup_ms": 169.69091796875,
+      "instant_post_join_media_saving_bound_ms": 169.69091796875,
+      "browser_ice_rtt_ms": 60
+    },
+    {
+      "run_id": "639e3d13914d",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "sample": 1,
+      "connecting_paint_ms": 37.7001953125,
+      "client_connected_ms": 451.5,
+      "entrypoint_ms": 447.72216796875,
+      "agent_room_connected_ms": 1076.154052734375,
+      "activity_ready_ms": 600.26708984375,
+      "session_returned_ms": 1077.531005859375,
+      "first_pcm_ms": 601.73291015625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1231.67919921875,
+      "first_rendered_audio_ms": 1352.60009765625,
+      "pcm_waiting_for_media_ms": 629.9462890625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 155.525146484375,
+      "instant_post_join_media_saving_bound_ms": 155.525146484375,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "f848619d3b79",
+      "case": "controlled-fast",
+      "profile": "example-order",
+      "sample": 1,
+      "connecting_paint_ms": 37.2998046875,
+      "client_connected_ms": 415.699951171875,
+      "entrypoint_ms": 410.574951171875,
+      "agent_room_connected_ms": 982.201904296875,
+      "activity_ready_ms": 1036.580810546875,
+      "session_returned_ms": 1037.98681640625,
+      "first_pcm_ms": 1038.921630859375,
+      "publication_ms": 74.81591796875,
+      "subscription_ready_ms": 1210.800048828125,
+      "first_rendered_audio_ms": 1336.599853515625,
+      "pcm_waiting_for_media_ms": 171.87841796875,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 74.81591796875,
+      "post_join_media_setup_ms": 172.560302734375,
+      "instant_post_join_media_saving_bound_ms": 171.87841796875,
+      "browser_ice_rtt_ms": 66
+    },
+    {
+      "run_id": "7125659d9207",
+      "case": "controlled-fast",
+      "profile": "automatic",
+      "sample": 2,
+      "connecting_paint_ms": 41.60009765625,
+      "client_connected_ms": 442.2001953125,
+      "entrypoint_ms": 439.054931640625,
+      "agent_room_connected_ms": 1000.97607421875,
+      "activity_ready_ms": 588.27099609375,
+      "session_returned_ms": 1003.20703125,
+      "first_pcm_ms": 590.12109375,
+      "publication_ms": 69.92626953125,
+      "subscription_ready_ms": 1175.140869140625,
+      "first_rendered_audio_ms": 1308.400146484375,
+      "pcm_waiting_for_media_ms": 585.019775390625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 69.92626953125,
+      "post_join_media_setup_ms": 173.087890625,
+      "instant_post_join_media_saving_bound_ms": 173.087890625,
+      "browser_ice_rtt_ms": 65
+    },
+    {
+      "run_id": "9260f2381548",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "sample": 2,
+      "connecting_paint_ms": 32.800048828125,
+      "client_connected_ms": 427.60009765625,
+      "entrypoint_ms": 428.88427734375,
+      "agent_room_connected_ms": 1078.408203125,
+      "activity_ready_ms": 578.59033203125,
+      "session_returned_ms": 1080.733154296875,
+      "first_pcm_ms": 583.653076171875,
+      "publication_ms": null,
+      "subscription_ready_ms": 1232.3271484375,
+      "first_rendered_audio_ms": 1357.0,
+      "pcm_waiting_for_media_ms": 648.674072265625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 153.9189453125,
+      "instant_post_join_media_saving_bound_ms": 153.9189453125,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "26274fd5b328",
+      "case": "controlled-fast",
+      "profile": "example-order",
+      "sample": 2,
+      "connecting_paint_ms": 31.89990234375,
+      "client_connected_ms": 460.39990234375,
+      "entrypoint_ms": 456.0029296875,
+      "agent_room_connected_ms": 1044.949951171875,
+      "activity_ready_ms": 1103.1767578125,
+      "session_returned_ms": 1104.83984375,
+      "first_pcm_ms": 1106.115966796875,
+      "publication_ms": 66.827880859375,
+      "subscription_ready_ms": 1281.423095703125,
+      "first_rendered_audio_ms": 1406.699951171875,
+      "pcm_waiting_for_media_ms": 175.30712890625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 66.827880859375,
+      "post_join_media_setup_ms": 176.171142578125,
+      "instant_post_join_media_saving_bound_ms": 175.30712890625,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "2fc6c0aaf85b",
+      "case": "controlled-fast",
+      "profile": "parallel-output",
+      "sample": 2,
+      "connecting_paint_ms": 30.89990234375,
+      "client_connected_ms": 435.39990234375,
+      "entrypoint_ms": 423.345703125,
+      "agent_room_connected_ms": 1049.546875,
+      "activity_ready_ms": 1107.294921875,
+      "session_returned_ms": 1116.505859375,
+      "first_pcm_ms": 1117.89794921875,
+      "publication_ms": 70.67919921875,
+      "subscription_ready_ms": 1224.69873046875,
+      "first_rendered_audio_ms": 1341.199951171875,
+      "pcm_waiting_for_media_ms": 106.80078125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 70.67919921875,
+      "post_join_media_setup_ms": 173.0361328125,
+      "instant_post_join_media_saving_bound_ms": 106.80078125,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "48803b71ef60",
+      "case": "controlled-activity-1200",
+      "profile": "example-order",
+      "sample": 0,
+      "connecting_paint_ms": 34.89990234375,
+      "client_connected_ms": 430.300048828125,
+      "entrypoint_ms": 426.198974609375,
+      "agent_room_connected_ms": 995.014892578125,
+      "activity_ready_ms": 2260.97607421875,
+      "session_returned_ms": 2262.06396484375,
+      "first_pcm_ms": 2262.705810546875,
+      "publication_ms": 64.652099609375,
+      "subscription_ready_ms": 2435.177001953125,
+      "first_rendered_audio_ms": 2538.5,
+      "pcm_waiting_for_media_ms": 172.47119140625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 64.652099609375,
+      "post_join_media_setup_ms": 172.967041015625,
+      "instant_post_join_media_saving_bound_ms": 172.47119140625,
+      "browser_ice_rtt_ms": 63
+    },
+    {
+      "run_id": "134f023c9c6d",
+      "case": "controlled-activity-1200",
+      "profile": "parallel-output",
+      "sample": 0,
+      "connecting_paint_ms": 45.599853515625,
+      "client_connected_ms": 431.39990234375,
+      "entrypoint_ms": 429.295166015625,
+      "agent_room_connected_ms": 1066.659912109375,
+      "activity_ready_ms": 2327.81103515625,
+      "session_returned_ms": 2328.8828125,
+      "first_pcm_ms": 2329.64306640625,
+      "publication_ms": 68.76708984375,
+      "subscription_ready_ms": 1251.11572265625,
+      "first_rendered_audio_ms": 2463.5,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1078.52734375,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 181.5869140625,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "21280e2c402b",
+      "case": "controlled-activity-1200",
+      "profile": "automatic",
+      "sample": 0,
+      "connecting_paint_ms": 36.60009765625,
+      "client_connected_ms": 432.10009765625,
+      "entrypoint_ms": 421.900146484375,
+      "agent_room_connected_ms": 990.35400390625,
+      "activity_ready_ms": 1767.019287109375,
+      "session_returned_ms": 1768.153076171875,
+      "first_pcm_ms": 1768.789306640625,
+      "publication_ms": 69.64599609375,
+      "subscription_ready_ms": 1161.32421875,
+      "first_rendered_audio_ms": 1899.5,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 607.465087890625,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 170.14013671875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "1cbe54ac6628",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "sample": 0,
+      "connecting_paint_ms": 37.89990234375,
+      "client_connected_ms": 476,
+      "entrypoint_ms": 406.17626953125,
+      "agent_room_connected_ms": 1051.3251953125,
+      "activity_ready_ms": 1773.73828125,
+      "session_returned_ms": 1774.93798828125,
+      "first_pcm_ms": 1775.81689453125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1207.39697265625,
+      "first_rendered_audio_ms": 1895.199951171875,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 568.419921875,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 156.07177734375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "3a8b147664f5",
+      "case": "controlled-activity-1200",
+      "profile": "parallel-output",
+      "sample": 1,
+      "connecting_paint_ms": 36.7998046875,
+      "client_connected_ms": 427.0,
+      "entrypoint_ms": 413.133056640625,
+      "agent_room_connected_ms": 980.973876953125,
+      "activity_ready_ms": 2238.654052734375,
+      "session_returned_ms": 2239.85400390625,
+      "first_pcm_ms": 2240.509765625,
+      "publication_ms": 68.81884765625,
+      "subscription_ready_ms": 1164.81884765625,
+      "first_rendered_audio_ms": 2359.2998046875,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1075.69091796875,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 181.429931640625,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 63
+    },
+    {
+      "run_id": "53422297298c",
+      "case": "controlled-activity-1200",
+      "profile": "automatic",
+      "sample": 1,
+      "connecting_paint_ms": 35.800048828125,
+      "client_connected_ms": 420.900146484375,
+      "entrypoint_ms": 404.5078125,
+      "agent_room_connected_ms": 1022.2021484375,
+      "activity_ready_ms": 1760.357177734375,
+      "session_returned_ms": 1761.614990234375,
+      "first_pcm_ms": 1762.5791015625,
+      "publication_ms": 65.018798828125,
+      "subscription_ready_ms": 1191.107177734375,
+      "first_rendered_audio_ms": 1880.5,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 571.471923828125,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 168.033203125,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "5f41b5a701b2",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "sample": 1,
+      "connecting_paint_ms": 35.60009765625,
+      "client_connected_ms": 433.2001953125,
+      "entrypoint_ms": 416.4052734375,
+      "agent_room_connected_ms": 1041.426025390625,
+      "activity_ready_ms": 1766.277099609375,
+      "session_returned_ms": 1768.697998046875,
+      "first_pcm_ms": 1771.093994140625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1212.572021484375,
+      "first_rendered_audio_ms": 1902.400146484375,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 558.52197265625,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 171.14599609375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "49c2423ba41e",
+      "case": "controlled-activity-1200",
+      "profile": "example-order",
+      "sample": 1,
+      "connecting_paint_ms": 38.0,
+      "client_connected_ms": 421.300048828125,
+      "entrypoint_ms": 419.80126953125,
+      "agent_room_connected_ms": 1081.595947265625,
+      "activity_ready_ms": 2347.166015625,
+      "session_returned_ms": 2348.47412109375,
+      "first_pcm_ms": 2349.672119140625,
+      "publication_ms": 59.988037109375,
+      "subscription_ready_ms": 2523.989013671875,
+      "first_rendered_audio_ms": 2659.60009765625,
+      "pcm_waiting_for_media_ms": 174.31689453125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 59.988037109375,
+      "post_join_media_setup_ms": 175.369873046875,
+      "instant_post_join_media_saving_bound_ms": 174.31689453125,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "15f5c3f3eec0",
+      "case": "controlled-activity-1200",
+      "profile": "automatic",
+      "sample": 2,
+      "connecting_paint_ms": 36.5,
+      "client_connected_ms": 429.300048828125,
+      "entrypoint_ms": 430.212890625,
+      "agent_room_connected_ms": 997.08984375,
+      "activity_ready_ms": 1786.81298828125,
+      "session_returned_ms": 1788.155029296875,
+      "first_pcm_ms": 1789.246826171875,
+      "publication_ms": 69.076904296875,
+      "subscription_ready_ms": 1172.43310546875,
+      "first_rendered_audio_ms": 1921.10009765625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 616.813720703125,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 174.384033203125,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 67
+    },
+    {
+      "run_id": "3bc53ba3fc27",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "sample": 2,
+      "connecting_paint_ms": 39.60009765625,
+      "client_connected_ms": 429.300048828125,
+      "entrypoint_ms": 436.048095703125,
+      "agent_room_connected_ms": 1060.30517578125,
+      "activity_ready_ms": 1788.620361328125,
+      "session_returned_ms": 1790.837158203125,
+      "first_pcm_ms": 1791.839111328125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1216.416015625,
+      "first_rendered_audio_ms": 1925.199951171875,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 575.423095703125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 156.11083984375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "df7708853f52",
+      "case": "controlled-activity-1200",
+      "profile": "example-order",
+      "sample": 2,
+      "connecting_paint_ms": 39.300048828125,
+      "client_connected_ms": 421.099853515625,
+      "entrypoint_ms": 419.505859375,
+      "agent_room_connected_ms": 975.103759765625,
+      "activity_ready_ms": 2238.871826171875,
+      "session_returned_ms": 2240.019775390625,
+      "first_pcm_ms": 2240.744873046875,
+      "publication_ms": 60.531005859375,
+      "subscription_ready_ms": 2412.5048828125,
+      "first_rendered_audio_ms": 2511.0,
+      "pcm_waiting_for_media_ms": 171.760009765625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": 60.531005859375,
+      "post_join_media_setup_ms": 172.3330078125,
+      "instant_post_join_media_saving_bound_ms": 171.760009765625,
+      "browser_ice_rtt_ms": 63
+    },
+    {
+      "run_id": "065cd13bce92",
+      "case": "controlled-activity-1200",
+      "profile": "parallel-output",
+      "sample": 2,
+      "connecting_paint_ms": 42.0,
+      "client_connected_ms": 485.7001953125,
+      "entrypoint_ms": 481.3291015625,
+      "agent_room_connected_ms": 1047.580078125,
+      "activity_ready_ms": 2319.343017578125,
+      "session_returned_ms": 2320.489990234375,
+      "first_pcm_ms": 2320.987060546875,
+      "publication_ms": 75.406005859375,
+      "subscription_ready_ms": 1228.485107421875,
+      "first_rendered_audio_ms": 2450.300048828125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1092.501953125,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 177.743896484375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 67
+    },
+    {
+      "run_id": "02083173d607",
+      "case": "controlled-pcm-1200",
+      "profile": "example-order",
+      "sample": 0,
+      "connecting_paint_ms": 35.300048828125,
+      "client_connected_ms": 431.5,
+      "entrypoint_ms": 421.721923828125,
+      "agent_room_connected_ms": 989.89111328125,
+      "activity_ready_ms": 1037.554931640625,
+      "session_returned_ms": 1040.14501953125,
+      "first_pcm_ms": 2243.326904296875,
+      "publication_ms": 68.7451171875,
+      "subscription_ready_ms": 1208.430908203125,
+      "first_rendered_audio_ms": 2377.800048828125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1034.89599609375,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 168.032958984375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 67
+    },
+    {
+      "run_id": "8b06278c258f",
+      "case": "controlled-pcm-1200",
+      "profile": "parallel-output",
+      "sample": 0,
+      "connecting_paint_ms": 36.0,
+      "client_connected_ms": 431.400146484375,
+      "entrypoint_ms": 421.538330078125,
+      "agent_room_connected_ms": 979.85107421875,
+      "activity_ready_ms": 1031.162353515625,
+      "session_returned_ms": 1034.3759765625,
+      "first_pcm_ms": 2236.170166015625,
+      "publication_ms": 67.787841796875,
+      "subscription_ready_ms": 1156.771240234375,
+      "first_rendered_audio_ms": 2365.7001953125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1079.39892578125,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 174.158935546875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 60
+    },
+    {
+      "run_id": "b0cdd1e20a44",
+      "case": "controlled-pcm-1200",
+      "profile": "automatic",
+      "sample": 0,
+      "connecting_paint_ms": 35.199951171875,
+      "client_connected_ms": 417.0,
+      "entrypoint_ms": 420.528076171875,
+      "agent_room_connected_ms": 1048.5341796875,
+      "activity_ready_ms": 572.22119140625,
+      "session_returned_ms": 1050.06201171875,
+      "first_pcm_ms": 1778.173095703125,
+      "publication_ms": 72.088623046875,
+      "subscription_ready_ms": 1224.695068359375,
+      "first_rendered_audio_ms": 1895.800048828125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 553.47802734375,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 175.413818359375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 66
+    },
+    {
+      "run_id": "19ffae81cbd7",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "sample": 0,
+      "connecting_paint_ms": 34.699951171875,
+      "client_connected_ms": 440.39990234375,
+      "entrypoint_ms": 440.826171875,
+      "agent_room_connected_ms": 1026.35595703125,
+      "activity_ready_ms": 597.78076171875,
+      "session_returned_ms": 1027.722900390625,
+      "first_pcm_ms": 1803.8232421875,
+      "publication_ms": null,
+      "subscription_ready_ms": 1186.673095703125,
+      "first_rendered_audio_ms": 1933.5,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 617.150146484375,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 160.317138671875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "52dd7a900c1e",
+      "case": "controlled-pcm-1200",
+      "profile": "parallel-output",
+      "sample": 1,
+      "connecting_paint_ms": 47.400146484375,
+      "client_connected_ms": 446.300048828125,
+      "entrypoint_ms": 448.797119140625,
+      "agent_room_connected_ms": 1030.0830078125,
+      "activity_ready_ms": 1096.742919921875,
+      "session_returned_ms": 1102.76025390625,
+      "first_pcm_ms": 2309.669189453125,
+      "publication_ms": 74.57373046875,
+      "subscription_ready_ms": 1208.5869140625,
+      "first_rendered_audio_ms": 2450.10009765625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1101.082275390625,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 176.044921875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 65
+    },
+    {
+      "run_id": "e3e27287b99b",
+      "case": "controlled-pcm-1200",
+      "profile": "automatic",
+      "sample": 1,
+      "connecting_paint_ms": 36.2998046875,
+      "client_connected_ms": 431.39990234375,
+      "entrypoint_ms": 441.621826171875,
+      "agent_room_connected_ms": 1015.8662109375,
+      "activity_ready_ms": 592.746826171875,
+      "session_returned_ms": 1017.338134765625,
+      "first_pcm_ms": 1798.93701171875,
+      "publication_ms": 71.441162109375,
+      "subscription_ready_ms": 1194.60400390625,
+      "first_rendered_audio_ms": 1933.39990234375,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 604.3330078125,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 177.821044921875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 63
+    },
+    {
+      "run_id": "7e54ebe231e0",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "sample": 1,
+      "connecting_paint_ms": 36.0,
+      "client_connected_ms": 431.099853515625,
+      "entrypoint_ms": 420.183837890625,
+      "agent_room_connected_ms": 1013.60498046875,
+      "activity_ready_ms": 567.966064453125,
+      "session_returned_ms": 1014.993896484375,
+      "first_pcm_ms": 1773.26171875,
+      "publication_ms": null,
+      "subscription_ready_ms": 1186.658935546875,
+      "first_rendered_audio_ms": 1903.099853515625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 586.602783203125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 173.053955078125,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 65
+    },
+    {
+      "run_id": "e4eeaa1105d2",
+      "case": "controlled-pcm-1200",
+      "profile": "example-order",
+      "sample": 1,
+      "connecting_paint_ms": 41.900146484375,
+      "client_connected_ms": 448.60009765625,
+      "entrypoint_ms": 445.647216796875,
+      "agent_room_connected_ms": 1001.474365234375,
+      "activity_ready_ms": 1056.425048828125,
+      "session_returned_ms": 1060.10498046875,
+      "first_pcm_ms": 2262.188232421875,
+      "publication_ms": 73.339111328125,
+      "subscription_ready_ms": 1231.84814453125,
+      "first_rendered_audio_ms": 2370.0,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1030.340087890625,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 171.59716796875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "a31db06ce5ab",
+      "case": "controlled-pcm-1200",
+      "profile": "automatic",
+      "sample": 2,
+      "connecting_paint_ms": 35,
+      "client_connected_ms": 417.800048828125,
+      "entrypoint_ms": 434.70703125,
+      "agent_room_connected_ms": 1445.06298828125,
+      "activity_ready_ms": 990.160888671875,
+      "session_returned_ms": 1446.9111328125,
+      "first_pcm_ms": 2195.331787109375,
+      "publication_ms": 72.761962890625,
+      "subscription_ready_ms": 1619.493896484375,
+      "first_rendered_audio_ms": 2309.89990234375,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 575.837890625,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 173.327880859375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "302f935a1e39",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "sample": 2,
+      "connecting_paint_ms": 44.0,
+      "client_connected_ms": 441.60009765625,
+      "entrypoint_ms": 447.807373046875,
+      "agent_room_connected_ms": 1791.26123046875,
+      "activity_ready_ms": 976.81494140625,
+      "session_returned_ms": 1794.64404296875,
+      "first_pcm_ms": 2180.22705078125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1948.85107421875,
+      "first_rendered_audio_ms": 2333.10009765625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 231.3759765625,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 157.58984375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "5b30d066b63d",
+      "case": "controlled-pcm-1200",
+      "profile": "example-order",
+      "sample": 2,
+      "connecting_paint_ms": 31.5,
+      "client_connected_ms": 426.60009765625,
+      "entrypoint_ms": 417.453369140625,
+      "agent_room_connected_ms": 1043.63916015625,
+      "activity_ready_ms": 1096.54833984375,
+      "session_returned_ms": 1098.952880859375,
+      "first_pcm_ms": 2300.3232421875,
+      "publication_ms": 68.999267578125,
+      "subscription_ready_ms": 1271.360107421875,
+      "first_rendered_audio_ms": 2431.0,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1028.963134765625,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 172.18310546875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 78
+    },
+    {
+      "run_id": "9a1c164a936b",
+      "case": "controlled-pcm-1200",
+      "profile": "parallel-output",
+      "sample": 2,
+      "connecting_paint_ms": 40.199951171875,
+      "client_connected_ms": 442.800048828125,
+      "entrypoint_ms": 426.35791015625,
+      "agent_room_connected_ms": 1092.382080078125,
+      "activity_ready_ms": 1144.0439453125,
+      "session_returned_ms": 1145.980224609375,
+      "first_pcm_ms": 2347.671875,
+      "publication_ms": 71.4638671875,
+      "subscription_ready_ms": 1264.50390625,
+      "first_rendered_audio_ms": 2481.10009765625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 1083.16796875,
+      "instant_registration_saving_bound_ms": 0,
+      "post_join_media_setup_ms": 169.297607421875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 80
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "controlled-activity-1200",
+      "baseline": "example-order",
+      "variant": "parallel-output",
+      "pairs": 3,
+      "median_paired_saving_ms": 75.0,
+      "paired_bootstrap_95_interval_ms": [
+        60.7,
+        300.3
+      ]
+    },
+    {
+      "case": "controlled-activity-1200",
+      "baseline": "example-order",
+      "variant": "automatic",
+      "pairs": 3,
+      "median_paired_saving_ms": 639.0,
+      "paired_bootstrap_95_interval_ms": [
+        589.9,
+        779.1
+      ]
+    },
+    {
+      "case": "controlled-activity-1200",
+      "baseline": "example-order",
+      "variant": "prepared",
+      "pairs": 3,
+      "median_paired_saving_ms": 643.3,
+      "paired_bootstrap_95_interval_ms": [
+        585.8,
+        757.2
+      ]
+    },
+    {
+      "case": "controlled-fast",
+      "baseline": "example-order",
+      "variant": "parallel-output",
+      "pairs": 3,
+      "median_paired_saving_ms": 27.9,
+      "paired_bootstrap_95_interval_ms": [
+        -8.9,
+        65.5
+      ]
+    },
+    {
+      "case": "controlled-fast",
+      "baseline": "example-order",
+      "variant": "automatic",
+      "pairs": 3,
+      "median_paired_saving_ms": -5.2,
+      "paired_bootstrap_95_interval_ms": [
+        -21.3,
+        98.3
+      ]
+    },
+    {
+      "case": "controlled-fast",
+      "baseline": "example-order",
+      "variant": "prepared",
+      "pairs": 3,
+      "median_paired_saving_ms": 49.7,
+      "paired_bootstrap_95_interval_ms": [
+        -16.0,
+        58.9
+      ]
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "baseline": "example-order",
+      "variant": "parallel-output",
+      "pairs": 3,
+      "median_paired_saving_ms": -50.1,
+      "paired_bootstrap_95_interval_ms": [
+        -80.1,
+        12.1
+      ]
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "baseline": "example-order",
+      "variant": "automatic",
+      "pairs": 3,
+      "median_paired_saving_ms": 436.6,
+      "paired_bootstrap_95_interval_ms": [
+        121.1,
+        482.0
+      ]
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "baseline": "example-order",
+      "variant": "prepared",
+      "pairs": 3,
+      "median_paired_saving_ms": 444.3,
+      "paired_bootstrap_95_interval_ms": [
+        97.9,
+        466.9
+      ]
+    }
+  ]
+}

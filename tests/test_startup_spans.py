@@ -611,3 +611,24 @@ async def test_connect_stamps_call_and_transport_connected() -> None:
     )
     await ctx.connect()
     assert 0 < ctx._connect_called_mono <= ctx._connected_mono
+
+
+async def test_job_connect_forwards_prepared_tracks_once() -> None:
+    room = _mock_room()
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=_info(),
+        room=room,
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+    track = MagicMock(spec=rtc.LocalAudioTrack)
+    options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    await ctx.connect(single_peer_connection=True, publish_tracks=[(track, options)])
+    passed = room.connect.call_args.kwargs["options"]
+    if hasattr(passed, "publish_tracks"):
+        assert passed.publish_tracks == [(track, options)]
+    assert passed.single_peer_connection is True
+    await ctx.connect(publish_tracks=[(track, options)])
+    room.connect.assert_awaited_once()

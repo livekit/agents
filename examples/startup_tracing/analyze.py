@@ -42,7 +42,16 @@ def analyze(inputs: list[Path], output: Path) -> None:
 
             pcm = first("first_pcm_at_output")
             subscribed = first("output_subscription_end")
-            publication_duration = first("track_publish_end") - first("track_publish_begin")
+            publication_duration = (
+                first("track_publish_end") - first("track_publish_begin")
+                if marks["track_publish_begin"]
+                else None
+            )
+            post_join = subscribed - (
+                first("track_publish_begin")
+                if publication_duration is not None
+                else first("room_connect_end")
+            )
             exposed_wait = max(0, subscribed - pcm)
             row = {
                 "run_id": case["run_id"],
@@ -61,11 +70,13 @@ def analyze(inputs: list[Path], output: Path) -> None:
                 "first_rendered_audio_ms": client["marks"]["first_rendered_audio"] - t0,
                 "pcm_waiting_for_media_ms": exposed_wait,
                 "media_slack_before_pcm_ms": max(0, pcm - subscribed),
-                "instant_registration_saving_bound_ms": min(publication_duration, exposed_wait),
-                "post_join_media_setup_ms": subscribed - first("track_publish_begin"),
-                "instant_post_join_media_saving_bound_ms": min(
-                    subscribed - first("track_publish_begin"), exposed_wait
+                "instant_registration_saving_bound_ms": (
+                    min(publication_duration, exposed_wait)
+                    if publication_duration is not None
+                    else None
                 ),
+                "post_join_media_setup_ms": post_join,
+                "instant_post_join_media_saving_bound_ms": min(post_join, exposed_wait),
                 "browser_ice_rtt_ms": client.get("iceRttMs"),
             }
             rows.append(row)
@@ -83,7 +94,11 @@ def analyze(inputs: list[Path], output: Path) -> None:
                     first("activity_start_end"),
                 ),
                 ("Produce first PCM", first("on_enter"), pcm),
-                ("Publication", first("track_publish_begin"), first("track_publish_end")),
+                *(
+                    [("Publication", first("track_publish_begin"), first("track_publish_end"))]
+                    if publication_duration is not None
+                    else []
+                ),
                 ("Subscription wait", first("output_subscription_begin"), subscribed),
                 ("First PCM waits for media", pcm, max(pcm, subscribed)),
                 (
@@ -143,12 +158,12 @@ def analyze(inputs: list[Path], output: Path) -> None:
             "PCM/media wait",
             summary["pcm_waiting_for_media_ms"],
             "instant registration bound",
-            summary["instant_registration_saving_bound_ms"],
+            summary.get("instant_registration_saving_bound_ms"),
         )
     comparisons = []
     lookup = {(row["case"], row["profile"], row["sample"]): row for row in rows}
     for case in sorted({row["case"] for row in rows}):
-        for variant in ["parallel-output", "automatic"]:
+        for variant in ["parallel-output", "automatic", "prepared"]:
             ids = sorted(
                 {
                     row["sample"]

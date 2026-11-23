@@ -165,7 +165,7 @@ async def run(args):
                         else ["automatic", "example-order"]
                     )
                     if args.profile == "all":
-                        order = ["example-order", "parallel-output", "automatic"]
+                        order = ["example-order", "parallel-output", "automatic", "prepared"]
                         offset = sample % len(order)
                         profiles = order[offset:] + order[:offset]
                     elif args.profile != "both":
@@ -275,7 +275,7 @@ def main():
     parser.add_argument("--mode", choices=["controlled", "realtime", "all"], default="controlled")
     parser.add_argument(
         "--profile",
-        choices=["example-order", "parallel-output", "automatic", "both", "all"],
+        choices=["example-order", "parallel-output", "automatic", "prepared", "both", "all"],
         default="both",
     )
     parser.add_argument("--repetitions", type=int, default=3)

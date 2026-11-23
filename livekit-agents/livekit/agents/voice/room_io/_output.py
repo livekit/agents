@@ -56,6 +56,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._audio_source = rtc.AudioSource(sample_rate, num_channels, queue_size_ms=200)
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
+        self._track: rtc.LocalAudioTrack | None = None
         self._subscribed_fut = asyncio.Future[None]()
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
@@ -87,12 +88,32 @@ class _ParticipantAudioOutput(io.AudioOutput):
         # playback_started fires once per segment; a mid-segment pause/resume does not re-arm this
         self._first_frame_event = asyncio.Event()
 
+    def _prepare_track(self) -> tuple[rtc.LocalAudioTrack, rtc.TrackPublishOptions]:
+        """Prepare an empty audio track without waiting for model output."""
+        if self._track is None:
+            self._track = rtc.LocalAudioTrack.create_audio_track(
+                self._track_name, self._audio_source
+            )
+        return self._track, self._publish_options
+
     async def _publish_track(self) -> None:
         async with self._lock:
-            track = rtc.LocalAudioTrack.create_audio_track(self._track_name, self._audio_source)
-            self._publication = await self._room.local_participant.publish_track(
-                track, self._publish_options
-            )
+            if self._publication is None:
+                track, options = self._prepare_track()
+                # Connect may already have published this exact track. Adopt that publication
+                # before considering normal publication (already-connected/legacy fallback).
+                self._publication = next(
+                    (
+                        publication
+                        for publication in self._room.local_participant.track_publications.values()
+                        if publication.track is track
+                    ),
+                    None,
+                )
+                if self._publication is None:
+                    self._publication = await self._room.local_participant.publish_track(
+                        track, options
+                    )
             await self._publication.wait_for_subscription()
             if not self._subscribed_fut.done():
                 self._subscribed_fut.set_result(None)
@@ -114,16 +135,31 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
             self._track_name = track_name
             if self._publication is None:
-                return
+                if self._track is None:
+                    return
+                # Resolve a prepared connect-time publication before renaming it.
+                self._publication = next(
+                    (
+                        publication
+                        for publication in self._room.local_participant.track_publications.values()
+                        if publication.track is self._track and self._track is not None
+                    ),
+                    None,
+                )
+                if self._publication is None:
+                    self._track = None
+                    return
 
             await self._room.local_participant.unpublish_track(self._publication.sid)
             track = rtc.LocalAudioTrack.create_audio_track(self._track_name, self._audio_source)
+            self._track = track
             self._publication = await self._room.local_participant.publish_track(
                 track, self._publish_options
             )
 
     async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
-        self._forwarding_task = asyncio.create_task(self._forward_audio())
+        if self._forwarding_task is None:
+            self._forwarding_task = asyncio.create_task(self._forward_audio())
         # detached: publishing spawns the track's tasks, which must not inherit this span
         with tracer.detached_span("publish_audio_output", context=trace_context) as span:
             await self._publish_track()

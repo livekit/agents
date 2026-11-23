@@ -79,6 +79,10 @@ def wrap_async(cls: Any, method: str, label: str) -> None:
         record(label + "_begin")
         if cls is JobContext:
             kwargs.setdefault("single_peer_connection", True)
+            # A/B the ordinary and connect-time publication paths with the same native build.
+            if CURRENT.get("profile") == "automatic":
+                kwargs["publish_tracks"] = ()
+            record("connect_initial_tracks", count=len(kwargs.get("publish_tracks", ())))
         try:
             if label == "toolsets_setup" and CURRENT.get("activity_delay_ms", 0):
                 record("injected_activity_delay_begin")
@@ -193,7 +197,7 @@ async def entrypoint(ctx: JobContext) -> None:
     provider.add_span_processor(SimpleSpanProcessor(FileExporter()))
     set_tracer_provider(provider, allow_pii=False)
     instrument()
-    if CURRENT["profile"] != "automatic":
+    if CURRENT["profile"] not in ("automatic", "prepared"):
         await ctx.connect(single_peer_connection=True)
         record("participant_wait_begin")
         await ctx.wait_for_participant()
@@ -212,7 +216,7 @@ async def entrypoint(ctx: JobContext) -> None:
     record("model_construction_end")
     session = AgentSession(llm=model)
     custom = None
-    if CURRENT["profile"] != "automatic":
+    if CURRENT["profile"] not in ("automatic", "prepared"):
         custom = _ParticipantAudioOutput(
             ctx.room,
             sample_rate=24000,
