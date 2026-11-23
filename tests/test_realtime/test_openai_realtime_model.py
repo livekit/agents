@@ -708,12 +708,17 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
 
 
 async def _start_function_call_server(
-    arguments: str, *, drop_on_output: bool = False, refuse_first: bool = False
+    arguments: str,
+    *,
+    drop_on_output: bool = False,
+    refuse_first: bool = False,
+    done_status: str | None = "completed",
 ) -> tuple[Any, list[tuple[Any, list[dict]]]]:
     """A realtime server whose response calls `weather`, recording each connection's creates.
 
     With `drop_on_output`, the first connection closes on the function call output before it
-    confirms it. With `refuse_first`, the first handshake gets a 503.
+    confirms it. With `refuse_first`, the first handshake gets a 503. `done_status` is the
+    call's status in response.output_item.done; None leaves the field out.
     """
     from aiohttp import WSMsgType, web
     from aiohttp.test_utils import TestServer
@@ -774,7 +779,11 @@ async def _start_function_call_server(
                     "name": "weather",
                     "arguments": "",
                 }
-                done_call = {**call, "status": "completed", "arguments": arguments}
+                done_call = {**call, "status": done_status, "arguments": arguments}
+                if done_status is None:
+                    del done_call["status"]
+                # a call cut off by max_response_output_tokens ends the response as incomplete
+                response_status = "incomplete" if done_status == "incomplete" else "completed"
                 for server_event in (
                     {"type": "response.created", "response": response},
                     {
@@ -796,7 +805,7 @@ async def _start_function_call_server(
                     },
                     {
                         "type": "response.done",
-                        "response": {**response, "status": "completed", "output": [done_call]},
+                        "response": {**response, "status": response_status, "output": [done_call]},
                     },
                 ):
                     await ws.send_json({"event_id": f"ev_{server_event['type']}", **server_event})
@@ -827,6 +836,34 @@ async def _call_weather(session: RealtimeSession, arguments: str) -> llm.ChatCon
         )
     )
     return chat_ctx
+
+
+async def _function_calls(arguments: str, done_status: str | None) -> list[llm.FunctionCall]:
+    server, _ = await _start_function_call_server(arguments, done_status=done_status)
+    model = _server_model(server)
+    session = model.session()
+    try:
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="what's the weather in Tokyo?", id="item_user")
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+        generation = await asyncio.wait_for(session.generate_reply(), 5)
+        return [call async for call in generation.function_stream]
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.parametrize("status", ["incomplete", "in_progress"])
+async def test_function_call_that_did_not_complete_is_not_dispatched(status: str) -> None:
+    # max_response_output_tokens cuts the arguments off mid-object
+    assert await _function_calls('{"city": "Tok', status) == []
+
+
+@pytest.mark.parametrize("status", ["completed", None])
+async def test_completed_function_call_is_dispatched(status: str | None) -> None:
+    calls = await _function_calls('{"city": "Tokyo"}', status)
+    assert [(call.name, call.arguments) for call in calls] == [("weather", '{"city": "Tokyo"}')]
 
 
 class _NoBackoff(APIConnectOptions):

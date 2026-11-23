@@ -2283,6 +2283,15 @@ class RealtimeSession(
         if item_type == "function_call" and isinstance(
             event.item, RealtimeConversationItemFunctionCall
         ):
+            # A call cut off by max_response_output_tokens arrives here as "incomplete",
+            # with arguments that may not parse, so it must not run.
+            # Items without a status (some compatible servers) are sent as before.
+            if event.item.status not in (None, "completed"):
+                logger.debug(
+                    "ignoring function call that did not complete",
+                    extra={"function": event.item.name, "status": event.item.status},
+                )
+                return
             self._handle_function_call(event.item)
 
         elif item_type == "message":
