@@ -948,6 +948,9 @@ class RealtimeSession(
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
         self._discarded_event_ids: set[str] = set()
+        # function calls that did not complete, removed from the conversation; the agent may
+        # still hold a placeholder for one, which must not recreate it on the server
+        self._dropped_fnc_item_ids: set[str] = set()
 
         self._reset_input_turn_state()
 
@@ -1592,7 +1595,8 @@ class RealtimeSession(
             [
                 item
                 for item in chat_ctx.items
-                if item.type != "message" or item.content or item.id in remote_ids
+                if (item.type != "message" or item.content or item.id in remote_ids)
+                and item.id not in self._dropped_fnc_item_ids
             ]
         )
         diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
@@ -2066,9 +2070,11 @@ class RealtimeSession(
         try:
             self._remote_chat_ctx.delete(event.item_id)
         except ValueError as e:
-            logger.warning(
-                f"failed to delete item `{event.item_id}`: {str(e)}",
-            )
+            # a dropped function call left the mirror before the server confirmed it
+            if event.item_id not in self._dropped_fnc_item_ids:
+                logger.warning(
+                    f"failed to delete item `{event.item_id}`: {str(e)}",
+                )
 
         if fut := self._item_delete_future.pop(event.item_id, None):
             if fut.done():
@@ -2291,6 +2297,7 @@ class RealtimeSession(
                     "ignoring function call that did not complete",
                     extra={"function": event.item.name, "status": event.item.status},
                 )
+                self._drop_function_call(item_id)
                 return
             self._handle_function_call(event.item)
 
@@ -2301,6 +2308,22 @@ class RealtimeSession(
             if not item_generation.modalities.done():
                 # in case message modalities is not set, this shouldn't happen
                 item_generation.modalities.set_result(self._opts.modalities)
+
+    def _drop_function_call(self, item_id: str) -> None:
+        # a call that never runs gets no output, and a reconnection or a chat ctx update would
+        # otherwise send it back to the model as a call still waiting for one. the mirror is
+        # updated now rather than on conversation.item.deleted, so a reconnection before the
+        # server confirms cannot replay it
+        self._dropped_fnc_item_ids.add(item_id)
+        with contextlib.suppress(ValueError):
+            self._remote_chat_ctx.delete(item_id)
+        self.send_event(
+            ConversationItemDeleteEvent(
+                type="conversation.item.delete",
+                item_id=item_id,
+                event_id=utils.shortuuid("fnc_call_delete_"),
+            )
+        )
 
     def _handle_function_call(self, item: RealtimeConversationItemFunctionCall) -> None:
         assert isinstance(self._current_generation, _ResponseGeneration), (

@@ -232,7 +232,9 @@ def test_update_chat_ctx_deletes_empty_remote_items() -> None:
     remote_ctx.insert(None, audio_item)
     remote_ctx.insert(audio_item.id, kept_item)
 
-    session = cast(RealtimeSession, SimpleNamespace(_remote_chat_ctx=remote_ctx))
+    session = cast(
+        RealtimeSession, SimpleNamespace(_remote_chat_ctx=remote_ctx, _dropped_fnc_item_ids=set())
+    )
     events = RealtimeSession._create_update_chat_ctx_events(
         session,
         llm.ChatContext(items=[kept_item]),
@@ -422,6 +424,7 @@ async def test_a_rejected_waiter_is_not_settled_twice() -> None:
     # the waiter stays parked under its item id, where a late reply would set a result on it
     session = _chat_ctx_update_session()
     session._remote_chat_ctx = RemoteChatContext()
+    session._dropped_fnc_item_ids = set()
     session._input_transcript_accumulators = {}
     session._input_speech_started_at = {}
     waiter = session._item_delete_future["item_1"]
@@ -445,6 +448,7 @@ async def test_an_error_outliving_its_update_is_still_reported() -> None:
     session._opts = SimpleNamespace(turn_detection=None)  # type: ignore[assignment]
     session._update_chat_ctx_lock = asyncio.Lock()
     session._remote_chat_ctx = RemoteChatContext()
+    session._dropped_fnc_item_ids = set()
     session._item_delete_future = {}
     session._item_create_future = {}
     session._chat_ctx_event_futures = {}
@@ -570,6 +574,7 @@ def _transcription_metrics_session() -> tuple[RealtimeSession, list[STTMetrics]]
     session._opts = replace(model._opts)
     session._capabilities = replace(model.capabilities)
     session._remote_chat_ctx = RemoteChatContext()
+    session._dropped_fnc_item_ids = set()
     session._input_transcript_accumulators = {}
     session._input_speech_started_at = {}
     collected: list[STTMetrics] = []
@@ -713,12 +718,14 @@ async def _start_function_call_server(
     drop_on_output: bool = False,
     refuse_first: bool = False,
     done_status: str | None = "completed",
+    deleted: list[str] | None = None,
 ) -> tuple[Any, list[tuple[Any, list[dict]]]]:
     """A realtime server whose response calls `weather`, recording each connection's creates.
 
     With `drop_on_output`, the first connection closes on the function call output before it
     confirms it. With `refuse_first`, the first handshake gets a 503. `done_status` is the
-    call's status in response.output_item.done; None leaves the field out.
+    call's status in response.output_item.done; None leaves the field out. Each
+    conversation.item.delete is confirmed and its item id appended to `deleted`.
     """
     from aiohttp import WSMsgType, web
     from aiohttp.test_utils import TestServer
@@ -760,6 +767,16 @@ async def _start_function_call_server(
                     }
                 )
                 previous_item_id = item["id"]
+            elif event["type"] == "conversation.item.delete":
+                if deleted is not None:
+                    deleted.append(event["item_id"])
+                await ws.send_json(
+                    {
+                        "type": "conversation.item.deleted",
+                        "event_id": f"ev_deleted_{event['item_id']}",
+                        "item_id": event["item_id"],
+                    }
+                )
             elif event["type"] == "response.create":
                 # like the real API, the call is added with empty arguments and only
                 # completed by response.output_item.done
@@ -864,6 +881,76 @@ async def test_function_call_that_did_not_complete_is_not_dispatched(status: str
 async def test_completed_function_call_is_dispatched(status: str | None) -> None:
     calls = await _function_calls('{"city": "Tokyo"}', status)
     assert [(call.name, call.arguments) for call in calls] == [("weather", '{"city": "Tokyo"}')]
+
+
+async def _drop_incomplete_call(session: RealtimeSession, deleted: list[str]) -> llm.ChatContext:
+    """Run a response whose call did not complete; return the context the agent would hold."""
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="what's the weather in Tokyo?", id="item_user")
+    await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+    generation = await asyncio.wait_for(session.generate_reply(), 5)
+    assert [call async for call in generation.function_stream] == []
+    for _ in range(500):
+        if deleted:
+            break
+        await asyncio.sleep(0.01)
+
+    assert deleted == ["item_call"]
+    assert session.chat_ctx.get_by_id("item_call") is None
+    # the agent keeps the placeholder it was given when the call was added
+    chat_ctx.items.append(
+        llm.FunctionCall(id="item_call", call_id="call_1", name="weather", arguments="")
+    )
+    return chat_ctx
+
+
+async def test_a_call_that_did_not_complete_is_not_recreated_by_a_chat_ctx_update() -> None:
+    deleted: list[str] = []
+    server, connections = await _start_function_call_server(
+        '{"city": "Tok', done_status="incomplete", deleted=deleted
+    )
+    model = _server_model(server)
+    session = model.session()
+    try:
+        chat_ctx = await _drop_incomplete_call(session, deleted)
+        chat_ctx.add_message(role="user", content="and in Osaka?", id="item_user_2")
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+        created = connections[0][1]
+        assert [item["id"] for item in created] == ["item_user", "item_user_2"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_reconnect_does_not_replay_a_call_that_did_not_complete() -> None:
+    # replayed with no output, the call would leave the model waiting for its result
+    deleted: list[str] = []
+    server, connections = await _start_function_call_server(
+        '{"city": "Tok', done_status="incomplete", deleted=deleted
+    )
+    model = _server_model(server)
+    session = model.session()
+    try:
+        chat_ctx = await _drop_incomplete_call(session, deleted)
+
+        await connections[0][0].close()
+        for _ in range(500):
+            if len(connections) == 2:
+                break
+            await asyncio.sleep(0.01)
+
+        # confirmed after the replay, so the replay is complete once this returns
+        chat_ctx.add_message(role="user", content="and in Osaka?", id="item_user_2")
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+        replayed = connections[1][1]
+        assert [item["id"] for item in replayed] == ["item_user", "item_user_2"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
 
 
 class _NoBackoff(APIConnectOptions):
@@ -1329,6 +1416,7 @@ def _offline_session() -> tuple[RealtimeSession, list[Any]]:
     session._realtime_model = SimpleNamespace(_provider_label="openai")  # type: ignore[assignment]
     session._update_chat_ctx_lock = asyncio.Lock()
     session._remote_chat_ctx = RemoteChatContext()
+    session._dropped_fnc_item_ids = set()
     session._item_delete_future = {}
     session._item_create_future = {}
     sent: list[Any] = []
