@@ -88,7 +88,8 @@ class LiveKitAssistantServer(AbstractAssistantServer):
             await asyncio.sleep(0.05)
         self._running = True
 
-    async def stop(self) -> None:
+    async def _shutdown(self) -> None:
+        # the base class's stop() calls this, then extracts audio and saves outputs
         self._running = False
         if self._server:
             self._server.should_exit = True
@@ -96,7 +97,6 @@ class LiveKitAssistantServer(AbstractAssistantServer):
             self._server_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._server_task
-        await self.save_outputs()
 
     # -- recording ----------------------------------------------------------------------------
 
