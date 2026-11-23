@@ -565,14 +565,17 @@ class ResponsesLLMStream(llm.LLMStream):
                 usage=llm.CompletionUsage(
                     completion_tokens=usage.output_tokens,
                     prompt_tokens=usage.input_tokens,
-                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens or 0
+                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens
                     if usage.input_tokens_details
+                    and usage.input_tokens_details.cached_tokens is not None
                     else 0,
-                    cache_creation_tokens=usage.input_tokens_details.cache_write_tokens or 0
+                    cache_creation_tokens=usage.input_tokens_details.cache_write_tokens
                     if usage.input_tokens_details
+                    and usage.input_tokens_details.cache_write_tokens is not None
                     else 0,
-                    reasoning_tokens=usage.output_tokens_details.reasoning_tokens or 0
+                    reasoning_tokens=usage.output_tokens_details.reasoning_tokens
                     if usage.output_tokens_details
+                    and usage.output_tokens_details.reasoning_tokens is not None
                     else 0,
                     total_tokens=usage.total_tokens,
                     service_tier=getattr(event.response, "service_tier", None),
