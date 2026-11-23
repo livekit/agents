@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from livekit import rtc
@@ -103,7 +104,18 @@ class Interruption:
 class SpeakerOutput(io.AudioOutput):
     """A virtual loudspeaker that plays the agent's audio in real time."""
 
-    def __init__(self, *, sample_rate: int = 8000, frame_ms: int = FRAME_MS) -> None:
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 8000,
+        frame_ms: int = FRAME_MS,
+        on_played: Callable[[PlayedChunk], None] | None = None,
+    ) -> None:
+        """
+        Args:
+            on_played: Called with each frame as it plays, for a transport that streams the
+                agent's audio out live; frames are also kept for ``drain_played()`` unless set.
+        """
         super().__init__(
             label="bench-speaker",
             capabilities=io.AudioOutputCapabilities(pause=True),
@@ -118,6 +130,7 @@ class SpeakerOutput(io.AudioOutput):
         self._interruptions: list[Interruption] = []
         self._last_played_segment: str | None = None
         self._paused = False
+        self._on_played = on_played
         self._playout_atask: asyncio.Task[None] | None = None
 
     # -- benchmark side -----------------------------------------------------------------------
@@ -242,7 +255,11 @@ class SpeakerOutput(io.AudioOutput):
                 self.on_playback_started(created_at=now)
             seg.played_bytes += len(chunk)
             self._last_played_segment = seg.id
-            self._played.append(PlayedChunk(pcm=chunk, segment_id=seg.id, played_at=now))
+            played = PlayedChunk(pcm=chunk, segment_id=seg.id, played_at=now)
+            if self._on_played is not None:
+                self._on_played(played)
+            else:
+                self._played.append(played)
             if not seg.buf and seg.flushed:
                 self._finish(seg)
             return

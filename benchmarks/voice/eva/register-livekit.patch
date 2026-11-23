@@ -1,0 +1,46 @@
+diff --git a/src/eva/models/config.py b/src/eva/models/config.py
+index bb325212..01047234 100644
+--- a/src/eva/models/config.py
++++ b/src/eva/models/config.py
+@@ -362,7 +362,7 @@ def get_pipeline_type(model_data: dict) -> PipelineType:
+     """
+     if s2s_value := model_data.get("s2s"):
+         # These frameworks use s2s_params but report the text they speak, as cascade pipelines do
+-        if s2s_value in ("elevenlabs", "cartesia"):
++        if s2s_value in ("elevenlabs", "cartesia", "livekit"):
+             return PipelineType.CASCADE
+         # Ultravox uses s2s_params for plumbing but is an audio-LLM (audio in, text out, separate TTS)
+         if s2s_value == "ultravox":
+@@ -588,7 +588,14 @@ class RunConfig(BaseSettings):
+ 
+     # Framework selection
+     framework: Literal[
+-        "pipecat", "openai_realtime", "gemini_live", "elevenlabs", "grok_voice", "smallest_hydra", "cartesia"
++        "pipecat",
++        "openai_realtime",
++        "gemini_live",
++        "elevenlabs",
++        "grok_voice",
++        "smallest_hydra",
++        "cartesia",
++        "livekit",
+     ] = Field(
+         "pipecat",
+         description=(
+diff --git a/src/eva/orchestrator/worker.py b/src/eva/orchestrator/worker.py
+index 29a19b29..bfb07d8b 100644
+--- a/src/eva/orchestrator/worker.py
++++ b/src/eva/orchestrator/worker.py
+@@ -58,6 +58,12 @@ def _get_server_class(framework: str) -> type[AbstractAssistantServer]:
+         from eva.assistant.cartesia_server import CartesiaAssistantServer
+ 
+         return CartesiaAssistantServer
++    elif framework == "livekit":
++        # bridges to a LiveKit Agents agent served by lk_voice_bench.ws_agent; symlinked in from
++        # the livekit/agents repo (benchmarks/voice/eva/livekit_server.py)
++        from eva.assistant.livekit_server import LiveKitAssistantServer
++
++        return LiveKitAssistantServer
+     else:
+         raise ValueError(
+             f"Unknown framework: {framework!r}. "

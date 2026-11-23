@@ -7,6 +7,9 @@
 # Runs the released voice-v1 frame (English; airline 50, retail 114, telecom 114 tasks; --domain
 # narrows it). voice-v1 refuses task samples, so a run with --num-tasks or --task-ids becomes a
 # custom run (--benchmark none) with voice-v1's caller, judge and limits pinned to match.
+# tau2 re-runs a call whose simulated caller hallucinated, judged by --review-model (Sierra's
+# default is claude-opus-4-5; this defaults to gpt-5.5 on OPENAI_API_KEY, override with
+# TAU2_REVIEW_MODEL).
 # Results go to benchmarks/voice/results/tau2/<run-name>/, agent-side session logs to agent_logs/.
 set -euo pipefail
 
@@ -51,4 +54,5 @@ exec "$BENCH/.venv-tau2/bin/tau2" run \
   --audio-native-provider livekit_agents \
   --audio-native-model "$PRESET" \
   --save-to "$OUT" \
+  --review-model "${TAU2_REVIEW_MODEL:-gpt-5.5}" \
   "$@"

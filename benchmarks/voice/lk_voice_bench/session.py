@@ -22,7 +22,7 @@ from livekit.agents.llm import ToolError, function_tool
 from livekit.agents.utils import http_context
 from livekit.agents.voice.transcription import TranscriptSynchronizer
 
-from .audio_io import CallerAudioInput, SpeakerOutput, SpokenTextOutput
+from .audio_io import CallerAudioInput, PlayedChunk, SpeakerOutput, SpokenTextOutput
 from .config import AgentConfig
 
 logger = logging.getLogger("lk_voice_bench")
@@ -104,6 +104,7 @@ class BenchAgent:
         greeting: str | None = None,
         output_sample_rate: int = 8000,
         external_clock: bool = False,
+        on_played: Callable[[PlayedChunk], None] | None = None,
     ) -> None:
         """
         Args:
@@ -116,12 +117,13 @@ class BenchAgent:
             external_clock: The benchmark plays the speaker out itself, with
                 ``speaker.play_frame()`` every 20 ms of its own time, instead of the speaker
                 playing on its own real-time clock.
+            on_played: Receives each 20 ms of agent audio as it plays (see ``SpeakerOutput``).
         """
         self.config = config
         self._external_clock = external_clock
         self.log = SessionLog()
         self.mic = CallerAudioInput()
-        self.speaker = SpeakerOutput(sample_rate=output_sample_rate)
+        self.speaker = SpeakerOutput(sample_rate=output_sample_rate, on_played=on_played)
         self.spoken_text = SpokenTextOutput(self.speaker)
         self._sync = TranscriptSynchronizer(
             next_in_chain_audio=self.speaker, next_in_chain_text=self.spoken_text
