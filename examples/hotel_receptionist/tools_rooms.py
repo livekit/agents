@@ -22,6 +22,7 @@ from hotel_db import (
     NotFound,
     RoomBooking,
     Unavailable,
+    describe_room_options,
     speak_usd,
 )
 from modify_booking import ModifyBookingTask
@@ -141,7 +142,7 @@ class RoomToolsMixin:
         check_out: date,
         guests: Annotated[int, Field(ge=1, le=MAX_PARTY_SIZE)],
         smoking: Literal["smoking", "non_smoking", "no_preference"],
-        room_type: Literal["king", "queen_2beds", "double_queen", "suite", "penthouse", "any"],
+        room_type: Literal["king", "queen_2beds", "suite", "penthouse", "any"],
     ) -> str:
         """Check what's available for a date range, with prices and views. One tool for every "what do you have?" / "how much?" / "any king available?" / "any smoking rooms?" question. Read-only browsing: it never books anything - when the caller wants to actually book, call start_room_booking instead. Surface the results progressively (types first, details after they narrow), don't recite the whole list.
 
@@ -155,7 +156,7 @@ class RoomToolsMixin:
         if check_out <= check_in:
             raise ToolError("check-out must be after check-in")
         smoking_filter = {"smoking": True, "non_smoking": False, "no_preference": None}[smoking]
-        avail = await ctx.userdata.db.list_room_types_available(
+        avail = await ctx.userdata.db.list_room_options(
             check_in=check_in, check_out=check_out, guests=guests, smoking=smoking_filter
         )
         if room_type != "any":
@@ -166,11 +167,7 @@ class RoomToolsMixin:
             )
             what = f"{kind}{room_type.replace('_', ' ')}" if room_type != "any" else f"{kind}rooms"
             return f"no {what} available for those dates"
-        return " | ".join(
-            f"{a.type.replace('_', ' ')}: {speak_usd(a.nightly_rate)} per night, "
-            f"{' or '.join(a.views)} view{'s' if len(a.views) > 1 else ''}"
-            for a in avail
-        )
+        return describe_room_options(avail)
 
     @function_tool
     async def start_room_booking(self, ctx: RunContext[Userdata]) -> str | None:

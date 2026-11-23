@@ -342,16 +342,24 @@ class BackgroundAudioPlayer:
             if not self._mixer_atask:
                 return  # not started
 
-            await cancel_and_wait(*self._play_tasks)
+            # detach before the awaits below: a "thinking" state change while closing
+            # would otherwise call play() on a half-closed player
+            if self._agent_session:
+                self._agent_session.off("agent_state_changed", self._agent_state_changed)
+
+            try:
+                await cancel_and_wait(*self._play_tasks)
+            except asyncio.CancelledError:
+                # the mixer is still running, so keep thinking sounds working
+                if self._agent_session:
+                    self._agent_session.on("agent_state_changed", self._agent_state_changed)
+                raise
 
             await cancel_and_wait(self._mixer_atask)
             self._mixer_atask = None
 
             await self._audio_mixer.aclose()
             await self._audio_source.aclose()
-
-            if self._agent_session:
-                self._agent_session.off("agent_state_changed", self._agent_state_changed)
 
             with contextlib.suppress(Exception):
                 # The cached publication SID may be stale if the SDK

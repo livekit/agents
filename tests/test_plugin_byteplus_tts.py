@@ -173,6 +173,75 @@ def test_public_option_and_event_types_are_exported() -> None:
     assert public_types.isdisjoint(byteplus.__pdoc__)
 
 
+@pytest.mark.parametrize(
+    ("code", "include_metadata", "expected_error_code", "expected_terminal"),
+    [
+        pytest.param(0, True, None, False, id="audio-success"),
+        pytest.param(20000000, True, None, True, id="terminal-success"),
+        pytest.param(45000000, False, 45000000, None, id="business-error"),
+        pytest.param(45000000, True, 45000000, None, id="business-error-with-metadata"),
+        pytest.param(55000000, True, 55000000, None, id="server-error-with-metadata"),
+        pytest.param(True, True, -1, None, id="invalid-boolean-code"),
+        pytest.param("0", True, -1, None, id="invalid-string-code"),
+    ],
+)
+def test_response_event_metadata_is_only_emitted_on_success(
+    code: object,
+    include_metadata: bool,
+    expected_error_code: int | None,
+    expected_terminal: bool | None,
+) -> None:
+    provider = TTS(api_key="test-key", include_usage=True)
+    usage: list[TTSUsage] = []
+    provider.on("usage_collected", usage.append)
+    emitter = _FakeEmitter()
+    pcm = b"\0\0" * 4
+    event: dict[str, Any] = {
+        "code": code,
+        "message": "provider result",
+        "data": base64.b64encode(pcm).decode("ascii"),
+    }
+    if include_metadata:
+        event["usage"] = {"text_words": 5}
+        event["sentence"] = {
+            "words": [{"word": "hello", "startTime": 0.1, "endTime": 0.4, "confidence": 1.0}]
+        }
+
+    if expected_error_code is not None:
+        with pytest.raises(APIStatusError) as error:
+            byteplus_tts._handle_response_event(
+                provider=provider,
+                event=event,
+                output_emitter=cast(tts.AudioEmitter, emitter),
+                request_id="provider-request-id",
+                transcript_offset=0.0,
+            )
+        assert error.value.status_code == expected_error_code
+        assert error.value.request_id == "provider-request-id"
+        assert usage == []
+        assert emitter.timed_words == []
+        assert emitter.audio == bytearray()
+        return
+
+    terminal, transcript_end = byteplus_tts._handle_response_event(
+        provider=provider,
+        event=event,
+        output_emitter=cast(tts.AudioEmitter, emitter),
+        request_id="provider-request-id",
+        transcript_offset=0.0,
+    )
+    assert terminal is expected_terminal
+    assert transcript_end == pytest.approx(0.4)
+    assert len(usage) == 1
+    assert usage[0].request_id == "provider-request-id"
+    assert usage[0].text_words == 5
+    assert len(emitter.timed_words) == 1
+    assert str(emitter.timed_words[0]) == "hello"
+    assert emitter.timed_words[0].start_time == pytest.approx(0.1)
+    assert emitter.timed_words[0].end_time == pytest.approx(0.4)
+    assert emitter.audio == (bytearray() if terminal else bytearray(pcm))
+
+
 @pytest.fixture
 def clear_byteplus_auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for variable in ("BYTEPLUS_API_KEY", "BYTEPLUS_APP_ID", "BYTEPLUS_ACCESS_KEY"):

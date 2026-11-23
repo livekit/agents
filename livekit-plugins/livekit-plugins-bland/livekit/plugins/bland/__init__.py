@@ -14,12 +14,13 @@
 
 """Bland plugin for LiveKit Agents"""
 
-from .tts import TTS, ChunkedStream
+from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
 __all__ = [
     "TTS",
     "ChunkedStream",
+    "SynthesizeStream",
     "__version__",
 ]
 

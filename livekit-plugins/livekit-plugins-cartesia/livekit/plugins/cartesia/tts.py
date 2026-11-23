@@ -70,6 +70,8 @@ class _TTSOptions:
     emotion: list[TTSVoiceEmotion | str] | None
     volume: float | None
     word_timestamps: bool
+    add_phoneme_timestamps: bool
+    use_normalized_timestamps: bool
     api_key: str
     language: LanguageCode | None
     base_url: str
@@ -97,6 +99,8 @@ class TTS(tts.TTS):
         volume: float | None = None,
         sample_rate: int = 24000,
         word_timestamps: bool = True,
+        add_phoneme_timestamps: bool = False,
+        use_normalized_timestamps: bool = False,
         pronunciation_dict_id: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
@@ -119,6 +123,8 @@ class TTS(tts.TTS):
             volume (float, optional): Volume of the speech, with sonic-3, the value is valid between 0.5 and 2.0
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
             word_timestamps (bool, optional): Whether to add word timestamps to the output. Defaults to True.
+            add_phoneme_timestamps (bool, optional): Whether to add phoneme-level timestamps to the output. Defaults to False.
+            use_normalized_timestamps (bool, optional): Whether to use normalized timestamps. Defaults to False.
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations. Defaults to None.
             api_key (str, optional): The Cartesia API key. If not provided, it will be read from the CARTESIA_API_KEY environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
@@ -157,6 +163,8 @@ class TTS(tts.TTS):
             api_key=cartesia_api_key,
             base_url=base_url,
             word_timestamps=word_timestamps,
+            add_phoneme_timestamps=add_phoneme_timestamps,
+            use_normalized_timestamps=use_normalized_timestamps,
             api_version=api_version,
             pronunciation_dict_id=pronunciation_dict_id,
         )
@@ -265,6 +273,8 @@ class TTS(tts.TTS):
         emotion: NotGivenOr[TTSVoiceEmotion | str | list[TTSVoiceEmotion | str]] = NOT_GIVEN,
         volume: NotGivenOr[float] = NOT_GIVEN,
         pronunciation_dict_id: NotGivenOr[str] = NOT_GIVEN,
+        add_phoneme_timestamps: NotGivenOr[bool] = NOT_GIVEN,
+        use_normalized_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
@@ -280,6 +290,8 @@ class TTS(tts.TTS):
             speed (TTSVoiceSpeed | float, optional): Voice Control - Speed (https://docs.cartesia.ai/user-guides/voice-control)
             emotion (list[TTSVoiceEmotion], optional): Voice Control - Emotion (https://docs.cartesia.ai/user-guides/voice-control)
             pronunciation_dict_id (str, optional): The pronunciation dictionary ID to use for custom pronunciations.
+            add_phoneme_timestamps (bool, optional): Whether to add phoneme-level timestamps to the output.
+            use_normalized_timestamps (bool, optional): Whether to use normalized timestamps.
         """
         if is_given(model):
             self._opts.model = model
@@ -296,8 +308,16 @@ class TTS(tts.TTS):
             self._opts.volume = volume
         if is_given(pronunciation_dict_id):
             self._opts.pronunciation_dict_id = pronunciation_dict_id
-        if is_given(api_version):
+        if is_given(add_phoneme_timestamps):
+            self._opts.add_phoneme_timestamps = add_phoneme_timestamps
+        if is_given(use_normalized_timestamps):
+            self._opts.use_normalized_timestamps = use_normalized_timestamps
+        if is_given(api_version) and api_version != self._opts.api_version:
             self._opts.api_version = api_version
+            # cartesia_version is a query parameter on the websocket URL, so a pooled
+            # socket keeps speaking the version it was opened with while
+            # _to_cartesia_options starts shaping the body for the new one.
+            self._pool.invalidate()
 
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
@@ -324,8 +344,11 @@ class TTS(tts.TTS):
     def _check_generation_config(self) -> None:
         if _is_sonic_3(self._opts.model):
             if self._opts.speed:
-                if not isinstance(self._opts.speed, float):
-                    raise ValueError("speed must be a float for sonic-3")
+                # an int such as 1 is a valid speed too; bool is an int subclass, so exclude it
+                if isinstance(self._opts.speed, bool) or not isinstance(
+                    self._opts.speed, (int, float)
+                ):
+                    raise ValueError("speed must be a number for sonic-3")
                 if not 0.6 <= self._opts.speed <= 2.0:
                     logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
             if self._opts.volume is not None and not 0.5 <= self._opts.volume <= 2.0:
@@ -371,7 +394,7 @@ class ChunkedStream(tts.ChunkedStream):
                 self._opts.get_http_url("/tts/bytes"),
                 headers={
                     API_AUTH_HEADER: self._opts.api_key,
-                    API_VERSION_HEADER: API_VERSION,
+                    API_VERSION_HEADER: self._opts.api_version,
                     "User-Agent": USER_AGENT,
                 },
                 json=json,
@@ -487,6 +510,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data = json.loads(msg.data)
                 segment_id = data.get("context_id")
+                # A pooled websocket may still hold audio/done from an interrupted
+                # previous context; ignore messages tagged with another context id.
+                if segment_id is not None and segment_id != cartesia_context_id:
+                    continue
                 if current_segment_id is None:
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
@@ -525,6 +552,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.push_timed_transcript(
                             TimedString(text=word, start_time=start, end_time=end)
                         )
+                elif data.get("phoneme_timestamps"):
+                    pass  # phoneme_timestamps are received but not surfaced by the output emitter
                 elif data.get("type") == "error":
                     logger.error(
                         "Cartesia returned error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",
@@ -534,7 +563,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("type") == "flush_done":
                     pass
                 else:
-                    logger.warning("unexpected message %s", data)
+                    logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         cartesia_context_id = utils.shortuuid()
         try:
@@ -618,5 +647,9 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
 
     if streaming:
         options["add_timestamps"] = opts.word_timestamps
+        if opts.add_phoneme_timestamps:
+            options["add_phoneme_timestamps"] = True
+        if opts.use_normalized_timestamps:
+            options["use_normalized_timestamps"] = True
 
     return options

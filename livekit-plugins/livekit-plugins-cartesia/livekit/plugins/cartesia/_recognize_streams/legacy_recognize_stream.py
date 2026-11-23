@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
@@ -231,8 +232,11 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -259,12 +263,16 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                     logger.exception("failed to parse Cartesia STT message")
                 else:
                     self._process_stream_event(data)
+                    if data["type"] == "transcript":
+                        self._mark_provider_progress()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
 
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
+                self._last_speech_end_time = 0
 
                 send = asyncio.create_task(send_task(ws))
                 recv = asyncio.create_task(recv_task(ws))
@@ -322,6 +330,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
                         API_AUTH_HEADER: self._api_key,
                         "User-Agent": USER_AGENT,
                     },
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
@@ -416,7 +425,20 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                    end_alternatives = []
+                    # Transcript spans track audio duration, which can include silence.
+                    if words and (last_word_end := words[-1].get("end", 0)) > 0:
+                        end_alternatives = [
+                            replace(
+                                speech_data,
+                                start_time=self.start_time_offset + words[0].get("start", 0),
+                                end_time=self.start_time_offset + last_word_end,
+                            )
+                        ]
+                    end_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=end_alternatives,
+                    )
                     self._event_ch.send_nowait(end_event)
             else:
                 event = stt.SpeechEvent(
@@ -435,11 +457,13 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         elif data["type"] == "error":
             message = data.get("message") or "unknown error from cartesia"
             status_code = data.get("code") or 500
-            logger.warning("cartesia sent an error", extra={"data": data})
+            logger.warning("cartesia sent an error", extra={"lk.pii.data": data})
             if status_code >= 500:
                 raise APIConnectionError(message=message, retryable=True)
         else:
-            logger.warning("received unexpected message from Cartesia STT: %s", data)
+            logger.warning(
+                "received unexpected message from Cartesia STT", extra={"lk.pii.data": data}
+            )
 
     def update_options(
         self,

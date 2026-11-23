@@ -1181,6 +1181,16 @@ def _handle_response_event(
             retryable=False,
         )
 
+    if code not in (0, 20000000):
+        raise APIStatusError(
+            f"BytePlus TTS request failed [{code}]: {message or 'unknown provider error'}. "
+            f"Provider request ID: {request_id}",
+            status_code=code,
+            request_id=request_id,
+            body=event,
+            retryable=_is_retryable_provider_error(code=code, message=message),
+        )
+
     _emit_usage(provider=provider, event=event, request_id=request_id)
     timed_words = _extract_timed_words(event, time_offset=transcript_offset)
     if timed_words:
@@ -1196,15 +1206,6 @@ def _handle_response_event(
 
     if code == 20000000:
         return True, transcript_end
-    if code != 0:
-        raise APIStatusError(
-            f"BytePlus TTS request failed [{code}]: {message or 'unknown provider error'}. "
-            f"Provider request ID: {request_id}",
-            status_code=code,
-            request_id=request_id,
-            body=event,
-            retryable=_is_retryable_provider_error(code=code, message=message),
-        )
 
     data = event.get("data")
     if not isinstance(data, str) or not data:

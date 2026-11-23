@@ -41,7 +41,9 @@ def _has_unclosed_xml_tags(text: str) -> bool:
         if is_self_closing:
             continue
         elif is_closing:
-            depth -= 1
+            # a closing tag whose opener is not in this text (already emitted, or
+            # never sent) must not cancel out a later opening tag
+            depth = max(depth - 1, 0)
         else:
             depth += 1
 

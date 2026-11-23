@@ -135,14 +135,18 @@ class APIConnectionError(APIError):
         # naming our own type by .message keeps a cycle that ends on one out of __str__, which
         # would otherwise re-enter here through the same chain.
         if isinstance(root, APIConnectionError):
-            detail = f"{type(root).__name__}: {root.message}"
+            root_message = root.message
         else:
             # a third-party __str__ may raise (e.g. aiohttp.ClientConnectorError on a partially
             # initialized connection key); the type name alone still beats losing the message.
             try:
-                detail = f"{type(root).__name__}: {root}"
+                root_message = str(root)
             except Exception:
-                detail = type(root).__name__
+                root_message = ""
+
+        detail = type(root).__name__
+        if root_message:
+            detail += f": {root_message}"
 
         return f"{self.message} (caused by {detail})"
 

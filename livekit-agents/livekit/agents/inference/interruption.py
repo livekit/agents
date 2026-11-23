@@ -34,14 +34,13 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics.base import InterruptionMetrics, Metadata
 from ..telemetry import trace_types
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import (
     AudioArrayBuffer,
     BoundedDict,
     aio,
     http_context,
     is_given,
-    shortuuid,
 )
 from ._utils import (
     create_access_token,
@@ -56,6 +55,9 @@ DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 0.7  # 700ms
 _FRAMES_PER_SECOND = 40
+# Do not reconnect after an error. The session falls back to VAD-based
+# interruption instead, which is faster than a reconnect to a slow backend.
+DEFAULT_INTERRUPTION_CONN_OPTIONS = APIConnectOptions(max_retry=0)
 
 
 class InterruptionDetectionError(BaseModel):
@@ -389,7 +391,7 @@ class AdaptiveInterruptionDetector(
         return self._session
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: APIConnectOptions = DEFAULT_INTERRUPTION_CONN_OPTIONS
     ) -> InterruptionWebSocketStream:
         try:
             stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
@@ -769,7 +771,6 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
         self, *, model: AdaptiveInterruptionDetector, conn_options: APIConnectOptions
     ) -> None:
         super().__init__(model=model, conn_options=conn_options)
-        self._request_id = str(shortuuid("interruption_request_"))
         self._reconnect_event = asyncio.Event()
 
     def update_options(
@@ -818,17 +819,29 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                 await self._num_requests.increment()
                 created_at = perf_counter_ns()
                 header = struct.pack("<Q", created_at)  # 8 bytes
-                await ws.send_bytes(header + audio_data.tobytes())
                 self._cache[created_at] = InterruptionCacheEntry(
                     created_at=created_at,
                     speech_input=audio_data,
                 )
+                try:
+                    # Register before yielding so a speech boundary can invalidate this request.
+                    await ws.send_bytes(header + audio_data.tobytes())
+                except BaseException:
+                    self._cache.pop(created_at, None)
+                    raise
 
             closing_ws = True
+            if ws.closed:
+                return
             msg = InterruptionWSSessionCloseMessage(
                 type=InterruptionWSMessageType.SESSION_CLOSE,
             )
-            await ws.send_str(msg.model_dump_json())
+            try:
+                await ws.send_str(msg.model_dump_json())
+            except ConnectionResetError:
+                # aiohttp raises ConnectionResetError (ClientConnectionResetError on newer
+                # versions) if the peer wins the close race. session.close is best-effort.
+                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -887,15 +900,20 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                         if (
                             overlap_started_at := self._overlap_started_at
                         ) is not None and self._overlap_started:
-                            entry = self._cache.set_or_update(
+                            entry = self._cache.update_value(
                                 created_at,
-                                lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                                 total_duration=(perf_counter_ns() - created_at) / 1e9,
                                 probabilities=np.array(msg.probabilities, dtype=np.float32),
                                 is_interruption=True,
                                 prediction_duration=msg.prediction_duration,
                                 detection_delay=time.time() - overlap_started_at,
                             )
+                            if entry is None:
+                                logger.trace(
+                                    "ignoring interruption verdict outside the current speech",
+                                    extra={"created_at": created_at},
+                                )
+                                continue
                             if self._user_speech_span:
                                 self._update_user_speech_span(self._user_speech_span, entry)
                                 self._user_speech_span = None
@@ -922,15 +940,20 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                         if (
                             overlap_started_at := self._overlap_started_at
                         ) is not None and self._overlap_started:
-                            entry = self._cache.set_or_update(
+                            entry = self._cache.update_value(
                                 created_at,
-                                lambda c=created_at: InterruptionCacheEntry(created_at=c),  # type: ignore[misc]
                                 total_duration=(perf_counter_ns() - created_at) / 1e9,
                                 prediction_duration=msg.prediction_duration,
                                 probabilities=np.array(msg.probabilities, dtype=np.float32),
                                 is_interruption=False,
                                 detection_delay=time.time() - overlap_started_at,
                             )
+                            if entry is None:
+                                logger.trace(
+                                    "ignoring interruption result outside the current speech",
+                                    extra={"created_at": created_at},
+                                )
+                                continue
                             logger.trace(
                                 "interruption inference done",
                                 extra={
@@ -982,15 +1005,15 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     self._reconnect_event.clear()
                 finally:
                     closing_ws = True
-                    if ws is not None and not ws.closed:
-                        await ws.close()
-                        ws = None
                     await aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     try:
                         tasks_group.exception()
                     except asyncio.CancelledError:
                         pass
+                    if ws is not None and not ws.closed:
+                        await ws.close()
+                        ws = None
             finally:
                 closing_ws = True
                 if ws is not None and not ws.closed:

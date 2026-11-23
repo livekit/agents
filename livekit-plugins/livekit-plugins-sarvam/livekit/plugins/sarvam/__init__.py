@@ -12,26 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Sarvam.ai plugin for LiveKit Agents
+"""Sarvam.ai plugin for LiveKit Agents.
 
-Support for speech-to-text, text-to-speech, and LLM with [Sarvam.ai](https://sarvam.ai/).
+Support for speech-to-text, text-to-speech, and LLM with Sarvam.ai.
 
-Sarvam.ai provides high-quality STT and TTS for Indian languages and OpenAI-compatible LLMs.
+Sarvam.ai provides high-quality STT and TTS for Indian languages and
+OpenAI-compatible LLMs.
 
 For API access, visit https://sarvam.ai/
 """
 
+from livekit.agents import Plugin
+
 from .llm import LLM, SarvamLLMModels
+from .log import logger
 from .stt import STT
+from .stt_streaming import RealtimeSpeechStream, STTRealtime
 from .tts import TTS
 from .version import __version__
 
-__all__ = ["STT", "TTS", "LLM", "SarvamLLMModels", "__version__"]
+# Deprecated compatibility aliases. Prefer `STTRealtime` and
+# `RealtimeSpeechStream`.
+STTStreaming = STTRealtime
+StreamingSpeechStream = RealtimeSpeechStream
 
-
-from livekit.agents import Plugin
-
-from .log import logger
+__all__ = [
+    "STT",
+    "STTRealtime",
+    "RealtimeSpeechStream",
+    "STTStreaming",
+    "StreamingSpeechStream",
+    "TTS",
+    "LLM",
+    "SarvamLLMModels",
+    "__version__",
+]
 
 
 class SarvamPlugin(Plugin):

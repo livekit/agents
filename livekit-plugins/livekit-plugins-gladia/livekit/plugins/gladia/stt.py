@@ -21,12 +21,10 @@ import json
 import os
 import weakref
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
-import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -50,45 +48,6 @@ from .models import GladiaModels
 from .version import __version__
 
 BASE_URL = "https://api.gladia.io/v2/live"
-
-MAGIC_NUMBER_THRESHOLD = 0.004**2
-
-
-class AudioEnergyFilter:
-    class State(Enum):
-        START = 0
-        SPEAKING = 1
-        SILENCE = 2
-        END = 3
-
-    def __init__(self, *, min_silence: float = 1.5, rms_threshold: float = MAGIC_NUMBER_THRESHOLD):
-        self._cooldown_seconds = min_silence
-        self._cooldown = min_silence
-        self._state = self.State.SILENCE
-        self._rms_threshold = rms_threshold
-
-    def update(self, frame: rtc.AudioFrame) -> State:
-        arr = np.frombuffer(frame.data, dtype=np.int16)
-        float_arr = arr.astype(np.float32) / 32768.0
-        rms = np.mean(np.square(float_arr))
-
-        if rms > self._rms_threshold:
-            self._cooldown = self._cooldown_seconds
-            if self._state in (self.State.SILENCE, self.State.END):
-                self._state = self.State.START
-            else:
-                self._state = self.State.SPEAKING
-        else:
-            if self._cooldown <= 0:
-                if self._state in (self.State.SPEAKING, self.State.START):
-                    self._state = self.State.END
-                elif self._state == self.State.END:
-                    self._state = self.State.SILENCE
-            else:
-                self._cooldown -= frame.duration
-                self._state = self.State.SPEAKING
-
-        return self._state
 
 
 @dataclass
@@ -130,7 +89,6 @@ class STTOptions:
     translation_config: TranslationConfiguration = dataclasses.field(
         default_factory=TranslationConfiguration
     )
-    energy_filter: AudioEnergyFilter | bool = False
     custom_vocabulary: list[str | dict] | None = None
     custom_spelling: dict[str, list[str]] | None = None
     pre_processing: PreProcessingConfiguration = dataclasses.field(
@@ -219,7 +177,6 @@ class STT(stt.STT):
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = BASE_URL,
-        energy_filter: AudioEnergyFilter | bool = False,
         translation_enabled: bool = False,
         translation_target_languages: list[str] | None = None,
         translation_model: str = "base",
@@ -254,8 +211,6 @@ class STT(stt.STT):
                         environment variable.
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Gladia API. Defaults to "https://api.gladia.io/v2/live".
-            energy_filter: Audio energy filter configuration for voice activity detection.
-                         Can be a boolean or AudioEnergyFilter instance. Defaults to False.
             translation_enabled: Whether to enable translation. Defaults to False.
             translation_target_languages: List of target languages for translation.
                                         Required if translation_enabled is True.
@@ -323,7 +278,6 @@ class STT(stt.STT):
             maximum_duration_without_endpointing=maximum_duration_without_endpointing,
             translation_config=translation_config,
             pre_processing=pre_processing_config,
-            energy_filter=energy_filter,
             custom_vocabulary=custom_vocabulary,
             custom_spelling=custom_spelling,
         )
@@ -589,6 +543,21 @@ class STT(stt.STT):
         pre_processing_audio_enhancer: bool | None = None,
         pre_processing_speech_threshold: float | None = None,
     ) -> None:
+        new_translation_enabled = (
+            translation_enabled
+            if translation_enabled is not None
+            else self._opts.translation_config.enabled
+        )
+        new_translation_target_languages = (
+            translation_target_languages
+            if translation_target_languages is not None
+            else self._opts.translation_config.target_languages
+        )
+        if new_translation_enabled and not new_translation_target_languages:
+            raise ValueError(
+                "translation_target_languages is required when translation_enabled is True"
+            )
+
         if languages is not None or code_switching is not None:
             language_config = dataclasses.replace(
                 self._opts.language_config,
@@ -665,6 +634,8 @@ class STT(stt.STT):
             self._opts.bit_depth = bit_depth
         if channels is not None:
             self._opts.channels = channels
+        if region is not None:
+            self._opts.region = region
         if encoding is not None:
             self._opts.encoding = encoding
         if custom_vocabulary is not None:
@@ -732,13 +703,6 @@ class SpeechStream(stt.SpeechStream):
             callback=self._on_audio_duration_report,
             duration=5.0,
         )
-
-        self._audio_energy_filter: AudioEnergyFilter | None = None
-        if opts.energy_filter:
-            if isinstance(opts.energy_filter, AudioEnergyFilter):
-                self._audio_energy_filter = opts.energy_filter
-            else:
-                self._audio_energy_filter = AudioEnergyFilter()
 
         self._pushed_audio_duration = 0.0
         self._request_id = ""
@@ -874,7 +838,8 @@ class SpeechStream(stt.SpeechStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with self._session.ws_connect(session_url) as ws:
+                async with self._session.ws_connect(session_url, autoping=False) as ws:
+                    self._input_ch.restart_provider_clock()
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -948,7 +913,6 @@ class SpeechStream(stt.SpeechStream):
         )
 
         has_ended = False
-        last_frame: rtc.AudioFrame | None = None
         closing_ws = False
 
         try:
@@ -958,20 +922,7 @@ class SpeechStream(stt.SpeechStream):
 
                 frames: list[rtc.AudioFrame] = []
                 if isinstance(data, rtc.AudioFrame):
-                    state = self._check_energy_state(data)
-                    if state in (
-                        AudioEnergyFilter.State.START,
-                        AudioEnergyFilter.State.SPEAKING,
-                    ):
-                        if last_frame:
-                            frames.extend(audio_bstream.write(last_frame.data.tobytes()))
-                            last_frame = None
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
-                    elif state == AudioEnergyFilter.State.END:
-                        frames = audio_bstream.flush()
-                        has_ended = True
-                    elif state == AudioEnergyFilter.State.SILENCE:
-                        last_frame = data
+                    frames = audio_bstream.write(data.data.tobytes())
                 elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                     has_ended = True
@@ -1002,11 +953,15 @@ class SpeechStream(stt.SpeechStream):
         if not self._ws:
             return
 
-        async for msg in self._ws:
+        async for msg in utils.aio.WebSocketMonitor(
+            self._ws, liveness_timeout=self._conn_options.liveness_timeout
+        ):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                     self._process_gladia_message(data)
+                    if data.get("type") in ("transcript", "translation"):
+                        self._mark_provider_progress()
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
             elif msg.type in (
@@ -1079,6 +1034,9 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechEvent(
                                     type=stt.SpeechEventType.END_OF_SPEECH,
                                     request_id=self._request_id,
+                                    alternatives=[speech_data]
+                                    if utterance.get("end", 0) > 0
+                                    else [],
                                 )
                             )
                     # If translation *is* enabled, we suppress this final event
@@ -1102,7 +1060,8 @@ class SpeechStream(stt.SpeechStream):
                 translated_utterance = translation_data.get("translated_utterance", {})
                 if not translated_utterance:
                     logger.warning(
-                        f"No translated_utterance in translation message: {translation_data}"
+                        "No translated_utterance in translation message",
+                        extra={"lk.pii.data": translation_data},
                     )
                     return
 
@@ -1153,9 +1112,20 @@ class SpeechStream(stt.SpeechStream):
                     # Emit END_OF_SPEECH after the final *translated* transcript
                     if self._speaking:
                         self._speaking = False
+                        end_time = original_utterance.get("end", 0)
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
-                                type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id
+                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                request_id=self._request_id,
+                                alternatives=[
+                                    stt.SpeechData(
+                                        language=LanguageCode(original_language),
+                                        text="",
+                                        end_time=end_time + self.start_time_offset,
+                                    )
+                                ]
+                                if end_time > 0
+                                else [],
                             )
                         )
 
@@ -1167,12 +1137,6 @@ class SpeechStream(stt.SpeechStream):
             # but ensure speaking state is reset if somehow missed.
             if self._speaking:
                 self._speaking = False
-
-    def _check_energy_state(self, frame: rtc.AudioFrame) -> AudioEnergyFilter.State:
-        """Check the energy state of an audio frame."""
-        if self._audio_energy_filter:
-            return self._audio_energy_filter.update(frame)
-        return AudioEnergyFilter.State.SPEAKING
 
     def _on_audio_duration_report(self, duration: float) -> None:
         """Report the audio duration for usage tracking."""

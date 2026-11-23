@@ -18,15 +18,19 @@ session = AgentSession(
 )
 ```
 
-**Note:** Realtime models (e.g., `openai.realtime.RealtimeModel`) are not supported by LiveKit Inference and must use the plugin directly. See the [Real-time Models](#-real-time-models) examples in `voice_agents/`.
+**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.DuplexModel(model="openai/gpt-live-1")`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic.
 
 ## 📁 Example Categories
 
 ### 🏠 [Homepage](./homepage/)
 
-A product knowledge agent demonstrating progressive disclosure with a Markdown-backed
-knowledge base, generated tool schemas, centralized prompt templates, session behaviors,
-streaming TTS filters, and a split unit/eval test suite.
+The agents behind the livekit.io homepage demos, one directory each:
+
+- [`livekit-expert/`](./homepage/livekit-expert/): a product knowledge agent demonstrating progressive disclosure with a Markdown-backed knowledge base, generated tool schemas, centralized prompt templates, session behaviors, streaming TTS filters, and a split unit/eval test suite.
+- [`frontdesk/`](./homepage/frontdesk/): Juniper Health, an AI receptionist that books and moves appointments on a clinic calendar.
+- [`card-auth/`](./homepage/card-auth/): Kestrel Bank card verification, a yes/no identity check before the agent touches an account.
+- [`restaurant-ordering/`](./homepage/restaurant-ordering/): Zappi's Pizzeria, phone ordering against a point of sale.
+- [`vehicle-service/`](./homepage/vehicle-service/): Bayside BMW service desk, books visits and calls back about repairs.
 
 ### 🎙️ [Voice Agents](./voice_agents/)
 
@@ -54,7 +58,7 @@ Basic building blocks and fundamental examples showing core LiveKit concepts lik
 
 ### 🛠️ [Other](./other/)
 
-Additional examples including text-only agents, various TTS providers, transcription services, and translation utilities.
+Additional examples including text-only agents, transcription services, and translation utilities.
 
 ## Running Examples
 

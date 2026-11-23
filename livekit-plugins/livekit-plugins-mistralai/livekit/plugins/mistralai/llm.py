@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
+import httpx2  # mistralai raises httpx2.TimeoutException from its http client
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
@@ -17,12 +21,15 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given, shortuuid
+from livekit.agents.utils.deprecation import deprecate_params
 from mistralai.client import Mistral
+from mistralai.client.errors import HTTPValidationError, SDKError
 from mistralai.client.models import (
     CompletionArgs,
     ConversationEvents,
     FunctionCallEvent,
     MessageOutputEvent,
+    ReasoningEffort,
     ResponseDoneEvent,
     ResponseErrorEvent,
     ResponseStartedEvent,
@@ -36,7 +43,7 @@ from .log import logger
 from .models import ChatModels
 from .tools import MistralTool
 
-DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
+DEFAULT_MODEL: ChatModels = "mistral-small-latest"
 
 
 @dataclass
@@ -49,6 +56,8 @@ class _LLMOptions:
     frequency_penalty: float | None
     random_seed: int | None
     tool_choice: ToolChoice | None
+    store: bool | None = None
+    reasoning_effort: ReasoningEffort | None = None
 
 
 @dataclass
@@ -61,7 +70,21 @@ class _PendingFunctionCall:
     arguments: str = ""
 
 
+class ApiMode(str, Enum):
+    """Deprecated: the LLM always uses the Conversations API."""
+
+    CONVERSATIONS = "conversations"
+    CHAT_COMPLETIONS = "chat_completions"
+
+
+_API_MODE_DEPRECATION = (
+    "The LLM always uses the Conversations API, including with 'chat_completions', "
+    "so this has no effect."
+)
+
+
 class LLM(llm.LLM):
+    @deprecate_params({"api_mode": _API_MODE_DEPRECATION})
     def __init__(
         self,
         *,
@@ -75,24 +98,38 @@ class LLM(llm.LLM):
         random_seed: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
-        """
-        Create a new instance of MistralAI LLM.
-
-        Uses the Mistral Conversations API, which supports both function tools
-        and provider tools (web search, document library, code interpreter).
+        """Create a new instance of MistralAI LLM.
 
         Args:
             client: Optional pre-configured MistralAI client instance.
-            api_key: Your Mistral AI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
-            model: The Mistral AI model to use, default is "ministral-8b-latest".
+            api_key: Your Mistral AI API key.  If not provided, will use
+                the ``MISTRAL_API_KEY`` environment variable.
+            model: The Mistral AI model to use, default is
+                ``"mistral-small-latest"``.
             temperature: The temperature to use the LLM with.
             top_p: Nucleus sampling parameter.
-            presence_penalty: Penalize new tokens based on their presence in the text so far.
-            frequency_penalty: Penalize new tokens based on their frequency in the text so far.
+            presence_penalty: Penalize new tokens based on their presence
+                in the text so far.
+            frequency_penalty: Penalize new tokens based on their
+                frequency in the text so far.
             random_seed: Random seed for reproducibility.
-            tool_choice: Default tool choice strategy ("auto", "required", "none").
-            max_completion_tokens: The max. number of tokens the LLM can output.
+            tool_choice: Default tool choice strategy
+                (``"auto"``, ``"required"``, ``"none"``).
+            max_completion_tokens: The max. number of tokens the LLM can
+                output.
+            store: Whether Mistral stores each conversation on its servers. The
+                Conversations API stores them by default; pass ``False`` to opt out.
+                The plugin sends the full chat context with every request, so it
+                never relies on a stored conversation.
+            reasoning_effort: How much the model reasons before answering, for models
+                with adjustable reasoning such as ``mistral-small-2603`` and
+                ``mistral-medium-3-5``. With ``"none"`` the model thinks minimally.
+                Left unset, the server default applies.
+            api_mode: Deprecated and ignored, the LLM always uses the Conversations API.
         """
         super().__init__()
         self._opts = _LLMOptions(
@@ -106,6 +143,8 @@ class LLM(llm.LLM):
             max_completion_tokens=max_completion_tokens
             if is_given(max_completion_tokens)
             else None,
+            store=store if is_given(store) else None,
+            reasoning_effort=reasoning_effort if is_given(reasoning_effort) else None,
         )
 
         mistral_api_key = api_key if is_given(api_key) else os.environ.get("MISTRAL_API_KEY")
@@ -114,6 +153,7 @@ class LLM(llm.LLM):
         self._client = client or Mistral(api_key=mistral_api_key)
 
     async def _prewarm_impl(self) -> None:
+        await asyncio.to_thread(lambda: self._client.beta.conversations)
         await self._client.models.list_async()
 
     @property
@@ -124,6 +164,7 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "MistralAI"
 
+    @deprecate_params({"api_mode": _API_MODE_DEPRECATION})
     def update_options(
         self,
         *,
@@ -135,6 +176,9 @@ class LLM(llm.LLM):
         frequency_penalty: NotGivenOr[float] = NOT_GIVEN,
         random_seed: NotGivenOr[int] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        store: NotGivenOr[bool] = NOT_GIVEN,
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
             self._opts.model = model
@@ -152,6 +196,10 @@ class LLM(llm.LLM):
             self._opts.random_seed = random_seed
         if is_given(tool_choice):
             self._opts.tool_choice = tool_choice
+        if is_given(store):
+            self._opts.store = store
+        if is_given(reasoning_effort):
+            self._opts.reasoning_effort = reasoning_effort
 
     def chat(
         self,
@@ -164,6 +212,8 @@ class LLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
         extra: dict[str, Any] = {}
+        if self._opts.store is not None:
+            extra["store"] = self._opts.store
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
@@ -180,6 +230,8 @@ class LLM(llm.LLM):
             completion_args["frequency_penalty"] = self._opts.frequency_penalty
         if self._opts.random_seed is not None:
             completion_args["random_seed"] = self._opts.random_seed
+        if self._opts.reasoning_effort is not None:
+            completion_args["reasoning_effort"] = self._opts.reasoning_effort
 
         resolved_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if resolved_tool_choice is not None:
@@ -188,6 +240,14 @@ class LLM(llm.LLM):
                 completion_args["tool_choice"] = "auto" if has_provider_tools else "required"
             elif resolved_tool_choice in ("auto", "none"):
                 completion_args["tool_choice"] = resolved_tool_choice
+
+        # completion_args passed through extra_kwargs win over the configured options
+        caller_args = extra.get("completion_args")
+        if isinstance(caller_args, CompletionArgs):
+            completion_args.update(caller_args.model_dump(exclude_unset=True))
+        elif isinstance(caller_args, dict):
+            completion_args.update(caller_args)
+
         if completion_args:
             extra["completion_args"] = CompletionArgs(**completion_args)
 
@@ -260,14 +320,24 @@ class LLMStream(llm.LLMStream):
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
+        except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
+            raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
                 request_id=e.request_id,
                 body=e.body,
-                retryable=retryable,
+                retryable=retryable and e.retryable,
             ) from None
+        except (SDKError, HTTPValidationError) as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.headers.get("x-request-id"),
+                body=e.body,
+                retryable=retryable and (e.status_code == 408 or e.status_code >= 500),
+            ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
@@ -367,7 +437,7 @@ class LLMStream(llm.LLMStream):
             args = self._provider_tool_args.pop(data.id, "")
             logger.debug(
                 "executed provider tool",
-                extra={"function": data.name, "arguments": args, "info": data.info},
+                extra={"function": data.name, "lk.pii.arguments": args, "lk.pii.info": data.info},
             )
 
         return chunks

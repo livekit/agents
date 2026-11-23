@@ -12,6 +12,7 @@ from livekit.agents import (
     EndpointingOptions,
     InterruptionOptions,
     NotGivenOr,
+    RecordingOptions,
     TurnHandlingOptions,
     utils,
 )
@@ -99,7 +100,13 @@ def create_session(
     return session
 
 
-async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 5) -> float:
+async def run_session(
+    session: AgentSession,
+    agent: Agent,
+    *,
+    drain_delay: float = 5,
+    record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
+) -> float:
     stt = session.stt
     audio_input = session.input.audio
     assert isinstance(audio_input, FakeAudioInput)
@@ -108,7 +115,7 @@ async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float
     if isinstance(session.output.audio, _SyncedAudioOutput):
         transcription_sync = session.output.audio._synchronizer
 
-    await session.start(agent)
+    await session.start(agent, record=record)
 
     # start the fake vad and stt
     t_origin = time.time()

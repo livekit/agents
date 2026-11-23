@@ -108,76 +108,114 @@ def _make_items() -> list[SearchItem]:
 STRATEGIES = [KeywordSearchStrategy(), BM25SearchStrategy()]
 
 
+@pytest.mark.parametrize("strategy", STRATEGIES)
 class TestSearchStrategies:
     """Tests that apply to all SearchStrategy implementations."""
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_name(self, strategy: SearchStrategy):
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            ("weather", ("get_weather", "get_forecast")),
+            ("academic", ("search_papers",)),
+            ("ticker symbol", ("get_stock_price",)),
+            # a name match outranks description-only matches
+            ("calculator", ("calculator",)),
+        ],
+        ids=["name", "description", "parameter", "name-weighted-higher"],
+    )
+    def test_top_match(self, strategy: SearchStrategy, query: str, expected: tuple[str, ...]):
         items = _make_items()
         strategy.build_index(items)
-        results = strategy.search("weather", items, 5)
-        assert len(results) >= 1
-        assert results[0].name in ("get_weather", "get_forecast")
+        results = strategy.search(query, items, 5)
+        assert results[0].name in expected
+        assert results[0].index_data is not None
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_description(self, strategy: SearchStrategy):
-        items = _make_items()
+    # index and query text get the same normalization: underscores, punctuation and hyphens
+    # never stop a match
+    @pytest.mark.parametrize(
+        ("description", "parameters", "query"),
+        [
+            ("Fetch the user's checking_balance from the ledger", {}, "checking_balance"),
+            ("Fetch the user's checking_balance from the ledger", {}, "checking balance"),
+            (
+                "Fetch ledger records",
+                {"filter": "One of: pending_refunds only, all"},
+                "pending_refunds",
+            ),
+            (
+                "Fetch ledger records",
+                {"filter": "One of: pending_refunds only, all"},
+                "pending refunds",
+            ),
+            ("Fetch the ledger, then the balance.", {}, "balance"),
+            ("Fetch the ledger, then the balance.", {}, "ledger"),
+            ("Track ledger, journal and receipts", {}, "ledger"),
+            ("Get real-time balance updates", {}, "real"),
+            ("Get real-time balance updates", {}, "time"),
+            ("Fetch account balance", {}, "the balance."),
+            ("Fetch account balance", {}, "balance?"),
+            ("Fetch ledger records", {"filter": "Only include settled refunds."}, "refunds"),
+        ],
+    )
+    def test_text_normalization(
+        self, strategy: SearchStrategy, description: str, parameters: dict, query: str
+    ):
+        items = [
+            SearchItem(
+                name="get_records",
+                description=description,
+                parameters=parameters,
+                source=calculator,
+            ),
+            SearchItem(
+                name="get_stock_price",
+                description="Get stock price for a symbol",
+                parameters={"symbol": "Stock ticker symbol"},
+                source=stock_tool,
+            ),
+        ]
         strategy.build_index(items)
-        results = strategy.search("academic", items, 5)
-        assert len(results) >= 1
-        assert results[0].name == "search_papers"
+        assert [r.name for r in strategy.search(query, items, 5)] == ["get_records"]
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_match_by_parameter(self, strategy: SearchStrategy):
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("ticker symbol", items, 5)
-        assert len(results) >= 1
-        assert results[0].name == "get_stock_price"
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
     def test_max_results_limit(self, strategy: SearchStrategy):
         items = _make_items()
         strategy.build_index(items)
-        results = strategy.search("get", items, 2)
-        assert len(results) == 2
+        assert len(strategy.search("get", items, 2)) == 2
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_no_matches(self, strategy: SearchStrategy):
+    @pytest.mark.parametrize("query", ["xyznonexistent", ""])
+    def test_no_matches(self, strategy: SearchStrategy, query: str):
         items = _make_items()
         strategy.build_index(items)
-        results = strategy.search("xyznonexistent", items, 5)
-        assert len(results) == 0
+        assert strategy.search(query, items, 5) == []
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_empty_query(self, strategy: SearchStrategy):
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("", items, 5)
-        assert len(results) == 0
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_name_weighted_higher(self, strategy: SearchStrategy):
-        """Tool name matches should rank higher than description-only matches."""
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("calculator", items, 5)
-        assert len(results) >= 1
-        assert results[0].name == "calculator"
+class TestKeywordSpecific:
+    """Tests specific to keyword (regex) behavior."""
 
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_index_data_set_by_build_index(self, strategy: SearchStrategy):
-        items = _make_items()
-        assert items[0].index_data is None
+    def test_regex_query_keeps_matching_rules(self):
+        """Regex syntax in a keyword query must keep its matching rules: the
+        anchored query matches only the exact name, not every tool containing
+        the same words. The forecast tool is indexed first so an anchor-stripping
+        regression that ties both tools returns the wrong one."""
+        items = [
+            SearchItem(
+                name="get_weather_forecast",
+                description="Get the weather forecast for a city",
+                parameters={"city": "City name"},
+                source=forecast_tool,
+            ),
+            SearchItem(
+                name="get_weather",
+                description="Get current weather for a city",
+                parameters={"city": "City name"},
+                source=weather_tool,
+            ),
+        ]
+        strategy = KeywordSearchStrategy()
         strategy.build_index(items)
-        assert items[0].index_data is not None
-
-    @pytest.mark.parametrize("strategy", STRATEGIES)
-    def test_index_data_preserved_through_search(self, strategy: SearchStrategy):
-        items = _make_items()
-        strategy.build_index(items)
-        results = strategy.search("weather", items, 5)
-        assert results[0].index_data is not None
+        results = strategy.search("^get_weather$", items, 1)
+        assert len(results) == 1
+        assert results[0].name == "get_weather"
 
 
 class TestBM25Specific:
@@ -192,6 +230,34 @@ class TestBM25Specific:
         results = strategy.search("academic papers arxiv", items, 5)
         assert len(results) >= 1
         assert results[0].name == "search_papers"
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [("c++", "compile_cpp"), ("c#", "compile_csharp")],
+    )
+    def test_programming_language_terms_stay_distinct(self, query: str, expected: str):
+        """Punctuation-bearing terms like c++ and c# must not collapse to the
+        same token, or the wrong-language tool can be returned. The C# tool is
+        indexed first so a token collision returns it for both queries."""
+        items = [
+            SearchItem(
+                name="compile_csharp",
+                description="Compile C# code",
+                parameters={"source": "C# source file"},
+                source=calculator,
+            ),
+            SearchItem(
+                name="compile_cpp",
+                description="Compile C++ code",
+                parameters={"source": "C++ source file"},
+                source=stock_tool,
+            ),
+        ]
+        strategy = BM25SearchStrategy()
+        strategy.build_index(items)
+        results = strategy.search(query, items, 1)
+        assert len(results) == 1
+        assert results[0].name == expected
 
     def test_cleanup_clears_state(self):
         strategy = BM25SearchStrategy()

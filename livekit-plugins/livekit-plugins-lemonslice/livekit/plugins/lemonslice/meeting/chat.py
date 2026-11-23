@@ -74,7 +74,10 @@ class MeetingChatRelay:
         while True:
             user_input = await self._queue.get()
             await self._wait_for_session_started()
-            logger.info("meeting chat relay: user_input=%r", user_input[:120])
+            logger.info(
+                "meeting chat relay received user input",
+                extra={"lk.pii.user_input": user_input[:120]},
+            )
             try:
                 await self._session.interrupt()
                 self._session.generate_reply(user_input=user_input)

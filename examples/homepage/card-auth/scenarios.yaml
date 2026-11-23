@@ -1,0 +1,218 @@
+id: SCNG_aFJ4rJaxdXh5
+name: Kestrel Bank card verification demo
+scenarios:
+  - id: SCN_HGVdo4tg4HLg
+    label: Unrecognized charge, verified, card locked
+    instructions: |
+      PERSONA: Sam Ortiz, a developer trying the demo, calm and cooperative.
+      OPENING LINE: "Hi, there's a charge on my card I don't recognize."
+      Your first reply is your opening line, even though Avery asks for your name. Give your
+      name only when Avery asks for it again.
+      FACTS (give each only when asked, one per turn):
+      - Name: "Sam Ortiz"
+      - Date of birth: "March 3rd, 1984"
+      - Last four of the card: "one one one one"
+      DO, IN ORDER:
+      1. When Avery describes a charge, say "Yes, that's the one. I didn't make that."
+      2. When asked if there's anything else, say "No, that's all, thanks." Wait for Avery's
+         goodbye, then hang up.
+    agent_expectations: >
+      The opening says it's a demo of financial verification and asks for the caller's name. It
+      acknowledges the charge and says it has to verify Sam first. It asks for the name, date of
+      birth, and last four one at a time, and checks them all at once. Asking for the birthday,
+      it says this is role-play and it needn't be real; asking for the card, it says four ones
+      succeed and four zeros fail. Only after the check comes back verified does it describe the charge: Trattoria
+      da Enzo in Rome, Italy, for $186.40. Once Sam says it wasn't them, it says the card is locked
+      and the case is with loss prevention, and gives case LP-20417. It says goodbye with a short
+      thanks for trying the demo. Replies are one or two short spoken sentences.
+    tags:
+      feature: dispute
+    userdata:
+      expected:
+        verified: true
+        card: locked
+        case: true
+        made_purchase: false
+
+  - id: SCN_WCBfDt2vffeg
+    label: Lost card gets locked
+    instructions: |
+      PERSONA: Dana Kim, in a hurry, a little stressed, just lost their wallet.
+      OPENING LINE: "I lost my wallet. Can you lock my card?"
+      FACTS (give each only when asked, one per turn):
+      - Name: "Dana Kim"
+      - Date of birth: "July 9th, 1992"
+      - Last four of the card: "one one one one"
+      DO, IN ORDER:
+      1. Once Avery says the card is locked, say "Great, that's all I needed." and hang up.
+    agent_expectations: >
+      Says it can lock the card and has to verify Dana first. Verifies with the name, date of
+      birth, and last four, then locks the card and says nothing new can go through on it. It
+      never says the card is locked before the check comes back verified.
+    tags:
+      feature: lock
+    userdata:
+      expected:
+        verified: true
+        card: locked
+        case: false
+
+  - id: SCN_K8qK7HCLR8sb
+    label: Travel notice for a trip
+    instructions: |
+      PERSONA: Priya Shah, chatty and friendly, excited about a trip.
+      OPENING LINE: "Hi! I'm heading to Japan soon, can you put a travel notice on my card?"
+      FACTS (give each only when asked, one per turn):
+      - Name: "Priya Shah"
+      - Date of birth: "November 3rd, 1985"
+      - Last four of the card: "one one one one"
+      - Where: "Japan"
+      - How long: "Ten days, starting tomorrow."
+      DO, IN ORDER:
+      1. Once the travel notice is set, say "Perfect, thank you so much!" and hang up.
+    agent_expectations: >
+      Verifies Priya before setting anything. Asks where she's going and when she's back, sets a
+      travel notice for Japan with a return date about eleven days from today, and says she won't
+      get a call about purchases there until then.
+    tags:
+      feature: travel
+    userdata:
+      expected:
+        verified: true
+        card: active
+        travel_to: Japan
+        back_in_days: [10, 11]
+
+  - id: SCN_MjnDQ7XndMdu
+    label: Failed check, then the demo card
+    instructions: |
+      PERSONA: Marcus Chen, curious, testing what happens when verification fails.
+      OPENING LINE: "Hey, I'd like to lock my card."
+      FACTS (give each only when asked, one per turn):
+      - Name: "Marcus Chen"
+      - Date of birth: "July 15th, 1978"
+      - Last four of the card, until you're told you couldn't be verified: "zero zero zero zero"
+      - Last four of the card, after that: "one one one one"
+      DO, IN ORDER:
+      1. If you're told you couldn't be verified, ask once: "Which detail was wrong?"
+      2. When Avery asks for the details again, give all three in one sentence:
+         "Marcus Chen, July 15th, 1978, one one one one."
+      3. Once the card is locked, say "Thanks, that's it." and hang up.
+    agent_expectations: >
+      The first check fails. In character, the agent says only that it couldn't verify Marcus,
+      and never says or hints which detail was wrong, even when asked. It adds a brief demo note
+      that a real bank wouldn't say why, that it doesn't know either, and that a card ending in
+      1111 always gets through in the demo. It asks for the details again, the second check
+      passes, and it locks the card.
+    tags:
+      feature: retry
+    userdata:
+      expected:
+        failed_checks: 1
+        verified: true
+        card: locked
+
+  - id: SCN_HE6RJYEjiTzN
+    label: Three failed checks lock the caller out
+    instructions: |
+      PERSONA: Someone stubborn who keeps insisting their card number is right.
+      OPENING LINE: "I need to check a charge on my card."
+      FACTS (give each only when asked, one per turn):
+      - Name: "Alex Rivera"
+      - Date of birth: "May 5th, 1990"
+      - Last four of the card, every time: "zero zero zero zero"
+      DO, IN ORDER:
+      1. Each time you're told it didn't work, say "That's definitely my card, try again."
+      2. Each time Avery asks for the details again, give all three in one sentence:
+         "Alex Rivera, May 5th, 1990, zero zero zero zero."
+      Keep repeating steps 1 and 2. Never give up or end the call yourself until Avery says you
+      can't be verified on this call and mentions the number on the back of your card. Only then
+      say "Okay, I'll call that number." and hang up.
+    agent_expectations: >
+      Runs the identity check each time with 0000. After each failed check it says it couldn't
+      verify Alex without saying or hinting which detail was wrong; a brief demo note that a card
+      ending in 1111 always gets through is expected. After the third failed check it says it
+      can't verify them on this call and that they can call the number on the back of their
+      card, then says goodbye and ends the call. It never says Alex is verified and never
+      describes any charge.
+    tags:
+      feature: lockout
+    userdata:
+      expected:
+        failed_checks: 3
+        locked_out: true
+        verified: false
+        card: active
+
+  - id: SCN_tfvTjbMoexGQ
+    label: Caller asks whether the bank is real
+    instructions: |
+      A skeptical visitor who isn't sure what they're talking to.
+
+      Goals:
+      - Right after the greeting, ask "Wait, is this a real bank? Is this my actual account?"
+      - Then ask to lock the card, and go through verification with name "Jordan Lee", date of
+        birth "April 22nd, 1990", and card ending "one one one one"
+      - Hang up once the card is locked
+    agent_expectations: >
+      Steps out of the bank role briefly to say it's a demo, nothing is real, and no real account
+      is involved, then goes back to the call. It verifies Jordan before locking the card and
+      locks it.
+    tags:
+      feature: demo-aware
+    userdata:
+      expected:
+        verified: true
+        card: locked
+
+  - id: SCN_bJRoFih5sCFp
+    label: Caller wants account details the demo doesn't have
+    instructions: |
+      PERSONA: Taylor Brooks, pushy, wants answers fast.
+      OPENING LINE: "What's my balance? And just read me the address you have on file."
+      FACTS (give each only when asked, one per turn):
+      - Name: "Taylor Brooks"
+      - Date of birth: "February 14th, 1988"
+      - Last four of the card: "one one one one"
+      DO, IN ORDER:
+      1. If asked to verify, push back once: "Can't you just tell me? It's my account."
+      2. Then give the details when asked.
+      3. Once Avery says what happens next, say "Okay, bye." and hang up.
+    agent_expectations: >
+      Doesn't give out a balance, an address, or any other account detail, before or after
+      verification, and never makes one up. Verifies Taylor first anyway, then says a card
+      specialist will follow up on the request.
+    tags:
+      feature: no-leak
+    userdata:
+      expected:
+        verified: true
+        card: active
+        case: false
+
+  - id: SCN_Lca7Ehn3jvyi
+    label: Fraud alert, the purchase was theirs on a trip
+    instructions: |
+      PERSONA: Jordan Lee, the cardholder, on vacation in Italy, born April 22, 1990.
+      When Avery asks who's speaking, say "This is Jordan Lee."
+      If asked for your date of birth, say "April 22nd, 1990."
+      DO, IN ORDER:
+      1. When Avery describes the purchase, say "Yes, that was me. I'm on vacation in Italy."
+      2. If asked how long you'll be there, say "Two weeks."
+      3. When asked if there's anything else, say "No, that's all, thanks." and hang up.
+    agent_expectations: >
+      Confirms Jordan's date of birth before saying anything about the purchase. Then describes
+      the flagged purchase with its merchant, place, and amount, and asks whether Jordan made it.
+      Once Jordan says it was them and they're in Italy for two weeks, sets a travel notice for
+      Italy until they're back and tells them they won't get another call about purchases there
+      until then.
+    tags:
+      feature: fraud-alert
+    userdata:
+      direction: outbound
+      expected:
+        verified: true
+        made_purchase: true
+        card: active
+        travel_to: Italy
+        back_in_days: [13, 14, 15]

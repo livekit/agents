@@ -74,8 +74,6 @@ class Chan(Generic[T]):
             self._puts.append(p)
             try:
                 await p
-            except ChanClosed:
-                raise
             except:
                 p.cancel()
                 with contextlib.suppress(ValueError):
@@ -104,8 +102,6 @@ class Chan(Generic[T]):
 
             try:
                 await g
-            except ChanClosed:
-                raise
             except BaseException:
                 g.cancel()
                 with contextlib.suppress(ValueError):
@@ -133,17 +129,13 @@ class Chan(Generic[T]):
     def close(self) -> None:
         self._closed = True
         self._close_ev.set()
-        for putter in self._puts:
-            if not putter.cancelled():
-                putter.set_exception(ChanClosed())
-
-        while len(self._gets) > self.qsize():
-            getter = self._gets.pop()
-            if not getter.cancelled():
-                getter.set_exception(ChanClosed())
-
-        while self._gets:
-            self._wakeup_next(self._gets)
+        # waiters wake with no result and raise ChanClosed themselves: an error stored in
+        # their future would hold the waiting frame through its traceback
+        for waiter in (*self._puts, *self._gets):
+            if not waiter.done():
+                waiter.set_result(None)
+        self._puts.clear()
+        self._gets.clear()
 
     #        if self.empty():
     #            self._finished_ev.set()

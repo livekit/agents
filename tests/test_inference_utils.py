@@ -1,19 +1,122 @@
-"""Unit tests for LiveKit Inference quota telemetry."""
+"""Unit tests for shared LiveKit Inference request metadata."""
 
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
-import httpx
+import aiohttp
+import httpx2 as httpx
 import openai
 import pytest
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
+import livekit.agents.inference._utils as inference_utils
+import livekit.agents.job as job_module
+from livekit.agents import inference
 from livekit.agents.inference._utils import (
+    HEADER_SESSION_ID,
+    create_api_error_from_response,
+    create_inference_request_id,
     extract_quota_usage,
+    get_inference_headers,
 )
 from livekit.agents.inference.llm import LLMStream
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "retryable", "message"),
+    [
+        (429, {}, True, "Invalid response status"),
+        (429, {"x-should-retry": "false"}, False, "Invalid response status"),
+        (401, {}, False, "Invalid response status"),
+        (
+            429,
+            {"x-livekit-inference-quota-message": "STT concurrent connection limit reached."},
+            True,
+            "STT concurrent connection limit reached.",
+        ),
+    ],
+)
+def test_handshake_error_preserves_retry_policy(
+    status: int, headers: dict[str, str], retryable: bool, message: str
+) -> None:
+    url = URL("https://example.livekit.cloud/v1/stt")
+    error = aiohttp.WSServerHandshakeError(
+        request_info=aiohttp.RequestInfo(url, "GET", CIMultiDictProxy(CIMultiDict()), url),
+        history=(),
+        status=status,
+        message="Invalid response status",
+        headers=CIMultiDict(headers),
+    )
+    result = create_api_error_from_response(error)
+
+    assert message in result.message
+    assert result.status_code == status
+    assert result.retryable is retryable
+    assert result.body is None
+
+
+def test_inference_class_has_public_import() -> None:
+    assert inference.InferenceClass is inference_utils.InferenceClass
+
+
+def test_public_inference_exports_resolve() -> None:
+    for name in inference.__all__:
+        assert getattr(inference, name) is not None
+
+
+def test_inference_session_id_is_omitted_without_job_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _no_job_context() -> None:
+        raise RuntimeError("no job context")
+
+    monkeypatch.setattr(job_module, "get_job_context", _no_job_context)
+
+    assert HEADER_SESSION_ID not in get_inference_headers()
+
+
+def test_inference_session_id_is_fresh_and_sdk_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room = SimpleNamespace(sid="RM_test", isconnected=lambda: False)
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(id="job_test", room=room),
+        room=room,
+        inference_headers={HEADER_SESSION_ID: "caller_value"},
+    )
+    suffixes = iter(("first", "second"))
+
+    monkeypatch.setattr(job_module, "get_job_context", lambda: ctx)
+    monkeypatch.setattr(
+        inference_utils,
+        "shortuuid",
+        lambda prefix="": prefix + next(suffixes),
+    )
+
+    first = get_inference_headers()
+    second = get_inference_headers()
+
+    assert first[HEADER_SESSION_ID] == "inference_first"
+    assert second[HEADER_SESSION_ID] == "inference_second"
+
+
+def test_inference_request_id_links_to_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        inference_utils,
+        "shortuuid",
+        lambda prefix="": prefix + "suffix",
+    )
+
+    assert create_inference_request_id("inference_parent", "tts") == "inference_parent_tts_suffix"
+    assert (
+        create_inference_request_id(None, "eot", fallback_prefix="turn_request_")
+        == "turn_request_suffix"
+    )
 
 
 def test_extract_quota_usage_returns_all_stamped_dimensions() -> None:
