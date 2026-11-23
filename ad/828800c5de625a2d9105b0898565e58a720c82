@@ -1,0 +1,24 @@
+livekit-agents/livekit/agents/voice/amd/_chat_context.py
+  s_aaf78334cb7322::t_9c70a85d4d863c 86-87
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_aaf78334cb7322::t_f66d84e718052c 639-641,643
+tests/test_amd.py
+  s_aaf78334cb7322::t_68f820a8cab7e0 3149-3182
+  s_aaf78334cb7322::t_e8e64eb53bfc70 3148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad828800c5de625a2d9105b0898565e58a720c82",
+  "prompts": {},
+  "sessions": {
+    "s_aaf78334cb7322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2193486-0057-4a50-bb24-44082ff248d9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
