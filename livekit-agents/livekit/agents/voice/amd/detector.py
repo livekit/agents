@@ -636,9 +636,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             and item.text_content
             and item.created_at >= self._started_at
         ):
-            self._chat_ctx.add_agent_reply(
-                item.created_at, item.text_content, words=self._likely_human
+            # after an uncertain turn in a menu or screener, the next turn may answer the agent
+            words = self._likely_human or (
+                self._state in _fsm.LIKELY_HUMAN_STAGES and self._category is AMDCategory.UNCERTAIN
             )
+            self._chat_ctx.add_agent_reply(item.created_at, item.text_content, words=words)
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         if self.lifecycle is not AMDLifecycle.ACTIVE:

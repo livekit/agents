@@ -3146,6 +3146,41 @@ async def test_classifier_sees_the_agent_words_while_a_human_is_held() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("after", "reply"),
+    [
+        (AMDCategory.UNCERTAIN, "Hi Sam, can you make it tomorrow?"),
+        # wait keeps the placeholder: the agent should not answer hold music
+        (AMDCategory.WAIT, AGENT_REPLY),
+    ],
+)
+async def test_classifier_sees_the_agent_words_after_an_uncertain_turn_in_a_menu(
+    after: AMDCategory, reply: str
+) -> None:
+    async with running() as (detector, session, classifier, _):
+        await commit(detector, session, classifier)
+        classifier.prediction(1, AMDCategory.MACHINE_IVR)
+        await eventually(lambda: detector._turns[1].prediction is not None)
+        commit_turn(detector, end_of_turn("Sam."))
+        await classifier.request()
+        classifier.prediction(2, after)
+        await eventually(lambda: detector._turns[2].prediction is not None)
+        session._conversation_item_added(
+            llm.ChatMessage(role="assistant", content=["Hi Sam, can you make it tomorrow?"])
+        )
+        commit_turn(detector, end_of_turn("Yes. That's confirmed."))
+        request = await classifier.request()
+
+        history = [(m.role, m.text_content) for m in request.chat_ctx.messages()[2:]]
+        assert history == [
+            ("user", "hello"),
+            ("user", "Sam."),
+            ("assistant", reply),
+            ("user", "Yes. That's confirmed."),
+        ]
+
+
+@pytest.mark.asyncio
 async def test_dtmf_tool_works_without_amd() -> None:
     from livekit.agents.beta.tools.send_dtmf import send_dtmf_events
     from livekit.agents.beta.workflows.utils import DtmfEvent
