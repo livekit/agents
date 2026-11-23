@@ -1,0 +1,39 @@
+livekit-agents/livekit/agents/voice/guardrail.py
+  s_f1897fb3dfb2d9::t_504c783a0bdec2 6,8-9,13,15-16,46,48-81,139,213-214,378-383,386-388,406-412,440,495-510,527-531,535-649,657-658,660-665,668-673
+livekit-agents/livekit/agents/voice/generation.py
+  s_9087a294f502ce::t_8398d95fd4e35f 189-210
+tests/test_guardrail.py
+  s_9087a294f502ce::t_8a76053192ac84 11-19,91-136,138-142,152-241,270,363,374
+  s_9087a294f502ce::t_5a7d39f4da2f03 9-10
+  s_f1897fb3dfb2d9::t_da83ad45fe9d96 6
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_f1897fb3dfb2d9::t_9456083ba8f255 96,112,139-141,1843-1844,1846-1855,1865-1866,1934-1935,2978-2980,2986-2989,3001-3022,3052-3054,3086-3088,3641-3642,3657-3658,3671-3672,3675-3680,3767-3786,4041-4042,4298-4319,4321,4332,4369-4372,4377
+examples/voice_agents/decision_guardrail.py
+  s_f1897fb3dfb2d9::t_09e036e9506fe5 10-11,31,86-91,128-133
+tests/test_guardrail_session.py
+  s_f1897fb3dfb2d9::t_f72a9f5604e8a3 4-5,11,16-18,20-21,23,25-26,69-75,82-83,85-88,98-211,282-533
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f105c7ad22e4c2dd59b4686ae957fc9252a58ac",
+  "prompts": {},
+  "sessions": {
+    "s_9087a294f502ce": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1fa00-ebe3-7d60-9223-21015e792fb8",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_f1897fb3dfb2d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2352c374-fdf0-4e8b-94ae-7ed464c02847",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
