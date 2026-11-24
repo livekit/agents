@@ -181,6 +181,15 @@ _RECORDING_ALL_OFF: RecordingOptions = {
 }
 
 
+def _job_log_file_is_exported(record_is_given: bool, options: RecordingOptions) -> bool:
+    """Whether the job's hosted log file is exported: yes, unless the code turned logs off.
+
+    The server's recording setting does not decide this. LiveKit Cloud decides for the
+    project when it receives the logs, so that it can change without a new SDK.
+    """
+    return not (record_is_given and not options["logs"])
+
+
 def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOptions:
     if isinstance(record, bool):
         defaults = _RECORDING_ALL_ON if record else _RECORDING_ALL_OFF
@@ -975,6 +984,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 record = job_ctx.job.enable_recording if job_ctx else False
 
             self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
+            export_job_log_file = _job_log_file_is_exported(
+                record_is_given, self._opts.recording_options
+            )
             if self._text_only:
                 self._opts.recording_options["audio"] = False
 
@@ -996,7 +1008,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             # auto-disable recording for non-primary sessions when record is not given
                             self._opts.recording_options = _resolve_recording_options(False)
 
-                job_ctx.init_recording(self._opts.recording_options)
+                job_ctx.init_recording(
+                    self._opts.recording_options, export_job_log_file=export_job_log_file
+                )
 
             self._redaction_enabled = bool(
                 self._opts.recording_options["redaction"]

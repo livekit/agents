@@ -27,6 +27,11 @@ from livekit.agents._hosted_logs import (
 )
 from livekit.agents.job import JobContext
 from livekit.agents.version import __version__
+from livekit.agents.voice.agent_session import (
+    RecordingOptions,
+    _job_log_file_is_exported,
+    _resolve_recording_options,
+)
 from livekit.protocol import agent
 
 pytestmark = pytest.mark.unit
@@ -254,6 +259,34 @@ def test_init_recording_decides_the_job_output() -> None:
     ctx._hosted_output.decide.assert_called_once_with(logs=False, redaction=True)
 
 
+def test_init_recording_exports_the_job_file_when_the_project_recording_is_off() -> None:
+    ctx = MagicMock()
+    ctx._recording_initialized = False
+    ctx.job.enable_redaction = False
+    ctx._info.url = "ws://localhost:7880"
+    all_off = _resolve_recording_options(False)
+    JobContext.init_recording(ctx, all_off, export_job_log_file=True)
+    ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=False)
+
+
+@pytest.mark.parametrize(
+    ("record_is_given", "record", "exported"),
+    [
+        (False, False, True),
+        (False, True, True),
+        (True, True, True),
+        (True, {"audio": False}, True),
+        (True, False, False),
+        (True, {"logs": False}, False),
+    ],
+)
+def test_only_the_code_turns_the_job_log_file_off(
+    record_is_given: bool, record: bool | RecordingOptions, exported: bool
+) -> None:
+    options = _resolve_recording_options(record)
+    assert _job_log_file_is_exported(record_is_given, options) is exported
+
+
 def test_init_recording_decides_only_once() -> None:
     ctx = MagicMock()
     ctx._recording_initialized = True
@@ -263,7 +296,7 @@ def test_init_recording_decides_only_once() -> None:
 
 
 @pytest.mark.parametrize("recording", [True, False])
-async def test_cleanup_follows_the_job_when_no_session_decided(recording: bool) -> None:
+async def test_cleanup_exports_the_job_file_when_no_session_decided(recording: bool) -> None:
     ctx = MagicMock()
     ctx._recording_initialized = False
     ctx._rejected_recording = None
@@ -273,7 +306,7 @@ async def test_cleanup_follows_the_job_when_no_session_decided(recording: bool) 
     ctx.job.enable_recording = recording
     ctx.job.enable_redaction = True
     await JobContext._on_cleanup(ctx)
-    ctx._hosted_output.decide.assert_called_once_with(logs=recording, redaction=True)
+    ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=True)
 
 
 async def test_cleanup_keeps_the_session_decision() -> None:
@@ -593,12 +626,12 @@ async def _hosted_entrypoint(job_ctx: JobContext) -> None:
     job_ctx.shutdown("done")
 
 
-def _hosted_job(*, redaction: bool) -> job.RunningJobInfo:
+def _hosted_job(*, redaction: bool, recording: bool = True) -> job.RunningJobInfo:
     return job.RunningJobInfo(
         job=agent.Job(
             id=f"AJ_{uuid.uuid4().hex[:12]}",
             type=agent.JobType.JT_ROOM,
-            enable_recording=True,
+            enable_recording=recording,
             enable_redaction=redaction,
         ),
         url="fake_url",
@@ -623,8 +656,10 @@ def _job_lines(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     return records, raw
 
 
-@pytest.mark.parametrize("redaction", [False, True])
-async def test_job_process_writes_its_file_end_to_end(hosted_env: Path, redaction: bool) -> None:
+@pytest.mark.parametrize(("redaction", "recording"), [(False, True), (True, True), (False, False)])
+async def test_job_process_writes_its_file_end_to_end(
+    hosted_env: Path, redaction: bool, recording: bool
+) -> None:
     hand_off()
     executor = ipc.job_proc_executor.ProcJobExecutor(
         initialize_process_fnc=_noop_initialize,
@@ -644,7 +679,7 @@ async def test_job_process_writes_its_file_end_to_end(hosted_env: Path, redactio
         mp_ctx=mp.get_context("spawn"),
         loop=asyncio.get_running_loop(),
     )
-    info = _hosted_job(redaction=redaction)
+    info = _hosted_job(redaction=redaction, recording=recording)
     await executor.start()
     await executor.initialize()
     await executor.launch_job(info)

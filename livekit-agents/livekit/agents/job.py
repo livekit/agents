@@ -408,8 +408,9 @@ class JobContext:
 
     async def _on_cleanup(self) -> None:
         if self._hosted_output is not None and not self._recording_initialized:
+            # no session decided: export, and LiveKit Cloud applies the project setting
             logs, redaction = self._rejected_recording or (
-                self.job.enable_recording,
+                True,
                 self.job.enable_redaction,
             )
             self._hosted_output.decide(logs=logs, redaction=redaction)
@@ -925,15 +926,25 @@ class JobContext:
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
-    def init_recording(self, options: RecordingOptions) -> None:
+    def init_recording(
+        self, options: RecordingOptions, *, export_job_log_file: bool | None = None
+    ) -> None:
+        """Set up recording for the job.
+
+        Args:
+            options: What this SDK uploads to LiveKit Cloud.
+            export_job_log_file: Whether the job's hosted log file is exported. ``None``
+                follows ``options["logs"]``.
+        """
         redaction_enabled = options.get("redaction", False) or (
             self.job.enable_redaction and self.simulation_context() is None
         )
+        logs = options.get("logs", True) if export_job_log_file is None else export_job_log_file
         if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
-            self._rejected_recording = (options.get("logs", True), redaction_enabled)
+            self._rejected_recording = (logs, redaction_enabled)
             raise ValueError("audio upload requires transcript upload when redaction is enabled")
         if self._hosted_output is not None and not self._recording_initialized:
-            self._hosted_output.decide(logs=options.get("logs", True), redaction=redaction_enabled)
+            self._hosted_output.decide(logs=logs, redaction=redaction_enabled)
 
         if self._recording_initialized:
             self._stop_log_buffering()
