@@ -21,16 +21,16 @@ use tokio::sync::mpsc;
 
 use super::*;
 
-const DISABLED: &[u8] = b"project data recording is disabled by owner";
+pub(crate) const DISABLED: &[u8] = b"project data recording is disabled by owner";
 
-struct Received {
-    path: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+pub(crate) struct Received {
+    pub path: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
 }
 
 impl Received {
-    fn header(&self, name: &str) -> Option<&str> {
+    pub fn header(&self, name: &str) -> Option<&str> {
         self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
 
@@ -43,14 +43,14 @@ impl Received {
         out
     }
 
-    fn decode<M: prost::Message + Default>(&self) -> M {
+    pub fn decode<M: prost::Message + Default>(&self) -> M {
         assert_eq!(self.header("content-type"), Some("application/x-protobuf"));
         M::decode(self.bytes().as_slice()).unwrap()
     }
 }
 
 /// A local OTLP/HTTP endpoint: `reply` answers each path with a status and body, or never.
-async fn endpoint(
+pub(crate) async fn endpoint(
     reply: impl Fn(&str) -> Option<(u16, &'static [u8])> + Send + Sync + 'static,
 ) -> (String, mpsc::UnboundedReceiver<Received>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -109,15 +109,15 @@ async fn endpoint(
     (url, rx)
 }
 
-fn ok(_: &str) -> Option<(u16, &'static [u8])> {
+pub(crate) fn ok(_: &str) -> Option<(u16, &'static [u8])> {
     Some((200, b""))
 }
 
-fn received(rx: &mut mpsc::UnboundedReceiver<Received>) -> Vec<Received> {
+pub(crate) fn received(rx: &mut mpsc::UnboundedReceiver<Received>) -> Vec<Received> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
-fn process() -> ProcessIdentity {
+pub(crate) fn process() -> ProcessIdentity {
     ProcessIdentity {
         sdk_name: SdkName::Python,
         sdk_version: "2.0.0".into(),
@@ -126,7 +126,7 @@ fn process() -> ProcessIdentity {
     }
 }
 
-fn exporter(limits: Limits) -> Exporter {
+pub(crate) fn exporter(limits: Limits) -> Exporter {
     Exporter::start(
         &crate::task::TokioSpawner::current(),
         Arc::new(crate::clock::RealClock::new()),
@@ -135,15 +135,15 @@ fn exporter(limits: Limits) -> Exporter {
     )
 }
 
-fn cloud(url: &str) -> CloudEndpoint {
+pub(crate) fn cloud(url: &str) -> CloudEndpoint {
     CloudEndpoint { base_url: url.to_owned(), api_key: "key".into(), api_secret: "secret".into() }
 }
 
-fn key(job: &str) -> JobKey {
+pub(crate) fn key(job: &str) -> JobKey {
     JobKey(job.to_owned())
 }
 
-fn identity(job: &str) -> SessionIdentity {
+pub(crate) fn identity(job: &str) -> SessionIdentity {
     SessionIdentity {
         room_id: Some(format!("RM_{job}")),
         job_id: Some(job.to_owned()),
@@ -152,11 +152,11 @@ fn identity(job: &str) -> SessionIdentity {
     }
 }
 
-fn recording() -> CloudRecording {
+pub(crate) fn recording() -> CloudRecording {
     CloudRecording { traces: true, logs: true, metrics: true, ..Default::default() }
 }
 
-fn span(name: &'static str, job: Option<&str>, attributes: KeyValues) -> Record {
+pub(crate) fn span(name: &'static str, job: Option<&str>, attributes: KeyValues) -> Record {
     Record::Span(SpanRecord {
         context: SpanContext { trace_id: 7, span_id: 9, sampled: true },
         parent: Some(3),
@@ -173,7 +173,7 @@ fn span(name: &'static str, job: Option<&str>, attributes: KeyValues) -> Record 
     })
 }
 
-fn counter(job: Option<&str>, value: i64) -> Record {
+pub(crate) fn counter(job: Option<&str>, value: i64) -> Record {
     Record::Measurement(Measurement {
         instrument: "lk.agents.usage.llm_input_tokens",
         kind: InstrumentKind::Counter,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import platform
 import threading
 import traceback
 from collections.abc import Iterator, Mapping, Sequence
@@ -31,7 +32,7 @@ def _install() -> None:
     global _provider_adopted
     from .version import __version__
 
-    _core._core_telemetry_install(__version__)
+    _core._core_telemetry_install(__version__, python_version=platform.python_version())
     if _provider_adopted:
         return
     _provider_adopted = True

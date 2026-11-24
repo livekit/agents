@@ -61,9 +61,10 @@ class TelemetrySpan:
     def end(self, end_time: int | None = None) -> None:
         """Ends the span; later calls do nothing."""
 
-def _core_telemetry_install(sdk_version: str) -> None:
+def _core_telemetry_install(sdk_version: str, *, python_version: str | None = None) -> None:
     """Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
-    the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
+    the `OTEL_EXPORTER_OTLP_*` environment, and the process's product statistics unless they
+    are opted out of. Later calls do nothing.
     """
 
 def configure(

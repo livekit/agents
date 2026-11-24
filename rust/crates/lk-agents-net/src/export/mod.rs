@@ -2,6 +2,7 @@
 
 pub mod host;
 pub mod otlp;
+pub mod productstats;
 pub mod profile;
 pub mod prometheus;
 pub mod session_report;

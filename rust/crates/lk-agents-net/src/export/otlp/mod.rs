@@ -1,8 +1,8 @@
 pub(crate) mod cloud;
 pub mod config;
 mod destination;
-mod encode;
-mod metrics;
+pub(crate) mod encode;
+pub(crate) mod metrics;
 pub mod proto;
 
 use std::sync::Arc;
@@ -420,7 +420,7 @@ fn stamp_app_spans(
 
 #[cfg(test)]
 #[path = "otlp_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "proto_tests.rs"]

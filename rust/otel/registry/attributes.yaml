@@ -3,6 +3,232 @@
 {
   "groups": [
     {
+      "id": "registry.livekit.agents.productstats",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats`.",
+      "attributes": [
+        {
+          "id": "lk.productstats.arch",
+          "type": "string",
+          "stability": "development",
+          "brief": "The CPU architecture (`std::env::consts::ARCH`)."
+        },
+        {
+          "id": "lk.productstats.crash.signature",
+          "type": {
+            "members": [
+              {
+                "id": "exited",
+                "value": "exited",
+                "brief": "exited",
+                "stability": "development"
+              },
+              {
+                "id": "signaled",
+                "value": "signaled",
+                "brief": "signaled",
+                "stability": "development"
+              },
+              {
+                "id": "lost",
+                "value": "lost",
+                "brief": "lost",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "How it died."
+        },
+        {
+          "id": "lk.productstats.drop.reason",
+          "type": {
+            "members": [
+              {
+                "id": "no_credential",
+                "value": "no_credential",
+                "brief": "no_credential",
+                "stability": "development"
+              },
+              {
+                "id": "refused",
+                "value": "refused",
+                "brief": "refused",
+                "stability": "development"
+              },
+              {
+                "id": "queue",
+                "value": "queue",
+                "brief": "queue",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Why they were dropped."
+        },
+        {
+          "id": "lk.productstats.error.type",
+          "type": {
+            "members": [
+              {
+                "id": "timeout",
+                "value": "timeout",
+                "brief": "timeout",
+                "stability": "development"
+              },
+              {
+                "id": "cancelled",
+                "value": "cancelled",
+                "brief": "cancelled",
+                "stability": "development"
+              },
+              {
+                "id": "api_error",
+                "value": "api_error",
+                "brief": "api_error",
+                "stability": "development"
+              },
+              {
+                "id": "api_status_error",
+                "value": "api_status_error",
+                "brief": "api_status_error",
+                "stability": "development"
+              },
+              {
+                "id": "api_connection_error",
+                "value": "api_connection_error",
+                "brief": "api_connection_error",
+                "stability": "development"
+              },
+              {
+                "id": "exception",
+                "value": "exception",
+                "brief": "exception",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The class of the failure."
+        },
+        {
+          "id": "lk.productstats.framework.version",
+          "type": "string",
+          "stability": "development",
+          "brief": "The framework's version."
+        },
+        {
+          "id": "lk.productstats.job.outcome",
+          "type": {
+            "members": [
+              {
+                "id": "ok",
+                "value": "ok",
+                "brief": "ok",
+                "stability": "development"
+              },
+              {
+                "id": "failed",
+                "value": "failed",
+                "brief": "failed",
+                "stability": "development"
+              },
+              {
+                "id": "cancelled",
+                "value": "cancelled",
+                "brief": "cancelled",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "How the job ended."
+        },
+        {
+          "id": "lk.productstats.model",
+          "type": "string",
+          "stability": "development",
+          "brief": "The model's name."
+        },
+        {
+          "id": "lk.productstats.operation",
+          "type": {
+            "members": [
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "tts",
+                "value": "tts",
+                "brief": "tts",
+                "stability": "development"
+              },
+              {
+                "id": "llm",
+                "value": "llm",
+                "brief": "llm",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "eot",
+                "value": "eot",
+                "brief": "eot",
+                "stability": "development"
+              },
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "STT, TTS, LLM, realtime, end of turn or VAD."
+        },
+        {
+          "id": "lk.productstats.os",
+          "type": "string",
+          "stability": "development",
+          "brief": "The operating system (`std::env::consts::OS`)."
+        },
+        {
+          "id": "lk.productstats.plugins",
+          "type": "string[]",
+          "stability": "development",
+          "brief": "Each loaded LiveKit plugin, as `package==version`."
+        },
+        {
+          "id": "lk.productstats.provider",
+          "type": "string",
+          "stability": "development",
+          "brief": "The provider, as the GenAI registry spells it."
+        },
+        {
+          "id": "lk.productstats.python.version",
+          "type": "string",
+          "stability": "development",
+          "brief": "The Python version the framework runs on."
+        },
+        {
+          "id": "lk.productstats.stall.signature",
+          "type": "string",
+          "stability": "development",
+          "brief": "Up to `STALL_SIGNATURE_FRAMES` function names, innermost first, joined by ` < `; `unknown` when the stack could not be read. No file, line or argument."
+        }
+      ]
+    },
+    {
       "id": "registry.livekit.agents.health",
       "type": "attribute_group",
       "brief": "Attributes declared in `lk_agents_abi::telemetry::health`.",
@@ -355,6 +581,85 @@
           "type": "any",
           "stability": "development",
           "brief": "The `Usage` model's entries: one per model and kind; absent when nothing was used."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.runner",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::telemetry::runner`.",
+      "attributes": [
+        {
+          "id": "lk.productstats.runner.kind",
+          "type": {
+            "members": [
+              {
+                "id": "production",
+                "value": "production",
+                "brief": "production",
+                "stability": "development"
+              },
+              {
+                "id": "development",
+                "value": "development",
+                "brief": "development",
+                "stability": "development"
+              },
+              {
+                "id": "ci",
+                "value": "ci",
+                "brief": "ci",
+                "stability": "development"
+              },
+              {
+                "id": "unknown",
+                "value": "unknown",
+                "brief": "unknown",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Production, development, CI or unknown."
+        },
+        {
+          "id": "lk.productstats.runner.launch",
+          "type": {
+            "members": [
+              {
+                "id": "dev",
+                "value": "dev",
+                "brief": "dev",
+                "stability": "development"
+              },
+              {
+                "id": "console",
+                "value": "console",
+                "brief": "console",
+                "stability": "development"
+              },
+              {
+                "id": "simulation",
+                "value": "simulation",
+                "brief": "simulation",
+                "stability": "development"
+              },
+              {
+                "id": "start",
+                "value": "start",
+                "brief": "start",
+                "stability": "development"
+              },
+              {
+                "id": "none",
+                "value": "none",
+                "brief": "none",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The command that started the process."
         }
       ]
     },

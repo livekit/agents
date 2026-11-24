@@ -264,6 +264,36 @@ fn registry_rules_refuse_mistakes() {
     }
 }
 
+// Catches: a product statistic carrying content, free text or an `lk.pii.*` key: its export is
+// LiveKit's and must never hold customer data.
+#[test]
+fn product_statistics_hold_only_bounded_values() {
+    let read = |decl: &str| {
+        let decl = format!("use crate::telemetry::decl::{{Content, Label}};\n{decl}");
+        let krate = Crate::from_files(
+            "abi",
+            &[
+                ("lib.rs", "pub mod telemetry; pub mod productstats;"),
+                ("telemetry/mod.rs", "pub mod decl; pub mod semconv;"),
+                ("telemetry/decl.rs", DECL),
+                ("telemetry/semconv.rs", SEMCONV),
+                ("productstats.rs", &decl),
+            ],
+        )?;
+        telemetry::read(&krate)
+    };
+    let group = |field: &str| format!("/// R.\n#[derive(Attrs)]\npub struct R {{ {field} }}");
+    read(&group("/// P.\n#[attr(\"lk.productstats.p\")] pub p: Vec<Label>, /// V.\n#[attr(\"lk.productstats.v\")] pub v: Label,")).unwrap();
+    for field in [
+        "/// T.\n#[attr(\"lk.productstats.t\")] pub t: String,",
+        "/// T.\n#[attr(\"lk.productstats.t\")] pub t: Vec<String>,",
+        "/// T.\n#[attr(\"lk.pii.t\")] pub t: Content<String>,",
+    ] {
+        let error = read(&group(field)).err().unwrap_or_else(|| panic!("accepted: {field}"));
+        assert!(error.contains("a product statistic is a closed enum"), "{error}");
+    }
+}
+
 // Catches: an output missing a declaration or misreporting it, a dependency key redefined in
 // the Weaver registry, or the pins lost.
 #[test]

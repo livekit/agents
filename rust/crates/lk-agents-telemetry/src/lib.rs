@@ -14,6 +14,7 @@
 extern crate self as lk_agents_telemetry;
 
 pub mod process;
+pub mod productstats;
 mod scoped;
 pub mod span;
 

@@ -2,6 +2,10 @@
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::{LlmMetrics, Metadata, TtsMetrics};
+use lk_agents_abi::productstats::{
+    FailureType, Operation, ProviderDuration, ProviderFailures, ProviderLabels, ProviderRequests,
+    ProviderRetries, ProviderTtfb, ProviderTtft,
+};
 use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
     GenAiInputTokens, GenAiLabels, GenAiOperationDuration, GenAiOutputTokens, ModelLabels,
@@ -40,6 +44,45 @@ pub fn provider_name(provider: &str) -> String {
 /// A model's `M` labels: its provider as the GenAI registry spells it, and its name.
 pub fn model_labels(id: &ProviderId) -> ModelLabels {
     ModelLabels::of(Some(&provider_name(&id.provider)), Some(&id.model))
+}
+
+/// A provider statistic's labels. A provider the GenAI registry does not name keeps the plugin's
+/// own name; an unknown host (a self-hosted endpoint) is `other`, never sent.
+pub fn stat_labels(operation: Operation, id: &ProviderId) -> ProviderLabels {
+    let raw = id.provider.trim();
+    let provider = match gen_ai::provider_name(raw) {
+        Some(name) if name == raw && raw.contains(['.', '/', ':', '@']) => "other".to_owned(),
+        Some(name) => name,
+        None => String::new(),
+    };
+    lk_agents_telemetry::productstats::provider(operation, &provider, &id.model)
+}
+
+/// One provider request's product statistics: the request, its retries, its failure, its
+/// first output (`first`, with the instrument it is measured by) and its duration.
+pub(crate) struct RequestStats<'a> {
+    pub labels: ProviderLabels,
+    pub retries: u32,
+    pub failure: Option<&'a ProviderError>,
+    pub duration: Option<f64>,
+}
+
+impl RequestStats<'_> {
+    pub fn record(self) {
+        use lk_agents_telemetry::productstats::{count, record};
+        let provider = self.labels;
+        count(&ProviderRequests { provider: provider.clone() });
+        if self.retries > 0 {
+            record(&ProviderRetries { provider: provider.clone() }, u64::from(self.retries));
+        }
+        if let Some(error) = self.failure {
+            let error_type = FailureType::of(error);
+            count(&ProviderFailures { provider: provider.clone(), error_type });
+        }
+        if let Some(seconds) = self.duration {
+            record(&ProviderDuration { provider }, seconds);
+        }
+    }
 }
 
 fn seconds(from: u64, to: u64) -> f64 {
@@ -242,6 +285,18 @@ impl LlmTrace {
             m
         });
         let Some(span) = self.span.take() else { return metrics };
+        let labels = stat_labels(Operation::Llm, &self.id);
+        if let Some(at) = self.first_chunk {
+            let ttft = ProviderTtft { provider: labels.clone() };
+            lk_agents_telemetry::productstats::record(&ttft, seconds(self.started, at));
+        }
+        RequestStats {
+            labels,
+            retries: self.attempts.saturating_sub(1),
+            failure: self.failure.as_ref(),
+            duration: Some(seconds(self.started, now)),
+        }
+        .record();
         let cx = span.cx();
         let usage = self.usage.clone().unwrap_or_default();
         let provider = provider_name(&self.id.provider);
@@ -456,6 +511,20 @@ impl TtsTrace {
 
     /// Ends the request with the text synthesized and its metrics.
     pub fn end(mut self, text: String, metrics: Option<&TtsMetrics>) {
+        if let Some(TtsRequestSpan::Request(_)) = &self.span {
+            let labels = stat_labels(Operation::Tts, &self.id);
+            if let Some(ttfb) = metrics.and_then(|m| m.ttfb).filter(|t| *t >= 0.0) {
+                let ttfb_labels = ProviderTtfb { provider: labels.clone() };
+                lk_agents_telemetry::productstats::record(&ttfb_labels, ttfb);
+            }
+            RequestStats {
+                labels,
+                retries: self.attempts.saturating_sub(1),
+                failure: self.failure.as_ref(),
+                duration: metrics.map(|m| m.duration),
+            }
+            .record();
+        }
         let end = TtsRequestEnd {
             input_text: Some(Content(text)),
             metrics: metrics.map(|m| Json(TtsMetricsSummary::from(m))),

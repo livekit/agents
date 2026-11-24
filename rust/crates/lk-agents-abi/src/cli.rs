@@ -49,6 +49,19 @@ pub enum CliArgs {
     },
 }
 
+impl CliArgs {
+    /// The command, as the process's runner reads it.
+    pub fn launch(&self) -> crate::telemetry::runner::Launch {
+        use crate::telemetry::runner::Launch;
+        match self {
+            CliArgs::Start { simulation: true, .. } => Launch::Simulation,
+            CliArgs::Start { dev: true, .. } => Launch::Dev,
+            CliArgs::Start { .. } => Launch::Start,
+            CliArgs::Console { .. } => Launch::Console,
+        }
+    }
+}
+
 /// Parsing never prints or exits the hosting process.
 #[derive(Clone, PartialEq)]
 #[crate::host(record(module = "cli", emit))]

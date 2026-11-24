@@ -37,6 +37,11 @@ pub trait Backend: Send + Sync + 'static {
 
     fn resource_id(&self) -> ResourceId;
 
+    /// The labels of its product statistics; `None` records none.
+    fn stat_labels(&self) -> Option<lk_agents_abi::productstats::ProviderLabels> {
+        None
+    }
+
     /// `conn` was rewritten by [`conn_options_for_attempt`](crate::fallback::conn_options_for_attempt); pass it verbatim.
     async fn open(
         &self,
@@ -320,6 +325,7 @@ impl<B: Backend> FallbackChain<B> {
             effects,
             active: None,
             served: None,
+            launched: None,
         })
     }
 
@@ -513,6 +519,8 @@ struct ChainRun<'c, B: Backend, T, S> {
     active: Option<RunningAttempt<T, S>>,
     /// The served value with its entry and selection id, until the machine finishes.
     served: Option<(T, usize, u64)>,
+    /// The entry the last attempt ran on: a launch on another is a fallback from it.
+    launched: Option<usize>,
 }
 
 impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T, S> {
@@ -669,6 +677,12 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
         // Recheck supplied time immediately before executing an authorized launch.
         if self.deadline.is_some_and(|at| chain.clock.now() >= at) {
             return self.handle(ChainEvent::Wake);
+        }
+        if let Some(previous) = self.launched.replace(index).filter(|p| *p != index)
+            && let Some(provider) = chain.entries[previous].stat_labels()
+        {
+            let fallback = lk_agents_abi::productstats::ProviderFallbacks { provider };
+            lk_agents_telemetry::productstats::count(&fallback);
         }
         let attempt_id = chain.attempts.fetch_add(1, Ordering::Relaxed) + 1;
         chain.select(index, attempt_id);
