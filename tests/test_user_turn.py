@@ -16,6 +16,8 @@ from livekit.agents import (
     AgentSession,
     ConversationItemAddedEvent,
     LanguageCode,
+    SpeechCreatedEvent,
+    StopResponse,
     TurnHandlingOptions,
     UserTurnExceededEvent,
     llm,
@@ -30,6 +32,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
+from livekit.agents.voice import SpeechHandle
 from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
 from .fake_io import FakeAudioInput
@@ -107,6 +110,141 @@ def _user_transcripts(agent: Agent) -> list[str | None]:
         for item in agent.chat_ctx.items
         if item.type == "message" and item.role == "user"
     ]
+
+
+async def test_manual_commit_returns_its_reply_before_playout(
+    running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    release_reply = asyncio.Event()
+
+    async def llm_node(*args: object, **kwargs: object) -> AsyncIterator[str]:
+        await release_reply.wait()
+        yield ""
+
+    monkeypatch.setattr(agent, "llm_node", llm_node)
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("speech_created", speeches.append)
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    commit = session.commit_user_turn(return_handle=True)
+    try:
+        # An unrelated generate_reply event comes from the same session and source.
+        unrelated = session.generate_reply()
+        result = await asyncio.wait_for(commit, 2.0)
+        transcript, handle = result
+        assert transcript == result.transcript == _TRANSCRIPT
+        assert handle is not None and handle is result.speech_handle
+        assert [event.speech_handle for event in speeches] == [unrelated, handle]
+        assert not handle.done()
+    finally:
+        release_reply.set()
+
+    assert await handle is handle
+
+
+async def test_manual_commit_can_wait_for_history_without_generating_a_reply(
+    running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    model_inputs: list[list[str | None]] = []
+
+    async def llm_node(chat_ctx: ChatContext, *args: object) -> AsyncIterator[str]:
+        model_inputs.append(
+            [m.text_content for m in chat_ctx.items if m.type == "message" and m.role == "user"]
+        )
+        yield ""
+
+    monkeypatch.setattr(agent, "llm_node", llm_node)
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    result = await session.commit_user_turn(skip_reply=True, return_handle=True)
+    assert result == (_TRANSCRIPT, None)
+    assert _user_transcripts(agent) == [_TRANSCRIPT]
+    assert not model_inputs
+
+    await session.generate_reply(instructions="Answer the user's question.")
+    assert model_inputs == [[_TRANSCRIPT]]
+
+
+async def test_manual_commit_returns_no_handle_when_response_is_stopped(
+    running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+
+    async def stop_response(*args: object, **kwargs: object) -> None:
+        raise StopResponse()
+
+    monkeypatch.setattr(agent, "on_user_turn_completed", stop_response)
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    result = await asyncio.wait_for(session.commit_user_turn(return_handle=True), 2.0)
+    assert result == (_TRANSCRIPT, None)
+    assert not _user_transcripts(agent)
+
+
+async def test_manual_commit_returns_no_handle_when_endpointing_is_abandoned(
+    running_session: tuple[AgentSession, Agent],
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    commit = session.commit_user_turn(return_handle=True)
+    await asyncio.sleep(0)
+    assert recognition._end_of_turn_task is not None
+    assert not recognition._end_of_turn_task.done()
+
+    session.update_options(turn_detection="vad")
+
+    assert await asyncio.wait_for(commit, 2.0) == (_TRANSCRIPT, None)
+    assert not _user_transcripts(agent)
+
+
+async def test_manual_commit_returns_no_handle_when_scheduling_fails(
+    running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, _ = running_session
+    activity = session._activity
+    assert activity is not None
+    recognition = activity._audio_recognition
+    assert recognition is not None
+
+    def reject_speech(speech: SpeechHandle, priority: int) -> None:
+        speech.interrupt(force=True)
+        raise RuntimeError("could not schedule speech")
+
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    with monkeypatch.context() as patch:
+        patch.setattr(activity, "_schedule_speech", reject_speech)
+        result = await asyncio.wait_for(session.commit_user_turn(return_handle=True), 2.0)
+    assert result == (_TRANSCRIPT, None)
+
+
+async def test_cancelling_commit_result_does_not_cancel_the_turn(
+    running_session: tuple[AgentSession, Agent],
+) -> None:
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    commit = session.commit_user_turn(skip_reply=True, return_handle=True)
+    await asyncio.sleep(0)
+    assert not commit.done()
+    commit.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await commit
+
+    await _await_delivery(session)
+    assert _user_transcripts(agent) == [_TRANSCRIPT]
 
 
 @pytest.mark.parametrize("phase", ["queued", "pending_delivery", "delivered"])
