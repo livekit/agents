@@ -1893,3 +1893,41 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+@pytest.mark.parametrize(
+    "filter_profanity,expected_query_val",
+    [
+        (NOT_GIVEN, None),
+        (True, "true"),
+        (False, "false"),
+    ],
+)
+async def test_filter_profanity_in_connect_config(filter_profanity, expected_query_val):
+    """filter_profanity is serialized correctly or omitted when NOT_GIVEN."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    kwargs = {}
+    if filter_profanity is not NOT_GIVEN:
+        kwargs["filter_profanity"] = filter_profanity
+
+    stt = STT(api_key="test-key", **kwargs)
+    assert stt._opts.filter_profanity is filter_profanity
+
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    if expected_query_val is None:
+        assert "filter_profanity" not in query
+    else:
+        assert query["filter_profanity"] == [expected_query_val]

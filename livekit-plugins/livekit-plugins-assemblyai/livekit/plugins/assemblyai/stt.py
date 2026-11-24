@@ -77,6 +77,7 @@ class STTOptions:
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
+    filter_profanity: NotGivenOr[bool] = NOT_GIVEN
     domain: NotGivenOr[str] = NOT_GIVEN
     voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
     voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -177,6 +178,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
+        filter_profanity: NotGivenOr[bool] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -267,6 +269,8 @@ class STT(stt.STT):
                 `max_turn_silence` still take precedence over the mode's defaults.
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
+            filter_profanity: Whether to filter profanity from transcribed text with
+                asterisks. Defaults to unset (leaves text unfiltered).
         """
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
@@ -394,6 +398,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
+            filter_profanity=filter_profanity,
             domain=domain,
             voice_focus=voice_focus,
             voice_focus_threshold=voice_focus_threshold,
@@ -894,6 +899,9 @@ class SpeechStream(stt.SpeechStream):
             if is_given(self._opts.speaker_labels)
             else None,
             "max_speakers": self._opts.max_speakers if is_given(self._opts.max_speakers) else None,
+            "filter_profanity": self._opts.filter_profanity
+            if is_given(self._opts.filter_profanity)
+            else None,
             "domain": self._opts.domain if is_given(self._opts.domain) else None,
             "voice_focus": self._opts.voice_focus if is_given(self._opts.voice_focus) else None,
             "voice_focus_threshold": self._opts.voice_focus_threshold
