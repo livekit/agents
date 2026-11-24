@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-hume"
 dynamic = ["version"]
-description = "Hume TTS and audio decisions plugin for LiveKit agents"
+description = "Hume audio decisions plugin for LiveKit agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [
     {name = "LiveKit", email = "info@livekit.io"}
 ]
-keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "HumeAI", "Hume", "Octave"]
+keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "HumeAI", "Hume", "decisions"]
 classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Multimedia :: Sound/Audio",

@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Hume AI TTS and audio decisions plugin for LiveKit Agents
+"""Hume AI audio decisions plugin for LiveKit Agents
 
-See https://docs.livekit.io/agents/integrations/tts/hume/ for more information.
+See https://dev.hume.ai/audio-decisions/docs/overview for more information.
 """
 
 from __future__ import annotations

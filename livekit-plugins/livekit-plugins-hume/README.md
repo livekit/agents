@@ -1,8 +1,6 @@
-# Hume AI TTS plugin for LiveKit Agents
+# Hume AI audio decisions plugin for LiveKit Agents
 
-Support for text-to-speech with [Hume](https://www.hume.ai/).
-
-See [https://docs.livekit.io/agents/integrations/tts/hume/](https://docs.livekit.io/agents/integrations/tts/hume/) for more information.
+Support for audio decisions with [Hume](https://www.hume.ai/).
 
 ## Installation
 
