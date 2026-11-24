@@ -228,6 +228,7 @@ def test_inference_and_plugin_agree_about_ink2(monkeypatch: pytest.MonkeyPatch) 
 def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
     stream = SpeechStream.__new__(SpeechStream)
     stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    stream._connection = None
     stream._opts = SimpleNamespace(language="en")
 
     data = stream._build_speech_data(GATEWAY_INK2_FINAL)
@@ -443,6 +444,7 @@ def _bare_stream() -> SpeechStream:
     stream._request_id = "req-1"
     stream._speech_duration = 0.0
     stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    stream._connection = None
     stream._pending_extra = None
     stream._opts = SimpleNamespace(language="en", model="auto")
     return stream
@@ -1374,6 +1376,52 @@ async def test_assemblyai_external_flush_sends_short_audio_before_each_finalize(
         assert [base64.b64decode(m["audio"]) for m in gateway.messages("input_audio")] == [
             audio.ljust(1600, b"\0"),
         ] * 2
+    finally:
+        await stream.aclose()
+
+
+async def test_assemblyai_external_padding_is_removed_from_timestamps() -> None:
+    finalizes = 0
+
+    async def on_send(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        nonlocal finalizes
+        if event["type"] != "session.finalize":
+            return
+        finalizes += 1
+        # each 20 ms turn reaches AssemblyAI padded to 50 ms, so turn 2 starts at 0.05 there
+        start = 0.05 * (finalizes - 1)
+        ws.reply(
+            "final_transcript",
+            transcript="hello",
+            language="en",
+            start=start,
+            duration=0.02,
+            words=[{"word": "hello", "start": start, "end": start + 0.03}],
+        )
+        ws.reply("session.finalized")
+
+    gateway = _Gateway(on_send)
+    stt = _gateway_stt(gateway, "assemblyai/universal-3-6-pro", external_endpointing=True)
+    stream = stt.stream(conn_options=_no_retry())
+    frame = rtc.AudioFrame(
+        b"\x01\x00" * 320, sample_rate=16000, num_channels=1, samples_per_channel=320
+    )
+    try:
+        timings = []
+        for _ in range(2):
+            stream.push_frame(frame)
+            stream.flush()
+            speech = (await asyncio.wait_for(_first_final(stream), timeout=1)).alternatives[0]
+            offset = stream.start_time_offset
+            word = speech.words[0]
+            timings.append(
+                [
+                    round(t - offset, 6)
+                    for t in (speech.start_time, speech.end_time, word.start_time, word.end_time)
+                ]
+            )
+        # turn 1's word end falls inside its own padding and clamps to where the audio ended
+        assert timings == [[0.0, 0.02, 0.0, 0.02], [0.02, 0.04, 0.02, 0.04]]
     finally:
         await stream.aclose()
 

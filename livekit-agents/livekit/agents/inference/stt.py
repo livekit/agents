@@ -1054,6 +1054,19 @@ class _STTConnection:
     update_uncertain: bool = False
     updates_changed: asyncio.Event = field(default_factory=asyncio.Event)
     handoff: _STTHandoffRequest | None = None
+    # provider timeline seconds written on this socket, silence padding included
+    sent_duration: float = 0.0
+    # (provider time where padding starts, padded seconds); padding is absent from the input
+    padding: list[tuple[float, float]] = field(default_factory=list)
+
+    def input_time(self, provider_time: float) -> float:
+        """Map a provider timestamp on this socket back onto the input's timeline."""
+        shift = 0.0
+        for start, duration in self.padding:
+            if provider_time <= start:
+                break
+            shift += min(duration, provider_time - start)
+        return provider_time - shift
 
     def apply_update(self, settings: dict[str, Any]) -> None:
         """Record an acknowledged session.update's settings on this connection's options."""
@@ -1420,8 +1433,12 @@ class SpeechStream(stt.SpeechStream):
             async def send_audio(frames: list[rtc.AudioFrame]) -> None:
                 for frame in frames:
                     audio_bytes = frame.data.tobytes()
-                    if assemblyai_external:
+                    padded = 0.0
+                    if assemblyai_external and len(audio_bytes) < samples_per_chunk * 2:
                         # AssemblyAI requires at least 50 ms even for a flushed tail.
+                        padded = (samples_per_chunk * 2 - len(audio_bytes)) / (
+                            2 * connection.options.sample_rate
+                        )
                         audio_bytes = audio_bytes.ljust(samples_per_chunk * 2, b"\0")
                     await send(
                         {
@@ -1429,6 +1446,10 @@ class SpeechStream(stt.SpeechStream):
                             "audio": base64.b64encode(audio_bytes).decode("utf-8"),
                         }
                     )
+                    connection.sent_duration += frame.duration
+                    if padded:
+                        connection.padding.append((connection.sent_duration, padded))
+                        connection.sent_duration += padded
                     self._speech_duration += frame.duration
                     if assemblyai_external and vad_stream is not None:
                         vad_stream.push_frame(frame)
@@ -1743,6 +1764,12 @@ class SpeechStream(stt.SpeechStream):
         assert ws is not None
         return ws
 
+    def _session_time(self, provider_time: float) -> float:
+        connection = self._connection
+        if connection is not None:
+            provider_time = connection.input_time(provider_time)
+        return self.start_time_offset + provider_time
+
     def _build_speech_data(self, data: dict) -> stt.SpeechData:
         language = LanguageCode(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
@@ -1752,16 +1779,16 @@ class SpeechStream(stt.SpeechStream):
         metadata = extra if isinstance(extra, dict) and extra else None
         return stt.SpeechData(
             language=language,
-            start_time=self.start_time_offset + data.get("start", 0),
-            end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
+            start_time=self._session_time(data.get("start", 0)),
+            end_time=self._session_time(data.get("start", 0) + data.get("duration", 0)),
             confidence=data.get("confidence", 1.0),
             text=data.get("transcript", ""),
             speaker_id=data.get("speaker_id"),
             words=[
                 TimedString(
                     text=word.get("word", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
+                    start_time=self._session_time(word.get("start", 0)),
+                    end_time=self._session_time(word.get("end", 0)),
                     start_time_offset=self.start_time_offset,
                     confidence=word.get("confidence", 0.0),
                     speaker_id=word.get("speaker_id"),
@@ -1839,7 +1866,7 @@ class SpeechStream(stt.SpeechStream):
                 # billed audio duration (e.g. Ink-2), so use word timing for EOS.
                 if (words := data.get("words")) and (last_word_end := words[-1].get("end", 0)) > 0:
                     end_alternatives = [
-                        replace(speech_data, end_time=self.start_time_offset + last_word_end)
+                        replace(speech_data, end_time=self._session_time(last_word_end))
                     ]
                 end_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,
