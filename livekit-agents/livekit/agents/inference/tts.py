@@ -13,7 +13,7 @@ import aiohttp
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired
 
-from .. import tts, utils
+from .. import tokenize, tts, utils
 from .._exceptions import (
     APIConnectionError,
     APIError,
@@ -826,22 +826,31 @@ class SynthesizeStream(tts.SynthesizeStream):
         from ..tts._provider_format import convert_markup, normalize_markup, sentence_tokenizer
 
         provider = self._opts.model.split("/")[0]
-        sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
+        fallback_providers = {fb["model"].split("/")[0] for fb in self._opts.fallback or []}
+        tokenizer_stream: tokenize.SentenceStream | tokenize.WordStream
+        # Gradium buffers streamed words itself, so holding them back for a whole sentence
+        # only delays the first audio by however long the sentence takes to arrive. Other
+        # providers, including a fallback the gateway may switch the turn to, expect one
+        # sentence per message.
+        if provider == "gradium" and fallback_providers <= {"gradium"}:
+            tokenizer_stream = tokenize.basic.WordTokenizer(ignore_punctuation=False).stream()
+        else:
+            tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    sent_tokenizer_stream.flush()
+                    tokenizer_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(normalize_markup(self._markup_key, data))
+                tokenizer_stream.push_text(normalize_markup(self._markup_key, data))
 
-            sent_tokenizer_stream.end_input()
+            tokenizer_stream.end_input()
 
         async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             base_pkt: dict[str, Any] = {}
             base_pkt["type"] = "input_transcript"
-            async for ev in sent_tokenizer_stream:
+            async for ev in tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 # re-normalize at sentence level: tags split across input chunks
                 # aren't caught by the per-chunk normalize in _input_task
@@ -988,7 +997,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     connection.in_use = False
                     input_sent_event.set()
-                    await sent_tokenizer_stream.aclose()
+                    await tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
                 if connection.handoff_id is not None:
                     await self._tts._retire(connection)

@@ -204,6 +204,37 @@ async def test_model_switch_mid_stream_keeps_the_stream_dialect() -> None:
     assert packets[0]["generation_config"]["model"] == "fishaudio/s2.1-pro"
 
 
+_WORDS = ["Thanks ", "for ", "calling ", "today. ", "How ", "can ", "I ", "help? "]
+_SENTENCES = ["Thanks for calling today. ", "How can I help? "]
+
+
+@pytest.mark.parametrize(
+    ("model", "fallback", "transcripts"),
+    [
+        ("gradium/default", [], _WORDS),
+        ("gradium/default", ["gradium/gradium-tts-beta"], _WORDS),
+        ("gradium/default", ["cartesia/sonic-3"], _SENTENCES),
+        ("cartesia/sonic-3", [], _SENTENCES),
+    ],
+)
+async def test_gradium_streams_words_unless_a_fallback_expects_sentences(
+    model: str, fallback: list[str], transcripts: list[str]
+) -> None:
+    tts = _make_tts(model, fallback=fallback)
+    websocket = _FakeWebSocket(
+        [{"type": "session.created", "session_id": "s"}, _AUDIO, {"type": "done"}]
+    )
+    tts._pool = _FakePool(websocket)  # type: ignore[assignment]
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text("Thanks for calling today. How can I help?")
+        stream.end_input()
+        _ = [event async for event in stream]
+
+    sent = [p["transcript"] for p in websocket.sent if p["type"] == "input_transcript"]
+    assert sent == transcripts
+
+
 @pytest.mark.virtual_time
 async def test_failed_handshake_explains_exhausted_credits(
     quota_http_session: SimpleNamespace,
