@@ -21,6 +21,7 @@ use lk_agents_abi::telemetry::spans::agent_turn::FunctionToolEnd;
 pub use lk_agents_abi::telemetry::{host, policy, record};
 use lk_agents_net::export::ExporterSlot;
 use lk_agents_net::export::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
+use lk_agents_net::export::productstats::{self, ProductStats};
 pub use lk_agents_net::export::profile;
 pub use lk_agents_net::export::stall::stall_message;
 pub(crate) use lk_agents_net::export::stall::{Blocked, event_loop_blocked};
@@ -150,6 +151,7 @@ pub fn tracer() -> Tracer {
 /// A forked child abandons its parent's exporter and draws its own ids.
 pub(crate) fn reinit() {
     PROCESS.slot.forget();
+    productstats::forget();
     PROCESS.tracer.reseed(seed());
 }
 
@@ -158,6 +160,20 @@ pub(crate) fn reinit() {
 pub async fn shutdown() {
     if let Some(exporter) = PROCESS.slot.take() {
         exporter.shutdown(SHUTDOWN_TIMEOUT).await;
+    }
+    if let Some(stats) = productstats::take() {
+        stats.shutdown(PRODUCT_STATS_SHUTDOWN_TIMEOUT).await;
+    }
+}
+
+/// How long the process-exit flush of product statistics may take.
+const PRODUCT_STATS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub struct ProductStatsHost;
+
+impl lk_agents_abi::productstats::ProductStatsHost for ProductStatsHost {
+    fn _core_product_stats_plugin(package: String, version: String) {
+        productstats::plugin(&package, &version);
     }
 }
 
@@ -179,7 +195,7 @@ fn env_app() -> Option<AppConfig> {
 pub struct Telemetry;
 
 impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
-    fn _core_telemetry_install(sdk_version: String) {
+    fn _core_telemetry_install(sdk_version: String, python_version: Option<String>) {
         let process = &*PROCESS;
         if process.slot.get().is_some() {
             return;
@@ -190,6 +206,10 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
                 return log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry not started: {error}");
             }
         };
+        productstats::install(|| {
+            let resource = productstats::resource(&sdk_version, python_version.as_deref());
+            ProductStats::start(&*spawner, crate::process::host_clock(), resource)
+        });
         let exporter = process.slot.install(|| {
             let identity = ProcessIdentity::from_env(SdkName::Python, sdk_version);
             Exporter::start(&*spawner, crate::process::host_clock(), identity, Limits::default())

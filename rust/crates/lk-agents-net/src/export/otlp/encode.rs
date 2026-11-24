@@ -91,7 +91,7 @@ pub(crate) fn app_resource(process: &ProcessIdentity, pairs: &[(String, String)]
     resource(&attributes)
 }
 
-fn resource(attributes: &KeyValues) -> Resource {
+pub(crate) fn resource(attributes: &KeyValues) -> Resource {
     Resource { attributes: key_values(attributes), ..Default::default() }
 }
 
