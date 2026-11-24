@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use lk_agents_abi::telemetry::runner::{Launch, Runner};
 use lk_agents_abi::{Clock, Spawner};
 
 use crate::http::GatewayHttp;
@@ -157,6 +158,64 @@ pub fn server_setting(name: &str) -> Option<String> {
     let registered =
         SERVER_SETTINGS.read().iter().find(|(n, _)| *n == name).map(|(_, v)| v.clone());
     registered.or_else(|| std::env::var(name).ok())
+}
+
+/// The command that started this process: the launcher's, or its worker's for a job process.
+static LAUNCH: parking_lot::RwLock<Launch> = parking_lot::RwLock::new(Launch::None);
+
+/// Registers the command that started this process, before its telemetry is installed.
+pub fn serve_launch(launch: Launch) {
+    *LAUNCH.write() = launch;
+}
+
+/// The command that started this process; `none` when no `lk agent` command did.
+pub fn launch() -> Launch {
+    *LAUNCH.read()
+}
+
+/// The process's runner, derived once from the command that started it, its platform and the
+/// `CI` and `LK_HOSTED_AGENTS` variables. No hostname, user name or path is read.
+pub fn runner() -> Runner {
+    static RUNNER: std::sync::OnceLock<Runner> = std::sync::OnceLock::new();
+    *RUNNER.get_or_init(|| {
+        Runner::detect(|name| std::env::var(name).ok(), std::env::consts::OS, launch())
+    })
+}
+
+/// Whether LiveKit's product statistics are on, read once: `LIVEKIT_PRODUCT_STATS=0` or
+/// `DO_NOT_TRACK=1` turns them off for the process.
+pub fn product_stats_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| product_stats_allowed(|name| std::env::var(name).ok()))
+}
+
+fn product_stats_allowed(var: impl Fn(&str) -> Option<String>) -> bool {
+    let value = |name| var(name).map(|v| v.trim().to_ascii_lowercase());
+    let off = matches!(value("LIVEKIT_PRODUCT_STATS").as_deref(), Some("0" | "false" | "off" | "no"));
+    let do_not_track = value("DO_NOT_TRACK").is_some_and(|v| !matches!(v.as_str(), "" | "0" | "false"));
+    !off && !do_not_track
+}
+
+#[cfg(test)]
+mod product_stats_tests {
+    // Catches: an opt-out variable ignored, or a value that keeps them on read as an opt-out.
+    #[test]
+    fn either_variable_opts_out() {
+        for (vars, allowed) in [
+            (&[][..], true),
+            (&[("LIVEKIT_PRODUCT_STATS", "0")][..], false),
+            (&[("LIVEKIT_PRODUCT_STATS", "false")][..], false),
+            (&[("LIVEKIT_PRODUCT_STATS", "1")][..], true),
+            (&[("DO_NOT_TRACK", "1")][..], false),
+            (&[("DO_NOT_TRACK", "0")][..], true),
+            (&[("LIVEKIT_PRODUCT_STATS", "1"), ("DO_NOT_TRACK", "1")][..], false),
+        ] {
+            let var = |name: &str| {
+                vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned())
+            };
+            assert_eq!(super::product_stats_allowed(var), allowed, "{vars:?}");
+        }
+    }
 }
 
 #[cfg(test)]
