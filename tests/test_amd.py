@@ -1157,6 +1157,7 @@ async def running(
     classifier: ClassifierLLM | None = None,
     agent: CustomerAgent | None = None,
     session_options: dict[str, Any] | None = None,
+    before_amd: Callable[[AgentSession], None] | None = None,
     **options: Any,
 ) -> AsyncIterator[tuple[AMD, AgentSession, ClassifierLLM, RecordingLLM]]:
     classifier = classifier or ClassifierLLM()
@@ -1179,6 +1180,8 @@ async def running(
             llm=classifier,
             **{"machine_silence_threshold": 0, "stt": None, **options},
         )
+        if before_amd is not None:
+            before_amd(session)
         async with detector:
             await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
             yield detector, session, classifier, model
@@ -3239,6 +3242,48 @@ async def test_a_reply_shows_its_words_by_the_prediction_it_answered(
             ("user", "Please hold."),
             ("user", "Yes. That's confirmed."),
         ]
+
+
+@pytest.mark.asyncio
+async def test_a_greeting_queued_before_amd_is_in_the_history_when_it_plays() -> None:
+    greeting: list[SpeechHandle] = []
+    async with running(before_amd=lambda s: greeting.append(s.say("Hi, this is Alex."))) as (
+        detector,
+        session,
+        classifier,
+        _,
+    ):
+        # AMD holds the greeting until it allows a reply
+        assert not playback_allowed(session)
+        hooks = await commit(detector, session, classifier)
+        assert hooks is not None
+        classifier.prediction(1, AMDCategory.MACHINE_IVR)
+        assert await hooks.should_reply(llm.ChatContext())
+        await asyncio.wait_for(greeting[0], 2)
+        commit_turn(detector, end_of_turn("Press one for sales."))
+        request = await classifier.request()
+
+        history = [(m.role, m.text_content) for m in request.chat_ctx.messages()[2:]]
+        assert history == [
+            ("user", "hello"),
+            ("assistant", AGENT_REPLY),
+            ("user", "Press one for sales."),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_amd_detaches_from_speeches_when_they_end_or_it_finishes() -> None:
+    async with running() as (detector, session, classifier, _):
+        ended = agent_speech(session)
+        playing = agent_speech(session)
+        assert ended._item_added_callbacks and playing._item_added_callbacks
+        ended._mark_done()
+        await eventually(lambda: not ended._item_added_callbacks)
+
+        await commit(detector, session, classifier)
+        classifier.prediction(1, AMDCategory.HUMAN)
+        await detector.execute()
+        assert not playing._item_added_callbacks
 
 
 @pytest.mark.asyncio

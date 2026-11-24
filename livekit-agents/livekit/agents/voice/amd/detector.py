@@ -369,6 +369,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._speeches: set[SpeechHandle] = set()
         # whether each speech's reply shows its words in the classifier history
         self._reply_words: dict[SpeechHandle, bool] = {}
+        self._item_callbacks: dict[SpeechHandle, Callable[..., None]] = {}
         self._held_turn_id: int | None = None
         self._held_reply: SpeechHandle | None = None
 
@@ -523,6 +524,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
             for emitter, event, handler in self._subscriptions:
                 emitter.on(event, handler)
+            # speech queued before AMD, such as a greeting, can play during detection
+            queued = [speech for _, _, speech in activity._speech_q]
+            for speech in [activity.current_speech, *queued]:
+                if speech is not None:
+                    self._watch_reply(speech)
             self._spawn(self._setup_listening())
         except BaseException:
             await self.aclose()
@@ -1217,16 +1223,29 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             event.speech_handle._bypass_authorization_pause = True
         handle = event.speech_handle
         self._speeches.add(handle)
-        # a turn reply replaces this value when AMD authorizes it
-        self._reply_words[handle] = self._shows_agent_words
-        handle._add_item_added_callback(functools.partial(self._on_speech_item_added, handle))
+        self._watch_reply(handle)
         handle.add_done_callback(self._on_speech_done)
         self._update_idle()
 
     def _on_speech_done(self, handle: SpeechHandle) -> None:
         self._speeches.discard(handle)
-        self._reply_words.pop(handle, None)
         self._update_idle()
+
+    def _watch_reply(self, handle: SpeechHandle) -> None:
+        """Add the speech's reply to the classifier history when the session records it."""
+        if handle.done() or handle in self._item_callbacks:
+            return
+        # a turn reply replaces this value when AMD authorizes it
+        self._reply_words[handle] = self._shows_agent_words
+        callback = functools.partial(self._on_speech_item_added, handle)
+        self._item_callbacks[handle] = callback
+        handle._add_item_added_callback(callback)
+        handle.add_done_callback(self._on_reply_done)
+
+    def _on_reply_done(self, handle: SpeechHandle) -> None:
+        self._reply_words.pop(handle, None)
+        if (callback := self._item_callbacks.pop(handle, None)) is not None:
+            handle._remove_item_added_callback(callback)
 
     # endregion
 
@@ -1348,6 +1367,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         for speech in self._speeches:
             speech.remove_done_callback(self._on_speech_done)
         self._reply_words.clear()
+        for speech, callback in self._item_callbacks.items():
+            speech._remove_item_added_callback(callback)
+            speech.remove_done_callback(self._on_reply_done)
+        self._item_callbacks.clear()
         if self._voicemail_handle is not None:
             self._voicemail_handle.remove_done_callback(self._on_voicemail_done)
             self._voicemail_handle = None
