@@ -143,7 +143,7 @@ dashboard, never billed, and never contain customer data.
 - What is never sent: transcripts, prompts, audio, tool arguments or any other
   content; room, participant, job, thread or agent names; ids; hostnames, user
   names or paths.
-- Where: `https://<your LiveKit Cloud host>/productstats/agents/v0/metrics`,
+- Where: `https://<your LiveKit Cloud host>/observability/productstats/agents/metrics/otlp/v0`,
   signed with your project's key. Nothing is sent when `LIVEKIT_URL` is not a
   LiveKit Cloud URL.
 - Opt out with `LIVEKIT_PRODUCT_STATS=0` or `DO_NOT_TRACK=1`, read once when the

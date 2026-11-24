@@ -23,7 +23,7 @@ use crate::signal;
 pub const INTERVAL: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The collector's route, under the Cloud host.
-pub const PATH: &str = "/productstats/agents/v0/metrics";
+pub const PATH: &str = "/observability/productstats/agents/metrics/otlp/v0";
 /// The plugin packages the resource lists: LiveKit's own.
 const PLUGIN_PREFIX: &str = "livekit.plugins.";
 
