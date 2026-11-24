@@ -222,10 +222,7 @@ class _STTPipeline:
 
     @property
     def manual_flush(self) -> bool:
-        return (
-            self._recognize_stream is not None
-            and self._recognize_stream._stt.capabilities.manual_flush
-        )
+        return self._recognize_stream is not None and self._recognize_stream.manual_flush
 
     def flush(self) -> bool:
         if not self.manual_flush:
