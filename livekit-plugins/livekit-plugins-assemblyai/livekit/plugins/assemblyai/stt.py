@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -133,6 +134,9 @@ def _normalize_language_codes(language_codes: str | list[str], model: str) -> li
 # API's MAX_PROMPT_CHARS). Oversize values sent mid-stream make the server
 # cancel the whole session, so the cap is enforced client-side.
 _MAX_AGENT_CONTEXT_CHARS = 1750
+
+# Error codes from AssemblyAI WebSocket that should not be retried by FallbackAdapter/reconnect
+_NON_RETRYABLE_STT_CODES = (1008, 4001, 3010, 3011, 3012, 3014)
 
 
 def _validate_agent_context(agent_context: str) -> None:
@@ -578,6 +582,7 @@ class SpeechStream(stt.SpeechStream):
         self._session_id: str | None = None
         self._expires_at: int | None = None
         self._last_frame_sent_at: float | None = None
+        self._last_error: APIStatusError | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -770,6 +775,9 @@ class SpeechStream(stt.SpeechStream):
                     if closing_ws:  # close is expected, see SpeechStream.aclose
                         return
 
+                    if self._last_error is not None:
+                        raise self._last_error
+
                     logger.warning(
                         "AssemblyAI WebSocket closed unexpectedly "
                         "session=%s code=%s data=%s extra=%s",
@@ -797,6 +805,8 @@ class SpeechStream(stt.SpeechStream):
                     self._process_stream_event(data)
                     if data.get("type") in ("SpeechStarted", "Turn"):
                         self._mark_provider_progress()
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception(
                         "failed to process AssemblyAI message session=%s",
@@ -967,6 +977,38 @@ class SpeechStream(stt.SpeechStream):
                 session_duration,
             )
             return
+
+        if message_type == "Error":
+            code = data.get("error_code")
+            code_int = code if isinstance(code, int) else -1
+            text = str(data.get("error") or "")
+            error_type = data.get("error_type")
+            kind = f" ({error_type})" if isinstance(error_type, str) else ""
+            label = f" [{code}]" if code is not None else ""
+            retryable = data.get("retryable")
+            if not isinstance(retryable, bool):
+                retryable = code not in _NON_RETRYABLE_STT_CODES
+
+            error_msg = f"AssemblyAI STT error{label}{kind}: {text}"
+            logger.error(
+                "%s session=%s",
+                error_msg,
+                self._session_id,
+                extra={
+                    "session_id": self._session_id,
+                    "error_code": code,
+                    "error_type": error_type,
+                },
+            )
+            err = APIStatusError(
+                error_msg,
+                status_code=code_int,
+                request_id=self._session_id,
+                body=data,
+                retryable=retryable,
+            )
+            self._last_error = err
+            raise err
 
         if message_type != "Turn":
             logger.debug(
