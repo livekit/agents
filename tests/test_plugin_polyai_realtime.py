@@ -237,3 +237,32 @@ def test_tool_choice_none_hides_tools_until_auto() -> None:
     assert [t["name"] for t in sent[1]["tools"]] == ["look_up_order"]
     assert len(sent) == 2
     assert all("tool_choice" not in s for s in sent)
+
+
+@pytest.mark.usefixtures("capture_send")
+async def test_tool_limit_follow_up_restores_tools() -> None:
+    """The sequence AgentActivity runs at the tool-call limit with per_response_tool_choice off:
+    update_options("none"), generate_reply(), then _restore_rt_tool_choice() with the
+    activity's default tool_choice, None."""
+
+    @llm.function_tool
+    async def look_up_order(order_number: str) -> str:
+        """Look up an order.
+
+        Args:
+            order_number: The order number.
+        """
+        return "shipped"
+
+    session = _make_session(RealtimeModel(api_key=KEY))
+    session._tools = llm.ToolContext([look_up_order])
+
+    session.update_options(tool_choice="none")
+    session.generate_reply().cancel()
+    session.update_options(tool_choice=None)
+
+    tool_updates = [e["session"]["tools"] for e in session._sent if isinstance(e, dict)]
+    assert tool_updates[0] == []
+    assert [t["name"] for t in tool_updates[-1]] == ["look_up_order"]
+    reply = next(e for e in session._sent if not isinstance(e, dict))
+    assert "tool_choice" not in reply.response.model_dump(exclude_none=True)
