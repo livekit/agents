@@ -38,5 +38,6 @@ VIRTUAL_ENV="$VENV" uv pip install --quiet \
   -e "$VENDOR[voice]" \
   "audioop-lts; python_version >= '3.13'" \
   -e "$ROOT/livekit-agents" \
+  -e "$ROOT/livekit-plugins/livekit-plugins-krisp" \
   -e "$BENCH"
 echo "venv: $VENV  (run tau2 with $VENV/bin/tau2)"

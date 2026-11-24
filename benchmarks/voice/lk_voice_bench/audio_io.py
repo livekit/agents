@@ -31,11 +31,23 @@ FRAME_MS = 20
 class CallerAudioInput(io.AudioInput):
     """The agent's microphone, fed by the benchmark with mono int16 PCM."""
 
-    def __init__(self, *, sample_rate: int = 16000) -> None:
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 16000,
+        processor: rtc.FrameProcessor[rtc.AudioFrame] | None = None,
+    ) -> None:
+        """
+        Args:
+            processor: Applied to the caller's audio in 10 ms frames before the session hears
+                it, as ``room_io.AudioInputOptions(noise_cancellation=...)`` would in a room.
+        """
         super().__init__(label="bench-caller")
         self._sample_rate = sample_rate
         self._queue: asyncio.Queue[rtc.AudioFrame | None] = asyncio.Queue()
         self._resamplers: dict[int, rtc.AudioResampler] = {}
+        self._processor = processor
+        self._pending = bytearray()
 
     def push_pcm(self, pcm: bytes, sample_rate: int) -> None:
         """Queue caller audio; must be called on the session's event loop."""
@@ -48,7 +60,7 @@ class CallerAudioInput(io.AudioInput):
             samples_per_channel=len(pcm) // 2,
         )
         if sample_rate == self._sample_rate:
-            self._queue.put_nowait(frame)
+            self._emit(frame)
             return
         resampler = self._resamplers.get(sample_rate)
         if resampler is None:
@@ -56,9 +68,25 @@ class CallerAudioInput(io.AudioInput):
                 input_rate=sample_rate, output_rate=self._sample_rate, num_channels=1
             )
         for f in resampler.push(frame):
-            self._queue.put_nowait(f)
+            self._emit(f)
+
+    def _emit(self, frame: rtc.AudioFrame) -> None:
+        if self._processor is None:
+            self._queue.put_nowait(frame)
+            return
+        # noise-cancellation processors take whole 10 ms frames
+        self._pending.extend(frame.data.cast("B"))
+        step = self._sample_rate // 100 * 2
+        while len(self._pending) >= step:
+            chunk = bytes(self._pending[:step])
+            del self._pending[:step]
+            self._queue.put_nowait(
+                self._processor._process(rtc.AudioFrame(chunk, self._sample_rate, 1, step // 2))
+            )
 
     def close(self) -> None:
+        if self._processor is not None:
+            self._processor._close()
         self._queue.put_nowait(None)
 
     async def __anext__(self) -> rtc.AudioFrame:

@@ -71,6 +71,32 @@ def _proxy_tool(schema: dict[str, Any], executor: ToolExecutor, log: SessionLog)
     )
 
 
+def _noise_cancellation(config: AgentConfig) -> Any:
+    if config.noise_cancellation is None:
+        return None
+    if config.noise_cancellation != "krisp_telephony":
+        raise ValueError(f"unknown noise_cancellation {config.noise_cancellation!r}")
+    import uuid
+
+    from livekit import api
+    from livekit.plugins import krisp
+
+    # a room hands these to the processor; here there is no room, so mint the credentials
+    room = f"lkbench-{uuid.uuid4().hex[:12]}"
+    token = (
+        api.AccessToken()
+        .with_identity("lk-voice-bench")
+        .with_grants(api.VideoGrants(room_join=True, room=room))
+        .to_jwt()
+    )
+    proc = krisp.voice_isolation_telephony()
+    proc._on_stream_info_updated(
+        room_name=room, participant_identity="caller", publication_sid="TR_lkbench"
+    )
+    proc._on_credentials_updated(token=token, url=os.environ["LIVEKIT_URL"])
+    return proc
+
+
 def build_session(config: AgentConfig) -> AgentSession[None]:
     tts_extra: dict[str, Any] = {}
     if config.tts_word_timestamps and config.tts.startswith("cartesia/"):
@@ -136,7 +162,7 @@ class BenchAgent:
             bytearray() if os.environ.get(SAVE_AUDIO_ENV) else None
         )
         self._caller_rate: int | None = None
-        self.mic = CallerAudioInput()
+        self.mic = CallerAudioInput(processor=_noise_cancellation(config))
         self.speaker = SpeakerOutput(sample_rate=output_sample_rate, on_played=on_played)
         self.spoken_text = SpokenTextOutput(self.speaker)
         self._sync = TranscriptSynchronizer(

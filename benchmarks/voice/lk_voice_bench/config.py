@@ -7,7 +7,7 @@ presets can be compared on equal terms.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 
@@ -23,6 +23,10 @@ class AgentConfig:
     tts_word_timestamps: bool = True
     """Ask the TTS for word timings, so the spoken transcript (and the chat history after an
     interruption) is cut at the word actually reached. Measurement fidelity, not behavior."""
+    noise_cancellation: str | None = None
+    """``"krisp_telephony"``: Krisp voice isolation for telephony audio on the caller's input
+    (LiveKit Cloud auth), as a room's ``AudioInputOptions(noise_cancellation=...)`` would apply.
+    BVC/BVCTelephony cannot be used here: they only run on a track in a connected room."""
     max_tool_steps: int = 10
     preemptive_generation: bool = True
     resume_false_interruption: bool = True
@@ -44,6 +48,9 @@ BASELINE_GEMMA4 = AgentConfig(name="baseline-gemma4")
 
 PRESETS: dict[str, AgentConfig] = {
     BASELINE_GEMMA4.name: BASELINE_GEMMA4,
+    "baseline-gemma4-krisp": replace(
+        BASELINE_GEMMA4, name="baseline-gemma4-krisp", noise_cancellation="krisp_telephony"
+    ),
 }
 
 
