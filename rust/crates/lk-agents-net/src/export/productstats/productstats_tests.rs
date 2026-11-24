@@ -13,8 +13,7 @@ use super::super::otlp::proto::collector::metrics::v1::ExportMetricsServiceReque
 use super::super::otlp::proto::common::v1::{KeyValue, any_value::Value as Any};
 use super::super::otlp::proto::metrics::v1::{AggregationTemporality, metric::Data};
 use super::super::otlp::tests::{
-    DISABLED, Received, cloud, counter, endpoint, exporter, identity, key, ok, received,
-    recording,
+    DISABLED, Received, cloud, counter, endpoint, exporter, identity, key, ok, received, recording,
 };
 use super::super::otlp::{CloudRecording, Limits};
 use super::*;
@@ -42,7 +41,11 @@ fn llm() -> ProviderLabels {
     lk_agents_telemetry::productstats::provider(Operation::Llm, "openai", "gpt-4o")
 }
 
-fn record<M: MetricDecl>(stats: &ProductStats, labels: &M, n: impl Into<lk_agents_abi::telemetry::record::Number>) {
+fn record<M: MetricDecl>(
+    stats: &ProductStats,
+    labels: &M,
+    n: impl Into<lk_agents_abi::telemetry::record::Number>,
+) {
     let mut m = measurement(labels, 0);
     m.value = n.into();
     stats.record(m);
@@ -68,8 +71,11 @@ fn decode(request: &Received) -> ExportMetricsServiceRequest {
     request.decode()
 }
 
-/// `(instrument, value)` of every counter point, and the histogram point counts.
-fn values(request: &ExportMetricsServiceRequest) -> Vec<(String, Vec<(String, String)>, i64)> {
+/// One data point: its instrument, its labels, and its value (a histogram's count).
+type Point = (String, Vec<(String, String)>, i64);
+
+/// Every data point of the request.
+fn values(request: &ExportMetricsServiceRequest) -> Vec<Point> {
     let metrics = &request.resource_metrics[0].scope_metrics[0].metrics;
     let mut out = Vec::new();
     for metric in metrics {
@@ -94,8 +100,10 @@ fn values(request: &ExportMetricsServiceRequest) -> Vec<(String, Vec<(String, St
             other => panic!("{other:?}"),
         };
         for (attributes, v) in points {
-            let labels =
-                attributes.iter().map(|kv| (kv.key.clone(), string(&kv.value).to_owned())).collect();
+            let labels = attributes
+                .iter()
+                .map(|kv| (kv.key.clone(), string(&kv.value).to_owned()))
+                .collect();
             out.push((metric.name.clone(), labels, v));
         }
     }

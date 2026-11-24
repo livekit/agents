@@ -1,7 +1,7 @@
 use crate::effects::RealtimeConnectionEffect;
 use lk_agents_abi::productstats::{
-    FailureType, Operation, ProviderFailures, ProviderLabels, ProviderReconnects,
-    ProviderRequests, ProviderRetries,
+    FailureType, Operation, ProviderFailures, ProviderLabels, ProviderReconnects, ProviderRequests,
+    ProviderRetries,
 };
 use lk_agents_telemetry::productstats;
 use std::sync::{Arc, Weak};

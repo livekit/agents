@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use lk_agents_abi::productstats::{JobEnds, JobOutcome};
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 

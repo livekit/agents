@@ -1,8 +1,8 @@
+use crate::telemetry;
 use lk_agents_abi::productstats::{
     FailureType, Operation, ProviderFailures, ProviderLabels, ProviderRequests, ProviderRetries,
 };
 use lk_agents_abi::telemetry::decl::MetricDecl;
-use crate::telemetry;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 

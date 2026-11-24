@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::productstats::{
-    DropReason, ExportDropped, ProductStatsResource, plugin_label,
-};
+use lk_agents_abi::productstats::{DropReason, ExportDropped, ProductStatsResource, plugin_label};
 use lk_agents_abi::telemetry::decl::{Attrs as _, Label, MetricDecl};
 use lk_agents_abi::telemetry::record::{KeyValues, Measurement};
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};

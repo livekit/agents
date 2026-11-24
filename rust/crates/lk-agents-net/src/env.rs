@@ -191,8 +191,10 @@ pub fn product_stats_enabled() -> bool {
 
 fn product_stats_allowed(var: impl Fn(&str) -> Option<String>) -> bool {
     let value = |name| var(name).map(|v| v.trim().to_ascii_lowercase());
-    let off = matches!(value("LIVEKIT_PRODUCT_STATS").as_deref(), Some("0" | "false" | "off" | "no"));
-    let do_not_track = value("DO_NOT_TRACK").is_some_and(|v| !matches!(v.as_str(), "" | "0" | "false"));
+    let off =
+        matches!(value("LIVEKIT_PRODUCT_STATS").as_deref(), Some("0" | "false" | "off" | "no"));
+    let do_not_track =
+        value("DO_NOT_TRACK").is_some_and(|v| !matches!(v.as_str(), "" | "0" | "false"));
     !off && !do_not_track
 }
 
@@ -210,9 +212,8 @@ mod product_stats_tests {
             (&[("DO_NOT_TRACK", "0")][..], true),
             (&[("LIVEKIT_PRODUCT_STATS", "1"), ("DO_NOT_TRACK", "1")][..], false),
         ] {
-            let var = |name: &str| {
-                vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned())
-            };
+            let var =
+                |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned());
             assert_eq!(super::product_stats_allowed(var), allowed, "{vars:?}");
         }
     }

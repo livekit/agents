@@ -64,7 +64,8 @@ mod tests {
     fn the_first_matching_rule_decides_the_kind() {
         use Launch::*;
         use RunnerKind::*;
-        let cases: &[(&[(&str, &str)], &str, Launch, RunnerKind)] = &[
+        type Vars = &'static [(&'static str, &'static str)];
+        let cases: &[(Vars, &str, Launch, RunnerKind)] = &[
             (&[("CI", "true"), ("LK_HOSTED_AGENTS", "1")], "linux", Start, Ci),
             (&[("CI", "TRUE")], "macos", Dev, Ci),
             (&[("CI", "false")], "linux", None, Unknown),
@@ -79,9 +80,8 @@ mod tests {
             (&[], "linux", None, Unknown),
         ];
         for (vars, os, launch, kind) in cases {
-            let var = |name: &str| {
-                vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned())
-            };
+            let var =
+                |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned());
             assert_eq!(Runner::detect(var, os, *launch), Runner { launch: *launch, kind: *kind });
         }
     }
