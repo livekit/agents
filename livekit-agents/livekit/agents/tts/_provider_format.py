@@ -994,7 +994,7 @@ _SONIOX_EXAMPLES = [
     '<expr type="sound" label="sighs"/> <expr type="expression" label="sincerely"/> I know it\'s been a rough week. <expr type="expression" label="reassuringly"/> We\'ll sort it out together.',  # noqa: E501
     '<expr type="expression" label="warm"/> Hey, good to hear from you. <expr type="expression" label="curious"/> What can I help you with today?',  # noqa: E501
     # sound-free, so at least one example survives any steering filter
-    '<expr type="expression" label="calm"/> You\'re all set for <expr type="break" label="500ms"/> Thursday the ninth. <expr type="prosody" label="slowly">Your code is B 4 J 7.</expr>',  # noqa: E501
+    '<expr type="expression" label="calm"/> You\'re all set for <expr type="break" label="500ms"/> Thursday the ninth. <expr type="expression" label="calm"/> <expr type="prosody" label="slowly">Your code is B 4 J 7.</expr>',  # noqa: E501
     '<expr type="expression" label="excited"/> <expr type="prosody" label="whispering">Okay, don\'t tell anyone yet</expr> but I think we actually pulled it off!',  # noqa: E501
 ]
 
@@ -1005,8 +1005,9 @@ def _soniox_expr_llm_instructions(sounds: list[str]) -> str:
 a sentence.
    <expr type="expression" label="EMOTION"/>
    Labels are a fixed vocabulary, NOT free-form descriptions: {", ".join(_SONIOX_EMOTIONS)}.
-   The delivery carries on until the next emotion marker, so tag the sentences where the \
-feeling shifts — there is no need to repeat the same label on every sentence."""
+   Give every sentence its own emotion marker — each sentence is synthesized on its own, \
+so repeat the same label to carry a feeling across sentences, or switch labels when the \
+feeling shifts."""
     ]
     if sounds:
         sections.append(

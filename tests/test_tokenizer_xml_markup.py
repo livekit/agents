@@ -516,6 +516,21 @@ class TestSonioxDialect:
         assert '<expr type="sound" label="laughs"/>' in instr
         assert "English" in instr
 
+    def test_every_example_sentence_has_an_emotion(self) -> None:
+        """StreamAdapter synthesizes each sentence as its own Soniox request, so an emotion
+        tag does not carry into the next sentence: the instructions and every example tag
+        each sentence."""
+        import re
+
+        from livekit.agents.tts import _provider_format as pf
+
+        assert "Give every sentence its own emotion marker" in pf.llm_instructions("soniox")
+        for example in pf._SONIOX_EXAMPLES:
+            for sentence in re.split(r"(?<=[.?!])\s+", example):
+                if not re.search(r"[A-Za-z]", re.sub(r"<[^>]*>", "", sentence)):
+                    continue
+                assert '<expr type="expression"' in sentence, sentence
+
     def test_convert_expr_to_soniox_brackets(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
