@@ -58,16 +58,45 @@ fn the_worker_registers_and_connects_with_the_resolved_settings() {
         ("LIVEKIT_AGENT_NAME_OVERRIDE", ""),
         ("LIVEKIT_AGENT_NAME", "from-env"),
     ]));
-    let (worker, connection) = s.worker(false, vec![]);
+    let (worker, connection) = s.worker(false, vec![], Default::default());
     assert_eq!(worker.ws_url, "wss://env");
     assert_eq!(connection.server_url, "https://env:7883");
     assert_eq!(connection.worker_token.as_deref(), Some("hosted"));
     assert_eq!((worker.agent_name.as_str(), worker.deployment.as_str()), ("from-env", "staging"));
     let s = settings().with_env(env(&[("LIVEKIT_URL", "wss://env"), ("LIVEKIT_WORKER_URL", "")]));
-    let (worker, connection) = s.worker(false, vec![]);
+    let (worker, connection) = s.worker(false, vec![], Default::default());
     assert_eq!(connection.server_url, "wss://env", "the worker dials ws_url by default");
     assert_eq!(connection.worker_token, None);
     assert!(worker.deployment.is_empty());
+}
+
+// Reads settings with a worker token alone, and with a key, a secret or an empty token. Catches
+// token mode without a worker token or with a key or secret, and a registration check that asks
+// for a key in token mode. Also catches job processes that are not told about token mode, or key
+// mode job processes that are told, since they would ask the server for tokens they can sign.
+#[test]
+fn token_mode_is_a_worker_token_without_a_key_and_its_jobs_are_told() {
+    let s = settings().with_env(env(&[("LIVEKIT_URL", "wss://x"), ("LIVEKIT_TOKEN", "wt")]));
+    assert!(s.token_mode());
+    s.check_registration().unwrap();
+    assert!(s.child_env().contains(&("LIVEKIT_TOKEN", "wt".to_owned())));
+    let token: crate::WorkerToken = std::sync::Arc::new(parking_lot::Mutex::new("wt".into()));
+    let (_, connection) = s.worker(false, vec![], token.clone());
+    assert_eq!(*connection.token.lock(), "wt");
+    assert!(connection.api_key.is_empty() && connection.api_secret.is_empty());
+
+    for keyed in [
+        &[("LIVEKIT_TOKEN", "wt"), ("LIVEKIT_API_KEY", "k"), ("LIVEKIT_API_SECRET", "s")][..],
+        &[("LIVEKIT_TOKEN", "wt"), ("LIVEKIT_API_KEY", "k")][..],
+        &[("LIVEKIT_TOKEN", "")][..],
+    ] {
+        let vars: Vec<_> = keyed.to_vec();
+        let s = settings().with_env(move |name: &str| {
+            vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned())
+        });
+        assert!(!s.token_mode(), "{keyed:?}");
+        assert!(s.child_env().iter().all(|(name, _)| *name != "LIVEKIT_TOKEN"), "{keyed:?}");
+    }
 }
 
 // Catches: a missing credential reported as another, or routes allowed without an agent name.
@@ -181,9 +210,9 @@ fn invalid_server_update_cannot_partially_change_launch_configuration() {
 #[test]
 fn simulation_is_resolved_before_constructing_the_worker_load_policy() {
     let mut server = settings();
-    let (worker, _) = server.worker(false, vec![]);
+    let (worker, _) = server.worker(false, vec![], Default::default());
     assert_eq!(worker.load_threshold.get(false), crate::config::DEFAULT_LOAD_THRESHOLD_PROD);
     server.simulation = true;
-    let (worker, _) = server.worker(false, vec![]);
+    let (worker, _) = server.worker(false, vec![], Default::default());
     assert!(worker.load_threshold.get(false).is_infinite());
 }

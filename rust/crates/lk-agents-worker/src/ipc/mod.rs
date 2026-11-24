@@ -2,6 +2,7 @@ pub mod child;
 pub mod executor;
 pub mod ipc_channel;
 pub mod job_run;
+pub(crate) mod job_tokens;
 pub mod owner;
 pub mod pool;
 pub mod process;
@@ -23,7 +24,7 @@ pub use process_pool::ProcessPool;
 pub use supervisor::secs;
 pub use supervisor::{InitError, ProtocolError, StartJobError};
 pub use supervisor::{RunnerFields, RunnerSupervisor, SupervisorCallbacks};
-pub use wire::{Hello, StartJob, ToChild, ToParent};
+pub use wire::{Hello, JobTokenAnswer, StartJob, ToChild, ToParent, Token};
 
 // Spawning the OS process stays with the host language; `ipc_channel` is the only code touching
 // the channel's bytes and `process` the only code touching the OS process.

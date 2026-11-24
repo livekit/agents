@@ -49,6 +49,8 @@ struct HostExecutors {
     options: JobRunnerOptions,
     context: CallContext,
     observer: Option<JobObserver>,
+    /// In token mode, the function that receives the token requests of each process.
+    job_tokens: Option<crate::JobTokenIssuer>,
 }
 
 #[async_trait::async_trait]
@@ -58,7 +60,8 @@ impl Executors for HostExecutors {
         let launcher = self.launchers.create(&telemetry::Cx::NONE).await?;
         let process =
             JobSupervisor::new(&self.env, launcher, self.options.clone(), self.context.clone())
-                .map_err(host_error)?;
+                .map_err(host_error)?
+                .with_job_tokens(self.job_tokens.clone());
         Ok(Executor(Arc::new(process)))
     }
 
@@ -117,7 +120,8 @@ pub struct ProcessPool {
 }
 
 impl ProcessPool {
-    /// A pool reporting its jobs' status to `observer`.
+    /// A pool reporting its jobs' status to `observer`. In token mode, the jobs' token requests
+    /// go to `job_tokens`.
     pub fn observed(
         env: &ProcessEnv,
         launchers: Arc<dyn JobLaunchers>,
@@ -125,6 +129,7 @@ impl ProcessPool {
         options: JobRunnerOptions,
         context: CallContext,
         observer: Option<JobObserver>,
+        job_tokens: Option<crate::JobTokenIssuer>,
     ) -> Result<Self, WorkerError> {
         let opts = PoolOptions {
             num_idle_processes,
@@ -136,7 +141,8 @@ impl ProcessPool {
             |error: lk_agents_net::env::ProcessError| WorkerError::Failed(error.to_string());
         let spawner = TokioSpawner::new((env.runtime)().map_err(failed)?);
         let rt = env.background().map_err(failed)?;
-        let executors = HostExecutors { env: env.clone(), launchers, options, context, observer };
+        let executors =
+            HostExecutors { env: env.clone(), launchers, options, context, observer, job_tokens };
         Ok(Self { pool: ProcPool::new(Arc::new(executors), opts, rt), spawner })
     }
 
@@ -178,7 +184,7 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
         options: JobRunnerOptions,
         context: CallContext,
     ) -> Result<Self, WorkerError> {
-        Self::observed(env, launchers, num_idle_processes, options, context, None)
+        Self::observed(env, launchers, num_idle_processes, options, context, None, None)
     }
 
     fn processes(&self) -> Vec<Arc<dyn SupervisedJob>> {

@@ -144,6 +144,12 @@ impl ChildChannel {
                 Ok(true)
             }
             ToChild::Hello(_) => Ok(true),
+            ToChild::JobToken { request_id, answer } => {
+                if let Some(run) = self.run.get() {
+                    run.job_token_answer(request_id, answer);
+                }
+                Ok(true)
+            }
         }
     }
 
@@ -161,7 +167,8 @@ impl ChildChannel {
             .downcast::<JobRun>()
             .map_err(|_| WorkerError::Failed("the runner started a foreign JobRun".into()))?;
         run.report_to(self.channel.clone());
-        self.run.set(run).map_err(|_| running())
+        self.run.set(run).map_err(|_| running())?;
+        Ok(host.run_job(&telemetry::Cx::NONE).await?)
     }
 
     /// The inbox ended: why the parent watch ended, with the parent closing counted as done.

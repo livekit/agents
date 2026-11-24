@@ -88,7 +88,10 @@ class AvatarSession(BaseAvatarSession):
 
         payload: dict[str, JsonValue] = {
             "personaConfig": persona_payload,
-            "environment": {"livekitUrl": ctx.livekit_url, "livekitToken": ctx.livekit_token()},
+            "environment": {
+                "livekitUrl": ctx.livekit_url,
+                "livekitToken": await ctx.livekit_token(),
+            },
         }
         options: dict[str, JsonValue] = {}
         if (session_options := self._session_options) is not None:

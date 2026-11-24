@@ -90,7 +90,7 @@ class AvatarSession(BaseAvatarSession):
                 **self._persona,
                 "room_name": ctx.room.name,
                 "livekit_url": ctx.livekit_url,
-                "livekit_token": ctx.livekit_token(grants=grants),
+                "livekit_token": await ctx.livekit_token(grants=grants),
                 "source_participant_identity": ctx.agent_identity,
             },
             conn_options=ctx.conn_options,

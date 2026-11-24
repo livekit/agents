@@ -825,3 +825,24 @@ async fn dropping_a_pending_decision_cancels_the_callback_it_owns() {
     assert!(ended.is_err(), "cancellation ends the producer without fabricating a decision");
     assert_eq!(rig.runtime.reserved_slots(), 0);
 }
+
+// Registers the worker and reads the snapshot right after the `Registered` notification. Catches a
+// notification that is sent before the snapshot shows the registration. For example, a waiter on
+// another thread wakes up, reads `registered == false`, and waits again. The later snapshot update
+// does not wake it, so it waits forever.
+#[tokio::test(start_paused = true)]
+async fn the_registration_is_published_before_its_notification() {
+    let mut rig = runtime_rig();
+    let mut notifications = rig.handle.subscribe();
+    let mut outbox = Outbox::new(Duration::from_secs(10), rig.runtime.clock.clone());
+    rig.runtime.on_connecting(&mut outbox);
+    rig.runtime.on_registered(
+        protocol::RegisterWorkerResponse { worker_id: "worker".into(), ..Default::default() },
+        &mut outbox,
+    );
+    assert!(matches!(notifications.try_recv(), Ok(WorkerNotification::Registered(_))));
+    // Read the published snapshot, as the woken waiter does. Do not publish a new one.
+    let state = rig.handle.snapshot();
+    assert!(state.registered, "notified of a registration the snapshot does not show");
+    assert_eq!(state.worker_id, "worker");
+}

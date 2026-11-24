@@ -92,6 +92,9 @@ impl JobProcess for Host {
     ) -> BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>> {
         unreachable!("this test starts the admitted job directly")
     }
+    fn run_job(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
+        unreachable!("this test starts the admitted job directly")
+    }
     fn start_entrypoint<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -346,6 +349,9 @@ struct JobThread {
     objects: Arc<Objects>,
     reasons: Arc<Mutex<Vec<Option<String>>>>,
     client: OnceLock<Arc<ChildChannel>>,
+    run: OnceLock<Arc<JobRun>>,
+    /// True if the run already had its token issuer when its task launched.
+    attached: Arc<AtomicBool>,
 }
 
 /// The entrypoint the job thread runs: it raises its error, or returns.
@@ -379,7 +385,7 @@ impl JobProcess for JobThread {
     fn ping(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async { Ok(()) })
     }
-    /// As `_JobProc._core_start_job`: the job task runs the job, then stops the client.
+    /// As `_JobProc._core_start_job`.
     fn start_job(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -406,16 +412,22 @@ impl JobProcess for JobThread {
                 "r".into(),
             );
             let run = Arc::new(run);
-            let host: Arc<dyn JobProcess> = self.me.upgrade().expect("the thread holds its host");
-            let client = self.client.get().expect("the client serves the job").clone();
-            let running = run.clone();
-            tokio::spawn(async move {
-                let _ = running.run(host, CallContext::default()).await;
-                running.close_tasks().await;
-                lk_agents_abi::worker::ipc_host::IpcClient::stop(&*client);
-            });
+            let _ = self.run.set(run.clone());
             Ok(run as Arc<dyn JobExecution>)
         })
+    }
+    /// Like `_JobProc._core_run_job`: the job task runs the job, then stops the client.
+    fn run_job(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
+        let host: Arc<dyn JobProcess> = self.me.upgrade().expect("the thread holds its host");
+        let client = self.client.get().expect("the client serves the job").clone();
+        let running = self.run.get().expect("the job started").clone();
+        self.attached.store(running.inner.job_tokens.get().is_some(), Ordering::Release);
+        tokio::spawn(async move {
+            let _ = running.run(host, CallContext::default()).await;
+            running.close_tasks().await;
+            lk_agents_abi::worker::ipc_host::IpcClient::stop(&*client);
+        });
+        Box::pin(async { Ok(()) })
     }
     fn start_entrypoint<'a>(
         &'a self,
@@ -470,6 +482,7 @@ impl JobProcess for JobThread {
 struct ThreadLauncher {
     crash: Option<&'static str>,
     reasons: Arc<Mutex<Vec<Option<String>>>>,
+    attached: Arc<AtomicBool>,
 }
 
 impl lk_agents_abi::worker::ipc_host::JobLauncher for ThreadLauncher {
@@ -488,6 +501,8 @@ impl lk_agents_abi::worker::ipc_host::JobLauncher for ThreadLauncher {
             objects: Arc::default(),
             reasons: self.reasons.clone(),
             client: OnceLock::new(),
+            run: OnceLock::new(),
+            attached: self.attached.clone(),
         });
         std::thread::spawn(move || {
             let _entered = handle.enter();
@@ -523,8 +538,11 @@ async fn a_raising_entrypoint_fails_the_job() {
     use lk_agents_abi::worker::ipc::{JobRunnerOptions, JobStatus};
     use lk_agents_abi::worker::ipc_host::JobSupervisor as _;
     let reasons = Arc::new(Mutex::new(Vec::new()));
-    let launcher =
-        Arc::new(ThreadLauncher { crash: Some("entrypoint raised"), reasons: reasons.clone() });
+    let launcher = Arc::new(ThreadLauncher {
+        crash: Some("entrypoint raised"),
+        reasons: reasons.clone(),
+        attached: Arc::default(),
+    });
     let options = JobRunnerOptions {
         thread: true,
         initialize_timeout: 5.0,
@@ -554,13 +572,21 @@ async fn a_raising_entrypoint_fails_the_job() {
 }
 
 /// A job the worker shuts down without a reason ends with a stated one, and cleanly.
+///
+/// The test also checks the launch order. The job task must launch after the run has its token
+/// issuer. A run that starts first finds no issuer, and it keeps no tokens for its whole life.
 /// https://github.com/livekit/agents/pull/6284
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_shut_down_by_its_worker_states_why_and_succeeds() {
     use lk_agents_abi::worker::ipc::{JobRunnerOptions, JobStatus};
     use lk_agents_abi::worker::ipc_host::JobSupervisor as _;
     let reasons = Arc::new(Mutex::new(Vec::new()));
-    let launcher = Arc::new(ThreadLauncher { crash: None, reasons: reasons.clone() });
+    let attached = Arc::new(AtomicBool::new(false));
+    let launcher = Arc::new(ThreadLauncher {
+        crash: None,
+        reasons: reasons.clone(),
+        attached: attached.clone(),
+    });
     let options = JobRunnerOptions {
         thread: true,
         initialize_timeout: 5.0,
@@ -588,4 +614,82 @@ async fn a_job_shut_down_by_its_worker_states_why_and_succeeds() {
 
     assert_eq!(*reasons.lock(), [Some("parent process shutdown".to_owned())]);
     assert_eq!(sup.status(), Some(JobStatus::Success));
+    assert!(attached.load(Ordering::Acquire), "the job task launched before its token issuer");
+}
+
+// A token mode job gets its first tokens, and then its run is cancelled, as a thread runner does
+// when its parent's channel closes. Catches a job whose tokens stay in the registry, where other
+// jobs could find them until they expire.
+#[tokio::test]
+async fn a_cancelled_job_run_removes_its_tokens() {
+    use crate::ipc::wire::Token;
+    use lk_agents_net::job_token::inference_token;
+    let host = Arc::new(Host {
+        objects: Arc::default(),
+        segment: Duration::ZERO,
+        reporting: tokio::sync::Notify::new(),
+        cancelled: Arc::default(),
+        events: Mutex::new(Vec::new()),
+        calls: Mutex::new(Vec::new()),
+    });
+    let mut run = JobRun::new(
+        &ProcessEnv::current_runtime(),
+        false,
+        5.0,
+        false,
+        "ws://localhost".into(),
+        None,
+        5.0,
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    Arc::get_mut(&mut run.inner).unwrap().token_mode = true;
+    let rt = crate::test_rt();
+    let (parent, child) = crate::ipc::ipc_channel::memory::<ToChild, ToParent>(&rt);
+    run.report_to(Arc::new(child));
+    let info = lk_agents_abi::worker::job::RunningJobInfo {
+        accept_arguments: Default::default(),
+        job: livekit_protocol::Job { id: "AJ_cancelled".into(), ..Default::default() },
+        url: "ws://localhost".into(),
+        token: "join".into(),
+        worker_id: "AW_1".into(),
+        fake_job: false,
+        received_at: None,
+        accepted_at: None,
+        assigned_at: None,
+        launched_at: 0.0,
+    };
+    run.start_trace(StartJob { info, traceparent: None }, None);
+    let key = run.job().unwrap();
+    let run = Arc::new(run);
+    let running = tokio::spawn({
+        let (run, host) = (run.clone(), host.clone());
+        async move { run.run(host, CallContext::default()).await }
+    });
+    // The parent answers the job's first two token requests: inference and telemetry.
+    let expires_at = lk_agents_net::clock::unix_now() as i64 + 600;
+    for _ in 0..2 {
+        let ToParent::CreateJobToken { request_id, .. } = parent.recv().await.unwrap() else {
+            panic!("expected a job token request");
+        };
+        let answer = JobTokenAnswer::Issued { token: Token("job-token".into()), expires_at };
+        run.job_token_answer(request_id, answer);
+    }
+    let limit = Duration::from_secs(5);
+    let held = async {
+        while inference_token(Some(&key)).is_err() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(limit, held).await.expect("the running job holds its tokens");
+
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    let gone = async {
+        while inference_token(Some(&key)).is_ok() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(limit, gone).await.expect("the cancelled job's tokens stayed");
 }

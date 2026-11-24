@@ -18,9 +18,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::ipc_channel::Channel;
 
-use super::wire::{ToChild, bounded};
+use super::job_tokens::WorkerIssue;
+use super::wire::{JobTokenAnswer, ToChild, bounded};
 use super::{ToParent, secs};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::job_token::JobTokens;
 
 // The first cause that ends the job wins: the room, the user, the parent, a crash or the
 // simulator leaving.
@@ -101,6 +103,12 @@ struct Inner {
     cloud: Option<telemetry::CloudEndpoint>,
     /// The job's root span, from its start until its shutdown ends.
     root: Mutex<Option<telemetry::ScopedSpan<telemetry::JobEntrypoint>>>,
+    /// In token mode, the job tokens of this job. The server issues them, and the parent process
+    /// passes the requests and answers.
+    job_tokens: OnceLock<(Arc<WorkerIssue>, Arc<JobTokens>)>,
+    /// True in token mode. The server has a worker token and no key or secret, so every job token
+    /// comes from the LiveKit server.
+    token_mode: bool,
     /// The job the parent handed over; none for a job run outside one.
     job: OnceLock<telemetry::Job>,
     /// The primary session's `agent_session`, once it started.
@@ -140,7 +148,36 @@ impl JobRun {
     }
 
     pub(crate) fn report_to(&self, parent: Arc<Channel<ToParent, ToChild>>) {
+        let issue = Arc::new(WorkerIssue::new(parent.clone(), self.inner.clock.clone()));
+        let tokens = Arc::new(JobTokens::new(issue.clone(), self.inner.clock.clone()));
+        let _ = self.inner.job_tokens.set((issue, tokens));
         let _ = self.inner.parent.set(parent);
+    }
+
+    /// Delivers the parent's answer to a job token request of this job.
+    pub(crate) fn job_token_answer(&self, request_id: u64, answer: JobTokenAnswer) {
+        if let Some((issue, _)) = self.inner.job_tokens.get() {
+            issue.answer(request_id, answer);
+        }
+    }
+}
+
+/// In token mode, the job's entry in the process-wide job token registry, and the renewal task.
+///
+/// Dropping it removes the entry. This happens in two cases:
+/// - The run ends normally. The drop comes after the job sent its last telemetry.
+/// - The run is cancelled. For example, a thread runner drops the run when its parent process
+///   goes away.
+///
+/// In both cases the job's tokens leave the registry, so no other job can find them.
+struct TokensOpen {
+    job: telemetry::JobKey,
+    _renewing: Option<OwnedTask>,
+}
+
+impl Drop for TokensOpen {
+    fn drop(&mut self) {
+        lk_agents_net::job_token::close(&self.job);
     }
 }
 
@@ -222,6 +259,7 @@ impl Inner {
             telemetry::start(&self.tracer.root(), telemetry::JobEntrypoint::default())
         });
         let _ = self.entry.set(span.cx().clone());
+        let tokens = self.keep_tokens_current().await;
         let result = self.clone().run_traced(&span).await;
         let failure = match &result {
             Ok(crash) => crash.clone(),
@@ -238,7 +276,32 @@ impl Inner {
         if let (Some(exporter), Some(job)) = (telemetry::exporter(), self.job.get()) {
             exporter.close_job(&job.key, secs(telemetry::SHUTDOWN_TIMEOUT_SECONDS)).await;
         }
+        // The job sent its last telemetry, so its tokens can go now.
+        drop(tokens);
         result.map(drop)
+    }
+
+    /// In token mode, gets the job's inference and telemetry tokens before the entrypoint runs,
+    /// and then renews them in the background.
+    ///
+    /// The inference and telemetry clients read these tokens from the registry. The tokens stay
+    /// registered until the returned value is dropped. Console jobs and key mode skip this.
+    async fn keep_tokens_current(&self) -> Option<TokensOpen> {
+        use lk_agents_net::job_token::{INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS};
+        if self.fake || !self.token_mode {
+            return None;
+        }
+        let ((_, tokens), job) = (self.job_tokens.get()?, self.job.get()?);
+        lk_agents_net::job_token::open(job.key.clone(), tokens.clone());
+        // Create the guard now. If the run is cancelled while the first tokens arrive, the guard
+        // still removes the entry.
+        let mut open = TokensOpen { job: job.key.clone(), _renewing: None };
+        let claims = [INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS];
+        let delay = tokens.renew(&claims, &mut 0).await;
+        let tokens = tokens.clone();
+        let renewing = self.spawner.spawn(async move { tokens.keep_current(delay, &claims).await });
+        open._renewing = Some(renewing);
+        Some(open)
     }
 
     /// Runs the job to its shutdown; `Ok` carries the entrypoint's unhandled exception, which its
@@ -493,9 +556,12 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         let configured = std::env::var("LIVEKIT_OBSERVABILITY_URL").ok();
         let observability_url =
             lk_agents_net::strings::observability_url(&url, configured.as_deref());
+        let token_mode = lk_agents_net::token::uses_job_token(&api_key, &api_secret);
+        // In token mode, the job's telemetry token authorizes the upload.
+        let signed = !api_key.is_empty() || token_mode;
         let cloud = observability_url
             .clone()
-            .filter(|_| !fake_job && !api_key.is_empty())
+            .filter(|_| !fake_job && signed)
             .map(|base_url| telemetry::CloudEndpoint { base_url, api_key, api_secret });
         Ok(Self {
             inner: Arc::new(Inner {
@@ -517,6 +583,8 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 clock: env.clock.clone(),
                 cloud,
                 root: Mutex::new(None),
+                job_tokens: OnceLock::new(),
+                token_mode,
                 job: OnceLock::new(),
                 session: OnceLock::new(),
                 entry: OnceLock::new(),
@@ -617,6 +685,19 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             st.tasks.push(task);
         }
         rx.await.unwrap_or(Err(WorkerError::Cancelled))
+    }
+
+    async fn create_job_token(&self, claims: String) -> Result<String, WorkerError> {
+        let tokens = self.inner.job_tokens.get().map(|(_, tokens)| tokens.clone());
+        let Some(tokens) = tokens.filter(|_| self.inner.token_mode) else {
+            return Err(WorkerError::Failed(
+                "a job token comes from the server only for a job its worker runs in token mode \
+                 (LIVEKIT_TOKEN without an API key and secret)"
+                    .into(),
+            ));
+        };
+        let issued = self.inner.spawner.run(async move { tokens.token(&claims).await }).await;
+        issued.map_err(|error| WorkerError::Failed(error.message))
     }
 
     async fn close_tasks(&self) {

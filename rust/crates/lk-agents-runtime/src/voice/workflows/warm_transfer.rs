@@ -2,6 +2,7 @@ use crate::telemetry;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::{ApiError, HostError};
 use lk_agents_abi::llm::provider_format::tools::RawFunctionDescription;
+use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_abi::voice::workflows::InstructionsArg;
 use lk_agents_abi::voice::workflows::warm_transfer::HoldMusic;
@@ -63,6 +64,9 @@ pub trait TransferApi: Send + Sync {
 type BoxFuture<'a, T> = lk_agents_abi::BoxFuture<'a, T>;
 
 /// [`TransferApi`] over a project's services, with the server's URL and key pair.
+///
+/// In token mode there is no key pair. Each call then uses a token of the caller's job, with the
+/// grants of that call.
 pub struct ProjectApi {
     rooms: RoomService,
     telephony: Telephony,
@@ -70,10 +74,17 @@ pub struct ProjectApi {
 
 impl ProjectApi {
     /// The project of the server's `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
-    pub fn of_server(env: &BTreeMap<String, String>) -> Self {
+    /// In token mode, the calls use the tokens of `job`, the caller's job.
+    pub fn of_server(env: &BTreeMap<String, String>, job: JobKey) -> Self {
         let get = |name: &str| env.get(name).map_or("", String::as_str);
         let (url, key, secret) =
             (get("LIVEKIT_URL"), get("LIVEKIT_API_KEY"), get("LIVEKIT_API_SECRET"));
+        if lk_agents_net::token::uses_job_token(key, secret) {
+            return ProjectApi {
+                rooms: RoomService::with_job_tokens(url, job.clone()),
+                telephony: Telephony::with_job_tokens(url, job),
+            };
+        }
         ProjectApi {
             rooms: RoomService::new(url, key, secret),
             telephony: Telephony::new(url, key, secret),
@@ -723,7 +734,8 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
         host: Arc<dyn lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
         caller: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
     ) -> Result<String, TransferFailed> {
-        let api = Arc::new(ProjectApi::of_server(&host.server_env()?));
+        let job = JobKey(host.job_id()?);
+        let api = Arc::new(ProjectApi::of_server(&host.server_env()?, job));
         let caller = caller
             .rtc()
             .ok_or_else(|| HostError::new("warm transfer requires a connected caller RTC room"))?;
@@ -874,6 +886,9 @@ mod tests {
             Box::pin(async move { unreachable!() })
         }
         fn server_env(&self) -> Result<BTreeMap<String, String>, HostError> {
+            unreachable!()
+        }
+        fn job_id(&self) -> Result<String, HostError> {
             unreachable!()
         }
     }

@@ -89,11 +89,14 @@ pub enum Auth {
 }
 
 impl Auth {
-    /// The `Authorization` bearer.
-    pub fn bearer(&self) -> Result<String, lk_agents_abi::errors::ApiError> {
+    /// The `Authorization` bearer for a request of the job that `cx` belongs to.
+    pub fn bearer(
+        &self,
+        cx: &lk_agents_abi::telemetry::Cx,
+    ) -> Result<String, lk_agents_abi::errors::ApiError> {
         match self {
             Auth::Gateway { api_key, api_secret } => {
-                lk_agents_net::token::inference_bearer(api_key, api_secret)
+                lk_agents_net::token::inference_bearer(cx.job(), api_key, api_secret)
             }
             Auth::ProviderKey(key) => Ok(key.clone()),
         }

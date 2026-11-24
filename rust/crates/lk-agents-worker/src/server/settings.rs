@@ -56,6 +56,11 @@ pub struct ServerSettings {
     pub ws_url: String,
     pub api_key: String,
     pub api_secret: String,
+    /// `LIVEKIT_TOKEN`: the first worker token, used when no key and no secret are set.
+    ///
+    /// This value only marks token mode. The registrations read the current worker token from the
+    /// server's `WorkerToken`, which the CLI can replace.
+    pub token: String,
     /// `LIVEKIT_WORKER_TOKEN`: set on a worker hosted on Cloud.
     pub worker_token: String,
     /// `LIVEKIT_WORKER_URL`: the `/agent` address when it is not `ws_url`. A development
@@ -107,6 +112,7 @@ impl Default for ServerSettings {
             ws_url: String::new(),
             api_key: String::new(),
             api_secret: String::new(),
+            token: String::new(),
             worker_token: String::new(),
             worker_url: String::new(),
             deployment: String::new(),
@@ -267,6 +273,7 @@ impl ServerSettings {
         or_env(&mut self.ws_url, "LIVEKIT_URL");
         or_env(&mut self.api_key, "LIVEKIT_API_KEY");
         or_env(&mut self.api_secret, "LIVEKIT_API_SECRET");
+        or_env(&mut self.token, "LIVEKIT_TOKEN");
         match env("LIVEKIT_AGENT_NAME_OVERRIDE") {
             Some(name) => self.agent_name = name,
             None => or_env(&mut self.agent_name, "LIVEKIT_AGENT_NAME"),
@@ -292,6 +299,12 @@ impl ServerSettings {
             .find_map(|name| read_env(name).filter(|v| !v.is_empty()))
     }
 
+    /// Returns true when these settings run in token mode (see
+    /// [`token_mode`](lk_agents_net::job_token::token_mode)).
+    pub fn token_mode(&self) -> bool {
+        lk_agents_net::job_token::token_mode(&self.api_key, &self.api_secret, &self.token)
+    }
+
     /// Hosted on Cloud: the worker's load is the platform's to judge.
     pub fn cloud(&self) -> bool {
         !self.worker_token.is_empty()
@@ -314,6 +327,9 @@ impl ServerSettings {
         if self.ws_url.is_empty() {
             return missing("ws_url is required, or set LIVEKIT_URL environment variable");
         }
+        if self.token_mode() {
+            return Ok(());
+        }
         if self.api_key.is_empty() {
             return missing("api_key is required, or set LIVEKIT_API_KEY environment variable");
         }
@@ -326,8 +342,14 @@ impl ServerSettings {
     }
 
     /// The variables the job processes inherit: the resolved connection.
+    ///
+    /// In token mode, `LIVEKIT_TOKEN` only tells the job process that it runs in token mode. A job
+    /// never sends the worker token.
     pub fn child_env(&self) -> Vec<(&'static str, String)> {
         let mut env = Vec::new();
+        if self.token_mode() {
+            env.push(("LIVEKIT_TOKEN", self.token.clone()));
+        }
         for (name, value) in [
             ("LIVEKIT_URL", &self.ws_url),
             ("LIVEKIT_API_KEY", &self.api_key),
@@ -348,6 +370,7 @@ impl ServerSettings {
         &self,
         devmode: bool,
         endpoints: Vec<proto::agent_http::AgentEndpoint>,
+        token: crate::WorkerToken,
     ) -> (WorkerConfig, RuntimeConfig) {
         let worker = WorkerConfig {
             agent_name: self.agent_name.clone(),
@@ -372,6 +395,7 @@ impl ServerSettings {
             headers: Vec::new(),
             api_key: self.api_key.clone(),
             api_secret: self.api_secret.clone(),
+            token,
             max_retry: self.max_retry,
             connection_timeout: crate::config::CONNECTION_TIMEOUT,
         };

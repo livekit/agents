@@ -118,35 +118,83 @@ async fn serve_dev_channel(
 
     send(
         &mut stream,
-        Message::ServerInfo(ServerInfo {
-            agent_name,
-            url: url.clone(),
-            supports_token_mode: false,
-        }),
+        Message::ServerInfo(ServerInfo { agent_name, url: url.clone(), supports_token_mode: true }),
     )
     .await
     .map_err(io)?;
     send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {}))
         .await
         .map_err(io)?;
-    let Some(first) = recv(&mut stream).await.map_err(io)? else { return Ok(()) };
-    if let Some(Message::GetRunningJobsResponse(kept)) = first.message
-        && !kept.jobs.is_empty()
-    {
-        log::info!(target: lk_agents_abi::LOG_TARGET, "reloading {} job(s)", kept.jobs.len());
-        let mut jobs = Vec::with_capacity(kept.jobs.len());
-        for job in kept.jobs {
-            let mut job = match from_proto(job) {
-                Ok(job) => job,
-                Err(error) => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, "cannot reload an invalid kept job: {error}");
-                    continue;
+    // The reload of the kept jobs runs beside the channel loop, not inside it. In token mode the
+    // reload waits for registration, and registration can need a new worker token. That token
+    // comes later on this same channel, in a `Credentials` message.
+    //
+    // The loop starts the reload as soon as the kept jobs arrive. From then on the server counts
+    // them as running. For example, if the CLI asks for the running jobs while a kept job still
+    // waits for its token, the answer includes that job.
+    let (kept, resume) = tokio::sync::oneshot::channel::<
+        lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::worker::ipc_host::WorkerError>>,
+    >();
+    let reload = async {
+        let Ok(reloading) = resume.await else { return Ok(()) };
+        reloading.await.map_err(|e| HostError::new(e.to_string()))
+    };
+    let serve = async {
+        let mut kept = Some(kept);
+        while let Some(message) = recv(&mut stream).await.map_err(io)? {
+            match message.message {
+                Some(Message::GetRunningJobsResponse(response)) => {
+                    let jobs = kept_jobs(response.jobs, &url, &api_key, &api_secret);
+                    if let Some(kept) = kept.take().filter(|_| !jobs.is_empty()) {
+                        // The reload task above receives the reload and runs it.
+                        let _ = kept.send(server.reload_jobs(jobs));
+                    }
                 }
-            };
+                // The CLI asks for the running jobs before it restarts this process. It gives
+                // them back after the restart.
+                Some(Message::GetRunningJobsRequest(_)) => {
+                    let jobs = server.running_jobs().into_iter().map(to_proto).collect();
+                    let reply =
+                        Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
+                    send(&mut stream, reply).await.map_err(io)?;
+                }
+                // Token mode: the next registration uses the new worker token.
+                Some(Message::Credentials(credentials)) => server.update_token(credentials.token),
+                _ => {}
+            }
+        }
+        Ok::<(), HostError>(())
+    };
+    let (reloaded, served) = tokio::join!(reload, serve);
+    reloaded.and(served)
+}
+
+/// Converts the kept jobs from the CLI, and makes their join tokens last past the reload.
+///
+/// In key mode, the function extends each join token with the key and secret. In token mode, there
+/// is no key. The join token stays as it is, and the server replaces it after the worker
+/// registers.
+fn kept_jobs(
+    kept: Vec<livekit_protocol::agent::RunningAgentJobInfo>,
+    url: &str,
+    api_key: &str,
+    api_secret: &str,
+) -> Vec<RunningJobInfo> {
+    if !kept.is_empty() {
+        log::info!(target: lk_agents_abi::LOG_TARGET, "reloading {} job(s)", kept.len());
+    }
+    let mut jobs = Vec::with_capacity(kept.len());
+    for job in kept {
+        let mut job = match from_proto(job) {
+            Ok(job) => job,
+            Err(error) => {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "cannot reload an invalid kept job: {error}");
+                continue;
+            }
+        };
+        if !api_key.is_empty() && !api_secret.is_empty() {
             job.token = match lk_agents_net::token::extend_job_token(
-                &job.token,
-                &api_key,
-                &api_secret,
+                &job.token, api_key, api_secret,
             ) {
                 Ok(token) => token,
                 Err(error) => {
@@ -154,22 +202,11 @@ async fn serve_dev_channel(
                     continue;
                 }
             };
-            job.url = url.clone();
-            jobs.push(job);
         }
-        if !jobs.is_empty() {
-            server.reload_jobs(jobs).await.map_err(|e| HostError::new(e.to_string()))?;
-        }
+        job.url = url.to_owned();
+        jobs.push(job);
     }
-    // The CLI asks before restarting this process, to resume these jobs after the reload.
-    while let Some(message) = recv(&mut stream).await.map_err(io)? {
-        if let Some(Message::GetRunningJobsRequest(_)) = message.message {
-            let jobs = server.running_jobs().into_iter().map(to_proto).collect();
-            let reply = Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
-            send(&mut stream, reply).await.map_err(io)?;
-        }
-    }
-    Ok(())
+    jobs
 }
 
 #[cfg(test)]

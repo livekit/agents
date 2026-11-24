@@ -180,7 +180,7 @@ class AvatarSession(BaseAvatarSession):
                 "type": "livekit",
                 "url": ctx.livekit_url,
                 "room_name": ctx.room.name,
-                "participant_token": ctx.livekit_token(ttl=ttl, grants=grants),
+                "participant_token": await ctx.livekit_token(ttl=ttl, grants=grants),
                 "participant_identity": ctx.avatar_identity,
                 "publisher_identity": ctx.agent_identity,
                 "audio_source": "data_stream",

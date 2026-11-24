@@ -5,6 +5,7 @@ use livekit_token::{
     ObservabilityGrants, TokenVerifier, VideoGrants,
 };
 use lk_agents_abi::errors::{ApiError, ErrorKind};
+use lk_agents_abi::telemetry::record::JobKey;
 
 // Renewal preserves the verified claim document, including future server restrictions.
 
@@ -155,17 +156,39 @@ pub fn database_token(
 
 pub const INFERENCE_TOKEN_TTL: Duration = Duration::from_secs(600);
 
-/// The LiveKit Inference gateway's bearer: identity `agent`, allowed to perform inference.
-pub fn inference_bearer(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
-    inference_bearer_with_ttl(api_key, api_secret, INFERENCE_TOKEN_TTL)
+/// Returns true when a client with `api_key` and `api_secret` must use job tokens.
+///
+/// This is [`token_mode`](crate::job_token::token_mode) with the worker token of this process.
+/// When it is true, the client gets its token from the server instead of signing one.
+pub fn uses_job_token(api_key: &str, api_secret: &str) -> bool {
+    let token = crate::env::server_setting("LIVEKIT_TOKEN").unwrap_or_default();
+    crate::job_token::token_mode(api_key, api_secret, &token)
 }
 
-/// An inference credential with the connection's requested lifetime.
+/// Returns the bearer for the LiveKit Inference gateway, with identity `agent` and the grant to
+/// perform inference.
+///
+/// In token mode, this is the current inference token of `job`.
+pub fn inference_bearer(
+    job: Option<&JobKey>,
+    api_key: &str,
+    api_secret: &str,
+) -> Result<String, ApiError> {
+    inference_bearer_with_ttl(job, api_key, api_secret, INFERENCE_TOKEN_TTL)
+}
+
+/// Returns an inference credential with the lifetime that the connection asks for.
+///
+/// In token mode, this is the job's inference token, and the server sets its lifetime.
 pub fn inference_bearer_with_ttl(
+    job: Option<&JobKey>,
     api_key: &str,
     api_secret: &str,
     ttl: Duration,
 ) -> Result<String, ApiError> {
+    if uses_job_token(api_key, api_secret) {
+        return crate::job_token::inference_token(job);
+    }
     if api_key.is_empty() {
         return Err(ApiError::new(
             ErrorKind::Auth,
@@ -192,8 +215,17 @@ pub fn inference_bearer_with_ttl(
         })
 }
 
-/// An observability write credential for a framework upload or host SDK exporter.
-pub fn observability_bearer(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
+/// Returns an observability write credential for a framework upload or a host SDK exporter.
+///
+/// In token mode, this is the current telemetry token of `job`.
+pub fn observability_bearer(
+    job: &JobKey,
+    api_key: &str,
+    api_secret: &str,
+) -> Result<String, ApiError> {
+    if uses_job_token(api_key, api_secret) {
+        return crate::job_token::observability_token(job);
+    }
     if api_key.is_empty() || api_secret.is_empty() {
         return Err(ApiError::new(
             ErrorKind::Auth,
@@ -243,27 +275,27 @@ mod tests {
 
     #[test]
     fn the_observability_token_only_grants_observability_writes() {
-        let token = observability_bearer("key", "secret").unwrap();
+        let token = observability_bearer(&JobKey("AJ_1".into()), "key", "secret").unwrap();
         let claims = TokenVerifier::with_api_key("key", "secret").verify(&token).unwrap();
         assert!(claims.observability.write);
         assert!(!claims.inference.perform);
         assert!(claims.exp > claims.nbf && claims.exp - claims.nbf <= 6 * 60 * 60);
-        assert!(observability_bearer("", "secret").is_err());
+        assert!(observability_bearer(&JobKey("AJ_1".into()), "", "secret").is_err());
     }
 
     // Catches: a gateway token without the inference grant or the `agent` identity, or one the
     // key pair does not verify.
     #[test]
     fn the_gateway_token_carries_the_inference_grant_and_verifies() {
-        let token = inference_bearer("key", "secret").unwrap();
+        let token = inference_bearer(None, "key", "secret").unwrap();
         let claims = TokenVerifier::with_api_key("key", "secret").verify(&token).unwrap();
         assert_eq!(
             (claims.sub.as_str(), claims.iss.as_str(), claims.inference.perform),
             ("agent", "key", true)
         );
         assert!(claims.exp > claims.nbf && claims.exp - claims.nbf <= 600);
-        assert!(!inference_bearer("", "secret").unwrap_err().retryable);
-        assert!(!inference_bearer("key", "").unwrap_err().retryable);
+        assert!(!inference_bearer(None, "", "secret").unwrap_err().retryable);
+        assert!(!inference_bearer(None, "key", "").unwrap_err().retryable);
     }
 
     mod worker {
@@ -405,7 +437,7 @@ mod renewal_regressions {
             )
             .is_err()
         );
-        assert!(inference_bearer_with_ttl("key", "secret", Duration::MAX).is_err());
+        assert!(inference_bearer_with_ttl(None, "key", "secret", Duration::MAX).is_err());
     }
 }
 

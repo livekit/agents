@@ -4,7 +4,6 @@ import os
 
 from pydantic import BaseModel
 
-from livekit import api
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -77,12 +76,8 @@ class AvatarSession(BaseAvatarSession):
         return "avatartalk"
 
     async def create_session(self, ctx: AvatarStart) -> str | None:
-        listener_token = (
-            ctx.access_token()
-            .with_identity(_LISTENER_IDENTITY)
-            .with_name(_LISTENER_IDENTITY)
-            .with_grants(api.VideoGrants(room_join=True, room=ctx.room.name))
-            .to_jwt()
+        listener_token = await ctx.participant_token(
+            identity=_LISTENER_IDENTITY, name=_LISTENER_IDENTITY
         )
         async with http.http_session().post(
             f"{self._api_url}/livekit/create-session",
@@ -92,7 +87,7 @@ class AvatarSession(BaseAvatarSession):
                 "avatar": self._avatar,
                 "emotion": self._emotion,
                 "room_name": ctx.room.name,
-                "room_token": ctx.livekit_token(),
+                "room_token": await ctx.livekit_token(),
                 "listener_token": listener_token,
                 "agent_identity": ctx.agent_identity,
             },

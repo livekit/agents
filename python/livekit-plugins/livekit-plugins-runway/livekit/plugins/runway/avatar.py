@@ -91,7 +91,7 @@ class AvatarSession(BaseAvatarSession):
             "avatar": self._avatar,
             "livekit": {
                 "url": ctx.livekit_url,
-                "token": ctx.livekit_token(),
+                "token": await ctx.livekit_token(),
                 "roomName": ctx.room.name,
                 "agentIdentity": ctx.agent_identity,
             },

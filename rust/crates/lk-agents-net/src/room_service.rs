@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use livekit_api::services::connector::{ConnectTwilioCallOptions, ConnectorClient};
-use livekit_api::services::room::RoomClient;
-use livekit_api::services::sip::{CreateSIPParticipantOptions, SIPClient};
-use livekit_api::services::{ServerError, ServerErrorCode, ServiceError};
+use livekit_api::services::connector::ConnectTwilioCallOptions;
+use livekit_api::services::sip::CreateSIPParticipantOptions;
+use livekit_api::services::{LiveKitApi, ServerError, ServerErrorCode, ServiceError, TokenGrants};
 use livekit_protocol as proto;
 use lk_agents_abi::errors::{ApiError, ErrorKind};
+use lk_agents_abi::telemetry::record::JobKey;
 
-/// A project's RoomService: its `LIVEKIT_URL` (`wss://` or `https://`) and key pair.
-pub struct RoomService(RoomClient);
+/// A project's RoomService at its `LIVEKIT_URL` (`wss://` or `https://`). It signs calls with the
+/// key pair, or in token mode it uses the job's tokens.
+pub struct RoomService(LiveKitApi);
 
 /// What `remove_participant` found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,9 +25,27 @@ fn not_found(error: &ServiceError) -> bool {
         if code.code == ServerErrorCode::NOT_FOUND)
 }
 
+/// Builds the project's services for token mode.
+///
+/// For each call, the client asks the server for a token of `job` with the grants of that call.
+fn job_api(url: &str, job: JobKey) -> LiveKitApi {
+    LiveKitApi::with_token_provider(url, move |grants: TokenGrants| {
+        let job = job.clone();
+        async move {
+            let claims = grants.to_claims_json()?;
+            Ok(crate::job_token::token(&job, &claims).await?)
+        }
+    })
+}
+
 impl RoomService {
     pub fn new(url: &str, api_key: &str, api_secret: &str) -> Self {
-        Self(RoomClient::with_api_key(url, api_key, api_secret))
+        Self(LiveKitApi::with_api_key(url, api_key, api_secret))
+    }
+
+    /// Token mode: each call uses a token of `job` (see [`job_api`]).
+    pub fn with_job_tokens(url: &str, job: JobKey) -> Self {
+        Self(job_api(url, job))
     }
 
     /// `RemoveParticipant`: `identity` leaves `room`. A participant already gone is
@@ -36,7 +55,7 @@ impl RoomService {
         room: &str,
         identity: &str,
     ) -> Result<Removal, ServiceError> {
-        match self.0.remove_participant(room, identity).await {
+        match self.0.room().remove_participant(room, identity).await {
             Ok(()) => Ok(Removal::Removed),
             Err(error) if not_found(&error) => Ok(Removal::NotInRoom),
             Err(error) => Err(error),
@@ -50,12 +69,12 @@ impl RoomService {
         identity: &str,
         destination: &str,
     ) -> Result<(), ServiceError> {
-        self.0.move_participant(room, identity, destination).await
+        self.0.room().move_participant(room, identity, destination).await
     }
 
     /// `DeleteRoom`: everyone in `room` is disconnected. A room already gone is not an error.
     pub async fn delete_room(&self, room: &str) -> Result<(), ServiceError> {
-        match self.0.delete_room(room).await {
+        match self.0.room().delete_room(room).await {
             Err(error) if not_found(&error) => Ok(()),
             other => other,
         }
@@ -79,17 +98,16 @@ pub struct SipCall {
 }
 
 /// A project's telephony: its SIP service and its Twilio connector.
-pub struct Telephony {
-    sip: SIPClient,
-    connector: ConnectorClient,
-}
+pub struct Telephony(LiveKitApi);
 
 impl Telephony {
     pub fn new(url: &str, api_key: &str, api_secret: &str) -> Self {
-        Self {
-            sip: SIPClient::with_api_key(url, api_key, api_secret),
-            connector: ConnectorClient::with_api_key(url, api_key, api_secret),
-        }
+        Self(LiveKitApi::with_api_key(url, api_key, api_secret))
+    }
+
+    /// Token mode: each call uses a token of `job` (see [`job_api`]).
+    pub fn with_job_tokens(url: &str, job: JobKey) -> Self {
+        Self(job_api(url, job))
     }
 
     /// `CreateSIPParticipant`: dials `call`, returning once it is answered when
@@ -105,7 +123,8 @@ impl Telephony {
             ..Default::default()
         };
         let trunk = call.sip_trunk_id.unwrap_or_default();
-        self.sip
+        self.0
+            .sip()
             .create_sip_participant(trunk, call.sip_call_to, call.room_name, options, call.trunk)
             .await
             .map(drop)
@@ -123,7 +142,7 @@ impl Telephony {
             ..Default::default()
         };
         let direction = proto::connect_twilio_call_request::TwilioCallDirection::Outbound;
-        let response = self.connector.connect_twilio_call(direction, room, options).await?;
+        let response = self.0.connector().connect_twilio_call(direction, room, options).await?;
         Ok(response.connect_url)
     }
 }

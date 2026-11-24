@@ -14,6 +14,7 @@ use lk_agents_net::signal;
 
 use super::executor::{RunnerExecutor, ThreadExecutor};
 use super::process::{ProcessExecutor, ProcessReceipt};
+use super::wire::{JobTokenAnswer, Token, bounded};
 use super::{
     HEALTH_CHECK_GRACE, Hello, InitError, RunnerFields, RunnerSupervisor, SupervisorCallbacks, secs,
 };
@@ -79,6 +80,12 @@ impl JobSupervisor {
         &self.logger
     }
 
+    /// In token mode, sends the job's token requests to `issuer`.
+    pub(crate) fn with_job_tokens(mut self, issuer: Option<crate::JobTokenIssuer>) -> Self {
+        self.logger.job_tokens = issuer;
+        self
+    }
+
     /// Whether a launched runner ended; an error when none was started.
     pub(crate) async fn wait_exit(&self) -> Result<bool, HostError> {
         let sup = self.sup().ok_or_else(|| HostError::new("process not started"))?;
@@ -102,7 +109,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             options.memory_limit_mb = 0.0;
         }
         let state = Arc::new(Mutex::new(RunnerState::default()));
-        let logger = JobLogger { state: state.clone() };
+        let logger = JobLogger { state: state.clone(), job_tokens: None };
         let failed =
             |error: lk_agents_net::env::ProcessError| WorkerError::Failed(error.to_string());
         Ok(Self {
@@ -340,10 +347,12 @@ impl ipc_host::ThreadLaunch for ThreadLaunch {
     }
 }
 
-/// What the runner's diagnostics name: its process and its job.
+/// What the runner's diagnostics name: its process and its job. In token mode, it also holds the
+/// function that receives the job's token requests.
 #[derive(Clone, Default)]
 pub(crate) struct JobLogger {
     pub(crate) state: Arc<Mutex<RunnerState>>,
+    pub(crate) job_tokens: Option<crate::JobTokenIssuer>,
 }
 
 impl SupervisorCallbacks for JobLogger {
@@ -358,6 +367,27 @@ impl SupervisorCallbacks for JobLogger {
             // empty until the job joins the room
             room_id: room.map(|room| room.sid.clone()).filter(|sid| !sid.is_empty()),
         }
+    }
+
+    fn create_job_token(
+        &self,
+        job_id: String,
+        claims: String,
+    ) -> lk_agents_abi::BoxFuture<'static, JobTokenAnswer> {
+        let issuer = self.job_tokens.clone();
+        Box::pin(async move {
+            let Some(issuer) = issuer else {
+                let refused = "cannot create a job token: the worker is not in token mode";
+                return JobTokenAnswer::Refused(refused.into());
+            };
+            match issuer(job_id, claims).await {
+                Ok(issued) => JobTokenAnswer::Issued {
+                    token: Token(issued.token),
+                    expires_at: issued.expires_at,
+                },
+                Err(error) => JobTokenAnswer::Refused(bounded(error.0)),
+            }
+        })
     }
 }
 

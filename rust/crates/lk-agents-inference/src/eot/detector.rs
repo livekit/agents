@@ -205,14 +205,16 @@ pub fn select(
     let mut cloud = version.map_or(hosted || dev, |v| v == "v1");
     let mut warnings = vec![];
     if cloud {
+        // Token mode needs no key and no secret. The requests use the job's inference token.
+        let keyless = lk_agents_net::token::uses_job_token(key, secret);
         let missing: Vec<_> = [
-            (url, "LIVEKIT_INFERENCE_URL"),
-            (key, "LIVEKIT_API_KEY"),
-            (secret, "LIVEKIT_API_SECRET"),
+            (url, "LIVEKIT_INFERENCE_URL", false),
+            (key, "LIVEKIT_API_KEY", keyless),
+            (secret, "LIVEKIT_API_SECRET", keyless),
         ]
         .into_iter()
-        .filter(|(value, _)| value.is_empty())
-        .map(|(_, name)| name)
+        .filter(|(value, _, optional)| value.is_empty() && !optional)
+        .map(|(_, name, _)| name)
         .collect();
         if !missing.is_empty() {
             let missing = missing.join(", ");

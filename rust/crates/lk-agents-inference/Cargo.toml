@@ -90,5 +90,9 @@ path = "src/realtime/machine/context/context_tests.rs"
 name = "eot"
 path = "src/eot_tests.rs"
 
+[[test]]
+name = "token_mode"
+path = "src/token_mode_tests.rs"
+
 [lints]
 workspace = true

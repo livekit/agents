@@ -32,11 +32,12 @@ pub fn is_evaluated_model_of_kind(
     Ok(is_evaluated_model(model, table))
 }
 
-/// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
+/// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`). This
+/// needs a key and secret, or token mode, where the requests use the job's inference token.
 pub fn auto_select_models(livekit_url: &str, api_key: &str, api_secret: &str) -> bool {
     lk_agents_net::strings::is_cloud_url(livekit_url)
-        && !api_key.is_empty()
-        && !api_secret.is_empty()
+        && ((!api_key.is_empty() && !api_secret.is_empty())
+            || lk_agents_net::token::uses_job_token(api_key, api_secret))
 }
 
 #[cfg(test)]

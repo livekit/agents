@@ -209,6 +209,8 @@ pub struct ServerStart {
     pub context: lk_agents_abi::invoke::CallContext,
     /// The job runners' loops run in debug mode.
     pub asyncio_debug: bool,
+    /// The worker token. The CLI can replace it while the server runs.
+    pub worker_token: crate::WorkerToken,
 }
 
 #[derive(Clone)]
@@ -300,6 +302,40 @@ impl ServerRuntime {
         self.snapshot.with(|snapshot| snapshot.clone())
     }
 
+    /// Waits for the worker connection and returns it.
+    ///
+    /// Returns `None` when the server runs unregistered, or when it stops before the connection
+    /// exists.
+    pub async fn worker(&self) -> Option<WorkerClient> {
+        self.snapshot
+            .wait_until(|snapshot| match (&snapshot.worker, snapshot.phase) {
+                (Some(worker), _) => Some(Some(worker.clone())),
+                (None, ServerPhase::Idle | ServerPhase::Starting) => None,
+                (None, _) => Some(None),
+            })
+            .await
+    }
+
+    /// Waits until the worker connection is registered and returns it. Returns `None` when the
+    /// connection stops first.
+    pub async fn registered_worker(&self) -> Option<WorkerClient> {
+        let worker = self.worker().await?;
+        let mut notifications = worker.subscribe();
+        loop {
+            let state = worker.snapshot();
+            if state.registered {
+                return Some(worker);
+            }
+            if state.finished.is_some() {
+                return None;
+            }
+            match notifications.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    }
+
     pub async fn run(&self, start: ServerStart) -> Result<(), ServerError> {
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
@@ -307,7 +343,9 @@ impl ServerRuntime {
         let process_cleanup = timeout * 3;
         let connection_cleanup =
             if start.unregistered { Duration::ZERO } else { crate::config::CONNECTION_TIMEOUT };
-        let cleanup_timeout = process_cleanup.max(connection_cleanup);
+        // The connection closes after the job processes, so the cleanup time is the sum of both
+        // limits.
+        let cleanup_timeout = process_cleanup + connection_cleanup;
         self.snapshot.modify(|snapshot| {
             snapshot.phase = ServerPhase::Starting;
             snapshot.has_rtc = start.has_rtc;
@@ -523,6 +561,7 @@ impl ServerRuntime {
             context: start.context.clone(),
             asyncio_debug: start.asyncio_debug,
             observer: Box::new(move |job, status| send_job_status(&snapshot, &job.job.id, status)),
+            job_tokens: settings.token_mode().then(|| job_token_issuer(Arc::clone(&self.snapshot))),
         };
         resources.server_settings = Some(lk_agents_net::env::serve_settings(settings.child_env()));
         host.start(settings.clone(), start.devmode, start.has_rtc, launch).await?;
@@ -848,7 +887,8 @@ fn new_worker(
     blocking_io: &lk_agents_net::blocking_io::BlockingIo,
     rt: &Background,
 ) -> (Worker, WorkerClient) {
-    let (config, connection) = settings.worker(start.devmode, start.endpoints.clone());
+    let (config, connection) =
+        settings.worker(start.devmode, start.endpoints.clone(), start.worker_token.clone());
     let transport = match &start.transport {
         crate::TransportConfig::WebSocket { heartbeat } => {
             crate::TransportConfig::WebSocket { heartbeat: *heartbeat }
@@ -946,6 +986,24 @@ impl LoadReporter {
     }
 }
 
+/// Builds the function that sends job token requests on the worker connection, for token
+/// mode.
+fn job_token_issuer(snapshot: Arc<signal::Shared<ServerSnapshot>>) -> crate::JobTokenIssuer {
+    Arc::new(move |job_id, claims| {
+        let worker = snapshot.with(|snapshot| snapshot.worker.clone());
+        Box::pin(async move {
+            let Some(worker) = worker else {
+                return Err(crate::JobTokenError(
+                    "cannot request a job token: the worker is not connected to the LiveKit \
+                     server"
+                        .into(),
+                ));
+            };
+            worker.create_job_token(&job_id, &claims).await
+        })
+    })
+}
+
 /// A job's status to the worker connection, when one is up.
 fn send_job_status(
     snapshot: &signal::Shared<ServerSnapshot>,
@@ -1034,10 +1092,26 @@ impl Resources {
     ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), ServerError>)>> {
         let closing = FuturesUnordered::new();
         let settings = self.server_settings;
+        // The worker connection closes after the job processes. A job's shutdown callback can
+        // still call the server API, and in token mode the job gets that token through the worker
+        // connection. The worker takes no new job while it waits.
+        let (pool_closed, connection_closes) = tokio::sync::oneshot::channel();
+        let worker = self.worker;
+        // When there is no worker connection, nothing needs to stay open.
+        let mut connection_closes = worker.is_some().then_some(connection_closes);
         closing.push(
             async move {
+                if let Some(worker) = &worker
+                    && worker.send(WorkerCommand::Drain { timeout: Some(Duration::ZERO) }).is_err()
+                {
+                    log::debug!(target: lk_agents_abi::LOG_TARGET, "the worker stopped before the server closed");
+                }
                 host.close_pool().await;
                 drop(settings);
+                let close_admission = worker.map_or(Ok(()), |worker| close_worker(&worker));
+                // The connection's close task waits for this value. The receiver is dropped only
+                // when the whole close is dropped.
+                let _ = pool_closed.send(close_admission);
                 (ServerResource::Processes, Ok(()))
             }
             .boxed(),
@@ -1052,19 +1126,6 @@ impl Resources {
             }
             .boxed(),
         );
-        let close_admission = self
-            .worker
-            .map(|worker| {
-                worker.send(WorkerCommand::Close).map_err(|_| {
-                    ServerError(
-                        worker
-                            .snapshot()
-                            .finished
-                            .unwrap_or_else(|| "worker close admission failed".into()),
-                    )
-                })
-            })
-            .unwrap_or(Ok(()));
         for (resource, task) in [
             (ServerResource::Worker, self.connection),
             (ServerResource::Load, self.load),
@@ -1073,7 +1134,7 @@ impl Resources {
             (ServerResource::Metrics, self.metrics),
         ] {
             let admission =
-                if resource == ServerResource::Worker { close_admission.clone() } else { Ok(()) };
+                if resource == ServerResource::Worker { connection_closes.take() } else { None };
             if resource == ServerResource::Load
                 && let Some(task) = &task
             {
@@ -1081,6 +1142,10 @@ impl Resources {
             }
             closing.push(
                 async move {
+                    let admission = match admission {
+                        Some(closes) => closes.await.unwrap_or(Ok(())),
+                        None => Ok(()),
+                    };
                     let result = match task {
                         Some(task) => match task.await {
                             Ok(result) => result,
@@ -1096,6 +1161,16 @@ impl Resources {
         }
         closing
     }
+}
+
+/// Asks the worker connection to close. When the worker already stopped, returns the reason that
+/// it stopped.
+fn close_worker(worker: &WorkerClient) -> Result<(), ServerError> {
+    worker.send(WorkerCommand::Close).map_err(|_| {
+        ServerError(
+            worker.snapshot().finished.unwrap_or_else(|| "worker close admission failed".into()),
+        )
+    })
 }
 
 #[cfg(test)]

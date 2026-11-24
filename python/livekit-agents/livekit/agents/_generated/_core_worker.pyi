@@ -222,6 +222,13 @@ class JobRun:
         """
     async def close_tasks(self) -> None:
         """Cancels the API calls still running and waits for them."""
+    async def create_job_token(self, claims: str) -> str:
+        """Returns a job token with `claims` for this job, in token mode. The worker asks the server to
+        sign it.
+
+        `claims` is JSON with the same fields as the payload of an access token. The job caches one
+        token per set of claims until half of its life has passed.
+        """
     def init_recording(self, options: Mapping[str, bool]) -> None:
         """The session's recording options: the job registers with the exporter's Cloud destination
         once, at the first call.

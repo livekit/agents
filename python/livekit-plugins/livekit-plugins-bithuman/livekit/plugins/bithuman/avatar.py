@@ -329,9 +329,9 @@ class AvatarSession(BaseAvatarSession):
             await self._start_local(ctx.room)
         elif self._is_expression_model and not self._is_default_api_url():
             # a self-hosted avatar worker takes the session as a form
-            await self._post(ctx, self._session_form(ctx))
+            await self._post(ctx, await self._session_form(ctx))
         else:
-            await self._post(ctx, self._session_json(ctx))
+            await self._post(ctx, await self._session_json(ctx))
 
     def audio_output(self, ctx: AvatarStart) -> DataStreamAudioOutput | QueueAudioOutput:
         if self._local_audio is not None:
@@ -373,25 +373,25 @@ class AvatarSession(BaseAvatarSession):
         )
         await self._avatar_runner.start()
 
-    def _session_token(self, ctx: AvatarStart) -> str:
+    async def _session_token(self, ctx: AvatarStart) -> str:
         attributes: dict[str, str] = {}
         if self._api_secret is not None:
             attributes["api_secret"] = self._api_secret
         if utils.is_given(self._avatar_id):
             attributes["agent_id"] = self._avatar_id
-        return ctx.livekit_token(attributes=attributes)
+        return await ctx.livekit_token(attributes=attributes)
 
     def _is_default_api_url(self) -> bool:
         return urlparse(self._api_url).hostname in ("auth.api.bithuman.ai", "api.bithuman.ai")
 
-    def _session_json(self, ctx: AvatarStart) -> dict[str, str]:
+    async def _session_json(self, ctx: AvatarStart) -> dict[str, str]:
         # `model` names the avatar model for this session explicitly. Without it the
         # server falls back to `mode`, which can only distinguish the two
         # first-generation engines. `mode` is still sent, unchanged, for servers that
         # predate `model`.
         json_data = {
             "livekit_url": ctx.livekit_url,
-            "livekit_token": self._session_token(ctx),
+            "livekit_token": await self._session_token(ctx),
             "room_name": ctx.room.name,
             "mode": "gpu" if self._avatar_image is not None or self._is_expression_model else "cpu",
         }
@@ -405,12 +405,12 @@ class AvatarSession(BaseAvatarSession):
             json_data["agent_id"] = self._avatar_id
         return json_data
 
-    def _session_form(self, ctx: AvatarStart) -> http.FormData:
+    async def _session_form(self, ctx: AvatarStart) -> http.FormData:
         """The session for a self-hosted avatar worker (gpu-avatar-worker, cpu-avatar-worker,
         Cerebrium deployments)."""
         form_data = http.FormData()
         form_data.add_field("livekit_url", ctx.livekit_url)
-        form_data.add_field("livekit_token", self._session_token(ctx))
+        form_data.add_field("livekit_token", await self._session_token(ctx))
         form_data.add_field("room_name", ctx.room.name)
         # without it a worker cannot tell `expression` from `expression-2`; workers that
         # predate the field ignore it

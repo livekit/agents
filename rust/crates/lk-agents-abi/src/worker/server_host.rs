@@ -110,13 +110,19 @@ pub trait ServerHost: Send + Sync {
 /// The server's jobs, as the dev channel reads and resumes them across a reload.
 #[crate::host(native(refused = "expected a native ServerRuntime"))]
 pub trait ServerJobs: Any + Send + Sync {
-    /// The jobs running now.
+    /// Returns the running jobs, plus the kept jobs that a reload is still restoring.
     fn running_jobs(&self) -> Vec<RunningJobInfo>;
-    /// Launch jobs kept from before a reload, once the job processes started.
+    /// Launches the kept jobs of a reload, after the job processes started.
+    ///
+    /// The jobs count as running from this call on. In token mode, each job first gets a new join
+    /// token from the server. When the server refuses, that job is not launched.
     fn reload_jobs(
         &self,
         jobs: Vec<RunningJobInfo>,
     ) -> crate::BoxFuture<'_, Result<(), WorkerError>>;
+    /// Stores a new worker token from the CLI's `Credentials` message. The next registration
+    /// uses it.
+    fn update_token(&self, token: String);
 }
 
 #[crate::host(class(name = "ServerRuntime", native = ServerJobs))]

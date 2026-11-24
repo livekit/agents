@@ -99,7 +99,7 @@ pub async fn export(
         send_profile && fits
     });
     let limit = deadline.saturating_duration_since(clock.now());
-    let uploaded = recording::upload(cloud, &upload, profile.as_deref(), clock);
+    let uploaded = recording::upload(cloud, key, &upload, profile.as_deref(), clock);
     let uploaded = lk_agents_abi::timeout(clock, limit, uploaded)
         .await
         .map_err(|_| UploadError("session recording upload deadline elapsed".into()))?;

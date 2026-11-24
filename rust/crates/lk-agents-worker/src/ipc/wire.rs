@@ -18,6 +18,30 @@ pub enum ToChild {
     /// Acked with `ShutdownAck`; the job then shuts down with `reason` (the process exits at once
     /// without one).
     Shutdown { reason: String },
+    /// The answer to a `CreateJobToken` request, in token mode.
+    JobToken { request_id: u64, answer: JobTokenAnswer },
+}
+
+/// A job token that the server signed, or the reason that there is none.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum JobTokenAnswer {
+    Issued {
+        token: Token,
+        /// Unix seconds.
+        expires_at: i64,
+    },
+    Refused(String),
+}
+
+/// A credential. Its `Debug` output never shows the value.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Token(pub String);
+
+impl std::fmt::Debug for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Token(<redacted>)")
+    }
 }
 
 /// A job process's messages to the worker.
@@ -41,6 +65,13 @@ pub enum ToParent {
     /// The job ended with `reason`; the process exits.
     Exiting {
         reason: String,
+    },
+    /// A job token request from the job, in token mode. `claims` is JSON with the same fields as
+    /// the payload of an access token. The worker passes it to the server in a
+    /// `CreateJobTokenRequest`.
+    CreateJobToken {
+        request_id: u64,
+        claims: String,
     },
 }
 

@@ -107,6 +107,10 @@ pub trait TransferHost: Send + Sync {
     /// its `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
     #[host(call, getter = "_job._server_env")]
     fn server_env(&self) -> Result<BTreeMap<String, String>, HostError>;
+    /// The id of the caller's job. In token mode, the transfer's LiveKit requests use this job's
+    /// tokens, and never another job's.
+    #[host(call, getter = "_job.job.id")]
+    fn job_id(&self) -> Result<String, HostError>;
 }
 
 /// A transfer plan and the runtime ownership of its current dial.

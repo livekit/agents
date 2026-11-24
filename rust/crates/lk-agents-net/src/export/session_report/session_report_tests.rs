@@ -72,6 +72,10 @@ async fn peer(
     (format!("http://{address}"), rx)
 }
 
+fn job() -> JobKey {
+    JobKey("AJ_recording".into())
+}
+
 fn cloud(url: &str) -> CloudEndpoint {
     CloudEndpoint { base_url: url.to_owned(), api_key: "key".into(), api_secret: "secret".into() }
 }
@@ -135,7 +139,7 @@ async fn the_upload_follows_the_ingest_contract() {
     std::fs::write(&path, &audio).unwrap();
     let (url, mut rx) = peer(vec![]).await;
     let upload = recording(Some(path.to_str().unwrap().to_owned()));
-    let sent = recording::upload(&cloud(&url), &upload, None, &*clock()).await;
+    let sent = recording::upload(&cloud(&url), &job(), &upload, None, &*clock()).await;
     std::fs::remove_file(path).unwrap();
     sent.unwrap();
     let request = rx.recv().await.unwrap();
@@ -175,7 +179,7 @@ async fn a_missing_audio_file_uploads_the_rest() {
     let upload = recording(Some("/nonexistent/recording.ogg".into()));
     let body = Multipart::new(&upload, None).await;
     assert!(!body.content_type().is_empty());
-    recording::upload(&cloud(&url), &upload, None, &*clock()).await.unwrap();
+    recording::upload(&cloud(&url), &job(), &upload, None, &*clock()).await.unwrap();
     let names: Vec<String> = parts(&rx.recv().await.unwrap())
         .into_iter()
         .map(|(h, _)| h.split("name=\"").nth(1).unwrap().split('"').next().unwrap().to_owned())
@@ -217,7 +221,7 @@ async fn transient_upload_failures_are_retried() {
         let clock = Arc::new(lk_agents_abi::VirtualClock::new());
         let sent = tokio::spawn({
             let clock = clock.clone();
-            async move { recording::upload(&cloud(&url), &recording(None), None, &*clock).await }
+            async move { recording::upload(&cloud(&url), &job(), &recording(None), None, &*clock).await }
         });
         while !sent.is_finished() {
             clock.advance(Duration::from_millis(500));
@@ -293,7 +297,7 @@ async fn a_connection_dropped_after_sending_fails_the_upload_without_a_retry() {
 }
 
 async fn send(url: &str) -> Result<(), PostError> {
-    recording::upload(&cloud(url), &recording(None), None, &*clock()).await
+    recording::upload(&cloud(url), &job(), &recording(None), None, &*clock()).await
 }
 
 fn job_exporter(url: &str) -> Exporter {
@@ -373,7 +377,7 @@ async fn a_profile_rides_as_its_own_part_before_the_audio() {
     let (url, mut rx) = peer(vec![]).await;
     let upload = recording(None);
     let profile = [0x1f_u8, 0x8b, 1, 2, 3];
-    recording::upload(&cloud(&url), &upload, Some(&profile), &*clock()).await.unwrap();
+    recording::upload(&cloud(&url), &job(), &upload, Some(&profile), &*clock()).await.unwrap();
     let parts = parts(&rx.recv().await.unwrap());
     let names: Vec<&str> = parts
         .iter()

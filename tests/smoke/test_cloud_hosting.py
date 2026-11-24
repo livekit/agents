@@ -321,8 +321,9 @@ async def test_sigterm_drains_the_call_then_exits(pod: Pod) -> None:
 )
 async def test_a_call_that_outlives_the_drain_is_ended_and_the_pod_exits(pod: Pod) -> None:
     """Catches: a shutdown that waits forever on a call that never ends (the pod sits in
-    Terminating until SIGKILL), or its job process left running. As in 1.x, the connection closes
-    before the job ends: LiveKit fails the job of a worker that left."""
+    Terminating until SIGKILL), or its job process left running. The worker connection closes
+    after the job ends, so the job's shutdown can still reach the server, as in 1.x's token
+    mode."""
     await pod.registered()
     seen = await pod.in_a_call()
 

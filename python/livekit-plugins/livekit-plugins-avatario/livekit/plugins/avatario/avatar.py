@@ -103,7 +103,7 @@ class AvatarSession(BaseAvatarSession):
             json={
                 "avatario_face_id": self._avatar_id,
                 "agent_id": ctx.agent_identity,
-                "livekit": {"url": ctx.livekit_url, "token": ctx.livekit_token()},
+                "livekit": {"url": ctx.livekit_url, "token": await ctx.livekit_token()},
                 **self._video_info,
             },
             conn_options=ctx.conn_options,

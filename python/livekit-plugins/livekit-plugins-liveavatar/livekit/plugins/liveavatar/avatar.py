@@ -186,7 +186,7 @@ class AvatarSession(ForwardingAvatarSession):
             "livekit_config": {
                 "livekit_room": ctx.room.name,
                 "livekit_url": ctx.livekit_url,
-                "livekit_client_token": ctx.livekit_token(),
+                "livekit_client_token": await ctx.livekit_token(),
             },
         }
         if is_given(self._video_quality):

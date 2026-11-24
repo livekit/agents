@@ -37,7 +37,7 @@ class _Avatar(AvatarSession):
         return "fake"
 
     async def create_session(self, ctx: AvatarStart) -> str:
-        self.tokens.append(ctx.livekit_token())
+        self.tokens.append(await ctx.livekit_token())
         await self.answering.wait()
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
@@ -153,3 +153,59 @@ async def test_a_receive_failure_closes_the_avatar() -> None:
     await avatar.start(VoiceSession(vad=None), AgentRoom())
     avatar.hung_up.set()
     await asyncio.wait_for(avatar.closed.wait(), 2)
+
+
+class _TokenModeJob:
+    """A fake token mode job. It records the claims of each participant token it is asked
+    for."""
+
+    def __init__(self) -> None:
+        self.asked: list[dict[str, object]] = []
+
+    async def create_participant_token(self, **claims: object) -> str:
+        self.asked.append(claims)
+        return f"server-token-{len(self.asked)}"
+
+
+def _start(job: _TokenModeJob, *, key: str = "", secret: str = "") -> AvatarStart:
+    from types import SimpleNamespace
+
+    return AvatarStart(
+        room=SimpleNamespace(name="call"),  # type: ignore[arg-type]
+        agent_session=None,  # type: ignore[arg-type]
+        agent_identity="agent-1",
+        livekit_url="wss://x",
+        conn_options=RETRY_ONCE,
+        avatar_identity="fake-avatar",
+        avatar_name="Avatar",
+        _api_key=key,
+        _api_secret=secret,
+        _job=job,  # type: ignore[arg-type]
+    )
+
+
+# Starts an avatar in a token mode job, and again with a plugin key and secret. Catches an avatar
+# token that is signed with no secret instead of created by the server, or a token that loses its
+# claims (publish on behalf of the agent, kind, room). Also catches a plugin key and secret that
+# do not sign the token locally.
+async def test_avatar_tokens_come_from_the_job_in_token_mode_and_a_key_signs_locally() -> None:
+    job = _TokenModeJob()
+    start = _start(job)
+    assert await start.livekit_token() == "server-token-1"
+    assert await start.participant_token(identity="listener") == "server-token-2"
+    avatar, listener = job.asked
+    assert (avatar["identity"], avatar["name"], avatar["kind"]) == (
+        "fake-avatar",
+        "Avatar",
+        "agent",
+    )
+    assert avatar["attributes"] == {"lk.publish_on_behalf": "agent-1"}
+    grants = avatar["grants"]
+    assert (grants.room_join, grants.room) == (True, "call")  # type: ignore[attr-defined]
+    assert (listener["identity"], listener["kind"]) == ("listener", None)
+
+    keyed = _start(job, key="plugin-key", secret="plugin-secret-plugin-secret-plugin")
+    token = await keyed.livekit_token()
+    claims = jwt.decode(token, "plugin-secret-plugin-secret-plugin", algorithms=["HS256"])
+    assert (claims["iss"], claims["sub"], claims["kind"]) == ("plugin-key", "fake-avatar", "agent")
+    assert len(job.asked) == 2, "a key and secret sign locally"

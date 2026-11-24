@@ -284,6 +284,9 @@ impl Worker {
             (s.region, s.protocol, cloud)
         });
         log::info!(target: lk_agents_abi::LOG_TARGET, worker_id = resp.worker_id.as_str(), deployment = self.cfg.deployment.as_str(), url = self.cfg.ws_url.as_str(), transport = self.transport.kind().as_str(), region = region.as_str(), protocol = protocol, agent_name = self.cfg.agent_name.as_str(); "registered worker");
+        // Publish the snapshot before the notification. Then a waiter that wakes on another
+        // thread already sees `registered == true`.
+        self.publish();
         self.notify(WorkerNotification::Registered(RegisteredInfo {
             worker_id: resp.worker_id,
             region,
@@ -322,8 +325,7 @@ impl Worker {
             // The server is draining; reconnecting is the transport's job, so nothing to decide.
             Some(M::GoAway(_)) => {}
             Some(M::Pong(_)) | None => {}
-            // This worker does not request replacement job tokens.
-            Some(M::CreateJobToken(_)) => {}
+            Some(M::CreateJobToken(response)) => self.on_job_token(response),
         }
     }
 
@@ -332,6 +334,9 @@ impl Worker {
         if std::mem::replace(&mut self.conn, ConnState::Disconnected) == ConnState::Registered {
             self.notify(WorkerNotification::Disconnected);
         }
+        self.job_tokens.fail_all(
+            "the connection to the LiveKit server was lost before it answered the job token request",
+        );
         self.timers.clear_deadline(WorkerTimer::StatusUpdate);
         // Decisions and assignments belong to the lost connection. Launches already handed to
         // the host must still complete and become active jobs.

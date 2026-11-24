@@ -63,6 +63,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "m
 name = "tls"
 path = "src/tls_tests.rs"
 
+[[test]]
+name = "warm_transfer_token_mode"
+path = "src/voice/workflows/warm_transfer_token_mode_tests.rs"
+
 # The sentence splitter's speed, kept with the other benchmarks: `make bench-sentences`.
 [[test]]
 name = "sentence_bench"

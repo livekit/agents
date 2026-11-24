@@ -327,12 +327,12 @@ impl Shared {
             (state.process.clone(), state.cloud.clone())
         };
         match batch {
-            Batch::Cloud { identity, recording, metadata, payload, .. } => {
+            Batch::Cloud { job, identity, recording, metadata, payload } => {
                 let Some(cloud) = cloud else { return Ok(()) };
                 let (signal, body) =
                     cloud_request(&process, &identity, &recording, &metadata, payload);
                 let path = format!("{}/otlp/v0", signal.path());
-                cloud.post(&path, |request| body.attach(request)).await
+                cloud.post(&job, &path, |request| body.attach(request)).await
             }
             Batch::App { config, payload } => export_app(&process, &config, payload).await,
         }

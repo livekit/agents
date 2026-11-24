@@ -197,8 +197,11 @@ impl CloudTransport {
     }
 
     async fn connect(&self) -> Result<(Arc<dyn WsSender>, Box<dyn WsReceiver>), ApiError> {
-        let token =
-            lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
+        let token = lk_agents_net::token::inference_bearer(
+            self.opts.cx.job(),
+            &self.opts.api_key,
+            &self.opts.api_secret,
+        )?;
         let headers = crate::headers::gateway_headers(&self.opts.cx, None, None, &token);
         let session_id = Some(crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
 
