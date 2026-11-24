@@ -1,0 +1,146 @@
+examples/voice_agents/basic_agent.py
+  h_a827ab16c3c189 88-94
+examples/voice_agents/otel_trace.py
+  h_a827ab16c3c189 116
+livekit-agents/livekit/agents/__init__.py
+  h_a827ab16c3c189 23-37,105,216
+livekit-agents/livekit/agents/_hosted_logs.py
+  h_a827ab16c3c189 1-446
+livekit-agents/livekit/agents/inference/interruption.py
+  h_a827ab16c3c189 52,1083-1088,1093
+livekit-agents/livekit/agents/inference/tts.py
+  h_a827ab16c3c189 116,119,123,126,542-546
+livekit-agents/livekit/agents/ipc/job_proc_executor.py
+  h_a827ab16c3c189 13,146-147
+livekit-agents/livekit/agents/ipc/job_proc_lazy_main.py
+  h_a827ab16c3c189 31,309-322,370,384,400,481,483-487,493,495-496
+livekit-agents/livekit/agents/job.py
+  h_a827ab16c3c189 40,214-216,305-306,410-416,933,935-936
+livekit-agents/livekit/agents/llm/__init__.py
+  h_a827ab16c3c189 96,133
+livekit-agents/livekit/agents/llm/_responses_engine.py
+  h_a827ab16c3c189 383-386,570,574,578,589-598
+livekit-agents/livekit/agents/llm/tool_context.py
+  h_a827ab16c3c189 38,63-73
+livekit-agents/livekit/agents/telemetry/traces.py
+  h_a827ab16c3c189 68,981
+livekit-agents/livekit/agents/tts/fallback_adapter.py
+  h_a827ab16c3c189 66
+livekit-agents/livekit/agents/voice/__init__.py
+  h_a827ab16c3c189 50,54
+livekit-agents/livekit/agents/voice/agent_activity.py
+  h_a827ab16c3c189 64,115,1235-1242,2097-2104,2113-2115,2121,2126,2128-2146,2991-2992,3214-3216
+livekit-agents/livekit/agents/voice/agent_session.py
+  h_a827ab16c3c189 98,1841-1870,1877-1878,1881-1886,1897-1898,1901,1904-1907,1916
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  h_a827ab16c3c189 54,72-78,92,1132,1210,1626,1938,2050-2051
+livekit-agents/livekit/agents/voice/events.py
+  h_a827ab16c3c189 29,581-589
+livekit-agents/livekit/agents/voice/turn.py
+  h_a827ab16c3c189 5,20-29
+livekit-agents/livekit/agents/worker.py
+  h_a827ab16c3c189 41,593-595
+livekit-agents/pyproject.toml
+  h_a827ab16c3c189 133
+livekit-plugins/livekit-plugins-baseten/livekit/plugins/baseten/stt.py
+  h_a827ab16c3c189 393-394
+livekit-plugins/livekit-plugins-gnani/README.md
+  h_a827ab16c3c189 117-187,195,200-219,286-302,313-323,332,341,343,349,351,359-366
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/models.py
+  h_a827ab16c3c189 3-7,12-23,35,37-40,43-45,50-56,58-188,203,205-217,221
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/request_id.py
+  h_a827ab16c3c189 1-26
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/stt.py
+  h_a827ab16c3c189 27-29,31,34,54-65,67,83-135,140,144,149-160,179-375,383-389,393-398,403-416,422-423,431-440,445-446,452-455,458,463-486,488-493,498,517-566,571,576,584,587-591,597-598,600,603-604,628-630,637-639,656,662-665,670-672,677-678,689-693,696-709,723,735-808,810-843,847-852,864-867,873,885-889,891,893-901,903-917,926-977,981-983,989,994-995,1005-1036,1038-1041,1043-1044,1046-1052,1054-1063,1070-1072,1079-1086,1088,1091-1094,1096-1097,1099-1101,1103-1112
+livekit-plugins/livekit-plugins-gnani/livekit/plugins/gnani/tts.py
+  h_a827ab16c3c189 34,47-48,53-60,66-67,70,76,95-138,142,145,163-173,184,187,200-205,226,229,238,274,279-287,289-298,301-302,329,331-332,337,340-341,346-394,629,633-634,636,733,735-736,738
+livekit-plugins/livekit-plugins-neuphonic/livekit/plugins/neuphonic/tts.py
+  h_a827ab16c3c189 402,404-409,412,420-423,426,428-436,473
+livekit-plugins/livekit-plugins-phonic/README.md
+  h_a827ab16c3c189 132
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/realtime/realtime_model.py
+  h_a827ab16c3c189 268,337-339,342,347,349,909-911,1062-1063,1186-1190,1204,1385-1386,1389-1391,1488-1490
+livekit-plugins/livekit-plugins-phonic/pyproject.toml
+  h_a827ab16c3c189 28
+livekit-plugins/livekit-plugins-phonic/tests/test_config_options.py
+  h_a827ab16c3c189 1-2,4,38-90
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/llm/client.py
+  h_a827ab16c3c189 20,73-79,106-110,164-168,210,212-214,330-331,377-385
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt.py
+  h_a827ab16c3c189 56-60,936-954,1015-1020,1029,1215-1221,1242-1247,1313-1314,1322-1323,1325,1329,1367-1465,1474,1483-1499,1501-1503,1513,1525,1529-1530,1708-1735,1739,1748-1749,1771,1776,1830-1834,1839-1842
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/stt_streaming.py
+  h_a827ab16c3c189 451-454,803-805
+livekit-plugins/livekit-plugins-sarvam/tests/test_speech_timing.py
+  h_a827ab16c3c189 39-45
+livekit-plugins/livekit-plugins-silma/README.md
+  h_a827ab16c3c189 1-117
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/__init__.py
+  h_a827ab16c3c189 1-65
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/_utils.py
+  h_a827ab16c3c189 1-325
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/log.py
+  h_a827ab16c3c189 1-3
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/models.py
+  h_a827ab16c3c189 1-86
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/tts.py
+  h_a827ab16c3c189 1-674
+livekit-plugins/livekit-plugins-silma/livekit/plugins/silma/version.py
+  h_a827ab16c3c189 1-15
+livekit-plugins/livekit-plugins-silma/pyproject.toml
+  h_a827ab16c3c189 1-52
+livekit-plugins/livekit-plugins-speechmatics/README.md
+  h_a827ab16c3c189 28-31
+livekit-plugins/livekit-plugins-tavus/livekit/plugins/tavus/api.py
+  h_a827ab16c3c189 25-26,93,98,103,106-107
+livekit-plugins/livekit-plugins-tavus/tests/test_tavus.py
+  h_a827ab16c3c189 8,122,129,137,142
+livekit-plugins/livekit-plugins-upliftai/livekit/plugins/upliftai/tts.py
+  h_a827ab16c3c189 173-176
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  h_a827ab16c3c189 135-138
+pyproject.toml
+  h_a827ab16c3c189 75
+tests/test_agent_session.py
+  h_a827ab16c3c189 22,24,46,1067-1099
+tests/test_hosted_logs.py
+  h_a827ab16c3c189 1-712
+tests/test_plugin_baseten_stt.py
+  h_a827ab16c3c189 20,96,105-106,135-142
+tests/test_plugin_gnani_stt.py
+  h_a827ab16c3c189 5-9,12,14-17,63,66,68,71,76-86,89,92-100,102-106,109,112-115,118-122,125-126,129-132,135-138,141-148,150,152,154-156,158-162,165-180,182-184,186-187,189-194,197-199,202,205,208-210,212-215,218-220,222-224,227-230,233-238,240-628,630-667,669-671,674-677,679-717,719-836,838-881,883-897,899-911,913-921,924-954,957-961,963-966,968,971-980,983-996,998-1000,1002-1003,1006-1052,1054-1056,1058,1061-1068,1070-1071,1074-1079,1081-1082,1085-1093,1095-1096,1099-1106,1108-1110,1113-1116,1118-1151,1155,1157-1170,1173-1339,1341-1342,1345-1348,1350-1427
+tests/test_plugin_gnani_tts.py
+  h_a827ab16c3c189 5-9,11,13-15,20-29,39,42,44,47,52-61,64,67-76,78-83,86,89-92,95-96,101-102,105,108-113,115-116,120-121,123-127,129-140,143-150,152,154-158,161-163,166-167,170-171,174,177-179,182-184,187-189,192,195-200,203-211,214-215,218-219,222-223,226-227,230-235,238,241-243,246,249-252,254-255,258-260,262-266,268-273,276-277,280-282,285-288,290,292,295,298-302,305-307,310-317,320,323-333,336,339-345,348-350,352-353,356-363,366-370,373-625,627-639,642-645,647-648,650-651,654-655,657-658,661-665,667-668,671-685,688-690,693-698,701-704,706,708-711,714-715,717,719-721,724-738,740,742-745,748-751,753,755-757,760-762,764,766-769
+tests/test_plugin_neuphonic_tts.py
+  h_a827ab16c3c189 156-229
+tests/test_plugin_openai_responses.py
+  h_a827ab16c3c189 12,492-528,779-850,1097-1182
+tests/test_plugin_sarvam_llm.py
+  h_a827ab16c3c189 104-163
+tests/test_plugin_sarvam_stt.py
+  h_a827ab16c3c189 8,35-41,403-1033
+tests/test_plugin_silma_tts.py
+  h_a827ab16c3c189 1-1131
+tests/test_plugin_upliftai_tts.py
+  h_a827ab16c3c189 1-9
+tests/test_plugin_xai_stt.py
+  h_a827ab16c3c189 212-217
+tests/test_realtime_metrics.py
+  h_a827ab16c3c189 323,325,333,340,347-362
+tests/test_recording.py
+  h_a827ab16c3c189 1864-1877
+tests/test_user_turn.py
+  h_a827ab16c3c189 19-20,35,115-249
+uv.lock
+  h_a827ab16c3c189 97,2356-2358,2499,2543,3653,3786-3799,5114,5123,5125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4599b9c6d3b57bdfc5d7a77f1af16c2148b0ff6",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
