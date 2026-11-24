@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import av
 import numpy as np
 
 from livekit import rtc
@@ -20,6 +19,8 @@ from ...log import logger
 from .. import io
 
 if TYPE_CHECKING:
+    import av
+
     from ..agent_session import AgentSession
 
 # Both channels sit on one absolute timeline: the user's audio where it arrived, the agent's
@@ -310,6 +311,9 @@ class RecorderIO:
             self._put(_Flush(until=settled))
 
     def _encode_thread(self) -> None:
+        # PyAV costs ~60 ms to import; only a session that records needs it.
+        import av
+
         assert self._output_path is not None and self._t0 is not None
         tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
         cursor = 0
