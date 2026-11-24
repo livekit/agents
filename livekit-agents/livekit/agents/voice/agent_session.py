@@ -95,6 +95,7 @@ from .run_result import RunOutputOptions, RunResult, _RunSuspension
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options
 from .turn import (
+    CommitUserTurnResult,
     EndpointingOptions,
     InterruptionOptions,
     PreemptiveGenerationOptions,
@@ -1837,17 +1838,52 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._activity.clear_user_turn()
 
+    @overload
     def commit_user_turn(
         self,
         *,
         transcript_timeout: float = 2.0,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
-    ) -> asyncio.Future[str]:
+        return_handle: Literal[False] = False,
+    ) -> asyncio.Future[str]: ...
+
+    @overload
+    def commit_user_turn(
+        self,
+        *,
+        transcript_timeout: float = 2.0,
+        stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
+        return_handle: Literal[True],
+    ) -> asyncio.Future[CommitUserTurnResult]: ...
+
+    @overload
+    def commit_user_turn(
+        self,
+        *,
+        transcript_timeout: float = 2.0,
+        stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
+        return_handle: bool,
+    ) -> asyncio.Future[str] | asyncio.Future[CommitUserTurnResult]: ...
+
+    def commit_user_turn(
+        self,
+        *,
+        transcript_timeout: float = 2.0,
+        stt_flush_duration: float = 2.0,
+        skip_reply: bool = False,
+        return_handle: bool = False,
+    ) -> asyncio.Future[str] | asyncio.Future[CommitUserTurnResult]:
         """Commit the user turn and generate a reply.
 
-        Returns a future that resolves with the user's audio transcript once STT
-        is complete and end-of-turn detection has been triggered.
+        By default, the future resolves with the user's audio transcript once STT
+        is complete and end-of-turn detection has been triggered. With ``return_handle=True``,
+        it waits for turn processing and returns the transcript and the scheduled reply handle.
+        The handle is ``None`` if no reply was scheduled. If ``skip_reply=True`` and the
+        turn is accepted into local chat history, the transcript is added before the result
+        resolves. Await the handle separately for playout.
 
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
@@ -1858,12 +1894,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 detached and STT does not support manual flushing. STT with manual flush
                 support receives a flush request instead. Default ``2.0`` s.
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
+            return_handle (bool, optional): Whether to return a ``CommitUserTurnResult``.
+                Defaults to ``False``.
 
         Returns:
-            asyncio.Future[str]: A future that resolves with the audio transcript.
+            A future that resolves with the audio transcript or a ``CommitUserTurnResult``.
 
         Raises:
-            RuntimeError: If the AgentSession isn't running.
+            RuntimeError: If the AgentSession isn't running. With a realtime model and
+                ``skip_reply=False``, also if the reply can't be scheduled, for example
+                while the agent is draining. The audio buffer is already committed and
+                the transcript isn't flushed when this happens.
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
@@ -1872,6 +1913,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
             skip_reply=skip_reply,
+            return_handle=return_handle,
         )
 
     def update_agent(self, agent: Agent) -> None:

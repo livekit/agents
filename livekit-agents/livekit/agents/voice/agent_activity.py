@@ -61,6 +61,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _PreflightStaleInfo,
     _STTPipeline,
+    _TurnCompletion,
 )
 from .endpointing import create_endpointing
 from .events import (
@@ -111,6 +112,7 @@ from .tool_executor import (
     _ToolExecutor,
 )
 from .turn import (
+    CommitUserTurnResult,
     EndpointingOptions,
     PreemptiveGenerationOptions,
     TurnDetectionMode,
@@ -1229,9 +1231,15 @@ class AgentActivity(RecognitionHooks):
             if isinstance(ts, AsyncToolset):
                 ts._attach_activity(activity=self, session=self._session)
 
-        @utils.log_exceptions(logger=logger)
         async def _do_setup(toolset: llm.Toolset) -> None:
-            await toolset.setup()
+            try:
+                await toolset.setup()
+            except Exception as e:
+                logger.exception("failed to set up toolset", extra={"toolset_id": toolset.id})
+                error = llm.ToolsetError(
+                    timestamp=time.time(), label=toolset.id, error=e, recoverable=True
+                )
+                self._session.emit("error", ErrorEvent(error=error, source=toolset))
 
         await asyncio.gather(
             *(_do_setup(ts) for ts in all_toolsets),
@@ -2086,8 +2094,14 @@ class AgentActivity(RecognitionHooks):
                 self._session._unanswered_user_metrics = None
 
     def commit_user_turn(
-        self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
-    ) -> asyncio.Future[str]:
+        self,
+        *,
+        transcript_timeout: float,
+        stt_flush_duration: float,
+        skip_reply: bool = False,
+        return_handle: bool = False,
+    ) -> asyncio.Future[str] | asyncio.Future[CommitUserTurnResult]:
+        completion = _TurnCompletion() if return_handle else None
         # Turn hooks gate realtime replies after EOT.
         if self._rt_session is not None and (self._session._turn_hooks is None or skip_reply):
             # commit audio buffer and conditionally trigger response generation
@@ -2096,18 +2110,40 @@ class AgentActivity(RecognitionHooks):
                 self._realtime_user_input_answered_at = time.time()
                 self._session._unanswered_user_metrics = None
             else:
-                self._session.generate_reply(input_modality="audio")
+                handle = self._session.generate_reply(input_modality="audio")
+                if completion is not None:
+                    completion.speech_handle = handle
             # `skip_reply` prevents duplicate reply from _on_user_turn_completed
             # but keeps flushing STT transcript into the chat context
             skip_reply = True
 
         assert self._audio_recognition is not None
-        return self._audio_recognition._commit_user_turn(
+        transcript_fut = self._audio_recognition._commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
             skip_reply=skip_reply,
+            completion=completion,
         )
+        if completion is None:
+            return transcript_fut
+
+        async def _result(completion: _TurnCompletion) -> CommitUserTurnResult:
+            transcript = await transcript_fut
+            # Endpointing hands this specific turn to the activity. Wait for each task
+            # without cancelling the turn if the caller cancels their wait.
+            if completion.end_of_turn_task is not None:
+                await asyncio.shield(
+                    asyncio.gather(completion.end_of_turn_task, return_exceptions=True)
+                )
+            if completion.user_turn_completed_task is not None:
+                await asyncio.shield(
+                    asyncio.gather(completion.user_turn_completed_task, return_exceptions=True)
+                )
+            handle = completion.speech_handle
+            return CommitUserTurnResult(transcript, handle if handle and handle.scheduled else None)
+
+        return asyncio.create_task(_result(completion))
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
         # when force=True, we still allow to schedule a new speech even if
@@ -2952,6 +2988,8 @@ class AgentActivity(RecognitionHooks):
             self._user_turn_completed_atask.add_done_callback(
                 lambda _: turn_hooks.on_user_turn_completed()
             )
+        if info.completion is not None:
+            info.completion.user_turn_completed_task = self._user_turn_completed_atask
         return True
 
     @utils.log_exceptions(logger=logger)
@@ -3172,6 +3210,9 @@ class AgentActivity(RecognitionHooks):
             )
             # the invalidated preemptive attempt answered this same turn: one agent_turn
             _continue_discarded_turn(discarded_preemptive, speech_handle)
+
+        if info.completion is not None:
+            info.completion.speech_handle = speech_handle
 
         if self._user_turn_completed_atask != asyncio.current_task():
             # If a new user turn has already started, interrupt this one since it's now outdated

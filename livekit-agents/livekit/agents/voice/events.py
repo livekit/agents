@@ -26,6 +26,7 @@ from ..llm import (
     RealtimeModel,
     RealtimeModelError,
     ToolChoice,
+    ToolsetError,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -577,7 +578,15 @@ class UserTurnExceededEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
+    error: (
+        LLMError
+        | STTError
+        | TTSError
+        | RealtimeModelError
+        | InterruptionDetectionError
+        | ToolsetError
+        | Any
+    )
     source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
 

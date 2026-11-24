@@ -51,6 +51,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
+    from .speech_handle import SpeechHandle
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
 _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
@@ -69,6 +70,13 @@ class _EndOfTurnMetrics:
 
 
 @dataclass
+class _TurnCompletion:
+    end_of_turn_task: asyncio.Task[None] | None = None
+    user_turn_completed_task: asyncio.Task[None] | None = None
+    speech_handle: SpeechHandle | None = None
+
+
+@dataclass
 class _EndOfTurnInfo:
     skip_reply: bool
     """If True, a reply was already triggered and should be skipped after end of turn detection."""
@@ -81,6 +89,7 @@ class _EndOfTurnInfo:
     """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
     ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
     user_turn_span_adopted: bool = False
+    completion: _TurnCompletion | None = None
 
 
 def _compute_end_of_turn_metrics(
@@ -1120,6 +1129,7 @@ class AudioRecognition:
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
+        completion: _TurnCompletion | None = None,
     ) -> asyncio.Future[str]:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
@@ -1197,6 +1207,7 @@ class AudioRecognition:
                 chat_ctx,
                 skip_reply=skip_reply,
                 trigger="manual",
+                completion=completion,
             )
             self._user_turn_committed = self._turn_detection_mode != "manual" or bool(transcript)
             if not fut.done():
@@ -1612,6 +1623,7 @@ class AudioRecognition:
         *,
         trigger: Literal["vad", "stt", "manual"],
         skip_reply: bool = False,
+        completion: _TurnCompletion | None = None,
     ) -> None:
         if self._turn_detection_mode == "manual" and trigger != "manual":
             return
@@ -1923,6 +1935,7 @@ class AudioRecognition:
                     else self._turn_backchannel_over_agent
                 ),
                 user_turn_span=user_turn_span,
+                completion=completion,
             )
             committed = self._hooks.on_end_of_turn(end_of_turn)
             manual_span_adopted = end_of_turn.user_turn_span_adopted
@@ -2034,6 +2047,8 @@ class AudioRecognition:
                 self._user_turn_start,
             )
         )
+        if completion is not None:
+            completion.end_of_turn_task = self._end_of_turn_task
         if manual_turn_snapshot is not None:
 
             def _on_manual_turn_done(task: asyncio.Task[None]) -> None:

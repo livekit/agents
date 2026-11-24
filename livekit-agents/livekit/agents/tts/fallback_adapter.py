@@ -63,7 +63,7 @@ class AvailabilityChangedEvent:
 class FallbackAdapter(
     TTS[Literal["tts_availability_changed", "fallback_activated"]],
 ):
-    """Agent Fallback Adapter for TTS. Manages multiple STT instances with automatic fallback
+    """Agent Fallback Adapter for TTS. Manages multiple TTS instances with automatic fallback
     when the primary provider fails.
     """
 

@@ -20,7 +20,21 @@ documentation, and examples.
 
 import typing
 
-from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
+from . import (
+    # Import this at the top, so hosted logs handoff as soon as possible
+    _hosted_logs as _hosted_logs,
+    cli,
+    inference,
+    ipc,
+    llm,
+    metrics,
+    stt,
+    tokenize,
+    tts,
+    utils,
+    vad,
+    voice,
+)
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -88,6 +102,7 @@ from .voice import (
     AudioRecognition,
     CloseEvent,
     CloseReason,
+    CommitUserTurnResult,
     ConversationItemAddedEvent,
     ErrorEvent,
     ExpressiveOptions,
@@ -198,6 +213,7 @@ __all__ = [
     "CloseReason",
     "ErrorEvent",
     "CloseEvent",
+    "CommitUserTurnResult",
     "ConversationItemAddedEvent",
     "AgentStateChangedEvent",
     "AgentFalseInterruptionEvent",
