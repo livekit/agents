@@ -26,8 +26,14 @@ BENCH=$(dirname "$HERE")
 OUT="$BENCH/results/tau2/$RUN"
 mkdir -p "$OUT"
 
-# caller voice IDs (from setup_voices), kept out of git
-[ -f "$BENCH/.env.tau2.local" ] && set -a && . "$BENCH/.env.tau2.local" && set +a
+# caller voice IDs (from setup_voices), kept out of git; a variable already set wins, so one
+# run can swap a persona's voice: TAU2_VOICE_ID_EN_MAMADOU_DIALLO=<id> tau2/run.sh ...
+if [ -f "$BENCH/.env.tau2.local" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in '' | \#*) continue ;; esac
+    [ -z "${!key:-}" ] && export "$key=$value"
+  done <"$BENCH/.env.tau2.local"
+fi
 export ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-${ELEVEN_API_KEY:-}}
 export LK_BENCH_LOG_DIR="$OUT/agent_logs"
 
