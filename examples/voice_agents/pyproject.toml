@@ -4,6 +4,7 @@ version = "0"
 requires-python = ">=3.10"
 dependencies = [
     "livekit-agents[openai,elevenlabs,deepgram,silero,turn-detector,mcp]>=1.6",
+    "livekit-plugins-ai-coustics~=0.3",
     "python-dotenv>=1.0",
     "duckduckgo-search>=8.0",
 ]

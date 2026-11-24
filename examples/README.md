@@ -12,13 +12,13 @@ Most examples use **LiveKit Inference** by default for STT, LLM, and TTS models.
 from livekit.agents import inference
 
 session = AgentSession(
-    stt=inference.STT("deepgram/nova-3"),
+    stt=inference.STT("assemblyai/assemblyai-stt-3-7-realtime-agent"),
     llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
-    tts=inference.TTS("cartesia/sonic-3"),
+    tts=inference.TTS("fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"),
 )
 ```
 
-**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.DuplexModel(model="openai/gpt-live-1")`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic.
+**Note:** For a speech-to-speech model, use OpenAI GPT-Live through LiveKit Inference with `llm="openai/gpt-live-1"` (or `inference.DuplexModel(model="openai/gpt-live-1")`). xAI Grok Voice is available through `inference.RealtimeModel`; use provider plugin classes for direct credentials or for other realtime models such as Amazon Nova Sonic.
 
 ## 📁 Example Categories
 
