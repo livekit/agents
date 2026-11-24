@@ -1,13 +1,24 @@
 """Yoob plugin for LiveKit Agents
 
-Expressive speech (Overtone) and live transcription (Undertone) from https://yoob.com.
+Expressive speech (Overtone), live transcription (Undertone) and lip-synced characters
+(avatars) from https://yoob.com.
 """
 
+from .avatar import AvatarSession, YoobAvatarException
 from .stt import STT, SpeechStream
 from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
-__all__ = ["TTS", "ChunkedStream", "SynthesizeStream", "STT", "SpeechStream", "__version__"]
+__all__ = [
+    "TTS",
+    "ChunkedStream",
+    "SynthesizeStream",
+    "STT",
+    "SpeechStream",
+    "AvatarSession",
+    "YoobAvatarException",
+    "__version__",
+]
 
 from livekit.agents import Plugin
 

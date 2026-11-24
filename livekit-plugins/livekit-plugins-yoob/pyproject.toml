@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-yoob"
 dynamic = ["version"]
-description = "Yoob speech (TTS) and transcription (STT) plugin for LiveKit Agents"
+description = "Yoob speech (TTS), transcription (STT) and avatar plugin for LiveKit Agents"
 readme = "README.md"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["voice", "ai", "realtime", "audio", "livekit", "yoob", "tts", "stt"]
+keywords = ["voice", "ai", "realtime", "audio", "livekit", "yoob", "tts", "stt", "avatar"]
 classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Multimedia :: Sound/Audio",
