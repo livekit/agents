@@ -21,6 +21,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
     APITimeoutError,
     stt,
 )
@@ -52,14 +53,20 @@ async def _serve(routes: dict[str, Any]) -> tuple[web.AppRunner, str]:
     return runner, f"http://127.0.0.1:{port}/v1"
 
 
-async def _stt_stream(ws_handler, *, frames: list[rtc.AudioFrame], timeout: float = 5.0):
+async def _stt_stream(
+    ws_handler, *, frames: list[rtc.AudioFrame], timeout: float = 5.0, max_retry: int = 0
+):
     from livekit.plugins.yoob import STT
 
     runner, base = await _serve({"/v1/audio/transcriptions/stream": ws_handler})
     try:
         async with aiohttp.ClientSession() as session:
             s = STT(api_key="k", base_url=base, http_session=session)
-            stream = s.stream(conn_options=APIConnectOptions(max_retry=0, timeout=timeout))
+            stream = s.stream(
+                conn_options=APIConnectOptions(
+                    max_retry=max_retry, timeout=timeout, retry_interval=0.01
+                )
+            )
             for f in frames:
                 stream.push_frame(f)
             stream.end_input()
@@ -212,6 +219,30 @@ async def test_a_stream_that_stalls_after_stop_times_out_for_good():
     with pytest.raises(APITimeoutError) as exc:
         await asyncio.wait_for(_stt_stream(ws_stt, frames=[_frame()], timeout=0.5), 10)
     assert exc.value.retryable is False
+
+
+async def test_busy_after_stop_is_final_not_a_silent_retry():
+    # Yoob answers "stop" with "busy". The audio is spent on that connection, so a retry would reconnect
+    # with nothing to send and could finish with neither the transcript nor an error: the caller gets the
+    # error, once, and no second connection is made.
+    connections = 0
+
+    async def ws_stt(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connections
+        connections += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_str(json.dumps(_READY))
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data).get("type") == "stop":
+                await ws.send_str(json.dumps({"type": "error", "code": "busy"}))
+        return ws
+
+    with pytest.raises(APIStatusError) as exc:
+        await asyncio.wait_for(_stt_stream(ws_stt, frames=[_frame()], max_retry=2), 10)
+    assert exc.value.status_code == 429
+    assert exc.value.retryable is False
+    assert connections == 1
 
 
 def _live_stt_stream(*, answer_pings: bool) -> tuple[AsyncMock, stt.SpeechStream]:

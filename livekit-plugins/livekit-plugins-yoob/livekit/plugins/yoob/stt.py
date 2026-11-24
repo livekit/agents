@@ -446,13 +446,13 @@ class SpeechStream(stt.SpeechStream):
                         raise APITimeoutError(
                             "Yoob transcription sent no last results in time", retryable=False
                         ) from None
-                    except APIConnectionError as e:
-                        if e.retryable:
-                            raise APIConnectionError(
-                                "Yoob transcription connection lost before the last results",
-                                retryable=False,
-                            ) from e
-                        raise
+            except APIError as e:
+                # Once input has ended, the audio this connection consumed cannot be replayed: a retry would
+                # finish without its results, and without an error. A retryable failure (a lost connection, Yoob
+                # busy) is final then. While input is still open, a retry carries on with the audio still to come.
+                if e.retryable and self._input_ch.closed:
+                    raise _final(e) from e
+                raise
             finally:
                 await utils.aio.gracefully_cancel(sender, receiver)
         except asyncio.TimeoutError:
@@ -472,6 +472,25 @@ class SpeechStream(stt.SpeechStream):
             end_time=float(ev.get("end") or 0.0) + self.start_time_offset,
             confidence=1.0,
         )
+
+
+def _final(e: APIError) -> APIError:
+    """`e`, not retryable: the stream's audio was spent on the connection that failed."""
+    if isinstance(e, APIStatusError):
+        return APIStatusError(
+            e.message,
+            status_code=e.status_code,
+            request_id=e.request_id,
+            body=e.body,
+            retryable=False,
+        )
+    if isinstance(e, APITimeoutError):
+        return APITimeoutError(e.message, retryable=False)
+    if isinstance(e, APIConnectionError):
+        return APIConnectionError(
+            "Yoob transcription connection lost before the last results", retryable=False
+        )
+    return APIError(e.message, body=e.body, retryable=False)
 
 
 def _socket_error(msg: dict[str, Any]) -> APIStatusError:
