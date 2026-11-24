@@ -1,0 +1,19 @@
+tests/test_amd.py
+  s_c9fa01ab24948b::t_3fd9075435763d 6928-6956
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "882f9694c51672b171908352f87273436b974308",
+  "prompts": {},
+  "sessions": {
+    "s_c9fa01ab24948b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16d4b070-3315-410b-8e32-1f2ab17907a1",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
