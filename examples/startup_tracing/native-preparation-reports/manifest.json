@@ -55,5 +55,11 @@
   "native_sha256": {
     "before": "72bd28d6e9e42f7092318bb8f52fe3bc0d41eccf0381ff9f4a475791764a0de7",
     "after": "6174e731f31ab4c888ea768aef34804eeaed8792860149eb620d6e37dc335569"
-  }
+  },
+  "validated_implementation_revisions": {
+    "agents": "50932a218",
+    "python_rtc": "816a63d",
+    "rust_ffi": "3b615c8f5fa3b26ef87db207452266661b82f81b"
+  },
+  "revision_note": "After sources were modified working trees during measurement; validated_implementation_revisions identify the committed implementation matching those snapshots."
 }
