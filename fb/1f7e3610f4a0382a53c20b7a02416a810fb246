@@ -1,0 +1,21 @@
+docs/internals/README.md
+  s_2ac1c22e7ebc04::t_d5ab83d72bd5af 43-45
+docs/proposals/amd.md
+  s_2ac1c22e7ebc04::t_886dc4ffd78339 1-381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb1f7e3610f4a0382a53c20b7a02416a810fb246",
+  "prompts": {},
+  "sessions": {
+    "s_2ac1c22e7ebc04": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_2ac1c22e7ebc04",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
