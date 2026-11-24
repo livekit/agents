@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_d4618634598061::t_ccc2831f245017 2081-2083
+tests/test_realtime_metrics.py
+  s_d4618634598061::t_f1f41c5e4bda11 347-362
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "71c62b22a124b997af6e38ef12841b95b9f9b029",
+  "prompts": {},
+  "sessions": {
+    "s_d4618634598061": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_d4618634598061",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
