@@ -11,6 +11,7 @@ import aiohttp
 import pytest
 
 from livekit.agents import APIConnectOptions, APIError, tts as agents_tts, utils
+from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.io import TimedString
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
@@ -815,7 +816,7 @@ def test_build_dialogue_synthesize_body_single_turn() -> None:
     ]
 
 
-def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:
+def test_build_dialogue_synthesize_body_drops_similarity_for_v3() -> None:
     tts = elevenlabs_tts.TTS(
         api_key="test-key",
         model="eleven_v3_conversational",
@@ -828,7 +829,7 @@ def test_build_dialogue_synthesize_body_keeps_only_supported_settings() -> None:
         tts._opts, "hello there"
     )
 
-    assert body["settings"] == {"stability": 0.5, "similarity": 0.75}
+    assert body["settings"] == {"stability": 0.5}
 
 
 def test_build_dialogue_context_init_packet_registers_single_voice() -> None:
@@ -855,7 +856,41 @@ def test_build_dialogue_context_init_packet_keeps_only_supported_voice_settings(
         tts._opts, context_id="ctx-1"
     )
 
-    assert packet["voice_settings"] == {"stability": 0.5, "similarity": 0.75}
+    assert packet["voice_settings"] == {"stability": 0.5}
+
+
+def test_dialogue_voice_settings_omits_unset_similarity() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(stability=0.5, similarity_boost=NOT_GIVEN),
+    )
+    body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there"
+    )
+    packet = elevenlabs_tts._build_dialogue_context_init_packet(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, context_id="ctx-1"
+    )
+
+    assert body["settings"] == {"stability": 0.5}
+    assert packet["voice_settings"] == {"stability": 0.5}
+
+
+def test_dialogue_voice_settings_all_unset_is_omitted() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_v4",
+        voice_id="voice-1",
+        voice_settings=elevenlabs_tts.VoiceSettings(
+            stability=NOT_GIVEN, similarity_boost=NOT_GIVEN
+        ),
+    )
+    body = elevenlabs_tts._build_dialogue_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there"
+    )
+
+    assert "settings" not in body
 
 
 def test_dialogue_model_warns_on_unsupported_voice_settings(

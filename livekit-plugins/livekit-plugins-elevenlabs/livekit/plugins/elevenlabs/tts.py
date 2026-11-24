@@ -46,7 +46,13 @@ from livekit.agents.voice.io import TimedString
 
 from ._utils import trace_id_from_headers
 from .log import logger
-from .models import TTSEncoding, TTSModels, is_dialogue_model, supports_clone_strength
+from .models import (
+    TTSEncoding,
+    TTSModels,
+    is_dialogue_model,
+    supports_clone_strength,
+    supports_dialogue_similarity,
+)
 
 # by default, use 22.05kHz sample rate at 32kbps
 # in our testing,  reduce TTFB by about ~110ms
@@ -739,11 +745,17 @@ def _dialogue_voice_settings_payload(opts: _TTSOptions) -> dict[str, float] | No
     if not is_given(opts.voice_settings):
         return None
     vs = opts.voice_settings
-    settings = {"stability": vs.stability, "similarity": vs.similarity_boost}
+    settings: dict[str, float] = {}
+    if is_given(vs.stability):
+        settings["stability"] = vs.stability
+    # eleven_v3 only supports stability; a similarity value carried over from a
+    # non-dialogue model would silence the voice without an error.
+    if is_given(vs.similarity_boost) and supports_dialogue_similarity(opts.model):
+        settings["similarity"] = vs.similarity_boost
     # clone_strength stays on the options, so a model switch back to eleven_v4 sends it again
     if is_given(vs.clone_strength) and supports_clone_strength(opts.model):
         settings["clone_strength"] = vs.clone_strength
-    return settings
+    return settings or None
 
 
 def _build_dialogue_context_init_packet(opts: _TTSOptions, *, context_id: str) -> dict[str, Any]:
