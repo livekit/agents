@@ -68,6 +68,7 @@ def _make_session(model: RealtimeModel) -> RealtimeSession:
     session._opts = model._opts
     session._instructions = "You are Ivy."
     session._response_created_futures = {}
+    session._tools = llm.ToolContext([])
     session._sent: list[Any] = []  # type: ignore[misc]
     return session
 
@@ -169,3 +170,70 @@ def test_response_done_reaches_the_callback() -> None:
         }
     )
     assert seen == [{"status": "completed", "poly_cited_topics": ["Hours"]}]
+
+
+# ------------------------------------------------------------- review fixes
+
+
+def test_tool_in_both_speech_options_is_rejected() -> None:
+    with pytest.raises(ValueError, match="look_up_order"):
+        RealtimeModel(
+            api_key=KEY,
+            tool_speech={"look_up_order": "required"},
+            spoken_arguments={"look_up_order": "hold_line"},
+        )
+
+
+def test_openai_api_version_does_not_switch_to_azure() -> None:
+    env = {"POLY_API_KEY": KEY, "OPENAI_API_VERSION": "2025-04-01-preview"}
+    with patch.dict("os.environ", env, clear=True):
+        model = RealtimeModel()
+    assert model._opts.is_azure is False
+    assert model._opts.api_version is None
+    event = _make_session(model)._create_session_update_event()
+    assert event["type"] == "session.update"
+    assert event["session"]["type"] == "realtime"
+
+
+def test_first_message_goes_in_the_first_update_only() -> None:
+    session = _make_session(
+        RealtimeModel(api_key=KEY, first_message="Hello.", response_language="es")
+    )
+    first = session._create_session_update_event()["session"]
+    again = session._create_session_update_event()["session"]  # as on a reconnect
+    assert first["poly_first_assistant_message"] == "Hello."
+    assert "poly_first_assistant_message" not in again
+    assert again["poly_response_language"] == "es"
+
+
+def test_session_update_never_carries_a_rejected_tool_choice() -> None:
+    session = _make_session(RealtimeModel(api_key=KEY))
+    session._opts.tool_choice = "none"
+    body = session._create_session_update_event()["session"]
+    assert body.get("tool_choice") in (None, "auto")
+
+
+@pytest.mark.usefixtures("capture_send")
+def test_tool_choice_none_hides_tools_until_auto() -> None:
+    @llm.function_tool
+    async def look_up_order(order_number: str) -> str:
+        """Look up an order.
+
+        Args:
+            order_number: The order number.
+        """
+        return "shipped"
+
+    session = _make_session(RealtimeModel(api_key=KEY))
+    session._tools = llm.ToolContext([look_up_order])
+
+    session.update_options(tool_choice="none")
+    session.update_options(tool_choice="none")  # no second hide
+    session.update_options(tool_choice="auto")
+    session.update_options(tool_choice="required")  # not accepted: ignored
+
+    sent = [e["session"] for e in session._sent]
+    assert [s["tools"] for s in sent][0] == []
+    assert [t["name"] for t in sent[1]["tools"]] == ["look_up_order"]
+    assert len(sent) == 2
+    assert all("tool_choice" not in s for s in sent)

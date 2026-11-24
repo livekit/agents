@@ -159,6 +159,12 @@ class RealtimeModel(_openai.RealtimeModel):
                 "Dialog-RSN-1 doesn't support interrupt_response=False: the server rejects it "
                 "and drops the rest of the session update."
             )
+        conflicting = sorted(set(tool_speech or {}) & set(spoken_arguments or {}))
+        if conflicting:
+            raise ValueError(
+                "A tool takes tool_speech or a spoken argument, not both: the server rejects "
+                f"poly_speech on a tool with a poly_spoken parameter ({', '.join(conflicting)})."
+            )
         resolved_base_url = (
             base_url if is_given(base_url) else os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL
         )
@@ -178,6 +184,11 @@ class RealtimeModel(_openai.RealtimeModel):
         if is_given(max_session_duration):
             init_kwargs["max_session_duration"] = max_session_duration
         super().__init__(**init_kwargs)
+
+        # The OpenAI base class switches to Azure mode (an `api-key` header, the old session
+        # format) when OPENAI_API_VERSION is set. PolyAI is never Azure.
+        self._opts.is_azure = False
+        self._opts.api_version = None
 
         # Dialog-RSN-1 takes tools and tool_choice on the session only, not per reply.
         self._capabilities.per_response_tool_choice = False
@@ -210,6 +221,11 @@ class RealtimeModel(_openai.RealtimeModel):
 class RealtimeSession(_openai.RealtimeSession):
     """A Dialog-RSN-1 session: PolyAI's extensions on the OpenAI Realtime session."""
 
+    # Class-level defaults: the base class sends the first session.update from inside its
+    # __init__, before this class's own __init__ body runs.
+    _polyai_first_message_sent: bool = False
+    _polyai_tools_hidden: bool = False
+
     def __init__(
         self, realtime_model: RealtimeModel, *, turn_detection_disabled: bool = False
     ) -> None:
@@ -230,8 +246,46 @@ class RealtimeSession(_openai.RealtimeSession):
             output = session.get("audio", {}).get("output")
             if isinstance(output, dict):
                 output.pop("voice", None)
-        session.update(self._polyai_model._poly_session)
+        if session.get("tool_choice") not in (None, "auto"):
+            # Only "auto" is accepted; anything else drops the whole update.
+            session.pop("tool_choice")
+        extensions = dict(self._polyai_model._poly_session)
+        if self._polyai_first_message_sent:
+            # The server says the first message on every update that carries it, so a
+            # reconnect (the connection is recycled every 20 minutes by default) must not
+            # greet the caller again.
+            extensions.pop("poly_first_assistant_message", None)
+        elif "poly_first_assistant_message" in extensions:
+            self._polyai_first_message_sent = True
+        session.update(extensions)
         return event
+
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        **kwargs: Any,
+    ) -> None:
+        # Dialog-RSN-1 takes tool_choice "auto" only, and rejects the whole session.update for
+        # anything else. LiveKit asks for "none" when an agent reaches its tool-call limit and
+        # wants a final spoken answer, so hide the tools for that reply instead, and put them
+        # back when the choice returns to "auto".
+        if is_given(tool_choice):
+            self._polyai_apply_tool_choice(tool_choice)
+        if kwargs:
+            super().update_options(**kwargs)
+
+    def _polyai_apply_tool_choice(self, tool_choice: llm.ToolChoice | None) -> None:
+        if tool_choice is None or tool_choice == "auto":
+            if self._polyai_tools_hidden:
+                self._polyai_tools_hidden = False
+                self.send_event(self._create_tools_update_event(self._tools.flatten()))
+        elif tool_choice == "none":
+            if not self._polyai_tools_hidden:
+                self._polyai_tools_hidden = True
+                self.send_event(self._create_tools_update_event([]))
+        else:
+            logger.warning("Dialog-RSN-1 takes tool_choice 'auto' only; ignoring %r", tool_choice)
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
         event = super()._create_tools_update_event(tools)
