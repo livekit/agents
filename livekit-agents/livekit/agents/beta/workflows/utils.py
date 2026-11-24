@@ -82,3 +82,18 @@ class WorkflowInstructions(Instructions):
             extra=self.extra,
             **format_kwargs,
         )
+
+
+# A lone symbol between spaced-out letters reads to TTS as punctuation, not as part of
+# the spelling (a "." is a sentence pause), so it is spelled as its spoken word.
+_SPOKEN_SYMBOLS = {
+    "-": "hyphen",
+    "'": "apostrophe",
+    "’": "apostrophe",
+    ".": "period",
+}
+
+
+def spell_out(text: str) -> str:
+    """Spell ``text`` character by character for a read-back, without its spaces."""
+    return " ".join(_SPOKEN_SYMBOLS.get(c, c) for c in text if c != " ")
