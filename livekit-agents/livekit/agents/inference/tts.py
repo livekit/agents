@@ -114,17 +114,17 @@ def _parse_model_string(model: str) -> tuple[str, str | None]:
 class FallbackModel(TypedDict):
     """Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
-    Extra fields are passed through to the provider.
+    Options in ``extra_kwargs`` are passed through to the provider.
 
     Example:
-        >>> FallbackModel(model="cartesia/sonic", voice="")
+        >>> FallbackModel(model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc")
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda")."""
+    """Model name (e.g. "cartesia/sonic-3", "inworld/inworld-tts-2", "rime/coda")."""
 
     voice: str
-    """Voice to use for the model."""
+    """Voice to use for the model. An empty string selects the model's default voice."""
 
     extra_kwargs: NotRequired[dict[str, Any]]
     """Extra configuration for the model."""
@@ -540,10 +540,11 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
-            fallback (FallbackModelType, optional): Fallback models - either a list of model names,
-                a list of FallbackModel instances.
-            disable_system_default_fallback (bool, optional): Disable system-configured fallback
-                models.
+            fallback (FallbackModelType | list[FallbackModelType], optional): Fallback models that
+                LiveKit Inference tries in order if the primary model fails. Pass a single entry
+                or a list. Each entry is a "provider/model[:voice]" string or a FallbackModel.
+            disable_system_default_fallback (bool, optional): Opt out of LiveKit Inference's
+                system-default fallback models. Models in ``fallback`` still apply.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE

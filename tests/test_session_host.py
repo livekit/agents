@@ -29,6 +29,7 @@ from livekit.agents.voice.events import (
     CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -500,6 +501,32 @@ class TestSessionHostEvents:
         assert len(transport.sent) == 1
         msg = transport.sent[0]
         assert msg.event.conversation_item_added.item.message.id == "msg-1"
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_function_tools_executed(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        call = FunctionCall(
+            id="item_a1/fnc_0", call_id="call_1", name="lookup", arguments='{"q": "x"}'
+        )
+        output = FunctionCallOutput(
+            id="item_b2", call_id="call_1", name="lookup", output="found", is_error=False
+        )
+        host._on_function_tools_executed(
+            FunctionToolsExecutedEvent(function_calls=[call], function_call_outputs=[output])
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 1
+        executed = transport.sent[0].event.function_tools_executed
+        # a consumer cites these items by id, so they must match the stored transcript's
+        assert executed.function_calls[0] == encode_chat_item(call).function_call
+        assert executed.function_call_outputs[0] == encode_chat_item(output).function_call_output
+        assert executed.function_calls[0].id == "item_a1/fnc_0"
+        assert executed.function_call_outputs[0].id == "item_b2"
 
         await host.aclose()
 

@@ -1994,3 +1994,17 @@ def test_telemetry_token_source_is_set_while_another_job_sets_its_own(
     traces._end_job_token_source("AJ_a")  # its source is read when the next job starts
     traces._set_job_token_source("AJ_b", lambda: "token-b")
     assert list(traces._job_token_sources) == ["AJ_a", "AJ_c", "AJ_b"]
+
+
+def test_setup_cloud_tracer_skips_the_log_handler_after_the_hand_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import _hosted_logs
+    from livekit.agents.telemetry import traces as traces_mod
+
+    monkeypatch.setattr(_hosted_logs, "_handed_off", True)
+    with _stub_cloud_tracer_deps():
+        _setup_cloud_tracer_for_job()
+        cloud = traces_mod._cloud
+        assert cloud._log_batch_processor is not None
+        assert cloud.log_handler is None or cloud.log_handler not in logging.getLogger().handlers

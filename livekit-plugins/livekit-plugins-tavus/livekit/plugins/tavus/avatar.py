@@ -129,6 +129,21 @@ class AvatarSession(BaseAvatarSession):
             ),
         )
 
+    async def aclose(self) -> None:
+        await super().aclose()
+
+        if self.conversation_id is not None:
+            conversation_id, self.conversation_id = self.conversation_id, None
+            # the replica keeps running until the conversation ends
+            try:
+                await self._api.end_conversation(conversation_id)
+            except Exception:
+                logger.warning(
+                    "failed to end the tavus conversation",
+                    extra={"conversation_id": conversation_id},
+                    exc_info=True,
+                )
+
     async def set_emotion(self, emotion: Emotion) -> None:
         """Set the avatar's facial emotion.
 
