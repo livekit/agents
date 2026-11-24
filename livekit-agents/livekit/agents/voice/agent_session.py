@@ -1846,7 +1846,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             A future that resolves with the audio transcript or a ``CommitUserTurnResult``.
 
         Raises:
-            RuntimeError: If the AgentSession isn't running.
+            RuntimeError: If the AgentSession isn't running. With a realtime model and
+                ``skip_reply=False``, also if the reply can't be scheduled, for example
+                while the agent is draining. The audio buffer is already committed and
+                the transcript isn't flushed when this happens.
         """
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
