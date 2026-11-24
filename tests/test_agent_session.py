@@ -19,7 +19,9 @@ from livekit.agents import (
     AgentStateChangedEvent,
     AgentTask,
     APIConnectionError,
+    CloseEvent,
     ConversationItemAddedEvent,
+    ErrorEvent,
     FlushSentinel,
     LanguageCode,
     MetricsCollectedEvent,
@@ -41,6 +43,7 @@ from livekit.agents.llm import (
     RawFunctionTool,
     ToolFlag,
     Toolset,
+    ToolsetError,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
@@ -1059,6 +1062,39 @@ async def test_on_enter_hides_ignore_on_enter_tools(with_task: bool) -> None:
     assert captured[0] == {"keep"}
     # a later (non-on_enter) turn sees every tool again
     assert captured[1] == {"keep", "end_call", "_bare_ignored"}
+
+
+class _UnreachableToolset(Toolset):
+    def __init__(self) -> None:
+        super().__init__(id="unreachable")
+
+    async def setup(self) -> _UnreachableToolset:
+        raise ConnectionError("server unreachable")
+
+
+async def test_toolset_setup_failure_emits_a_recoverable_error() -> None:
+    """A toolset that fails to set up is reported as an error event and does not close the session."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.5, "hello")
+    actions.add_llm("Hi, how can I help?")
+    actions.add_tts(1.0)
+    session = create_session(actions)
+    errors: list[ErrorEvent] = []
+    closes: list[CloseEvent] = []
+    session.on("error", errors.append)
+    session.on("close", closes.append)
+    toolset = _UnreachableToolset()
+
+    agent = Agent(instructions="you are helpful", tools=[toolset])
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    [event] = errors
+    assert isinstance(event.error, ToolsetError)
+    assert event.error.label == "unreachable"
+    assert event.error.recoverable
+    assert isinstance(event.error.error, ConnectionError)
+    assert event.source is toolset
+    assert [close.error for close in closes] == [None]
 
 
 async def test_on_enter_marker_does_not_follow_a_handoff_back() -> None:

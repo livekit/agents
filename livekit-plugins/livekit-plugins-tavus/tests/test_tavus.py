@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from livekit.agents.utils import http_context
-from livekit.plugins.tavus.api import DEFAULT_FACE_ID, DEFAULT_PAL_ID, TavusAPI
+from livekit.plugins.tavus.api import DEFAULT_PAL_ID, TavusAPI
 from livekit.plugins.tavus.avatar import AvatarSession
 
 pytestmark = pytest.mark.unit
@@ -119,14 +119,14 @@ async def test_pal_id_only_skips_pal_creation_and_omits_face():
     assert "face_id" not in payload
 
 
-async def test_defaults_to_stock_pal_and_face_when_neither_given():
+async def test_defaults_to_stock_pal_and_its_own_face_when_neither_given():
     api = _api()
     with patch.object(api, "_post", new=_mock_post()) as m:
         await api.create_conversation()
     assert "pals" not in [c.args[0] for c in m.call_args_list]  # no pal is created
     payload = m.call_args.args[1]
     assert payload["pal_id"] == DEFAULT_PAL_ID
-    assert payload["face_id"] == DEFAULT_FACE_ID
+    assert "face_id" not in payload  # the stock pal's own default face is used
 
 
 async def test_extra_payload_pal_keeps_its_own_face():
@@ -134,12 +134,12 @@ async def test_extra_payload_pal_keeps_its_own_face():
     with patch.object(api, "_post", new=_mock_post()) as m:
         await api.create_conversation(extra_payload={"pal_id": "custom-pal"})
     payload = m.call_args.args[1]
-    # extra_payload replaces the pal, so the stock face must not be attached to it
+    # extra_payload replaces the pal, and no face is attached to it
     assert payload["pal_id"] == "custom-pal"
     assert "face_id" not in payload
 
 
-async def test_env_face_wins_over_default_face(monkeypatch):
+async def test_env_face_overrides_stock_pal_face(monkeypatch):
     monkeypatch.setenv("TAVUS_FACE_ID", "envf")
     api = _api()
     with patch.object(api, "_post", new=_mock_post()) as m:

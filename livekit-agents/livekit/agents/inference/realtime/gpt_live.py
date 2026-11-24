@@ -12,6 +12,7 @@ from livekit.agents import llm
 from livekit.agents._exceptions import APIStatusError
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
+    _resolve_provider,
     create_access_token,
     create_api_error_from_response,
     get_default_inference_url,
@@ -99,7 +100,7 @@ class DuplexModel(_GPTLiveModel):
         self,
         model: OpenAIDuplexModels,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -116,7 +117,7 @@ class DuplexModel(_GPTLiveModel):
         self,
         model: str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -132,7 +133,7 @@ class DuplexModel(_GPTLiveModel):
         self,
         model: DuplexModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -145,8 +146,9 @@ class DuplexModel(_GPTLiveModel):
         """
         Args:
             model: Provider-prefixed duplex model, for example ``openai/gpt-live-1``.
-            provider: Host that must serve the model, e.g. ``"openai"``. The session is
-                refused if no host in the region matches.
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
             voice: Output voice, ``marin`` by default for GPT-Live.
             extra_kwargs: Model-specific options; :class:`OpenAIDuplexOptions` for GPT-Live.
                 Delegated work runs on the default service tier only.
@@ -180,7 +182,7 @@ class DuplexModel(_GPTLiveModel):
             conn_options=conn_options,
         )
         self._inference_opts = _InferenceOptions(
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
         )
