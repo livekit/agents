@@ -934,6 +934,31 @@ async def test_reconnect_ends_the_turn_when_no_transcript_arrives(
 
 
 @pytest.mark.virtual_time
+async def test_end_input_after_an_unanswered_reconnect_closes_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The utterance a reconnect gave up on doesn't hold end of input on the next socket."""
+    monkeypatch.setattr(sarvam_stt, "RECONNECT_SETTLE_TIMEOUT", 0.05)
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    stream.end_input()
+    events = [event.type async for event in stream]  # raises if end of input times out
+
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert len(session.sockets) == 2
+    assert session.sockets[1].closed
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
 async def test_reconnect_carries_buffered_audio_over(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

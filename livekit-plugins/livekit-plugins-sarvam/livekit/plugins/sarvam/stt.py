@@ -1518,8 +1518,10 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._settling_for_reconnect = False
 
-        # settled either way, so a later reconnect doesn't flush this utterance again
+        # settled either way, so neither a later reconnect nor end of input on the next
+        # connection waits for this utterance again
         self._utterance_resolved.set()
+        self._utterance_settled.set()
         self._speaking = False
         # the flush closed the utterance on the old connection, so nothing needs replaying
         self._recent_audio.clear()
