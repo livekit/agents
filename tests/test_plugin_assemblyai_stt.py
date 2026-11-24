@@ -1893,3 +1893,98 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+# ---------------------------------------------------------------------------
+# acknowledge_silence and Silence message handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("setting_val", "expected_query_val"),
+    [
+        (NOT_GIVEN, None),
+        (True, "true"),
+        (False, "false"),
+    ],
+)
+async def test_acknowledge_silence_connect_config(setting_val, expected_query_val):
+    """acknowledge_silence is omitted when unset and serialized as boolean string when set."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    kwargs = {}
+    if setting_val is not NOT_GIVEN:
+        kwargs["acknowledge_silence"] = setting_val
+    stt = STT(api_key="test-key", **kwargs)
+    assert stt._opts.acknowledge_silence is setting_val
+
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    if expected_query_val is None:
+        assert "acknowledge_silence" not in query
+    else:
+        assert query["acknowledge_silence"] == [expected_query_val]
+
+
+async def test_acknowledge_silence_unsupported_model():
+    """acknowledge_silence is rejected for non-Universal-3 Pro models in init and update."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="The 'acknowledge_silence' parameter is only supported"):
+        STT(
+            api_key="test-key",
+            model="universal-streaming-english",
+            acknowledge_silence=True,
+        )
+
+    stt = STT(api_key="test-key", model="universal-streaming-english")
+    with pytest.raises(ValueError, match="The 'acknowledge_silence' parameter is only supported"):
+        stt.update_options(acknowledge_silence=True)
+
+
+@pytest.mark.parametrize("val", [True, False])
+async def test_acknowledge_silence_update_options(val):
+    """acknowledge_silence can be updated mid-session via UpdateConfiguration."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt._opts.acknowledge_silence is NOT_GIVEN
+
+    stream = _make_stream_for_unit_test(stt)
+    stt._streams.add(stream)
+
+    stt.update_options(acknowledge_silence=val)
+    assert stt._opts.acknowledge_silence is val
+    assert stream._opts.acknowledge_silence is val
+
+    config_msg = stream._config_update_queue.get_nowait()
+    assert config_msg == {
+        "type": "UpdateConfiguration",
+        "acknowledge_silence": val,
+    }
+
+
+async def test_process_stream_event_silence():
+    """Silence message event is processed cleanly without emitting spurious speech events."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        {
+            "type": "Silence",
+            "start_ms": 1200,
+            "end_ms": 2200,
+        }
+    )
+
+    events = _drain_events(stream)
+    assert events == []
