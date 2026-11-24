@@ -126,6 +126,33 @@ parts off. At session end the framework uploads the session report; an
 `rtc_session(on_session_end=)` callback receives the `JobContext` first, and
 `ctx.make_session_report()` builds the same `SessionReport`.
 
+## Product statistics
+
+Separately from your telemetry, an agent connected to LiveKit Cloud sends LiveKit
+anonymous product statistics about the framework and its plugins, so LiveKit can
+see how they behave across versions and providers. They are never shown in your
+dashboard, never billed, and never contain customer data.
+
+- What is sent, once a minute per process: the framework, Python and LiveKit
+  plugin versions, the OS and architecture, whether the process runs in
+  production, development or CI; per provider, model and kind (STT, TTS, LLM,
+  realtime, end of turn, VAD): request, failure (by error class), retry,
+  fallback and reconnect counts, and time to first byte or token and request
+  duration; job starts and outcomes; crashed job processes and event-loop
+  stalls (by function names only).
+- What is never sent: transcripts, prompts, audio, tool arguments or any other
+  content; room, participant, job, thread or agent names; ids; hostnames, user
+  names or paths.
+- Where: `https://<your LiveKit Cloud host>/productstats/agents/v0/metrics`,
+  signed with your project's key. Nothing is sent when `LIVEKIT_URL` is not a
+  LiveKit Cloud URL.
+- Opt out with `LIVEKIT_PRODUCT_STATS=0` or `DO_NOT_TRACK=1`, read once when the
+  process starts. Opting out does not affect your observability data, and
+  turning observability off does not opt out.
+
+Product statistics are Telemetry Data under section 7.2 of the LiveKit Terms of
+Service.
+
 ## Diagnostics
 
 `telemetry.diagnostics()` returns the process's export counters as a
