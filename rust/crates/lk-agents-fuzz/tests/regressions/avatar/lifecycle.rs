@@ -86,7 +86,6 @@ fn owner() -> Arc<SessionOwner> {
         min_consecutive_speech_delay: 0.0,
         expressive: Default::default(),
         aec_warmup_duration: Maybe::NotGiven,
-        ivr_detection: false,
         user_away_timeout: None,
         transcription_timeout: None,
         final_transcript_timeout: 2.0,

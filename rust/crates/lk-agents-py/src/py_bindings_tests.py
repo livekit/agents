@@ -748,29 +748,6 @@ async def test_realtime_generation_preserves_plain_text_and_transcript_chunk_sta
     assert [event.start_time for event in deltas] == [None, 0.25]
 
 
-async def test_refused_amd_handle_cannot_replace_or_close_the_attached_detector() -> None:
-    from livekit.agents import Agent, VoiceSession
-    from livekit.agents.voice.amd import AMD
-    from tests.fakes import FakeLLM
-
-    async with VoiceSession(llm=FakeLLM(), vad=None, turn_detection="manual") as session:
-        await session.start(Agent(instructions="Welcome the caller.", name="desk"))
-        first, second = AMD(session, llm=None, stt=None), AMD(session, llm=None, stt=None)
-        try:
-            await first.__aenter__()
-            assert first.enabled
-            await second.__aenter__()
-            assert not second.enabled and session._amd is first
-            await second.aclose()
-            assert first.enabled and session._amd is first
-            await first.aclose()
-            await second.__aenter__()
-            assert second.enabled and session._amd is second
-        finally:
-            await first.aclose()
-            await second.aclose()
-
-
 def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity() -> None:
     from dataclasses import FrozenInstanceError
 
@@ -882,23 +859,17 @@ async def test_the_end_of_the_core_events_settles_what_only_they_would() -> None
     import asyncio
 
     from livekit.agents import Agent, VoiceSession
-    from livekit.agents.voice.amd import AMD
     from tests.fakes import FakeLLM
 
     async with VoiceSession(llm=FakeLLM(), vad=None, turn_detection="manual") as session:
         await session.start(Agent(instructions="Welcome the caller.", name="desk"))
-        amd = AMD(session, llm=None, stt=None)
-        await amd.__aenter__()
-        verdict = asyncio.ensure_future(amd.execute())
-        # what `_run` and an expert's question register
+        # what an expert's question registers
         answer: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         session._settled_by_events(answer)
         await asyncio.sleep(0)
-        assert not verdict.done()
 
         session._core_events_ended()
-        with pytest.raises(RuntimeError, match="amd closed before a result"):
-            await verdict
         with pytest.raises(RuntimeError, match="the voice session ended"):
             await answer
-        assert not session._event_settled and session._amd is None
+        await asyncio.sleep(0)  # the done callback that forgets it
+        assert not session._event_settled

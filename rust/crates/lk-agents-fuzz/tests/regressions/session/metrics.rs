@@ -56,12 +56,10 @@ mod llm_tokens_per_second {
 
 mod model_metrics_reported {
     //! The calls the session makes on the agent's behalf are metered like its replies: the VAD's
-    //! inferences, and AMD's classification.
+    //! inferences.
     use lk_agents_abi::metrics::base::AgentMetrics;
-    use lk_agents_fuzz::drive::{AmdAnswer, AmdSetup, Run, Setup, simulate};
-    use lk_agents_fuzz::input::{
-        AmdInput, Confidence, Input, Millis, Ref, ToolArgs, TurnMode, UserText,
-    };
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{Confidence, Input, Millis, Ref};
     use lk_agents_voice::events::SessionEvent;
 
     fn metrics(setup: &Setup, inputs: &[Input]) -> Vec<AgentMetrics> {
@@ -104,43 +102,6 @@ mod model_metrics_reported {
             .collect();
         // 1 / 0.032 s = 31.25: the 32nd inference reports, the next 8 wait for theirs.
         assert_eq!(vad, vec![32]);
-    }
-
-    // Catches: AMD's classification left unmetered; its LLM call reports `LLMMetrics` like a reply.
-    #[test]
-    fn an_amd_classification_is_metered() {
-        let setup = Setup {
-            vad: true,
-            stt: true,
-            turn: TurnMode::Stt,
-            amd: Some(AmdSetup { answer: AmdAnswer::Track, ..AmdSetup::default() }),
-            ..Setup::default()
-        };
-        let inputs = [
-            Input::VadStart { vad: Ref::new(0), speech_ms: Millis(300) },
-            Input::SttStart { stt: Ref::new(0) },
-            Input::Advance { ms: Millis(300) },
-            Input::SttFinal {
-                utterance: Ref::new(0),
-                text: UserText("hi you have reached the voicemail of theo".into()),
-                speaker: None,
-            },
-            Input::SttEnd { utterance: Ref::new(0) },
-            Input::VadEnd { vad: Ref::new(0), silence_ms: Millis(500) },
-            Input::Advance { ms: Millis(20) },
-            Input::LlmToolCall {
-                chat: Ref::new(0),
-                name: "save_prediction".into(),
-                args: ToolArgs(r#"{"label":"machine-vm"}"#.into()),
-            },
-            Input::LlmEnd { chat: Ref::new(0) },
-            Input::Advance { ms: Millis(3000) },
-            Input::Amd { input: AmdInput::Execute },
-            Input::Advance { ms: Millis(20) },
-        ];
-        let llm =
-            metrics(&setup, &inputs).iter().filter(|m| matches!(m, AgentMetrics::Llm(_))).count();
-        assert_eq!(llm, 1);
     }
 }
 
@@ -199,6 +160,7 @@ mod node_text_not_metered {
 
         let setup = Setup {
             preemptive: true,
+            speech_gap_ms: Some(2_000),
             nodes: Some(NodeSetup {
                 llm: false,
                 tts: true,
@@ -226,21 +188,36 @@ mod node_text_not_metered {
                     }
                     run.apply(&run.release_advance()).await;
                 }
-                run.apply(&Input::PauseAuthorization {}).await;
-                run.apply(&Input::GenerateReply {
-                    user_input: None,
-                    instructions: None,
-                    allow: None,
-                })
-                .await;
+                let transcriptions = |run: &Run| {
+                    run.record
+                        .inference_view()
+                        .nodes()
+                        .filter(|(_, _, node)| *node == NodeUse::Transcription)
+                        .count()
+                };
+                let reply =
+                    Input::GenerateReply { user_input: None, instructions: None, allow: None };
+                // A first reply plays out, so the next waits out the gap unauthorized.
+                run.apply(&reply).await;
+                for _ in 0..10 {
+                    for input in run.releases() {
+                        run.apply(&input).await;
+                    }
+                    run.apply(&Input::Advance { ms: Millis(100) }).await;
+                }
+                let before = transcriptions(&run);
+                run.apply(&reply).await;
                 run.apply(&Input::Advance { ms: Millis(100) }).await;
-                let synthesized_before_authorization =
-                    run.record.journal().iter().any(|(_, step)| {
-                        matches!(step, Step::Generation(GenerationStep::TtsRequested { .. }))
-                    }) && !run.record.journal().iter().any(|(_, step)| {
-                        matches!(step, Step::Speech(SpeechStep::Authorized { .. }))
-                    });
-                run.apply(&Input::ResumeAuthorization {}).await;
+                let journal = run.record.journal();
+                let synthesized = journal.iter().rev().find_map(|(_, step)| match step {
+                    Step::Generation(GenerationStep::TtsRequested { speech, .. }) => Some(*speech),
+                    _ => None,
+                });
+                let synthesized_before_authorization = synthesized.is_some_and(|reply| {
+                    !journal.iter().any(|(_, step)| {
+                        matches!(step, Step::Speech(SpeechStep::Authorized { speech }) if *speech == reply)
+                    })
+                });
                 // Answer every external dependency, without closing or interrupting the speech.
                 for _ in 0..20 {
                     for input in run.releases() {
@@ -248,12 +225,7 @@ mod node_text_not_metered {
                     }
                     run.apply(&run.release_advance()).await;
                 }
-                let transcriptions = run
-                    .record
-                    .inference_view()
-                    .nodes()
-                    .filter(|(_, _, node)| *node == NodeUse::Transcription)
-                    .count();
+                let transcriptions = transcriptions(&run) - before;
                 let speeches = run.record.host_view().speeches();
                 let done_before_close =
                     !speeches.is_empty() && speeches.iter().all(|s| s.is_done());

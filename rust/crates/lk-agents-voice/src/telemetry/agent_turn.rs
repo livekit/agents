@@ -72,7 +72,6 @@ pub(crate) fn interruption_source(cause: InterruptCause) -> InterruptionSource {
         InterruptCause::Host
         | InterruptCause::OutputReplaced
         | InterruptCause::OutputFailed
-        | InterruptCause::Detector
         | InterruptCause::Superseded
         | InterruptCause::Closing
         | InterruptCause::ScheduleRejected

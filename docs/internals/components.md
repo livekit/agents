@@ -573,8 +573,7 @@ validate fake behavior, not just the fake's agreement with its own generator.
 | Background audio | Clip/loop/fade decisions and mix settings | Pure sample processing and file decoding in media; runtime publishes audio |
 | Recording | Timeline/accounting and flush/finish lifecycle | Runtime admits captured frames and hands them to the media pool; media owns the recording file (timeline, encoding, ordered writes) and its bounds; finalization waits for accepted data and occurs once |
 | Remote session | Request correlation, cancellation, deadline and drain state | Typed messages over runtime-owned room/TCP transport; late replies cannot settle new requests |
-| AMD | Classification phase and deadline | Runtime invokes the model; classification coordinates with the existing session floor |
-| IVR and keyterms | Their bounded request/pass state | Invoke model/provider operations as effects; replacement or cancellation invalidates stale results |
+| Keyterms | Their bounded request/pass state | Invoke model/provider operations as effects; replacement or cancellation invalidates stale results |
 | DTMF/end-call/transfer helpers | Their bounded live-interaction state | Obey VoiceTask/session ownership; restore temporary audio and release transfer resources on failure as well as success |
 | Codecs and text processing | Deterministic conversion over supplied bytes, frames or text | Synchronous functions or stream accumulators; no hidden files, sockets or threads |
 

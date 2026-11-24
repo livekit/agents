@@ -112,12 +112,6 @@ pub trait SessionHooks: Send + Sync {
         &self,
         tools: &crate::HostRef,
     ) -> Result<Vec<crate::agent::FunctionToolInfo>, crate::errors::HostError>;
-    /// The session closes: what runs beside it (AMD) closes first.
-    #[host(await, name = "_core_closing")]
-    fn closing(
-        &self,
-        cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
     /// `agent.on_user_turn_completed(turn_ctx, new_message)`, `turn_ctx` built from `chat_ctx`
     /// (a copy of the agent's own context). Its span is current.
     #[host(await, name = "_core_on_user_turn_completed")]

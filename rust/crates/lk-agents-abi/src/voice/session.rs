@@ -26,8 +26,6 @@ pub enum VoiceCommandOrigin {
     Hook {
         hook: String,
     },
-    Amd,
-    Ivr,
 }
 
 /// A command on a session that cannot take it. Each `Display` is the message a host raises.
@@ -766,30 +764,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
-    /// `IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
-    /// `IVRActivity.tools`. A second start is journalled, not run.
-    #[host(call)]
-    fn ivr_start(
-        &self,
-        #[host(default = 5.0)] max_silence: f64,
-        #[host(default = None)] tools: Option<Vec<ToolSpec>>,
-        #[host(kw, default = None)] tools_host: Option<HostRef>,
-    ) -> Result<(), CommandRefused>;
-
-    /// `AMD._run`: the answering-machine detector over its config, classifier LLM, tools and
-    /// optional STT. It listens once the callee answers in the session's room; the verdict comes
-    /// back as `amd_result`. Returns false if another detector is already attached; the host
-    /// must not publish a rejected detector as the session's owner.
-    #[host(call)]
-    fn attach_amd(
-        &self,
-        cfg: crate::voice::amd::AmdConfigKwargs,
-        llm: Arc<dyn Llm>,
-        tools: Option<HostRef>,
-        stt: Option<Arc<dyn Stt>>,
-        participant_identity: Option<String>,
-    ) -> Result<bool, CommandRefused>;
-
     /// `_aclose_impl`: the hooks' `closing`, the close itself, the turn-detector stream, the
     /// remote session host, the room io, then the session's toolsets. Idempotent: a second call
     /// waits for the first.
@@ -947,22 +921,6 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = true)] add_to_chat_ctx: bool,
         #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
-
-    /// `_start_ivr_detection(transcript)`: a final the navigator counts as if heard.
-    #[host(call)]
-    fn ivr_final(&self, text: String) -> Result<(), SessionRefused>;
-
-    /// `AMD.started`: the detector listens (the callee answered, no verdict out yet).
-    #[host(call)]
-    fn amd_listening(&self) -> bool;
-
-    /// `AMD.execute()`'s interrupt and `_resume_authorization()`, after its IVR hand-off.
-    #[host(call)]
-    fn amd_execute(&self) -> Result<(), SessionRefused>;
-
-    /// `AMD.aclose()`. Idempotent.
-    #[host(call)]
-    fn amd_close(&self) -> Result<(), SessionRefused>;
 
     /// `session.keyterms`: the list the recogniser was last handed; `None` before any push.
     #[host(call)]

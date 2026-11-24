@@ -207,7 +207,6 @@ mod tests {
             endpointing_overrides: o::EndpointingOverrides::default(),
             max_tool_steps: 3,
             min_consecutive_speech_delay: 0.0,
-            ivr_detection: false,
             user_away_timeout: Some(15.0),
             transcription_timeout: None,
             final_transcript_timeout: 2.0,

@@ -701,7 +701,6 @@ from .agent_session import (  # noqa: E402
     VoiceTask,
     VoiceTaskFailed,
 )
-from .amd import AMD, AMDCategory, AMDPredictionEvent, DetectionOptions  # noqa: E402
 from .background_audio import (  # noqa: E402
     AudioConfig,
     BackgroundAudioPlayer,
@@ -727,10 +726,6 @@ __all__ = [
     "UserStateChangedEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",
-    "AMD",
-    "AMDCategory",
-    "AMDPredictionEvent",
-    "DetectionOptions",
     "BackgroundAudioPlayer",
     "AudioConfig",
     "BuiltinAudioClip",

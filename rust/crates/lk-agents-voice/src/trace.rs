@@ -63,12 +63,12 @@ pub enum CoreStep {
         kind: crate::agent_session::commands::CommandKind,
     },
     TimerArmed {
-        timer: TimerName,
+        timer: Timer,
         at: lk_agents_abi::Ts,
     },
-    TimerCancelled(TimerName),
+    TimerCancelled(Timer),
     /// Recorded as the cycle that performs it begins.
-    TimerFired(TimerName, Ts),
+    TimerFired(Timer, Ts),
     /// The whole configuration in effect after a layer of the option stack was applied. What a
     /// re-resolution changed is the diff against the previous `ConfigApplied`. Boxed: largest, rarest.
     ConfigApplied {
@@ -84,22 +84,6 @@ pub enum CoreStep {
     },
     /// Never silent.
     PortFailure(&'static str),
-}
-
-/// A deadline as the journal names it: the session's, or one the AMD or the IVR navigator keeps
-/// on its own loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TimerName {
-    Session(Timer),
-    Amd(crate::amd::machine::classifier::AmdTimer),
-    /// `IVRActivity._debounced_silence`.
-    IvrSilence,
-}
-
-impl From<Timer> for TimerName {
-    fn from(timer: Timer) -> Self {
-        TimerName::Session(timer)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -226,10 +210,6 @@ pub enum SpeechStep {
     SchedulingPauseRefused {
         cause: PauseRefusal,
     },
-    /// AMD's hold went on: the queue keeps its head and stops authorizing it.
-    AuthorizationPaused,
-    /// The hold came off; the held speech takes the floor on this same iteration.
-    AuthorizationResumed,
     /// A `WaitForIdle`/`WaitForIdleAndHold` answered; `closing` when it was the refusal.
     IdleAnswered {
         hold: Option<crate::agent_session::HoldId>,
@@ -433,10 +413,6 @@ pub enum ToolStep {
     ToolsetUpdated {
         tools: usize,
     },
-    /// `AgentSession._tools.extend(..)`: the session's tools grew by `added`.
-    SessionToolsExtended {
-        added: Vec<String>,
-    },
     /// The deferred reply was scheduled with `instructions`, as the agent's templates rendered.
     ReplyScheduled {
         speech: SpeechId,
@@ -504,7 +480,6 @@ pub enum PlayoutStep {
         stt_real: bool,
         realtime_real: bool,
         vad_real: bool,
-        amd_real: bool,
     },
     /// Silence frames the forwarder substituted on `leg`, reported at the gate change that ends the
     /// verdict.
@@ -702,9 +677,6 @@ pub enum CloseStep {
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum DetectorStep {
-    AmdRefused(crate::amd::machine::classifier::Refusal),
-    IvrTriggered { origin: crate::ivr::IvrReplyOrigin },
-    IvrLifecycle(IvrLifecycle),
     KeytermsPushed { terms: Vec<String> },
     KeytermsRebound { same_stt: bool },
 }
@@ -726,14 +698,6 @@ pub enum FillerEnd {
     /// whose say the scheduler refused, or a host callable that raised, passed its bound or had
     /// no host to run it.
     Refused,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IvrLifecycle {
-    Started,
-    /// A second start while one runs: refused, the running one stands.
-    AlreadyStarted,
-    Closed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -805,8 +769,6 @@ pub enum InterruptCause {
     /// The audio output was replaced while a speech played into the old one, which it cannot
     /// leave: cut whatever its `allow_interruptions`, as a cause of its own.
     OutputReplaced,
-    /// A detector's verdict (AMD: a machine answered), forced past `allow_interruptions`.
-    Detector,
     /// The speech's audio output raised on a frame: cut where the output stopped taking it,
     /// whatever its `allow_interruptions`.
     OutputFailed,
@@ -956,8 +918,6 @@ impl Step {
                 | SpeechStep::SchedulingPaused
                 | SpeechStep::SchedulingPauseSettled
                 | SpeechStep::SchedulingPauseRefused { .. }
-                | SpeechStep::AuthorizationPaused
-                | SpeechStep::AuthorizationResumed
                 | SpeechStep::IdleAnswered { .. } => None,
             },
             Step::Interrupt(step) => match step {
@@ -1001,8 +961,7 @@ impl Step {
                 | ToolStep::Updated { .. }
                 | ToolStep::UpdateRefused { .. }
                 | ToolStep::Cancelled { .. }
-                | ToolStep::ToolsetUpdated { .. }
-                | ToolStep::SessionToolsExtended { .. } => None,
+                | ToolStep::ToolsetUpdated { .. } => None,
             },
             Step::Playout(step) => match step {
                 PlayoutStep::PlaybackStarted { speech }

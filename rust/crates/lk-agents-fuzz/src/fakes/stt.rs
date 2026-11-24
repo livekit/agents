@@ -26,7 +26,6 @@ pub struct FakeStt {
     registry: Arc<Registry>,
     /// Connect delay, so a reopen or close can land while an open is in flight.
     connect: std::time::Duration,
-    /// The session's streams, or AMD's own.
     detail: Detail,
     /// `STTCapabilities.keyterms`.
     keyterms: bool,
@@ -49,15 +48,6 @@ impl FakeStt {
         reports: SttSpeech,
     ) -> Arc<Self> {
         Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: true, reports })
-    }
-
-    /// `AMD(stt=..)`: a recogniser the detector feeds through its own listening gate.
-    pub fn for_amd(
-        registry: Arc<Registry>,
-        connect: std::time::Duration,
-        reports: SttSpeech,
-    ) -> Arc<Self> {
-        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt, keyterms: false, reports })
     }
 }
 

@@ -14,7 +14,6 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core, inference, llm, stt, tts
-from .._bindings import tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
 from .._generated.remote_session import (
@@ -164,7 +163,6 @@ def initialize(
     session._host = None
     session._hooks = None
     session._room = None
-    session._amd = None
     session._event_settled = set()
     # the native options own the providers: `session.stt`, `tts` and `vad` read them
     session._options.update_providers({"stt": stt_model, "tts": tts_model, "vad": vad_model})
@@ -298,18 +296,6 @@ class SessionAdapter:
     def _using_default_vad(self) -> bool:
         session = self.session
         return session._default_vad is not None and session.vad is session._default_vad
-
-    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
-        session = self.session
-        from ..beta import send_dtmf_events
-
-        if send_dtmf_events not in session._tools:
-            session._tools.append(send_dtmf_events)
-        session._running.ivr_start(
-            tools=tool_specs([send_dtmf_events]), tools_host=[send_dtmf_events]
-        )
-        if transcript is not None:
-            session._running.ivr_final(transcript)
 
 
 def _stt_model(model: NotGivenOr[stt.STT | str | None]) -> NotGivenOr[stt.STT | None]:
@@ -503,10 +489,6 @@ class SessionHost:
             stt_node=nodes.get("stt_node") if "stt" in providers else None,
             tts_node=nodes.get("tts_node") if "tts" in providers else None,
         )
-
-    async def started(self) -> None:
-        if self.session.options["ivr_detection"]:
-            await self.session._start_ivr_detection()
 
     async def closed(self) -> None:
         session = self.session

@@ -1070,10 +1070,7 @@ impl VoiceDriver {
             VoiceCommandOrigin::Tool { invocation_id, operation, call_id } => {
                 self.activity.tools.speech_of(invocation_id, *operation, call_id)
             }
-            VoiceCommandOrigin::Host
-            | VoiceCommandOrigin::Hook { .. }
-            | VoiceCommandOrigin::Amd
-            | VoiceCommandOrigin::Ivr => None,
+            VoiceCommandOrigin::Host | VoiceCommandOrigin::Hook { .. } => None,
         }
     }
 }

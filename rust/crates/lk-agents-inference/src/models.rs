@@ -32,14 +32,6 @@ impl InferenceModels for Models {
         crate::llm::models::min_reasoning_effort(&model).map(str::to_owned)
     }
 
-    fn amd_auto_select_models(livekit_url: String, api_key: String, api_secret: String) -> bool {
-        crate::amd::auto_select_models(&livekit_url, &api_key, &api_secret)
-    }
-
-    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, Invalid> {
-        crate::amd::is_evaluated_model_of_kind(&model, &kind)
-    }
-
     fn llm_unsupported_params(
         model: String,
         has_tools: bool,

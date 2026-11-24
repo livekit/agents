@@ -109,7 +109,6 @@ pub enum VoiceEffect {
     /// Recognition checkpoints and accepted conversation without a corresponding speech.
     SaveConversation(Box<lk_agents_abi::storage::voice::VoiceConversationProgress>),
     Outputs(crate::agent_session::Outputs),
-    Tap(crate::agent_session::SystemTap),
     SessionView(Arc<crate::agent_session::SessionView>),
     Closing,
     SttConversationItem {

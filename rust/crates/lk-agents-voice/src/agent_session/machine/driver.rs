@@ -1,7 +1,6 @@
 use crate::agent_session::VoiceSessionState;
 use crate::agent_session::commands::{
-    Answer, Close, Command, IvrCommand, RecorderHandle, RequestId, Sent, SpeechCall,
-    VoiceCommandOrigin,
+    Answer, Close, Command, RecorderHandle, RequestId, Sent, SpeechCall, VoiceCommandOrigin,
 };
 use crate::agent_session::effects::Timer;
 use crate::agent_session::effects::VoiceEffect;
@@ -30,16 +29,6 @@ use lk_agents_abi::{SpeechEvent, TimerSet, Ts, VadEvent};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-
-/// Only what a host could read, in loop order; never machine state.
-#[derive(Debug, Clone)]
-pub enum SystemTap {
-    Session(SessionEvent),
-    Vad(lk_agents_abi::VadEvent),
-    Stt(lk_agents_abi::SpeechEvent),
-    Ivr(IvrCommand),
-    CloseRequested,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueClosed;
@@ -334,11 +323,6 @@ impl VoiceDriver {
     pub fn take_outbox(&mut self) -> Vec<crate::agent_session::effects::VoiceEffect> {
         self.flush_spans();
         std::mem::take(&mut self.outbox)
-    }
-
-    /// `ivr_detection=True`: the IVR system is the host's to start; the core starts no system.
-    pub fn ivr_detection(&self) -> bool {
-        self.session.config.effective().turn.ivr_detection()
     }
 
     /// The session's STT, whose provider identity a recognition input is stamped with.
@@ -641,7 +625,6 @@ impl VoiceDriver {
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome),
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
-            Command::AmdSpan(ev) => self.amd_span(&ev),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {
@@ -663,17 +646,6 @@ impl VoiceDriver {
             Command::SetStaticKeyterms(terms) => {
                 self.keyterms_step(now, crate::keyterm_detection::KeytermIn::StaticTerms(terms));
             }
-            // Addressed to the IVR navigator: journalled and relayed on the feed, acted on by
-            // nobody: except `AddTools`, since the core owns what a request is offered.
-            Command::Ivr(IvrCommand::AddTools(tools)) => {
-                let added = self.session.extend_tools(tools);
-                self.record_trace(crate::trace::ToolStep::SessionToolsExtended { added });
-            }
-            Command::Ivr(command) => {
-                self.record_effect(crate::agent_session::effects::VoiceEffect::Tap(
-                    SystemTap::Ivr(command),
-                ));
-            }
         }
     }
 
@@ -684,7 +656,7 @@ impl VoiceDriver {
         let revised = &self.revised_deadlines;
         let timer =
             self.timers.pop_due_where(now, |timer| !revised.contains(&timer) && pick(timer))?;
-        self.record_trace(CoreStep::TimerFired(timer.into(), now));
+        self.record_trace(CoreStep::TimerFired(timer, now));
         Some(timer)
     }
 
@@ -775,7 +747,6 @@ impl VoiceDriver {
                 stt_real: !discard,
                 realtime_real: !discard,
                 vad_real: true,
-                amd_real: true,
             }));
         }
     }

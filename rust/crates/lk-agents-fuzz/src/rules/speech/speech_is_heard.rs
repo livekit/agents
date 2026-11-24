@@ -7,7 +7,7 @@ use lk_agents_voice::{
     events::{SessionEvent, SpeechOutcome},
     trace::{
         CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, RealtimeStep,
-        RoomEventKind, RoomStep, SinkCall, SpeechStep, Step, TimerName, TurnStep,
+        RoomEventKind, RoomStep, SinkCall, SpeechStep, Step, TurnStep,
     },
 };
 
@@ -30,15 +30,15 @@ const OWED: [Kind; 6] =
     [Kind::Chat, Kind::Tts, Kind::Tool, Kind::Hook, Kind::Generation, Kind::Stream];
 
 // A speech may rightly wait past the bound on an unanswered model, voice, tool, hook or server
-// response, the floor (another speech or `wait_for_idle_and_hold`), AMD's authorization hold, the
-// person speaking, or the close. Anything else is dead air.
+// response, the floor (another speech or `wait_for_idle_and_hold`), the person speaking, or the
+// close. Anything else is dead air.
 
 pub struct SpeechIsHeard;
 
 impl Rule for SpeechIsHeard {
     const CONTRACT: Contract = Contract {
         id: "speech_is_heard",
-        guarantee: "A speech plays within a bound of its creation, ends, or waits on something that still holds: an unanswered provider, tool or hook, the floor held by a playing speech or the developer, authorization held, the person speaking, the close.",
+        guarantee: "A speech plays within a bound of its creation, ends, or waits on something that still holds: an unanswered provider, tool or hook, the floor held by a playing speech or the developer, the person speaking, the close.",
         examples: &[
             played_in_time,
             waited_on_the_model,
@@ -403,14 +403,6 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     let journal: Vec<&(Observed, Step)> = r.journal().iter().filter(|(a, _)| before(a)).collect();
     let last =
         |pick: &dyn Fn(&Step) -> Option<bool>| journal.iter().filter_map(|(_, s)| pick(s)).last();
-    let held = last(&|s| match s {
-        Step::Speech(SpeechStep::AuthorizationPaused) => Some(true),
-        Step::Speech(SpeechStep::AuthorizationResumed) => Some(false),
-        _ => None,
-    });
-    if held == Some(true) {
-        return Some("authorization held");
-    }
     // The gap the scheduler holds between speeches (`min_consecutive_speech_delay`).
     let gap = last(&|s| match s {
         Step::Speech(SpeechStep::FloorArmed { .. }) => Some(true),
@@ -436,11 +428,6 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
         Step::Room(RoomStep::Event(RoomEventKind::ParticipantDisconnected)) => n - 1,
         _ => n,
     });
-    // AMD found nobody answered: the callee never joined to subscribe.
-    let unanswered = journal.iter().any(|(_, s)| {
-        matches!(s, Step::Emitted(SessionEvent::AmdResult { verdict })
-            if verdict.reason == lk_agents_abi::voice::amd::AmdReason::ParticipantMissing)
-    });
     // The case had no audio output of its own by then: the voice goes to the room's own speaker
     // (the room's legs), which holds it until somebody subscribes, whether or not the room's
     // events reached the journal.
@@ -449,7 +436,7 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
             && before(&o.at)
             && o.detail == crate::record::Detail::Output { audio: true }
     });
-    if (room_track || unanswered || room_speaker) && present <= 0 {
+    if (room_track || room_speaker) && present <= 0 {
         return Some("nobody in the room to hear it");
     }
     // A provider failing within the bound: the reply waits on retries, or on a connection.
@@ -469,14 +456,14 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     for (_, s) in &journal {
         match s {
             Step::Core(CoreStep::TimerArmed {
-                timer: TimerName::Session(Timer::RealtimeRequest(key)),
+                timer: Timer::RealtimeRequest(key),
                 ..
             }) => {
                 asked.insert(*key);
             }
             Step::Core(
-                CoreStep::TimerCancelled(TimerName::Session(Timer::RealtimeRequest(key)))
-                | CoreStep::TimerFired(TimerName::Session(Timer::RealtimeRequest(key)), _),
+                CoreStep::TimerCancelled(Timer::RealtimeRequest(key))
+                | CoreStep::TimerFired(Timer::RealtimeRequest(key), _),
             ) => {
                 asked.remove(key);
             }
@@ -551,12 +538,12 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     // The person stopped, and their turn's end is still being decided (seed 99458).
     let endpointing = last(&|s| match s {
         Step::Core(CoreStep::TimerArmed {
-            timer: TimerName::Session(Timer::EndpointingDelay),
+            timer: Timer::EndpointingDelay,
             ..
         }) => Some(true),
         Step::Core(
-            CoreStep::TimerCancelled(TimerName::Session(Timer::EndpointingDelay))
-            | CoreStep::TimerFired(TimerName::Session(Timer::EndpointingDelay), _),
+            CoreStep::TimerCancelled(Timer::EndpointingDelay)
+            | CoreStep::TimerFired(Timer::EndpointingDelay, _),
         ) => Some(false),
         _ => None,
     });

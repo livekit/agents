@@ -61,7 +61,6 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         | VoiceEffect::SaveConversation(_)
         | VoiceEffect::StorageAbort(_)
         | VoiceEffect::Outputs(_)
-        | VoiceEffect::Tap(_)
         | VoiceEffect::SessionView(_)
         | VoiceEffect::Closing
         | VoiceEffect::SttConversationItem { .. }
@@ -140,13 +139,13 @@ impl VoiceDriver {
 
     /// Replaces this timer's deadline, visible immediately to domain queries.
     pub(crate) fn set_deadline(&mut self, timer: Timer, at: Ts) {
-        self.record_trace(CoreStep::TimerArmed { timer: timer.into(), at });
+        self.record_trace(CoreStep::TimerArmed { timer, at });
         self.timers.set_deadline(timer, at);
         self.revised_deadlines.insert(timer);
     }
 
     pub(crate) fn clear_deadline(&mut self, timer: Timer) {
-        self.record_trace(CoreStep::TimerCancelled(timer.into()));
+        self.record_trace(CoreStep::TimerCancelled(timer));
         self.timers.clear_deadline(timer);
         self.revised_deadlines.insert(timer);
     }
@@ -423,7 +422,6 @@ impl VoiceDriver {
             | SessionEvent::HistoryReloaded { .. }
             | SessionEvent::SpeechDone { .. }
             | SessionEvent::FloorChanged { .. }
-            | SessionEvent::AmdResult { .. }
             | SessionEvent::RunStarted { .. }
             | SessionEvent::RunRefused { .. }
             | SessionEvent::RunSettled { .. }

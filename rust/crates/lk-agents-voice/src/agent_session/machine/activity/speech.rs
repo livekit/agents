@@ -152,16 +152,6 @@ impl VoiceDriver {
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call } => {
                 self.say(now, text, allow_interruptions, add_to_chat_ctx, call)
             }
-            // AMD's authorization hold: the scheduler keeps its head.
-            SpeechCommand::PauseAuthorization => {
-                self.record_trace(SpeechStep::AuthorizationPaused);
-                self.activity.speech_scheduler.authorization_paused = true;
-            }
-            // Its release: the head is authorized in this same cycle.
-            SpeechCommand::ResumeAuthorization => {
-                self.record_trace(SpeechStep::AuthorizationResumed);
-                self.activity.speech_scheduler.authorization_paused = false;
-            }
             SpeechCommand::Interrupt { force, call } => self.host_interrupt_all(now, force, call),
             SpeechCommand::InterruptSpeech { speech, force } => {
                 self.host_interrupt_speech(now, speech, force)
@@ -516,7 +506,6 @@ impl VoiceDriver {
             providers: Providers {
                 dynamic_instructions: self.activity.dynamic_instructions,
                 toolset: advertised,
-                tools_host_extra: self.session.tool_hosts.clone(),
                 output_nodes: self.activity.output_nodes.clone(),
             },
             user_metrics,

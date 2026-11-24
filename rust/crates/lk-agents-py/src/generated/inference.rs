@@ -203,31 +203,6 @@ pub fn min_reasoning_effort(
     ::pyo3::PyResult::Ok(out)
 }
 
-/// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
-#[pyfunction]
-#[pyo3(signature = (livekit_url, api_key, api_secret))]
-pub fn amd_auto_select_models(
-    py: Python<'_>,
-    livekit_url: ::std::string::String,
-    api_key: ::std::string::String,
-    api_secret: ::std::string::String,
-) -> PyResult<bool> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_auto_select_models(livekit_url, api_key, api_secret));
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table.
-#[pyfunction]
-#[pyo3(signature = (model, kind))]
-pub fn amd_is_evaluated_model(
-    py: Python<'_>,
-    model: ::std::string::String,
-    kind: ::std::string::String,
-) -> PyResult<bool> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_is_evaluated_model(model, kind)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
-    ::pyo3::PyResult::Ok(out)
-}
-
 /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
 /// is the request's `reasoning_effort` and `reasoning` the effort of its Responses
 /// `reasoning`.

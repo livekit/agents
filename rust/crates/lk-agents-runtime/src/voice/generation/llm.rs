@@ -107,7 +107,6 @@ async fn chat_request(
             .toolset
             .as_ref()
             .map_or_else(|| ctx.resources.toolset.host.clone(), |t| t.host.clone()),
-        tools_host_extra: ctx.resources.tools_host_extra.clone(),
         // Already filtered by `plan_request` to the tools this step may call.
         tools: ctx.plan.request.tools.clone(),
         conn_options: shared.conn.llm.unwrap_or_default(),

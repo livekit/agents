@@ -710,8 +710,8 @@ that the core or storage producing the event builds; a stored payload of the
 wrong shape for its type is refused when read.
 
 On a call, the voice runtime's own events are recorded as well: agent and
-user state changes, transcripts, interruptions, end-of-turn and
-answering-machine detection. They are the same `AgentSessionEvent`
+user state changes, transcripts, interruptions and end-of-turn
+detection. They are the same `AgentSessionEvent`
 payloads exposed by live session events and are not listed here.
 
 ### Reading it

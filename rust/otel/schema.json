@@ -386,54 +386,6 @@
       ]
     },
     {
-      "name": "amd",
-      "brief": "Answering-machine detection, from the detector's attach to its verdict.",
-      "kind": "internal",
-      "parents": [
-        "agent_session"
-      ],
-      "outlives_parent": null,
-      "start": [],
-      "end": [
-        {
-          "key": "lk.amd.category",
-          "type": "string",
-          "required": false,
-          "members": [
-            "human",
-            "machine-ivr",
-            "machine-vm",
-            "machine-unavailable",
-            "uncertain"
-          ]
-        },
-        {
-          "key": "lk.amd.reason",
-          "type": "string",
-          "required": false
-        },
-        {
-          "key": "lk.amd.speech_duration",
-          "type": "double",
-          "required": false,
-          "unit": "s"
-        },
-        {
-          "key": "lk.amd.delay",
-          "type": "double",
-          "required": false,
-          "unit": "s"
-        },
-        {
-          "key": "lk.pii.amd.transcript",
-          "type": "string",
-          "required": false,
-          "content": "pii"
-        }
-      ],
-      "events": []
-    },
-    {
       "name": "drain_agent_activity",
       "brief": "Draining an agent's activity before it leaves.",
       "kind": "internal",

@@ -222,9 +222,6 @@ impl VoiceDriver {
             });
             return;
         }
-        self.record_effect(crate::agent_session::effects::VoiceEffect::Tap(
-            crate::agent_session::SystemTap::Stt(ev.clone()),
-        ));
         if self.hear_promoted(now, stream, &ev) {
             return;
         }
@@ -379,9 +376,6 @@ impl VoiceDriver {
     pub(crate) fn on_vad(&mut self, now: Ts, ev: VadEvent) {
         self.anchor_stt_stream(now);
         self.fold_vad_metrics(&ev);
-        self.record_effect(crate::agent_session::effects::VoiceEffect::Tap(
-            crate::agent_session::SystemTap::Vad(ev.clone()),
-        ));
         let eff = self.activity.audio_recognition.on_vad_event(now, &ev);
         self.apply_recognition_effects(eff);
 
@@ -483,7 +477,6 @@ impl VoiceDriver {
             TurnCommand::StartUser { id } => self.start_user_turn(now, id),
             TurnCommand::EndUser { id, reply, call } => self.end_user_turn(now, id, reply, call),
             TurnCommand::CancelUser { id } => self.cancel_user_turn(now, id),
-            TurnCommand::SkipReplies(on) => self.session.amd_skips_replies = on,
             TurnCommand::Configure(patch) => {
                 let diff = self.session.config.configure(&patch);
                 self.apply_config(now, ConfigLayer::Session, diff);
@@ -533,7 +526,7 @@ impl VoiceDriver {
         }
     }
 
-    pub(crate) fn on_end_of_turn(&mut self, now: Ts, mut info: EndOfTurnInfo) {
+    pub(crate) fn on_end_of_turn(&mut self, now: Ts, info: EndOfTurnInfo) {
         // The interim this turn committed with, published just before as the last final.
         self.activity.promoted = info.promoted.as_ref().and_then(|p| {
             Some(PromotedWords {
@@ -548,12 +541,6 @@ impl VoiceDriver {
         let last = self.unanswered_user_speech();
         if let Some(rt) = self.activity.realtime_activity_mut() {
             rt.heard.turn_committed(last);
-        }
-        // AMD already called the line a machine: the turn is committed, no reply is made for it
-        // and a preemptive one goes.
-        if self.session.amd_skips_replies {
-            self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
-            info.skip_reply = true;
         }
         // Inside the transition window the turn is kept for the arriving agent.
         if self.activity.in_window() {
@@ -573,7 +560,7 @@ impl VoiceDriver {
             committed: decision.committed,
         });
         let span = self.decide_user_turn(&info, decision.verdict);
-        // Told to the host before the verdict, unconditionally: AMD's release gate waits on it.
+        // Told to the host before the verdict, unconditionally.
         self.publish_event(crate::events::SessionEvent::UserTurnCompleted(
             crate::events::UserTurnCompletedEvent {
                 turn: info.turn_id,
@@ -920,7 +907,6 @@ impl VoiceDriver {
         } else if self.activity.in_window()
             || self.session.experts.needs_input_routing()
             || self.needs_local_input_routing()
-            || s.authorization_paused
             || s.is_paused()
             || self.session.closing_past_edge()
         {

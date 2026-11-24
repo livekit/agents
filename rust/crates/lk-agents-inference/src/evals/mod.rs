@@ -169,7 +169,6 @@ impl Judges {
             // a host model gets a placeholder for it from the request's function schemas
             tools: vec![prompts::check_intent_tool()],
             tools_host: None,
-            tools_host_extra: Vec::new(),
             conn_options: DEFAULT_API_CONNECT_OPTIONS,
             parallel_tool_calls: None,
             tool_choice: Some(ToolChoice::Required),

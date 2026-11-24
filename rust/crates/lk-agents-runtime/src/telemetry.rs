@@ -32,8 +32,6 @@ pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds
 pub(crate) use lk_agents_abi::telemetry::health::{TeardownOverrun, TeardownStage};
 pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;
-#[cfg(test)]
-pub(crate) use lk_agents_abi::telemetry::record::{Record, RecordSink, Value};
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::agent_turn::{
     AgentTurn, FunctionTool, LlmNode, LlmNodeEnd, RealtimeInference, RealtimeMetrics, TtsNode,
@@ -48,7 +46,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::job::{
     WaitForAudioTrack, WaitForAudioTrackEnd, WaitForParticipant,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, Amd, KeytermDetection, RpcCall, RpcEnd, RpcHandler, SessionStart, SetupToolsets,
+    AgentSession, KeytermDetection, RpcCall, RpcEnd, RpcHandler, SessionStart, SetupToolsets,
     StartAgentActivity, UpdateAgent,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{

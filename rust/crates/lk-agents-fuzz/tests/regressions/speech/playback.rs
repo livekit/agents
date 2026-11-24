@@ -779,8 +779,7 @@ mod skip_reply_turn_no_hook {
     use lk_agents_voice::agent_session::HookKind;
     use lk_agents_voice::trace::{HandoffStep, Step};
 
-    // Catches: a turn that asks for no reply (`commit_user_turn(skip_reply=True)`, or one AMD
-    // consumed) was parked on the developer's `on_user_turn_completed` like any other, its item
+    // Catches: a turn that asks for no reply (`commit_user_turn(skip_reply=True)`) was parked on the developer's `on_user_turn_completed` like any other, its item
     // committed only once the hook answered and stamped with its delay.
     #[test]
     fn a_skip_reply_turn_runs_no_hook() {
@@ -846,16 +845,21 @@ mod speculative_segment_takes_current_output {
     //! A segment synthesised before its authorization takes the outputs current at its activation: an
     //! audio output detached meanwhile never plays it, and its words show without that audio.
     use lk_agents_fuzz::drive::{Outcome, Run, Setup, finish, simulate};
-    use lk_agents_fuzz::input::{AgentText, Input, Millis, SayInput};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, SayInput};
     use lk_agents_fuzz::record::Sink;
 
     #[test]
     fn a_segment_synthesised_before_a_detach_plays_nothing_on_the_detached_output() {
-        let setup = Setup { sync_transcription: true, ..Setup::default() };
+        let setup =
+            Setup { sync_transcription: true, speech_gap_ms: Some(2_000), ..Setup::default() };
         simulate(async {
             let mut run = Run::start(&setup, 0, Default::default()).await;
             for input in [
-                Input::PauseAuthorization {},
+                // An empty reply plays out, so the next speech waits out the gap unauthorized.
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(20) },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(20) },
                 Input::Say {
                     text: AgentText("Words synthesised ahead.".into()),
                     input: SayInput::Words,
@@ -864,8 +868,6 @@ mod speculative_segment_takes_current_output {
                 },
                 Input::Advance { ms: Millis(100) },
                 Input::SetAudioOutput { attach: false },
-                Input::Advance { ms: Millis(100) },
-                Input::ResumeAuthorization {},
                 Input::Advance { ms: Millis(5000) },
             ] {
                 run.apply(&input).await;

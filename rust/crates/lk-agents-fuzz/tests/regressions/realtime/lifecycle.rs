@@ -174,7 +174,7 @@ mod realtime_late_answer_interrupted {
     use lk_agents_fuzz::fakes::RealtimeDelays;
     use lk_agents_fuzz::input::{Input, Millis};
     use lk_agents_voice::agent_session::effects::Timer;
-    use lk_agents_voice::trace::{CoreStep, RealtimeStep, Step, TimerName};
+    use lk_agents_voice::trace::{CoreStep, RealtimeStep, Step};
 
     // Catches: the timeout's cancel crossing the server's creation on the wire. The late generation
     // was discarded without an interrupt and held the server, which refused the next
@@ -205,14 +205,8 @@ mod realtime_late_answer_interrupted {
             .iter()
             .enumerate()
             .find_map(|(i, (at, s))| {
-                matches!(
-                    s,
-                    Step::Core(CoreStep::TimerFired(
-                        TimerName::Session(Timer::RealtimeRequest(_)),
-                        _
-                    ))
-                )
-                .then_some((i, at.at_ms))
+                matches!(s, Step::Core(CoreStep::TimerFired(Timer::RealtimeRequest(_), _)))
+                    .then_some((i, at.at_ms))
             })
             .expect("the scenario: the request times out");
         let sent = |kind: RealtimeCommandKind| {

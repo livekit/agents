@@ -60,7 +60,7 @@ impl Recording {
     }
 
     /// Steps anywhere in the journal that `pick` matches. The release phase asks this for the
-    /// driver's armed deadlines and the navigator's triggers.
+    /// driver's armed deadlines.
     pub fn journal_where<'a, T>(
         &'a self,
         pick: impl Fn(&'a Step) -> Option<T> + 'a,

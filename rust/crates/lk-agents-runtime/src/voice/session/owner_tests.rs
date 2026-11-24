@@ -123,9 +123,6 @@ impl SessionHost for FailingHost {
             Err(HostError::new("toolset initialization failed"))
         })
     }
-    fn started(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
-        Box::pin(async { panic!("failed startup must not announce success") })
-    }
     fn closed(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
             self.closed.fetch_add(1, Ordering::SeqCst);
@@ -513,9 +510,6 @@ impl SessionHost for JobHost {
         _cx: &lk_agents_abi::telemetry::Cx,
     ) -> BoxFuture<'_, Result<Arc<dyn SessionBindingsPort>, HostError>> {
         panic!("already prepared")
-    }
-    fn started(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
-        panic!("not started")
     }
     fn closed(&self, _cx: &lk_agents_abi::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>> {
         panic!("not started")

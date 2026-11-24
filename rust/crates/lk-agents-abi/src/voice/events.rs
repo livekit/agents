@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::voice::amd::AmdPrediction;
 use crate::voice::room_io::{
     DeleteRoomRequested, ParticipantLinked, ParticipantUnlinked, TextInput,
 };
@@ -53,7 +52,6 @@ pub enum Leg {
     Realtime,
     Eot,
     Interruption,
-    Amd,
     Keyterms,
     AudioIn,
     VideoIn,
@@ -72,8 +70,6 @@ pub enum HookName {
     FunctionToolsExecuted,
     /// Resolving the agent's tools before it starts.
     SetupTools,
-    /// The host's close of the session.
-    Closing,
 }
 
 #[crate::host(record(
@@ -477,7 +473,7 @@ pub struct EndOfSpeechEvent {
     #[host(skip)]
     pub from_vad: bool,
     /// Silence already elapsed when the event was raised, in seconds (`0.0` on the STT path). `at`
-    /// includes it, but a host needs it: AMD's post-speech window runs from when speech ended.
+    /// includes it.
     pub silence_duration: f64,
 }
 
@@ -853,7 +849,6 @@ pub enum HostWire {
     UserStateChanged(UserStateChanged),
     #[host(event)]
     AgentFalseInterruption(AgentFalseInterruption),
-    AmdResult(AmdPrediction),
     #[host(emits = "ConversationItemAddedEvent")]
     ItemAdded(ItemAddedWire),
     ContextCarried(ContextCarriedWire),

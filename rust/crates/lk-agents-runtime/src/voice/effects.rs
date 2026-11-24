@@ -7,7 +7,7 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_voice::agent_session::effects::{SpeechHistory, StreamKind, VoiceEffect};
 use lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::{StorageRequest, SystemTap, VoiceEvent, VoiceHostEvent};
+use lk_agents_voice::agent_session::{StorageRequest, VoiceEvent, VoiceHostEvent};
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::audio_recognition::InterruptionSignal;
 use lk_agents_voice::events::SessionEvent;
@@ -109,7 +109,6 @@ impl VoiceRuntime {
                 self.shared.realtime_spans.metrics(&self.shared.trace, m);
             }
         }
-        self.peer.publish(SystemTap::Session(event.clone()));
         let _ = self.deliver(VoiceHostEvent::Session(event));
     }
 
@@ -270,7 +269,6 @@ impl VoiceRuntime {
             E::Outputs(outputs) => {
                 self.publications.output.set(outputs);
             }
-            E::Tap(tap) => self.peer.publish(tap),
             E::SessionView(view) => {
                 self.publications.view.set(view);
             }

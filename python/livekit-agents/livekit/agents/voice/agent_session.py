@@ -92,7 +92,6 @@ if TYPE_CHECKING:
     from ..storage.context import ContextStore, _SessionBinding
     from ..storage.session_state import BoundContext
     from ._session_bindings import SessionHost
-    from .amd import AMD
     from .io import TurnHandlingOptions
 
 # The session and the state of the event its callbacks are handling.
@@ -124,7 +123,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _bound_context: BoundContext[Context_T] | None
     _session_binding: _SessionBinding | None
     _room: rtc.Room | None
-    _amd: AMD | None
     # what only the core's events settle: failed if they end first
     _event_settled: set[asyncio.Future[Any]]
     _event_snapshots: deque[dict[str, Any]]
@@ -248,11 +246,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         if delivered is not None and delivered[0] is self:
             return delivered[1]
         return self._native.state
-
-    @property
-    def amd(self) -> AMD | None:
-        """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
-        return self._amd
 
     @property
     def agent_state(self) -> AgentState:
@@ -388,9 +381,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             self._root_span_context = _context(span)
             otel_context.attach(self._root_span_context)
 
-    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
-        await self._adapter._start_ivr_detection(transcript)
-
     async def __aenter__(self) -> VoiceSession[Context_T]:
         return self
 
@@ -482,8 +472,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         for future in list(self._event_settled):
             if not future.done():
                 future.set_exception(ended)
-        if self._amd is not None:
-            self._amd._release()
 
     def _settled_by_events(self, future: asyncio.Future[Any]) -> None:
         """Fails ``future`` when the core's events end before one settles it."""

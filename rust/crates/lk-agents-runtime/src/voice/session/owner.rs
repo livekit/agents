@@ -333,15 +333,14 @@ impl Inner {
         session.attach_recorder(self.recorder.get().cloned());
         let in_session = trace.clone().under::<telemetry::AgentSession>(opening.session.context);
         if let Some(run) = &job_run {
-            run.session_started(in_session.clone());
+            run.session_started(in_session);
         }
         session.trace_under(trace, job_ids, opening);
         let _ = self.session.set(session.clone());
         let initial = self.select(initial_agent);
         let started = session.start().map_err(|error| HostError::new(error.to_string()))?.await;
         self.selected(initial);
-        started?;
-        Ok(host.started(&in_session).await?)
+        started
     }
 
     /// A start that failed: logged once, and the session's reserved spans end with it unless its

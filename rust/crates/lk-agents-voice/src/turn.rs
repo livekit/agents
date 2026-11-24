@@ -21,8 +21,6 @@ pub struct TurnHandlingOptions {
     pub interruption: InterruptionOptions,
     pub preemptive: PreemptiveGenerationOptions,
     pub user_turn_limit: UserTurnLimitOptions,
-    /// `ivr_detection`: a turn's outcome is also fed to the IVR machine.
-    pub ivr_detection: Option<bool>,
     /// Turns open and end only on `start_user_turn()` and its `end()` / `cancel()`.
     pub push_to_talk: Option<bool>,
 }
@@ -30,7 +28,6 @@ pub struct TurnHandlingOptions {
 option_group!(TurnHandlingOptions {
     detection: Option<TurnDetection>,
     owner: TurnDetectionMode,
-    ivr_detection: bool,
     push_to_talk: bool,
 } groups(endpointing, interruption, preemptive, user_turn_limit));
 

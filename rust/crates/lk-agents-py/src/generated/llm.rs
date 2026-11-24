@@ -2623,26 +2623,6 @@ impl ChatRequest {
         out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
     }
 
-    /// The pools the session added on top of the agent's.
-    #[getter]
-    fn tools_host_extra<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <ChatRequestImpl as ::lk_agents_abi::llm::types::ChatRequestView>::tools_host_extra(
-                &self.0,
-            )
-        });
-        ::pyo3::PyResult::Ok(
-            ::pyo3::types::PyList::new(
-                py,
-                out.into_iter()
-                    .map(|x| crate::py_objects::object_ref_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )
-    }
-
     #[getter]
     fn parallel_tool_calls(
         &self,

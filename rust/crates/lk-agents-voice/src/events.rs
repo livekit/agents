@@ -316,8 +316,8 @@ pub enum SessionEvent {
     AgentFalseInterruption {
         resumed: bool,
     },
-    /// The user's turn ended, emitted before the commit verdict (`on_end_of_turn`) so AMD's release
-    /// gate hears it. It cannot veto the reply.
+    /// The user's turn ended, emitted before the commit verdict (`on_end_of_turn`). It cannot veto
+    /// the reply.
     UserTurnCompleted(UserTurnCompletedEvent),
     /// A speech was created, for every kind: the host's `speech_created` and
     /// `session.current_speech` for speeches it did not start itself.
@@ -355,10 +355,6 @@ pub enum SessionEvent {
     /// The floor changed hands (`None`: free); once per cycle, after the cycle's other effects.
     FloorChanged {
         holder: Option<crate::agent_session::machine::activity::scheduling::SpeechId>,
-    },
-    /// The AMD machine released its verdict, once per machine.
-    AmdResult {
-        verdict: lk_agents_abi::voice::amd::AmdPrediction,
     },
     /// One provider metrics record (`metrics_collected`), computed by the driver or handed in by the
     /// host (`Command::HostMetrics`). `speech` is the speech it belongs to.

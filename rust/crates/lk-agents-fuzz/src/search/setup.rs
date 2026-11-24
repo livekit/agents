@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use crate::{
     drive::{
-        AmdAnswer, AmdSetup, ConnSetup, Faults, KeytermDetectionSetup, NodeSetup, PreConnect,
-        ProcessorFaults, RealtimeSetup, RoomLegs, RoomSetup, Setup, StorageSetup, TtsAlignment,
+        ConnSetup, Faults, KeytermDetectionSetup, NodeSetup, PreConnect, ProcessorFaults,
+        RealtimeSetup, RoomLegs, RoomSetup, Setup, StorageSetup, TtsAlignment,
     },
     fakes::a2a_peer::{CancelReply, PeerEnd, PeerScript},
     fakes::{CaptureFault, UnreportedClear},
@@ -49,13 +49,6 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         realtime: rng
             .bool()
             .then(|| RealtimeSetup { turn_detection: rng.bool(), ..RealtimeSetup::default() }),
-        // Three ways: no navigator, one the host started, one navigating from the start.
-        ivr: match rng.usize(0..3) {
-            0 => None,
-            1 => Some(false),
-            _ => Some(true),
-        },
-        amd: rng.bool().then_some(AmdSetup::default()),
         keyterms: if rng.bool() { names(rng) } else { vec![] },
         keyterm_detection: None,
         nodes: None,
@@ -118,20 +111,6 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     setup.background_audio = setup.room_legs.is_some() && rng.bool();
     setup.avatar = setup.room_legs.is_some() && rng.u8(0..100) < 30;
     setup.avatar_reports_start = setup.avatar && rng.bool();
-    if let Some(amd) = setup.amd.as_mut() {
-        *amd = AmdSetup {
-            interrupt_on_machine: rng.bool(),
-            ivr_detection: rng.bool(),
-            wait_until_finished: rng.bool(),
-            own_stt: rng.bool(),
-            // Most callees pick up; one call in eight rings out with nobody joining.
-            answer: match rng.usize(0..8) {
-                0..=4 => AmdAnswer::Track,
-                5 | 6 => AmdAnswer::Sip,
-                _ => AmdAnswer::Missing,
-            },
-        };
-    }
     setup.keyterm_detection = (rng.u8(0..100) < 35).then(|| KeytermDetectionSetup {
         stt_takes_keyterms: rng.u8(0..100) < 80,
         turn_interval: rng.u32(0..3),

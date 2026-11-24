@@ -539,9 +539,6 @@ class ChatRequest:
     def tools_host(self) -> object | None:
         """The host's live `list[Tool]` pool."""
     @property
-    def tools_host_extra(self) -> list[object]:
-        """The pools the session added on top of the agent's."""
-    @property
     def parallel_tool_calls(self) -> bool | None: ...
     @property
     def tool_choice(self) -> ToolChoice | None: ...

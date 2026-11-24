@@ -340,7 +340,7 @@ Everything that carries attributes is one kind of thing, a struct deriving
 
 ```rust
 /// One request to an LLM provider, retries included.
-#[span(name = "llm_request", parent = LlmNode | KeytermDetection | Amd | AgentRun, end = LlmRequestEnd)]
+#[span(name = "llm_request", parent = LlmNode | KeytermDetection | AgentRun, end = LlmRequestEnd)]
 #[derive(Attrs)]
 pub struct LlmRequest {
     #[attr("gen_ai.request.model", label)]
@@ -563,7 +563,6 @@ dropped or left open without the type system or the `Drop` assertion noticing.
 | `agent_turn`, `agent_speaking` | the speech's scheduler entry, then the record of its running tool calls |
 | `start_agent_activity` + `on_enter`, `drain_agent_activity` + `on_exit` | the callback's hook record |
 | `update_agent` | the activity's agent update, ended once done and no callback runs under it |
-| `amd` | the session's AMD detection, from the detector's attach to its verdict |
 | `keyterm_detection` | the keyterm slot's pass in flight |
 
 Core work that continues in the runtime (an LLM node, a TTS node, a tool call)

@@ -53,7 +53,8 @@ use lk_agents_voice::agent_session::{
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
 use lk_agents_voice::tool_executor::Toolset;
-use lk_agents_voice::trace::{CoreStep, Step};
+#[cfg(any(test, feature = "dst"))]
+use lk_agents_voice::trace::Step;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -171,7 +172,6 @@ struct Running {
     /// `Agent.chat_ctx`: the driving agent's view, as the driver last published it.
     chat_ctx: lk_agents_net::signal::Cell<Arc<lk_agents_abi::ChatContext>>,
     peer: PeerHandle,
-    amd: Option<Arc<dyn lk_agents_abi::voice::amd::AmdPort>>,
     /// The loop and the host event drain, cancelled once the close has drained.
     loop_tasks: Vec<ScopedTask>,
     /// Resolves when the host's drain has handed over the last event, so `close` handlers are
@@ -214,8 +214,6 @@ struct HostParts {
     /// The options object the session was built over: it mints `override_options` layer ids.
     /// `resolved_options()` answers `None` for a session built with none.
     options: Option<SessionOptions>,
-    /// Where `AMD` awaits the callee: the call's room, `None` on an offline (console) session.
-    call_room: Option<Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>>,
     /// The remote session protocol this session serves, if it does.
     remote: Option<RemoteSessionConfig>,
     /// The job whose room the session runs in.
@@ -357,7 +355,6 @@ impl VoiceSession {
                 keyterms,
                 chat_ctx,
                 peer,
-                ivr_detection: _,
                 speech_ids,
                 id_seed,
             } = handle;
@@ -404,7 +401,6 @@ impl VoiceSession {
                 chat_ctx,
                 peer,
                 _stalls: stalls,
-                amd: None,
                 remote,
                 loop_tasks: Vec::new(),
                 drained: Some(drained),
@@ -618,22 +614,6 @@ impl VoiceSession {
             pending.submitted();
         }
         sent
-    }
-
-    /// Attaches answering-machine detection once per session; the verdict arrives as `amd_result`.
-    pub fn attach_amd(
-        &self,
-        setup: lk_agents_voice::amd::AmdSetup,
-    ) -> Result<bool, SessionRefused> {
-        self.running(|r| {
-            if r.amd.is_some() {
-                r.peer.journal(Step::Core(CoreStep::PortFailure("amd: already attached")));
-                Ok(false)
-            } else {
-                r.amd = Some(crate::voice::amd::spawn(r.peer.clone(), setup));
-                Ok(true)
-            }
-        })
     }
 
     /// Resolves once the loop returned and the drain handed over the last event.

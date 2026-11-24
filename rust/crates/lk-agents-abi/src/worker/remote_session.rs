@@ -1,5 +1,4 @@
 use crate::ChatItem;
-use crate::voice::amd::AmdCategory;
 use crate::voice::events::{
     AgentFalseInterruption, AgentStateChanged, EotPrediction, ItemAddedWire, ToolCallEnded,
     ToolCallUpdated, ToolReplyUpdated, UserInputTranscribed, UserStateChanged,
@@ -19,7 +18,6 @@ pub const STATE_OPTION_FIELDS: &[&str] = &[
     "transcription_timeout",
     "preemptive_generation",
     "min_consecutive_speech_delay",
-    "ivr_detection",
 ];
 
 /// `id` and `created_at` are left unset, as in the reference (`remote_session.py:533`).
@@ -53,17 +51,6 @@ pub struct OverlappingSpeechWire {
     pub overlap_started_at: Option<f64>,
     pub detection_delay: f64,
     pub detected_at: f64,
-}
-
-/// `amd_prediction` (tag 18). Back-channel: never passes through `session.on(..)`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AmdPredictionWire {
-    pub speech_duration: f64,
-    /// The detector's verdict.
-    pub category: AmdCategory,
-    pub reason: String,
-    pub transcript: String,
-    pub delay: f64,
 }
 
 /// `function_tools_executed` (tag 14).
@@ -128,7 +115,6 @@ pub enum WireEvent {
     Error(ErrorWire),
     OverlappingSpeech(OverlappingSpeechWire),
     EotPrediction(EotPrediction),
-    AmdPrediction(AmdPredictionWire),
     FunctionToolsExecuted(FunctionToolsExecutedWire),
     FunctionToolsStarted(FunctionToolsStartedWire),
     DebugMessage(DebugMessageWire),

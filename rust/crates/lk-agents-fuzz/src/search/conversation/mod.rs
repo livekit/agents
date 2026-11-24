@@ -4,13 +4,8 @@ use std::{
 };
 
 use fastrand::Rng;
-use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_voice::{
     agent_session::IoKind,
-    amd::machine::classifier::{
-        MAX_EXTENSION_SECS, POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL,
-    },
-    events::SessionEvent,
     keyterm_detection::RECORD_KEYTERMS_TOOL,
     trace::{RealtimeStep, Step},
 };
@@ -18,12 +13,12 @@ use lk_agents_voice::{
 use super::uniform;
 
 use crate::{
-    drive::{AmdAnswer, Case, Outcome, Policy, Run, Setup},
+    drive::{Case, Outcome, Policy, Run, Setup},
     fakes::{MS_PER_WORD, Timing, delay, measured},
     input::{
-        AGENT_TURNS, AgentText, AmdInput, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make,
-        Millis, NAMES, Ref, RoomIn, RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode,
-        USER_TURNS, UserText,
+        AGENT_TURNS, AgentText, Confidence, ConsoleAsk, Count, HookAnswer, Input, Make, Millis,
+        NAMES, Ref, RoomIn, RtEvent, Sampler, Speaker, ToolAnswer, ToolArgs, TurnMode, USER_TURNS,
+        UserText,
     },
     record::{Detail, Kind, Sink, Tag},
 };
@@ -342,18 +337,11 @@ const TEARDOWN: u8 = 30;
 /// How often, per beat, a camera the case attached delivers frames.
 const CAMERA: u8 = 30;
 
-/// How often, per beat, a ringing SIP call AMD waits on is answered.
-const SIP_ANSWERS: u8 = 20;
-
 /// How often, per beat, a voice provider that is down comes back: outages last seconds.
 const OUTAGE_ENDS: u8 = 2;
 
 /// How often, per beat, the developer turns back on a leg it turned off: about two seconds on.
 const RESTORES: u8 = 5;
-
-/// How often, per beat, the developer leaves the `async with AMD(...)` block once `execute()`
-/// returned.
-const AMD_LEFT: u8 = 30;
 
 /// One beat of microphone time: a beat's frames in one `MicFrames`, one detector tick, then the
 /// clock moves by the beat. A real detector reports every 32 ms, but three inputs per 32 ms beat
@@ -723,7 +711,7 @@ impl Talk {
                 self.send(restore).await?;
             }
         }
-        self.detect_machine().await
+        Ok(())
     }
 
     /// Whether the voice provider is down now: the last outage the case stated still stands.
@@ -770,49 +758,6 @@ impl Talk {
             }
         }
         off.into_values().collect()
-    }
-
-    /// The developer's `async with AMD(...) as detector: result = await detector.execute()`: the
-    /// SIP call is answered a few beats in, `execute()` returns once the verdict is out, and the
-    /// block is left (`aclose()`) right after or later.
-    async fn detect_machine(&mut self) -> Result<(), Halt> {
-        let Some(amd) = self.run.setup.amd else { return Ok(()) };
-        let sent = |run: &Run, step: AmdInput| {
-            run.record.applied().iter().any(|a| a.accepted && a.input == Input::Amd { input: step })
-        };
-        if amd.answer == AmdAnswer::Sip
-            && !sent(&self.run, AmdInput::Answer)
-            && self.rng.u8(0..100) < SIP_ANSWERS
-        {
-            self.send(Input::Amd { input: AmdInput::Answer }).await?;
-        }
-        let verdict = self
-            .run
-            .record
-            .host_view()
-            .events()
-            .iter()
-            .any(|(_, ev)| matches!(ev, SessionEvent::AmdResult { .. }));
-        if verdict && !sent(&self.run, AmdInput::Execute) {
-            self.send(Input::Amd { input: AmdInput::Execute }).await?;
-        }
-        // `participant_missing` is the call that ended before anyone spoke: the developer hangs
-        // up rather than leave the agent talking to an empty room, where its voice waits for a
-        // listener that is not coming (the room's output plays once subscribed).
-        let missing = self.run.record.host_view().events().iter().any(|(_, ev)| {
-            matches!(ev, SessionEvent::AmdResult { verdict, .. }
-                if verdict.reason == lk_agents_abi::voice::amd::AmdReason::ParticipantMissing)
-        });
-        if missing && !self.ending && !self.closing() {
-            return Box::pin(self.hang_up()).await;
-        }
-        if sent(&self.run, AmdInput::Execute)
-            && !sent(&self.run, AmdInput::Close)
-            && self.rng.u8(0..100) < AMD_LEFT
-        {
-            self.send(Input::Amd { input: AmdInput::Close }).await?;
-        }
-        Ok(())
     }
 
     /// The session began closing: the host or the room asked, or the session gave up on its own.

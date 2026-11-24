@@ -66,8 +66,6 @@ from ._generated._core_evals import (
 from ._generated._core_inference import (
     InferenceAvatar as InferenceAvatar,
     InferenceTts as InferenceTts,
-    amd_auto_select_models as amd_auto_select_models,
-    amd_is_evaluated_model as amd_is_evaluated_model,
     eot_select as eot_select,
     identify_host as identify_host,
     inference_api_key as inference_api_key,
@@ -324,9 +322,6 @@ from ._generated._core_voice import (
     _core_SessionOwner as _core_SessionOwner,
     _core_SessionState as _core_SessionState,
     _core_SessionStorage as _core_SessionStorage,
-    amd_prediction_is_human as amd_prediction_is_human,
-    amd_prediction_is_machine as amd_prediction_is_machine,
-    amd_resolve_max_endpointing_delay as amd_resolve_max_endpointing_delay,
     card_expired as card_expired,
     default_session_models as default_session_models,
     dtmf_capture_plan as dtmf_capture_plan,

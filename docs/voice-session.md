@@ -82,7 +82,6 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `llm`, `tools`, `conn_options`, `context` | the constructor's model, session tools, connection policy and application context |
 | `thread` | the call's thread, `None` for a call in memory |
 | `store` | the call's `ContextStore` for explicit `load_context` and `save_context`; raises before `start()` |
-| `amd` | the session's `AMD`, `None` when answering-machine detection is off |
 | `input`, `output` | the session's media endpoints; assigning `session.output.audio` replaces the audio sink the agent speaks into |
 
 | Event | Payload | When |
@@ -539,37 +538,6 @@ another output is selected. Buffered audio is not silently replayed on the
 replacement, and generated or accepted audio is not counted as heard audio.
 Recording and transcript accounting retain the same session timeline across
 the change.
-
-## Answering machine detection
-
-`AMD(session, ...)` classifies who answered an outbound call. Start it before
-dialing so no audio is missed:
-
-```python
-from livekit.agents import AMD, AMDCategory
-
-async with AMD(session) as detector:
-    await ctx.api.sip.create_sip_participant(...)  # wait_until_answered=True
-    result = await detector.execute()
-
-if result.category == AMDCategory.MACHINE_VM:
-    await session.say("Hi, this is the clinic calling about your appointment.")
-```
-
-`execute()` returns an `AMDPredictionEvent`: `category` (`human`,
-`machine-ivr`, `machine-vm`, `machine-unavailable` or `uncertain`), `reason`,
-`transcript`, `speech_duration` and `delay` (`timedelta`s), with `is_human` and `is_machine`.
-Until the verdict the agent's speech is held. On a machine the current speech
-is interrupted (`interrupt_on_machine=True`), and a `machine-ivr` verdict
-starts IVR navigation (`ivr_detection=True`).
-
-| Parameter | What |
-| --- | --- |
-| `llm`, `stt` | the classifier's models; by default LiveKit inference with Cloud credentials, else the session's. `None` reuses the session's |
-| `interrupt_on_machine`, `ivr_detection` | what a machine verdict does, both on by default |
-| `participant_identity` | listen to this participant only |
-| `detection_options` | a `DetectionOptions`: the silence and speech thresholds, `timeout` and the classification `prompt` |
-| `wait_until_finished` | once speech is heard, wait for the greeting to end rather than answer at `timeout` |
 
 ## Background audio
 

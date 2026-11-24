@@ -277,49 +277,6 @@
       }
     },
     {
-      "id": "span.amd",
-      "type": "span",
-      "span_kind": "internal",
-      "stability": "development",
-      "brief": "Answering-machine detection, from the detector's attach to its verdict.",
-      "attributes": [
-        {
-          "ref": "lk.amd.category",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.amd.reason",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.amd.speech_duration",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.amd.delay",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.pii.amd.transcript",
-          "requirement_level": "recommended"
-        }
-      ],
-      "annotations": {
-        "livekit": {
-          "parents": [
-            "agent_session"
-          ],
-          "end_attributes": [
-            "lk.amd.category",
-            "lk.amd.reason",
-            "lk.amd.speech_duration",
-            "lk.amd.delay",
-            "lk.pii.amd.transcript"
-          ]
-        }
-      }
-    },
-    {
       "id": "span.drain_agent_activity",
       "type": "span",
       "span_kind": "internal",

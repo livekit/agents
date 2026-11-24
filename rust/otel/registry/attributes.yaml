@@ -1109,73 +1109,6 @@
           "brief": "Label of the agent running the activity."
         },
         {
-          "id": "lk.amd.category",
-          "type": {
-            "members": [
-              {
-                "id": "human",
-                "value": "human",
-                "brief": "human",
-                "stability": "development"
-              },
-              {
-                "id": "machine_ivr",
-                "value": "machine-ivr",
-                "brief": "machine-ivr",
-                "stability": "development"
-              },
-              {
-                "id": "machine_vm",
-                "value": "machine-vm",
-                "brief": "machine-vm",
-                "stability": "development"
-              },
-              {
-                "id": "machine_unavailable",
-                "value": "machine-unavailable",
-                "brief": "machine-unavailable",
-                "stability": "development"
-              },
-              {
-                "id": "uncertain",
-                "value": "uncertain",
-                "brief": "uncertain",
-                "stability": "development"
-              }
-            ]
-          },
-          "stability": "development",
-          "brief": "AMD classification."
-        },
-        {
-          "id": "lk.amd.delay",
-          "type": "double",
-          "stability": "development",
-          "brief": "Seconds from the call start to the verdict.",
-          "annotations": {
-            "livekit": {
-              "unit": "s"
-            }
-          }
-        },
-        {
-          "id": "lk.amd.reason",
-          "type": "string",
-          "stability": "development",
-          "brief": "Why the detector decided."
-        },
-        {
-          "id": "lk.amd.speech_duration",
-          "type": "double",
-          "stability": "development",
-          "brief": "Seconds of speech the detector heard.",
-          "annotations": {
-            "livekit": {
-              "unit": "s"
-            }
-          }
-        },
-        {
           "id": "lk.blocking.count",
           "type": "int",
           "stability": "development",
@@ -1443,17 +1376,6 @@
           },
           "stability": "development",
           "brief": "State before the transition."
-        },
-        {
-          "id": "lk.pii.amd.transcript",
-          "type": "string",
-          "stability": "development",
-          "brief": "The transcript the verdict was made on.",
-          "annotations": {
-            "livekit": {
-              "sensitivity": "pii"
-            }
-          }
         },
         {
           "id": "lk.pii.rpc.payload",

@@ -105,12 +105,6 @@ impl SessionHooks for ScriptedHooks {
     ) -> Result<Vec<lk_agents_abi::agent::FunctionToolInfo>, HostError> {
         self.result(Vec::new())
     }
-    fn closing(
-        &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
-        Box::pin(async move { self.result(()) })
-    }
     fn on_user_turn_completed<'a>(
         &'a self,
         cx: &lk_agents_abi::telemetry::Cx,

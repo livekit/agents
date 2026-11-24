@@ -28,8 +28,8 @@ mod speech_scheduler {
         callers: Vec<PauseCause>,
     }
 
-    /// Where the scheduling loop is: idle, sleeping out `min_consecutive_speech_delay`, holding
-    /// authorization, or with a current speech.
+    /// Where the scheduling loop is: idle, sleeping out `min_consecutive_speech_delay`, or with a
+    /// current speech.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum SchedulingStep {
         Idle,
@@ -37,10 +37,6 @@ mod speech_scheduler {
         /// fires. `next` is `None` once that candidate finished early; the gap still stands.
         Delaying {
             next: Option<SpeechId>,
-        },
-        /// The head is chosen but authorization is held for AMD.
-        AuthorizationPaused {
-            next: SpeechId,
         },
         /// Authorized: playing, or inside a tool.
         Current(SpeechId),
@@ -89,9 +85,6 @@ mod speech_scheduler {
         /// speech.
         last_playout: Option<Ts>,
         paused: Option<Pause>,
-        /// AMD's hold: the head is chosen and held unauthorized. A flag, not a counter: two
-        /// pauses and one resume resume.
-        pub(crate) authorization_paused: bool,
         /// At most one live preemptive generation, with the transcript the model was asked about.
         preemptive_generation: Option<(SpeechId, String)>,
         /// The preflight a preemptive generation is started for, consumed by the `schedule_speech`
@@ -121,7 +114,6 @@ mod speech_scheduler {
                 step: SchedulingStep::Idle,
                 last_playout: None,
                 paused: None,
-                authorization_paused: false,
                 preemptive_generation: None,
                 preflight: None,
                 preemptive_generation_count: 0,
@@ -134,9 +126,7 @@ mod speech_scheduler {
         pub fn current_speech(&self) -> Option<SpeechId> {
             match self.step {
                 SchedulingStep::Current(speech) => Some(speech),
-                SchedulingStep::Idle
-                | SchedulingStep::Delaying { .. }
-                | SchedulingStep::AuthorizationPaused { .. } => None,
+                SchedulingStep::Idle | SchedulingStep::Delaying { .. } => None,
             }
         }
 
@@ -255,17 +245,16 @@ mod speech_scheduler {
         pub fn no_current_speech(&self) -> bool {
             match self.step {
                 SchedulingStep::Idle | SchedulingStep::Delaying { next: None, .. } => true,
-                SchedulingStep::Delaying { next: Some(_), .. }
-                | SchedulingStep::AuthorizationPaused { .. }
-                | SchedulingStep::Current(_) => false,
+                SchedulingStep::Delaying { next: Some(_), .. } | SchedulingStep::Current(_) => {
+                    false
+                }
             }
         }
 
-        /// The next speech, chosen but not yet current (AMD's hold or the consecutive-speech gap).
+        /// The next speech, chosen but not yet current (the consecutive-speech gap).
         pub fn next_speech(&self) -> Option<SpeechId> {
             match self.step {
-                SchedulingStep::AuthorizationPaused { next }
-                | SchedulingStep::Delaying { next: Some(next), .. } => Some(next),
+                SchedulingStep::Delaying { next: Some(next), .. } => Some(next),
                 SchedulingStep::Idle
                 | SchedulingStep::Delaying { next: None, .. }
                 | SchedulingStep::Current(_) => None,
@@ -299,8 +288,8 @@ mod speech_scheduler {
             self.speech_q.push_back(speech);
         }
 
-        /// The owed gap expires where it is read, and the head is authorized, armed behind the
-        /// gap, or held for AMD.
+        /// The owed gap expires where it is read, and the head is authorized or armed behind the
+        /// gap.
         /// `min_delay` is the effective `min_consecutive_speech_delay` (the driving agent's, else
         /// the session's), read at each pass.
         pub(super) fn scheduling_pass(
@@ -328,7 +317,6 @@ mod speech_scheduler {
                         released = true;
                         next
                     }
-                    SchedulingStep::AuthorizationPaused { next } => next,
                     SchedulingStep::Idle => match self.speech_q.pop_front() {
                         Some(speech) => speech,
                         None => return SchedulingPass { released, next: NextSpeech::Stay },
@@ -345,11 +333,6 @@ mod speech_scheduler {
                 let until = now.saturating_add(delay);
                 self.step = SchedulingStep::Delaying { next: Some(candidate) };
                 return SchedulingPass { released, next: NextSpeech::Delayed { until } };
-            }
-            // AMD's hold keeps the head chosen and unauthorized.
-            if self.authorization_paused {
-                self.step = SchedulingStep::AuthorizationPaused { next: candidate };
-                return SchedulingPass { released, next: NextSpeech::Stay };
             }
             self.step = SchedulingStep::Current(candidate);
             self.set_status(candidate, Status::Current);
@@ -397,9 +380,6 @@ mod speech_scheduler {
                 // The gap owed to a finished speech stands for whoever is behind.
                 SchedulingStep::Delaying { next: Some(next) } if next == speech => {
                     SchedulingStep::Delaying { next: None }
-                }
-                SchedulingStep::AuthorizationPaused { next } if next == speech => {
-                    SchedulingStep::Idle
                 }
                 step => step,
             };
@@ -490,16 +470,12 @@ mod speech_scheduler {
             self.paused.take().map(|p| p.callers)
         }
 
-        /// The close: an owed or held next speech freed (`true` when an owed gap was released).
+        /// The close: an owed next speech freed (`true` when an owed gap was released).
         pub(super) fn close(&mut self) -> bool {
             match self.step {
                 SchedulingStep::Delaying { .. } => {
                     self.step = SchedulingStep::Idle;
                     true
-                }
-                SchedulingStep::AuthorizationPaused { .. } => {
-                    self.step = SchedulingStep::Idle;
-                    false
                 }
                 SchedulingStep::Idle | SchedulingStep::Current(_) => false,
             }
@@ -579,8 +555,7 @@ mod speech_scheduler {
                     Some(Status::Current),
                     "the current speech is not current"
                 ),
-                SchedulingStep::Delaying { next: Some(next), .. }
-                | SchedulingStep::AuthorizationPaused { next } => debug_assert_eq!(
+                SchedulingStep::Delaying { next: Some(next), .. } => debug_assert_eq!(
                     status(&next),
                     Some(Status::Queued),
                     "the next speech {next:?} was released or is not queued"
@@ -618,7 +593,7 @@ mod speech_scheduler {
     }
 
     pub(super) enum NextSpeech {
-        /// A current speech, a gap owed, nothing queued, or held for AMD: nothing to authorize.
+        /// A current speech, a gap owed, or nothing queued: nothing to authorize.
         Stay,
         /// The gap is owed until `until`.
         Delayed {

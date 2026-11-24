@@ -446,26 +446,28 @@ mod text_before_attach {
     // Catches: an authorized synthesised segment forwarding its words straight to the transcription
     // output it captured, ahead of the activation that attaches it, so words reached an output that
     // was never attached (`output_replacement_is_clean`, survey seed 1560). Here the segment waits
-    // on its authorization, activates after the replacement, and all its words go to it.
+    // out the consecutive-speech gap, activates after the replacement, and all its words go to it.
     #[test]
     fn a_failed_voice_writes_no_words_to_an_unattached_replaced_output() {
         let text = |t: &str| AgentText(t.into());
         simulate(async {
-            let setup = Setup { preemptive: true, ..Setup::default() };
+            let setup = Setup { preemptive: true, speech_gap_ms: Some(2_000), ..Setup::default() };
             let mut run = Run::start(&setup, 0, Default::default()).await;
             for input in [
-                Input::TtsOutage { down: true },
-                Input::PauseAuthorization {},
+                // An empty reply plays out, so the next speech waits out the gap unauthorized.
                 Input::GenerateReply { user_input: None, instructions: None, allow: None },
                 Input::Advance { ms: Millis(20) },
-                Input::LlmText { chat: Ref::new(0), text: text("Hello there.") },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(20) },
+                Input::TtsOutage { down: true },
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(20) },
+                Input::LlmText { chat: Ref::new(1), text: text("Hello there.") },
                 Input::Advance { ms: Millis(20) },
                 Input::SetTranscriptionOutput { attach: true },
                 Input::Advance { ms: Millis(20) },
-                Input::LlmText { chat: Ref::new(0), text: text(" How are you?") },
-                Input::LlmEnd { chat: Ref::new(0) },
-                Input::Advance { ms: Millis(20) },
-                Input::ResumeAuthorization {},
+                Input::LlmText { chat: Ref::new(1), text: text(" How are you?") },
+                Input::LlmEnd { chat: Ref::new(1) },
                 Input::Advance { ms: Millis(10_000) },
             ] {
                 run.apply(&input).await;

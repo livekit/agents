@@ -329,61 +329,6 @@ async fn unadopted_initial_streams_close_and_release_their_registered_sinks() {
     assert!(resources.audio_sink(sink).is_none(), "the abandoned initial sink remained registered");
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_tap_refused_by_the_closed_queue_is_retired_without_a_runtime_cleanup_pass() {
-    let (mut runtime, handle, _) = session("late-audio-tap").await;
-    runtime.queue.close();
-    let ended = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let sink = Arc::new(CountedTap(ended.clone()));
-    let retained = Arc::downgrade(&sink);
-    assert!(handle.peer.install_audio_tap(sink).is_err());
-    assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert!(retained.upgrade().is_none());
-    assert!(runtime.shared.resources.live().is_empty());
-}
-
-#[tokio::test(start_paused = true)]
-async fn retiring_a_queue_ends_every_tap_in_an_unprocessed_burst() {
-    for dropped in [false, true] {
-        let (mut runtime, handle, _) = session("queued-tap-burst").await;
-        let resources = runtime.shared.resources.clone();
-        let mut taps = Vec::new();
-        for _ in 0..512 {
-            let ended = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let tap = Arc::new(CountedTap(ended.clone()));
-            let retained = Arc::downgrade(&tap);
-            handle.peer.install_audio_tap(tap).unwrap();
-            taps.push((ended, retained));
-        }
-        if !dropped {
-            runtime.close().await;
-        }
-        drop(runtime);
-        assert!(handle.api.is_closed(), "resource cleanup preceded queue admission shutdown");
-        assert!(resources.live().is_empty(), "queued registrations outlived their queue owner");
-        for (ended, retained) in taps {
-            assert_eq!(ended.load(std::sync::atomic::Ordering::SeqCst), 1);
-            assert!(retained.upgrade().is_none());
-        }
-    }
-}
-
-struct CountedTap(Arc<std::sync::atomic::AtomicUsize>);
-impl lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame> for CountedTap {
-    fn push(
-        &self,
-        _: lk_agents_abi::AudioFrame,
-    ) -> Result<(), lk_agents_abi::errors::ProviderError> {
-        Ok(())
-    }
-    fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
-        Ok(())
-    }
-    fn end_input(&self) {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
 async fn prepared_stt(
     runtime: &VoiceRuntime,
 ) -> (crate::voice::events::StreamOpened, Arc<tokio::sync::Notify>) {
@@ -559,21 +504,6 @@ async fn refused_cleanup_task_admission_preserves_the_stream_owner() {
         .await
         .expect("task refusal abandoned the armed stream owner");
     assert!(runtime.shared.resources.live().is_empty());
-}
-
-#[test]
-fn watch_close_preserves_queued_order_and_refuses_late_subscriptions() {
-    let watch = crate::voice::session::WatchHub::new();
-    let mut feed = watch.subscribe();
-    watch.publish(SystemTap::Ivr(IvrCommand::Close));
-    watch.publish(SystemTap::CloseRequested);
-    watch.close();
-    watch.publish(SystemTap::CloseRequested);
-    assert!(matches!(feed.try_recv(), Ok(SystemTap::Ivr(IvrCommand::Close))));
-    assert!(matches!(feed.try_recv(), Ok(SystemTap::CloseRequested)));
-    assert!(matches!(feed.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)));
-    assert!(watch.subscribe().is_closed());
-    assert!(watch.is_empty());
 }
 
 #[derive(Default)]
@@ -769,7 +699,7 @@ async fn cancelling_a_polled_stream_retirement_preserves_close_and_registration_
     let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let tasks = Arc::<lk_agents_net::task::TaskSet>::default();
     let opened = legs::OpeningLeg::new(
-        lk_agents_voice::audio::AudioChannel::Amd,
+        lk_agents_voice::audio::AudioChannel::Stt,
         Arc::new(StartupSink(ended.clone())),
         legs::PendingLeg::Stt(Box::new(PendingCloseSource { probe: probe.clone(), ended })),
         builder.resources.clone(),
@@ -1071,7 +1001,7 @@ async fn startup_runs_under_the_spans_start_reserved() {
 }
 
 // Catches: the host's drain parked forever after the runtime dropped (a panic, an abort) because
-// a system still held a sender of the host-event stream (AMD, IVR, the session's stage).
+// something still held a sender of the host-event stream (the session's stage).
 #[tokio::test(start_paused = true)]
 async fn a_dropped_runtime_ends_the_host_event_stream_whatever_senders_remain() {
     let (runtime, mut handle, _) = session("dropped-stream").await;

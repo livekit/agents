@@ -144,13 +144,10 @@ fn message_names_models(
 /// Whether the session had an STT at `at`: a recognition stream open, and no agent since taken
 /// over without one (its turn, decided as the old one's stream closes, names no STT).
 fn stt_open(r: &Recording, at: &Observed) -> bool {
-    // The session's recogniser: the answering-machine detector's own transcribes for it alone.
     let open = r
         .opened()
         .iter()
-        .filter(|o| {
-            o.kind == Kind::Stt && o.detail != crate::record::Detail::AmdStt && o.at.seq <= at.seq
-        })
+        .filter(|o| o.kind == Kind::Stt && o.at.seq <= at.seq)
         .any(|o| {
             !r.closed().iter().any(|(c, k, n)| *k == Kind::Stt && *n == o.nth && c.seq <= at.seq)
         });
