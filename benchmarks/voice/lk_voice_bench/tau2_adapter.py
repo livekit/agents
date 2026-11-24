@@ -36,6 +36,13 @@ from tau2.voice.audio_native.tick_result import TickResult, UtteranceTranscript
 
 from livekit.agents.llm import ToolError
 
+# plugins must register on the main thread; tau2 imports this module there before its
+# simulation threads start (see register-livekit-agents.patch), so load optional ones now
+try:
+    from livekit.plugins import krisp  # noqa: F401
+except ImportError:  # only needed by presets that use Krisp noise cancellation
+    pass
+
 from .audio_io import FRAME_MS
 from .codec import pcm16_to_ulaw, ulaw_to_pcm16
 from .config import get_preset
