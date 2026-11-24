@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from livekit.agents import APIStatusError
-from livekit.agents.tts import AudioEmitter
+from livekit.agents import APIStatusError, tokenize
+from livekit.agents.tts import AudioEmitter, StreamAdapter
 from livekit.plugins import soniox
 from livekit.plugins.soniox.tts import _Connection
 
@@ -340,3 +340,47 @@ async def test_reduce_silence_rejected_on_unsupported_model() -> None:
     with pytest.raises(ValueError, match="reduce_silence"):
         tts.update_options(model="tts-rt-v1")
     assert tts._opts.model == "tts-rt-v2"
+
+
+def test_markup_only_on_models_that_read_audio_tags() -> None:
+    # audio tags arrived with tts-rt-v2; an older model would read them aloud
+    v2 = soniox.TTS(api_key="test-key", model="tts-rt-v2")
+    assert v2.markup._provider_key() == "soniox"
+    assert v2.markup.llm_instructions() is not None
+    assert v2.markup.convert('<expr type="sound" label="laughs"/> Ha.') == "[laughs] Ha."
+
+    v1 = soniox.TTS(api_key="test-key", model="tts-rt-v1-preview")
+    assert v1.markup._provider_key() == ""
+    assert v1.markup.llm_instructions() is None
+
+    v1.update_options(model="tts-rt-v2")
+    assert v1.markup._provider_key() == "soniox"
+
+
+async def test_stream_adapter_lowers_markup_to_audio_tags() -> None:
+    # a natively streaming TTS gets expressive mode through StreamAdapter, which
+    # lowers the markers before Soniox sees the text
+    fake = _FakeConnection()
+    soniox_tts = soniox.TTS(api_key="fake-key", model="tts-rt-v2")
+
+    async def _fake_current_connection(*, timeout: float) -> tuple[Any, float, bool]:
+        return fake, 0.0, True
+
+    soniox_tts._current_connection = _fake_current_connection  # type: ignore[method-assign]
+    adapter = StreamAdapter(
+        tts=soniox_tts,
+        sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True, xml_aware=True),
+    )
+    adapter._set_expressive(True)  # the pipeline does this just before stream()
+
+    async with adapter.stream() as stream:
+        # split mid-marker, the way tokens actually arrive from an LLM
+        for chunk in ['<expr type="sound" label="la', 'ughs"/> That is funny. ', "Okay."]:
+            stream.push_text(chunk)
+        stream.end_input()
+        async for _ in stream:
+            pass
+
+    sent = "".join(text for _, text, end in fake.send_calls if not end)
+    assert "[laughs] That is funny." in sent
+    assert "<expr" not in sent

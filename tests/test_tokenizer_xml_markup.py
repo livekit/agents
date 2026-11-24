@@ -499,6 +499,106 @@ class TestFishAudioDialect:
         )
 
 
+class TestSonioxDialect:
+    """Soniox's native dialect is English words in square brackets, each steering the words
+    after it: expr markers lower to [EMOTION] / [SOUND] / [pause] / [long pause] for the TTS,
+    and any label outside Soniox's documented vocabulary is dropped rather than risk the
+    voice reading it aloud."""
+
+    def test_llm_instructions_registered(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        instr = pf.llm_instructions("soniox")
+        # non-None is what the expressive gate keys on
+        assert instr is not None
+        for label in (*pf._SONIOX_EMOTIONS, *pf._SONIOX_SOUNDS, *pf._SONIOX_TONES):
+            assert label in instr, label
+        assert '<expr type="sound" label="laughs"/>' in instr
+        assert "English" in instr
+
+    def test_convert_expr_to_soniox_brackets(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = (
+            '<expr type="expression" label="excited"/> We won! '
+            '<expr type="sound" label="laughs"/> <expr type="break" label="500ms"/> '
+            '<expr type="prosody" label="whispering">Don\'t tell anyone</expr> yet. '
+            '<expr type="break" label="2s"/> Okay.'
+        )
+        assert pf.convert_markup("soniox", raw) == (
+            "[excited] We won! [laughs] [pause] [whispering] Don't tell anyone yet. "
+            "[long pause] Okay."
+        )
+
+    def test_convert_aliases_from_other_providers(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # other providers advertise "laugh"/"sigh"; a carried-over one still lowers to
+        # the sound Soniox renders
+        assert pf.convert_markup("soniox", '<expr type="sound" label="laugh"/>') == "[laughs]"
+        assert pf.convert_markup("soniox", '<expr type="sound" label="Sighing"/>') == "[sighs]"
+        assert pf.convert_markup("soniox", '<expr type="sound" label="clear throat"/>') == (
+            "[clears throat]"
+        )
+        raw = '<expr type="prosody" label="whisper">psst</expr>'
+        assert pf.convert_markup("soniox", raw) == "[whispering] psst"
+
+    def test_unknown_labels_are_dropped_not_spoken(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # Soniox may read an unknown tag aloud, so only documented labels pass
+        raw = (
+            '<expr type="expression" label="say it gently"/> Hi there. '
+            '<expr type="sound" label="dog barks"/> Bye. '
+            '<expr type="prosody" label="like a pirate">ahoy</expr> '
+            '<expr type="prosody" label="emphasis">really</expr> '
+            'code <expr type="spell">A7</expr>'
+        )
+        assert pf.convert_markup("soniox", raw).strip() == "Hi there. Bye. ahoy really code A7"
+
+    def test_hallucinated_native_markup_never_leaks(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = '<expression value="happy"/> Hey <sound value="laughing"/> there <break time="1s"/>'
+        clean, _ = pf.split_all_markup(raw)
+        assert "<" not in clean
+        assert pf.convert_markup("soniox", raw) == "[happy] Hey [laughs] there [pause]"
+
+    def test_split_markup_strips_expr(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = (
+            '<expr type="expression" label="warm"/> Good to see you. '
+            '<expr type="sound" label="chuckles"/>'
+        )
+        clean, tags = pf.split_all_markup(raw)
+        assert clean == "Good to see you."
+        types = [(t["type"], t["value"]) for t in tags]
+        assert ("expression", "warm") in types and ("sound", "chuckles") in types
+
+    def test_steering_filters_sounds_and_examples(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        instr = pf.llm_instructions("soniox", {"nonverbal_sounds": False})
+        assert instr is not None
+        assert 'type="sound"' not in instr and "laughs" not in instr
+        assert "Examples:" in instr  # the sound-free examples survive
+
+        instr = pf.llm_instructions("soniox", {"nonverbal_sounds": {"reflex_sounds": False}})
+        assert instr is not None
+        assert "laughs" in instr and "coughs" not in instr
+
+    def test_supported_nonverbals(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # every Soniox sound is governed by exactly one NonverbalOptions field
+        governed = [
+            label for labels in pf._NONVERBAL_SOUND_LABELS["soniox"].values() for label in labels
+        ]
+        assert sorted(governed) == sorted(pf._SONIOX_SOUNDS)
+        assert pf.supported_nonverbals("soniox")["laughing"] == ["laughs", "chuckles", "giggles"]
+
+
 class TestFishAudioDramaDialect:
     """drama-3 follows free-form direction, so the LLM writes Inworld-style delivery
     descriptions that lower verbatim to [direction], and prosody spans lower to drama-3's
