@@ -1068,6 +1068,32 @@ def commit_turn(detector: AMD, info: _EndOfTurnInfo) -> TurnHooks:
     return hooks.on_user_turn_committed(info.new_transcript, info.metrics.end_of_turn_delay)
 
 
+def agent_speech(session: AgentSession) -> SpeechHandle:
+    """Create a speech the way the session does, so AMD sees it."""
+    handle = SpeechHandle.create()
+    session.emit(
+        "speech_created",
+        SpeechCreatedEvent(user_initiated=False, source="say", speech_handle=handle),
+    )
+    return handle
+
+
+def agent_said(
+    session: AgentSession,
+    text: str,
+    *,
+    handle: SpeechHandle | None = None,
+    created_at: float | None = None,
+) -> None:
+    """Add a speech's reply when the speech ends, as the session does."""
+    handle = handle or agent_speech(session)
+    message = llm.ChatMessage(role="assistant", content=[text])
+    if created_at is not None:
+        message.created_at = created_at
+    handle._item_added([message])
+    handle._mark_done()
+
+
 def speech_started(detector: AMD) -> None:
     detector._session._update_user_state("speaking")
 
@@ -3066,17 +3092,11 @@ async def test_amd_collects_only_successful_dtmf_calls_from_its_run() -> None:
 @pytest.mark.asyncio
 async def test_classifier_sees_that_the_agent_spoke_but_not_its_words() -> None:
     async with running() as (detector, session, classifier, _):
-        session._conversation_item_added(
-            llm.ChatMessage(
-                role="assistant", content=["before AMD"], created_at=detector._started_at - 1
-            )
-        )
+        agent_said(session, "before AMD", created_at=detector._started_at - 1)
         commit_turn(detector, end_of_turn("Leave a message after the tone."))
         await classifier.request()
-        session._conversation_item_added(llm.ChatMessage(role="assistant", content=[""]))
-        session._conversation_item_added(
-            llm.ChatMessage(role="assistant", content=["Hi Sam, this is Alex."])
-        )
+        agent_said(session, "")
+        agent_said(session, "Hi Sam, this is Alex.")
         commit_turn(detector, end_of_turn("To erase it and start over, press two."))
         request = await classifier.request()
 
@@ -3097,12 +3117,10 @@ async def test_agent_reply_keeps_speaking_order_when_a_turn_commits_during_it() 
         second = await classifier.request()
         assert first.current_turn.created_at < second.current_turn.created_at
         # the reply started between the two turns but is added when its speech ends
-        session._conversation_item_added(
-            llm.ChatMessage(
-                role="assistant",
-                content=["This is Alex from Acme."],
-                created_at=(first.current_turn.created_at + second.current_turn.created_at) / 2,
-            )
+        agent_said(
+            session,
+            "This is Alex from Acme.",
+            created_at=(first.current_turn.created_at + second.current_turn.created_at) / 2,
         )
         commit_turn(detector, end_of_turn("Please hold."))
         request = await classifier.request()
@@ -3122,16 +3140,12 @@ async def test_classifier_sees_the_agent_words_while_a_human_is_held() -> None:
         await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
         await eventually(lambda: detector._turns[1].prediction is not None)
-        session._conversation_item_added(
-            llm.ChatMessage(role="assistant", content=["Pressing one."])
-        )
+        agent_said(session, "Pressing one.")
         commit_turn(detector, end_of_turn("Hello?"))
         await classifier.request()
         classifier.prediction(2, AMDCategory.HUMAN)
         await eventually(lambda: detector._turns[2].prediction is not None)
-        session._conversation_item_added(
-            llm.ChatMessage(role="assistant", content=["Hi Sam, can you make it tomorrow?"])
-        )
+        agent_said(session, "Hi Sam, can you make it tomorrow?")
         commit_turn(detector, end_of_turn("Yes. Goodbye."))
         request = await classifier.request()
 
@@ -3165,8 +3179,54 @@ async def test_classifier_sees_the_agent_words_after_an_uncertain_turn_in_a_menu
         await classifier.request()
         classifier.prediction(2, after)
         await eventually(lambda: detector._turns[2].prediction is not None)
-        session._conversation_item_added(
-            llm.ChatMessage(role="assistant", content=["Hi Sam, can you make it tomorrow?"])
+        agent_said(session, "Hi Sam, can you make it tomorrow?")
+        commit_turn(detector, end_of_turn("Yes. That's confirmed."))
+        request = await classifier.request()
+
+        history = [(m.role, m.text_content) for m in request.chat_ctx.messages()[2:]]
+        assert history == [
+            ("user", "hello"),
+            ("user", "Sam."),
+            ("assistant", reply),
+            ("user", "Yes. That's confirmed."),
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("after", "next_prediction", "reply"),
+    [
+        (AMDCategory.UNCERTAIN, AMDCategory.MACHINE_IVR, "Hi Sam, can you make it tomorrow?"),
+        (AMDCategory.MACHINE_IVR, AMDCategory.UNCERTAIN, AGENT_REPLY),
+    ],
+)
+async def test_a_reply_shows_its_words_by_the_prediction_it_answered(
+    after: AMDCategory, next_prediction: AMDCategory, reply: str
+) -> None:
+    async with running() as (detector, session, classifier, _):
+        await commit(detector, session, classifier)
+        classifier.prediction(1, AMDCategory.MACHINE_IVR)
+        await eventually(lambda: detector._turns[1].prediction is not None)
+        hooks = commit_turn(detector, end_of_turn("Sam."))
+        await classifier.request()
+        # a preemptive reply exists before the prediction it answers
+        handle = agent_speech(session)
+        should_reply = asyncio.create_task(hooks.should_reply(llm.ChatContext()))
+        classifier.prediction(2, after)
+        assert await asyncio.wait_for(should_reply, 2)
+        hooks.on_agent_turn_committed(handle)
+        reply_started_at = time.time()
+
+        # the next turn is classified while the reply still plays
+        commit_turn(detector, end_of_turn("Please hold."))
+        await classifier.request()
+        classifier.prediction(3, next_prediction)
+        await eventually(lambda: detector._turns[3].prediction is not None)
+        agent_said(
+            session,
+            "Hi Sam, can you make it tomorrow?",
+            handle=handle,
+            created_at=reply_started_at,
         )
         commit_turn(detector, end_of_turn("Yes. That's confirmed."))
         request = await classifier.request()
@@ -3176,6 +3236,7 @@ async def test_classifier_sees_the_agent_words_after_an_uncertain_turn_in_a_menu
             ("user", "hello"),
             ("user", "Sam."),
             ("assistant", reply),
+            ("user", "Please hold."),
             ("user", "Yes. That's confirmed."),
         ]
 

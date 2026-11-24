@@ -406,13 +406,17 @@ error (section 8.4).
 AMD keeps its own chat context. It never copies the Agent's history. It contains:
 
 - one user message for each turn with text, in the format of section 6.1
-- one assistant message for each agent reply after AMD started. The content is
-  `(the agent spoke)`. While the likely-human mark is set, the content is the reply's
-  words (section 9.4). The session adds a reply when its speech ends, so a turn
-  committed during that speech can arrive first. AMD inserts the reply at its start
-  time to keep the speaking order. An opening (section 10.6) is a reply like any
-  other, so the history shows that the agent spoke before the participant's first
-  turn.
+- one assistant message for each agent reply after AMD started, from a speech
+  created after AMD was entered. The content is `(the agent spoke)`. The content is
+  the reply's words when the likely-human mark is set (section 9.4), or when the
+  stage is `machine-screening` or `machine-ivr` and the latest prediction is
+  `uncertain`. AMD decides this when it allows the reply, or when the speech is
+  created for a speech that does not reply to a turn. A later turn's prediction
+  can arrive while the reply plays and does not change it. The session adds a reply
+  when its speech ends, so a turn committed during that speech can arrive first. AMD
+  inserts the reply at its start time to keep the speaking order. An opening
+  (section 10.6) is a reply like any other, so the history shows that the agent
+  spoke before the participant's first turn.
 - successful `send_dtmf_events` calls and their results (section 11.1)
 
 ### 8.3 Prompt contract
@@ -492,6 +496,7 @@ greeting. A short greeting fits both. So in `machine-screening` and `machine-ivr
    - the next request sends `previous_prediction.category` as
      `"uncertain (likely human)"`
    - classifier history keeps the agent's words instead of `(the agent spoke)`
+     (section 8.2)
    - a reply is allowed without stage instructions (section 10.1)
 3. While the mark is set, a `human` prediction completes AMD as `human`.
 4. Only a valid prediction other than `uncertain` clears the mark. `uncertain`

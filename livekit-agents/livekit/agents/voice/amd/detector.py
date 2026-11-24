@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import os
 import time
 import uuid
@@ -39,7 +40,6 @@ if TYPE_CHECKING:
     from ..events import (
         AgentFalseInterruptionEvent,
         AgentStateChangedEvent,
-        ConversationItemAddedEvent,
         FunctionToolsExecutedEvent,
         SpeechCreatedEvent,
         UserInputTranscribedEvent,
@@ -123,6 +123,7 @@ class _AMDTurnHooks:
     _amd: AMD
     _turn_id: int | None = None
     _track_voicemail: bool = False
+    _reply_words: bool = False
     reply_instructions: str | None = None
 
     def on_user_turn_committed(self, transcript: str, end_of_turn_delay: float | None) -> TurnHooks:
@@ -137,15 +138,20 @@ class _AMDTurnHooks:
         return self._amd._on_reply_generation(tools)
 
     async def should_reply(self, chat_ctx: llm.ChatContext) -> bool:
+        # decide now: a later turn's prediction can arrive while the reply plays
+        self._reply_words = self._amd._shows_agent_words
         if self._turn_id is None:
             return not self._amd._forbids_reply and not self._amd._should_wait
         decision = await self._amd._should_reply(self._turn_id, chat_ctx)
         self._track_voicemail = decision.track_voicemail
+        self._reply_words = self._amd._shows_agent_words
         if decision.instructions_for is not None:
             self.reply_instructions = self._amd._get_instructions(decision.instructions_for)
         return decision.allow
 
     def on_agent_turn_committed(self, handle: SpeechHandle) -> None:
+        if handle in self._amd._reply_words:
+            self._amd._reply_words[handle] = self._reply_words
         if self._turn_id is not None and self._turn_id == self._amd._held_turn_id:
             self._amd._held_reply = handle
         if self._track_voicemail:
@@ -361,6 +367,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._latest: AMDPredictionEvent | None = None
         self._run: _AMDResources | None = None
         self._speeches: set[SpeechHandle] = set()
+        # whether each speech's reply shows its words in the classifier history
+        self._reply_words: dict[SpeechHandle, bool] = {}
         self._held_turn_id: int | None = None
         self._held_reply: SpeechHandle | None = None
 
@@ -501,7 +509,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 (self._session, "user_state_changed", self._on_user_state_changed),
                 (self._session, "user_input_transcribed", self._on_user_input_transcribed),
                 (self._session, "function_tools_executed", self._on_function_tools_executed),
-                (self._session, "conversation_item_added", self._on_conversation_item_added),
                 (self._session, "speech_created", self._on_speech_created),
                 (self._session, "agent_state_changed", self._on_agent_state_changed),
                 (self._session, "agent_false_interruption", self._on_false_interruption),
@@ -625,10 +632,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             if call.created_at >= self._started_at:
                 self._chat_ctx.add_tool_result(call, output)
 
-    def _on_conversation_item_added(self, event: ConversationItemAddedEvent) -> None:
+    def _on_speech_item_added(self, handle: SpeechHandle, item: llm.ChatItem) -> None:
         if self.lifecycle not in {AMDLifecycle.PENDING, AMDLifecycle.ACTIVE}:
             return
-        item = event.item
         assert self._started_at is not None
         if (
             isinstance(item, llm.ChatMessage)
@@ -636,11 +642,18 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             and item.text_content
             and item.created_at >= self._started_at
         ):
-            # after an uncertain turn in a menu or screener, the next turn may answer the agent
-            words = self._likely_human or (
-                self._state in _fsm.LIKELY_HUMAN_STAGES and self._category is AMDCategory.UNCERTAIN
-            )
+            words = self._reply_words.get(handle, False)
             self._chat_ctx.add_agent_reply(item.created_at, item.text_content, words=words)
+
+    @property
+    def _shows_agent_words(self) -> bool:
+        """Whether the next turn may answer the agent's words.
+
+        True after a likely human turn, or after an uncertain turn in a menu or screener.
+        """
+        return self._likely_human or (
+            self._state in _fsm.LIKELY_HUMAN_STAGES and self._category is AMDCategory.UNCERTAIN
+        )
 
     def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
         if self.lifecycle is not AMDLifecycle.ACTIVE:
@@ -1202,12 +1215,17 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return
         if self._starting_opening:
             event.speech_handle._bypass_authorization_pause = True
-        self._speeches.add(event.speech_handle)
-        event.speech_handle.add_done_callback(self._on_speech_done)
+        handle = event.speech_handle
+        self._speeches.add(handle)
+        # a turn reply replaces this value when AMD authorizes it
+        self._reply_words[handle] = self._shows_agent_words
+        handle._add_item_added_callback(functools.partial(self._on_speech_item_added, handle))
+        handle.add_done_callback(self._on_speech_done)
         self._update_idle()
 
     def _on_speech_done(self, handle: SpeechHandle) -> None:
         self._speeches.discard(handle)
+        self._reply_words.pop(handle, None)
         self._update_idle()
 
     # endregion
@@ -1329,6 +1347,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             emitter.off(event, handler)
         for speech in self._speeches:
             speech.remove_done_callback(self._on_speech_done)
+        self._reply_words.clear()
         if self._voicemail_handle is not None:
             self._voicemail_handle.remove_done_callback(self._on_voicemail_done)
             self._voicemail_handle = None
