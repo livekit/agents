@@ -6925,6 +6925,35 @@ async def test_session_stt_classifies_before_realtime_transcription(category: AM
             assert rt.generate_reply_calls == 0
 
 
+@pytest.mark.parametrize("category", [AMDCategory.WAIT, AMDCategory.HUMAN])
+async def test_manual_realtime_commit_returns_the_reply_amd_allows(category: AMDCategory) -> None:
+    async with running_realtime() as (_, session, classifier, rt):
+        handles: list[SpeechHandle] = []
+        session.on("speech_created", lambda ev: handles.append(ev.speech_handle))
+        recognition = session._activity._audio_recognition
+        await recognition._on_stt_event(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(text="Hello?", language=LanguageCode("en"))],
+            )
+        )
+        commit = session.commit_user_turn(return_handle=True)
+        await classifier.request()
+        classifier.prediction(1, category)
+        result = await asyncio.wait_for(commit, 2)
+
+        assert result.transcript == "Hello?"
+        if category is AMDCategory.HUMAN:
+            assert result.speech_handle is handles[0]
+            await eventually(lambda: rt.generate_reply_calls == 1)
+            respond(rt)
+            await asyncio.wait_for(handles[0], 2)
+        else:
+            # AMD holds the turn without a reply
+            assert result.speech_handle is None
+            assert not handles
+
+
 @pytest.mark.parametrize("session_stt", [False, True])
 @pytest.mark.parametrize("skip_reply", [False, True])
 async def test_manual_realtime_commit_without_amd(session_stt: bool, skip_reply: bool) -> None:
