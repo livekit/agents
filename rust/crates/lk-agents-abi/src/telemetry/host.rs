@@ -92,9 +92,13 @@ pub trait SpanFacade {
 #[crate::host(functions(pid = false))]
 pub trait Telemetry {
     /// Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
-    /// the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
+    /// the `OTEL_EXPORTER_OTLP_*` environment, and the process's product statistics unless they
+    /// are opted out of. Later calls do nothing.
     #[host(function)]
-    fn _core_telemetry_install(sdk_version: String);
+    fn _core_telemetry_install(
+        sdk_version: String,
+        #[host(kw, default = None)] python_version: Option<String>,
+    );
 
     /// Send the process's spans and metrics to an OTLP/HTTP protobuf endpoint; arguments override
     /// the `OTEL_EXPORTER_OTLP_*` environment.

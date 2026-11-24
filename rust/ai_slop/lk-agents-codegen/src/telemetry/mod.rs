@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 
 /// The ABI module the wire types and markers live in.
 const DECL: [&str; 2] = ["telemetry", "decl"];
+/// The ABI module of LiveKit's product statistics.
+const PRODUCT_STATS: &str = "productstats";
 /// The ABI module of the dependency registries' constants, one submodule per registry.
 const SEMCONV: [&str; 2] = ["telemetry", "semconv"];
 
@@ -56,6 +58,8 @@ pub struct Attr {
     pub label: Option<String>,
     /// The type is bounded (`Label`, an enum, `BoolString`): it may be a metric label.
     pub bounded: bool,
+    /// A `Vec` of bounded values.
+    pub bounded_items: bool,
     pub metric: Option<String>,
     pub brief: String,
     /// The module of the struct that declares the field (`telemetry::spans::job`).
@@ -246,6 +250,9 @@ impl Reader<'_> {
             let here = format!("{}::{}", self.krate.display(module), st.ident);
             let brief = brief(&st.attrs);
             let attrs = self.attrs(*key)?;
+            if self.krate.modules[module].path.first().map(String::as_str) == Some(PRODUCT_STATS) {
+                product_stat(&attrs, &here)?;
+            }
             unique(&attrs, &here)?;
             note(&attrs, &mut r)?;
             if brief.is_empty() && (decl.role.is_some() || !groups.contains(key)) {
@@ -537,6 +544,7 @@ impl Reader<'_> {
             unmeasured: ty.measured.then_some(attr.unmeasured),
             label,
             bounded: ty.label,
+            bounded_items: ty.bounded_items,
             metric,
             brief: brief(&field.attrs),
             declared_in: self.krate.display(module).replacen("crate::", "", 1),
@@ -678,6 +686,7 @@ impl Reader<'_> {
                 return Ok(Ty {
                     wire: Wire::Array(Box::new(inner.wire)),
                     shape: inner.shape,
+                    bounded_items: inner.label,
                     ..Ty::default()
                 });
             }
@@ -894,6 +903,8 @@ struct Ty {
     measured: bool,
     /// Bounded: may be a metric label.
     label: bool,
+    /// A `Vec` of bounded values.
+    bounded_items: bool,
     shape: Option<Shape>,
 }
 
@@ -967,6 +978,23 @@ fn check(r: &Registry) -> Result<(), String> {
         if a.brief.is_empty() {
             return Err(format!(
                 "`{}` is owned here and needs a `///` brief on one of its fields",
+                a.key
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A product statistics declaration writes only bounded values (closed enums, `Label`s or
+/// `Vec`s of them), never content or a key under `lk.pii.*`: its export is LiveKit's, and no
+/// customer data may reach it.
+fn product_stat(attrs: &[Attr], here: &str) -> Result<(), String> {
+    for a in attrs {
+        let pii = a.key.split('.').take(2).eq(["lk", "pii"]);
+        if a.content.is_some() || pii || !(a.bounded || a.bounded_items) {
+            return Err(format!(
+                "{here} (`{}`): a product statistic is a closed enum or a bounded `Label`, never \
+                 content, free text or an `lk.pii.*` key",
                 a.key
             ));
         }
