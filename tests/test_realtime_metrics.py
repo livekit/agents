@@ -344,6 +344,22 @@ async def test_realtime_manual_commit_preserves_speech_timing(
     assert reply.metrics["e2e_latency"] == pytest.approx(reply.metrics["started_speaking_at"] - now)
 
 
+@pytest.mark.parametrize("return_handle", [False, True])
+async def test_realtime_manual_commit_raises_when_reply_cannot_be_scheduled(
+    realtime: tuple[AgentSession, FakeRealtimeModel],
+    monkeypatch: pytest.MonkeyPatch,
+    return_handle: bool,
+) -> None:
+    session, _ = realtime
+
+    def reject_reply(**kwargs: object) -> SpeechHandle:
+        raise RuntimeError("could not schedule speech")
+
+    monkeypatch.setattr(session, "generate_reply", reject_reply)
+    with pytest.raises(RuntimeError, match="could not schedule speech"):
+        session.commit_user_turn(return_handle=return_handle)
+
+
 @pytest.mark.parametrize("phase", ["pending_delivery", "delivered"])
 @pytest.mark.parametrize("next_speech", ["none", "before_clear", "after_clear"])
 async def test_realtime_manual_clear_preserves_latest_speech_timing(

@@ -2078,15 +2078,9 @@ class AgentActivity(RecognitionHooks):
                 self._realtime_user_input_answered_at = time.time()
                 self._session._unanswered_user_metrics = None
             else:
-                try:
-                    handle = self._session.generate_reply(input_modality="audio")
-                except RuntimeError:
-                    if completion is None:
-                        raise
-                    logger.exception("error scheduling a reply for the committed realtime turn")
-                else:
-                    if completion is not None:
-                        completion.speech_handle = handle
+                handle = self._session.generate_reply(input_modality="audio")
+                if completion is not None:
+                    completion.speech_handle = handle
             # `skip_reply` prevents duplicate reply from _on_user_turn_completed
             # but keeps flushing STT transcript into the chat context
             skip_reply = True
