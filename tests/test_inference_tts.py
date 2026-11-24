@@ -457,6 +457,46 @@ async def _until(condition: Any) -> None:
             await asyncio.sleep(0.005)
 
 
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("model", "expressive", "stream_words"),
+    [
+        ("gradium/default", False, True),
+        ("gradium/gradium-tts-beta", False, True),
+        ("gradium/default", True, False),
+        ("xai/tts-1", False, False),
+    ],
+)
+async def test_inference_tts_streams_words_for_plain_gradium_speech(
+    model: str, expressive: bool, stream_words: bool
+) -> None:
+    gateway = _Gateway()
+    tts = _make_tts(model, http_session=gateway)
+    tts._set_expressive(expressive)
+    try:
+        async with tts.stream() as stream:
+            stream.push_text("Hel")
+            stream.push_text("lo, how are ")
+            if stream_words:
+                await _until(
+                    lambda: gateway.sockets and "input_transcript" in gateway.sockets[0].types()
+                )
+            stream.push_text("you?")
+            stream.end_input()
+            _ = [event async for event in stream]
+        packets = [
+            event["transcript"]
+            for event in gateway.sockets[0].sent
+            if event["type"] == "input_transcript"
+        ]
+        expected = (
+            ["Hello, ", "how ", "are ", "you? "] if stream_words else ["Hello, how are you? "]
+        )
+        assert packets == expected
+    finally:
+        await tts.aclose()
+
+
 async def test_session_create_advertises_handoff_protocol() -> None:
     gateway = _Gateway()
     tts = _make_tts(http_session=gateway)
