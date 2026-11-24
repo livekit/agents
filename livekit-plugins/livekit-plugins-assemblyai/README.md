@@ -64,7 +64,7 @@ session = AgentSession(
 ```
 
 Manual mode needs `assemblyai-stt-3-7-realtime-agent` and a LiveKit turn detector or VAD turn
-detection. Leave `min_turn_silence` unset. `max_turn_silence` (10 s by default) only ends a turn
+detection, and doesn't support `speaker_labels` yet. Leave `min_turn_silence` unset. `max_turn_silence` (10 s by default) only ends a turn
 when LiveKit never does. See
 [manual mode](https://www.assemblyai.com/docs/streaming/turn-detection#manual-mode).
 

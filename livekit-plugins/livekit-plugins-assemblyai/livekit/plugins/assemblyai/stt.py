@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import math
 import os
 import time
 import weakref
@@ -89,6 +90,9 @@ class STTOptions:
 _MANUAL_MODE_MODELS = ("assemblyai-stt-3-7-realtime-agent",)
 
 _FORCE_ENDPOINT_MSG = json.dumps({"type": "ForceEndpoint"})
+
+# AssemblyAI rejects audio chunks shorter than this (close code 3007).
+_MIN_CHUNK_SECONDS = 0.02
 
 
 # Speech models in the Universal-3 Pro family, which share the same parameter support
@@ -300,7 +304,7 @@ class STT(stt.STT):
                 with a LiveKit turn detector or VAD turn detection; with
                 `turn_detection="stt"` nothing sends `ForceEndpoint`. `min_turn_silence` no
                 longer ends turns, so leave it unset. Only supported with
-                assemblyai-stt-3-7-realtime-agent.
+                assemblyai-stt-3-7-realtime-agent, and not yet with `speaker_labels`.
                 See https://www.assemblyai.com/docs/streaming/turn-detection#manual-mode.
         """
         if is_given(language_code) and is_given(language_codes):
@@ -375,10 +379,15 @@ class STT(stt.STT):
                         f"The {_param_name!r} parameter is only supported with the "
                         f"{', '.join(_U3_PRO_MODELS)} models."
                     )
-        if mode == "manual" and model not in _MANUAL_MODE_MODELS:
-            raise ValueError(
-                f"mode='manual' is only supported with the {', '.join(_MANUAL_MODE_MODELS)} model."
-            )
+        if mode == "manual":
+            if model not in _MANUAL_MODE_MODELS:
+                raise ValueError(
+                    f"mode='manual' is only supported with the "
+                    f"{', '.join(_MANUAL_MODE_MODELS)} model."
+                )
+            if speaker_labels is True:
+                # the server applies its speaker-label turn defaults instead of manual mode
+                raise ValueError("mode='manual' can't be combined with speaker_labels yet.")
 
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
@@ -738,6 +747,7 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
             manual_mode = self._opts.mode == "manual"
+            min_chunk_samples = math.ceil(self._opts.sample_rate * _MIN_CHUNK_SECONDS)
 
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
@@ -745,14 +755,22 @@ class SpeechStream(stt.SpeechStream):
             try:
                 async for data in self._input_ch:
                     if isinstance(data, self._FlushSentinel):
-                        # AssemblyAI rejects audio chunks under 20 ms (close code 3007),
-                        # and every turn flush can leave a shorter tail, so pad it with
-                        # silence to a full chunk.
-                        frames = [
-                            _pad_frame(frame, samples_per_buffer, self._opts.encoding)
-                            for frame in audio_bstream.flush()
-                        ]
+                        input_ending = self._input_ch.closed and self._input_ch.empty()
+                        if input_ending:
+                            # nothing follows, so a short tail is padded up to the minimum
+                            frames = [
+                                _pad_frame(frame, min_chunk_samples, self._opts.encoding)
+                                for frame in audio_bstream.flush()
+                            ]
+                        elif audio_bstream.buffered_duration >= _MIN_CHUNK_SECONDS:
+                            frames = audio_bstream.flush()
+                        else:
+                            # A shorter tail stays buffered and starts the next chunk.
+                            # Padding it would insert audio and shift every later word's
+                            # timestamp.
+                            frames = []
                     else:
+                        input_ending = False
                         frames = audio_bstream.write(data.data.tobytes())
 
                     for frame in frames:
@@ -768,13 +786,9 @@ class SpeechStream(stt.SpeechStream):
                         self._last_frame_sent_at = time.time()
 
                     # In manual mode a flush ends the turn: ForceEndpoint goes out after the
-                    # flushed audio so the final covers all of it. It's skipped when input is
+                    # flushed audio so the final covers it. It's skipped when input is
                     # ending, since Terminate finalizes the open turn.
-                    if (
-                        manual_mode
-                        and isinstance(data, self._FlushSentinel)
-                        and not (self._input_ch.closed and self._input_ch.empty())
-                    ):
+                    if manual_mode and isinstance(data, self._FlushSentinel) and not input_ending:
                         await ws.send_str(_FORCE_ENDPOINT_MSG)
 
                 closing_ws = True

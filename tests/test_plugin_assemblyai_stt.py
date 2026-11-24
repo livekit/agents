@@ -1909,8 +1909,6 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
 
 _MANUAL_MODEL = "assemblyai-stt-3-7-realtime-agent"
 _FORCE_ENDPOINT = {"type": "ForceEndpoint"}
-# the plugin's default 50 ms chunk at 16 kHz, in bytes of 16-bit samples
-_CHUNK_BYTES = 800 * 2
 
 
 async def test_mode_manual_accepted_on_stt_3_7_realtime_agent():
@@ -1945,6 +1943,22 @@ async def test_mode_manual_rejected_on_universal_streaming():
 
     with pytest.raises(ValueError, match="mode"):
         STT(api_key="test-key", model="universal-streaming-english", mode="manual")
+
+
+async def test_mode_manual_rejects_speaker_labels():
+    """With speaker labels on, the server uses its speaker-label turn defaults
+    instead of manual mode and would end turns LiveKit hasn't ended."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="speaker_labels"):
+        STT(api_key="test-key", mode="manual", speaker_labels=True)
+
+
+async def test_speaker_labels_still_allowed_outside_manual_mode():
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", mode="balanced", speaker_labels=True)
+    assert stt._opts.speaker_labels is True
 
 
 @pytest.mark.parametrize("mode", [NOT_GIVEN, "min_latency", "balanced", "max_accuracy"])
@@ -2040,13 +2054,17 @@ def _live_stream(ws: _FakeWS, **kwargs):
     return stream
 
 
-def _frame(ms: int):
+def _frame(ms: int, sample: bytes = b"\x01\x00"):
     from livekit import rtc
 
     samples = 16000 * ms // 1000
     return rtc.AudioFrame(
-        data=b"\x01\x00" * samples, sample_rate=16000, num_channels=1, samples_per_channel=samples
+        data=sample * samples, sample_rate=16000, num_channels=1, samples_per_channel=samples
     )
+
+
+def _ms(chunk: bytes) -> int:
+    return len(chunk) // 32  # 16-bit samples at 16 kHz
 
 
 async def _wait_until(predicate, timeout: float = 5.0) -> None:
@@ -2066,7 +2084,7 @@ async def test_manual_flush_sends_force_endpoint_after_the_buffered_audio():
         stream.flush()
         await _wait_until(lambda: len(ws.sent) == 4)
 
-        assert all(isinstance(msg, bytes) for msg in ws.sent[:3])
+        assert [_ms(msg) for msg in ws.sent[:3]] == [50, 50, 30]
         assert ws.sent[3] == _FORCE_ENDPOINT
     finally:
         await stream.aclose()
@@ -2088,22 +2106,37 @@ async def test_manual_flush_sends_force_endpoint_when_no_audio_is_left():
         await stream.aclose()
 
 
-async def test_flush_pads_a_short_tail_to_a_full_chunk():
-    """AssemblyAI rejects audio chunks under 20 ms (close code 3007), and every
-    turn flush can leave a shorter tail."""
+async def test_flush_holds_a_tail_under_20ms_for_the_next_chunk():
+    """AssemblyAI rejects audio chunks under 20 ms (close code 3007), and a turn
+    flush can leave a shorter tail. It goes out at the start of the next chunk:
+    padding it would insert audio and shift every later word timestamp."""
     ws = _FakeWS()
     stream = _live_stream(ws, mode="manual")
     try:
-        for _ in range(3):
-            stream.push_frame(_frame(10))
-            stream.flush()
-        await _wait_until(lambda: ws.sent.count(_FORCE_ENDPOINT) == 3)
+        stream.push_frame(_frame(10, b"\x01\x00"))
+        stream.flush()
+        await _wait_until(lambda: ws.sent == [_FORCE_ENDPOINT])
 
-        audio = [msg for msg in ws.sent if isinstance(msg, bytes)]
-        assert [len(chunk) for chunk in audio] == [_CHUNK_BYTES] * 3
-        # the 10 ms of speech is kept and the rest is silence
-        assert audio[0][:320] == b"\x01\x00" * 160
-        assert audio[0][320:] == b"\x00" * (_CHUNK_BYTES - 320)
+        stream.push_frame(_frame(40, b"\x02\x00"))
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        # one full chunk: the held 10 ms, then the next 40 ms, with nothing inserted
+        assert ws.sent[1] == b"\x01\x00" * 160 + b"\x02\x00" * 640
+    finally:
+        await stream.aclose()
+
+
+async def test_end_input_pads_a_tail_under_20ms():
+    """No audio follows the last tail, so it's padded with silence instead."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(10))
+        stream.end_input()
+        await _wait_until(lambda: {"type": "Terminate"} in ws.sent)
+
+        (audio,) = [msg for msg in ws.sent if isinstance(msg, bytes)]
+        assert audio == b"\x01\x00" * 160 + b"\x00" * 320  # 10 ms, padded to 20 ms
     finally:
         await stream.aclose()
 
@@ -2132,6 +2165,6 @@ async def test_manual_end_input_terminates_without_force_endpoint():
         await _wait_until(lambda: {"type": "Terminate"} in ws.sent)
 
         assert _FORCE_ENDPOINT not in ws.sent
-        assert sum(isinstance(msg, bytes) for msg in ws.sent) == 3
+        assert [_ms(msg) for msg in ws.sent if isinstance(msg, bytes)] == [50, 50, 30]
     finally:
         await stream.aclose()
