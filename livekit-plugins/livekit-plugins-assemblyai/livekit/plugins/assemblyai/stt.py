@@ -81,6 +81,7 @@ class STTOptions:
     voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
     voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
     mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
+    acknowledge_silence: NotGivenOr[bool] = NOT_GIVEN
 
 
 # Speech models in the Universal-3 Pro family, which share the same parameter support
@@ -181,6 +182,7 @@ class STT(stt.STT):
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
         mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
+        acknowledge_silence: NotGivenOr[bool] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -267,6 +269,10 @@ class STT(stt.STT):
                 `max_turn_silence` still take precedence over the mode's defaults.
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
+            acknowledge_silence: Whether to enable periodic server Silence messages during
+                periods of silence (emitted roughly once per second while no speech is being
+                transcribed on Universal-3 Pro models). Can be updated mid-session via
+                `update_options`. Defaults to unset.
         """
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
@@ -331,6 +337,7 @@ class STT(stt.STT):
                 "mode": mode,
                 "language_code": language_code,
                 "language_codes": language_codes,
+                "acknowledge_silence": acknowledge_silence,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
                 if is_given(_param_value):
@@ -398,6 +405,7 @@ class STT(stt.STT):
             voice_focus=voice_focus,
             voice_focus_threshold=voice_focus_threshold,
             mode=mode,
+            acknowledge_silence=acknowledge_silence,
         )
         self._session = http_session
         # user keyterms; _opts.keyterms_prompt holds the effective set (user + session)
@@ -460,6 +468,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
+        acknowledge_silence: NotGivenOr[bool] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -480,6 +489,12 @@ class STT(stt.STT):
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
             language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
+        if is_given(acknowledge_silence):
+            if self._opts.speech_model not in _U3_PRO_MODELS:
+                raise ValueError(
+                    "The 'acknowledge_silence' parameter is only supported with the "
+                    f"{', '.join(_U3_PRO_MODELS)} models."
+                )
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
@@ -508,6 +523,8 @@ class STT(stt.STT):
             self._opts.continuous_partials = continuous_partials
         if is_given(interruption_delay):
             self._opts.interruption_delay = interruption_delay
+        if is_given(acknowledge_silence):
+            self._opts.acknowledge_silence = acknowledge_silence
 
         for stream in self._streams:
             stream.update_options(
@@ -522,6 +539,7 @@ class STT(stt.STT):
                 vad_threshold=vad_threshold,
                 continuous_partials=continuous_partials,
                 interruption_delay=interruption_delay,
+                acknowledge_silence=acknowledge_silence,
             )
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
@@ -606,6 +624,7 @@ class SpeechStream(stt.SpeechStream):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
+        acknowledge_silence: NotGivenOr[bool] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -626,6 +645,12 @@ class SpeechStream(stt.SpeechStream):
                     f"{', '.join(_U3_PRO_MODELS)} models."
                 )
             language_codes = _normalize_language_codes(language_codes, self._opts.speech_model)
+        if is_given(acknowledge_silence):
+            if self._opts.speech_model not in _U3_PRO_MODELS:
+                raise ValueError(
+                    "The 'acknowledge_silence' parameter is only supported with the "
+                    f"{', '.join(_U3_PRO_MODELS)} models."
+                )
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
@@ -651,6 +676,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.continuous_partials = continuous_partials
         if is_given(interruption_delay):
             self._opts.interruption_delay = interruption_delay
+        if is_given(acknowledge_silence):
+            self._opts.acknowledge_silence = acknowledge_silence
 
         # Send UpdateConfiguration message over the active websocket
         config_msg: dict = {"type": "UpdateConfiguration"}
@@ -674,6 +701,8 @@ class SpeechStream(stt.SpeechStream):
             config_msg["interruption_delay"] = interruption_delay
         if is_given(vad_threshold):
             config_msg["vad_threshold"] = vad_threshold
+        if is_given(acknowledge_silence):
+            config_msg["acknowledge_silence"] = acknowledge_silence
 
         if len(config_msg) > 1:
             self._config_update_queue.put_nowait(config_msg)
@@ -900,6 +929,9 @@ class SpeechStream(stt.SpeechStream):
             if is_given(self._opts.voice_focus_threshold)
             else None,
             "mode": self._opts.mode if is_given(self._opts.mode) else None,
+            "acknowledge_silence": self._opts.acknowledge_silence
+            if is_given(self._opts.acknowledge_silence)
+            else None,
         }
 
         headers = {
@@ -965,6 +997,15 @@ class SpeechStream(stt.SpeechStream):
                 self._session_id,
                 audio_duration,
                 session_duration,
+            )
+            return
+
+        if message_type == "Silence":
+            logger.debug(
+                "AssemblyAI silence session=%s start_ms=%s end_ms=%s",
+                self._session_id,
+                data.get("start_ms"),
+                data.get("end_ms"),
             )
             return
 
