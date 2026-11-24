@@ -1,6 +1,7 @@
 use crate::voice::session::owner::SessionOwner;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AvatarMetrics, Metadata};
+use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::voice::avatar::{self, AvatarHost, AvatarJoinError};
 use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::voice::session::VoiceSession as _;
@@ -8,6 +9,7 @@ use lk_agents_abi::voice::session_owner::SessionOwner as _;
 use lk_agents_abi::worker::job::SessionJob;
 use lk_agents_abi::{ChatItem, Clock, Role, Spawner};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::job_token;
 use lk_agents_net::room_service::{Removal, RoomService};
 use lk_agents_net::signal;
 use lk_agents_net::task::TaskSet;
@@ -259,12 +261,16 @@ impl Inner {
         let removed = async {
             let room = self.room.name().map_err(|error| error.to_string())?;
             let env = job.server_env().map_err(|error| error.to_string())?;
-            let setting = |name: &str| env.get(name).map_or("", String::as_str).to_owned();
-            let service = RoomService::new(
-                &setting("LIVEKIT_URL"),
-                &setting("LIVEKIT_API_KEY"),
-                &setting("LIVEKIT_API_SECRET"),
-            );
+            let setting = |name: &str| env.get(name).map_or("", String::as_str);
+            let (url, key, secret) =
+                (setting("LIVEKIT_URL"), setting("LIVEKIT_API_KEY"), setting("LIVEKIT_API_SECRET"));
+            // In token mode there is no key pair. The removal uses a token of this job.
+            let service = if job_token::token_mode(key, secret, setting("LIVEKIT_TOKEN")) {
+                let job_id = job.job_id().map_err(|error| error.to_string())?;
+                RoomService::with_job_tokens(url, JobKey(job_id))
+            } else {
+                RoomService::new(url, key, secret)
+            };
             service.remove_participant(&room, identity).await.map_err(|error| error.to_string())
         };
         match removed.await {

@@ -77,6 +77,9 @@ impl SessionJob for Job {
     fn server_env(&self) -> Result<BTreeMap<String, String>, HostError> {
         Ok(self.env.clone())
     }
+    fn job_id(&self) -> Result<String, HostError> {
+        Ok("AJ_avatar".into())
+    }
 }
 
 fn owner() -> Arc<SessionOwner> {
@@ -274,6 +277,46 @@ async fn a_disconnected_room_removes_nobody() {
     s.room.set_connection_state(ConnectionState::Disconnected);
     s.lifecycle.aclose().await;
     assert!(paths.lock().unwrap().is_empty());
+}
+
+/// A fake token server that records the claims of each request.
+#[derive(Default)]
+struct Issuer(Mutex<Vec<String>>);
+
+#[async_trait::async_trait]
+impl lk_agents_runtime::net::job_token::Issue for Issuer {
+    async fn issue(
+        &self,
+        claims: &str,
+    ) -> Result<lk_agents_runtime::net::job_token::Issued, lk_agents_abi::errors::ApiError> {
+        self.0.lock().unwrap().push(claims.to_owned());
+        let expires_at = lk_agents_runtime::net::clock::unix_now() as i64 + 600;
+        Ok(lk_agents_runtime::net::job_token::Issued { token: "job-token".into(), expires_at })
+    }
+}
+
+// A token mode job, with a worker token and no key pair, closes its avatar. Catches a removal
+// that signs with the missing key pair, so the avatar stays in the room.
+#[tokio::test]
+async fn a_token_mode_close_removes_the_participant_with_a_job_token() {
+    use lk_agents_runtime::net::job_token::{self, JobTokens};
+    let (url, paths) = room_service("200 OK", "{}").await;
+    let env = [("LIVEKIT_URL", url.as_str()), ("LIVEKIT_TOKEN", "worker-token")];
+    let env = env.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+    let issuer = Arc::new(Issuer::default());
+    let clock = Arc::new(lk_agents_runtime::net::clock::RealClock::new());
+    let key = telemetry::record::JobKey("AJ_avatar".into());
+    job_token::open(key.clone(), Arc::new(JobTokens::new(issuer.clone(), clock)));
+    let s = start("token-mode", Some(Arc::new(Job { env })));
+    s.lifecycle.aclose().await;
+    job_token::close(&key);
+    assert_eq!(
+        *paths.lock().unwrap(),
+        vec!["/twirp/livekit.RoomService/RemoveParticipant".to_owned()]
+    );
+    let claims: serde_json::Value = serde_json::from_str(&issuer.0.lock().unwrap()[0]).unwrap();
+    assert_eq!(claims["video"]["roomAdmin"], true);
+    assert_eq!(claims["video"]["room"], "token-mode");
 }
 
 /// The avatar's audio output on the lifecycle's room, as a plugin attaches it.

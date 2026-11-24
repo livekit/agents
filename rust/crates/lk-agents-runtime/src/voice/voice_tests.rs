@@ -1007,6 +1007,9 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
     ) -> Result<std::collections::BTreeMap<String, String>, lk_agents_abi::errors::HostError> {
         unreachable!("only an avatar calls the job's RoomService")
     }
+    fn job_id(&self) -> Result<String, lk_agents_abi::errors::HostError> {
+        unreachable!("only an avatar calls the job's RoomService")
+    }
 }
 
 // Catches: the room connecting before `session_start` exists, so `room_connect` parents to the

@@ -102,6 +102,20 @@ async def test_a_token_mode_worker_gets_every_job_token_from_the_server(
     assert WORKER_TOKEN not in [api_bearer, seen["participant_token"]]
 
 
+@pytest.mark.parametrize("token_mode", [((), {"LIVEKIT_THREAD_API_PORT": "0"})], indirect=True)
+async def test_a_thread_api_port_does_not_stop_a_token_mode_worker(
+    token_mode: tuple[FakeLiveKit, Path, Child],
+) -> None:
+    """A token mode worker with ``LIVEKIT_THREAD_API_PORT`` set.
+
+    Catches a worker that starts the local thread service without a key pair. The service fails,
+    and the worker exits before it registers.
+    """
+    livekit, agent_dir, _ = token_mode
+    await livekit.until_registered()
+    assert "local thread service off" in (agent_dir / "agent.log").read_text()
+
+
 @pytest.mark.parametrize(
     "token_mode",
     [(("--drain-timeout=0.1", "--shutdown-process-timeout=5"), {"AGENT_HOLD": "1"})],

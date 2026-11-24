@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import jwt
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -56,3 +57,22 @@ async def test_close_stops_the_billable_session_once(avatar_host: AvatarHost) ->
         await avatar.aclose()
 
     assert deletes == ["billable-session"]
+
+
+async def test_the_listener_token_lives_six_hours(avatar_host: AvatarHost) -> None:
+    """A key mode session start. Catches a listener token that lives one hour instead of the six
+    hours it had before, so a late listener reconnect fails."""
+    bodies: list[dict[str, str]] = []
+
+    async def create(request: web.Request) -> web.Response:
+        bodies.append(await request.json())
+        return web.json_response({"task_id": "session"})
+
+    app = web.Application()
+    app.router.add_post("/livekit/create-session", create)
+    async with TestServer(app) as server, http.open():
+        avatar = AvatarSession(api_secret="key", api_url=str(server.make_url("")).rstrip("/"))
+        await avatar.start(avatar_host.agent, avatar_host.room)
+
+    claims = jwt.decode(bodies[0]["listener_token"], options={"verify_signature": False})
+    assert claims["exp"] - claims["nbf"] == 6 * 60 * 60

@@ -222,6 +222,9 @@ pub struct ServerCallbacks {
     /// The server has a voice door.
     has_rtc: bool,
     pub(crate) mounted: Mounted,
+    /// The kept jobs that a reload is still restoring. They count as running jobs before they
+    /// launch. A termination from the server removes a job from this list.
+    pub(crate) restoring: Arc<Mutex<Vec<RunningJobInfo>>>,
 }
 
 impl ServerCallbacks {
@@ -233,6 +236,7 @@ impl ServerCallbacks {
             user_load: true,
             has_rtc: false,
             mounted: Mounted::default(),
+            restoring: Arc::default(),
         }
     }
 
@@ -324,22 +328,38 @@ impl ServerCallbacks {
     /// Launches the kept jobs of a reload, after the job processes started.
     ///
     /// Each job leaves `restoring` as soon as it is launched. From then on, the pool lists it
-    /// while it runs.
+    /// while it runs. A job that does not launch gets a final status through `ended`, so the
+    /// worker does not keep it as a running job:
+    /// - A job that the server terminated while it was restoring is no longer in `restoring`. It
+    ///   does not launch, and its status is success.
+    /// - A job whose launch fails has the status failed. The other jobs still launch, and the
+    ///   function returns the first launch error.
     pub(crate) async fn reload(
         &self,
         jobs: Vec<RunningJobInfo>,
-        restoring: &Mutex<Vec<RunningJobInfo>>,
+        ended: impl Fn(&str, livekit_protocol::JobStatus),
     ) -> Result<(), WorkerError> {
         let Some(pool) = self.pool.wait().await.clone() else {
             return Err(WorkerError::Failed("a server with no rtc_session runs no job".into()));
         };
+        let mut reloaded = Ok(());
         for info in jobs {
-            log::info!(target: lk_agents_abi::LOG_TARGET, job_id = info.job.id.as_str(); "reloading job");
             let job_id = info.job.id.clone();
-            pool.launch(info).await?;
-            restoring.lock().retain(|job| job.job.id != job_id);
+            if !self.restoring.lock().iter().any(|job| job.job.id == job_id) {
+                log::info!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(); "job ended before its reload");
+                ended(&job_id, livekit_protocol::JobStatus::JsSuccess);
+                continue;
+            }
+            log::info!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(); "reloading job");
+            let launched = pool.launch(info).await;
+            self.restoring.lock().retain(|job| job.job.id != job_id);
+            if let Err(error) = launched {
+                log::error!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(), exc_text:% = error.exc_text(); "failed to reload job");
+                ended(&job_id, livekit_protocol::JobStatus::JsFailed);
+                reloaded = reloaded.and(Err(error.into()));
+            }
         }
-        Ok(())
+        reloaded
     }
 
     /// Admit no new exchange, close WebSockets and wait for the exchanges in flight.
@@ -364,6 +384,9 @@ impl WorkerHost for ServerCallbacks {
     }
 
     async fn terminate_job(&self, id: JobId) -> Result<(), HostError> {
+        // A kept job that is still restoring has no process yet. Removing it from `restoring`
+        // stops its launch.
+        self.restoring.lock().retain(|job| job.job.id != id);
         if let Some(pool) = self.pool() {
             pool.terminate(&id).await;
         }
@@ -451,9 +474,6 @@ pub struct AgentServerRuntime {
     /// The worker token that each registration sends. It starts as the token from the settings.
     /// The CLI can replace it with `update_token`.
     worker_token: crate::WorkerToken,
-    /// The kept jobs that a reload is still restoring. They count as running jobs before they
-    /// launch.
-    restoring: Arc<Mutex<Vec<RunningJobInfo>>>,
 }
 
 impl AgentServerRuntime {
@@ -555,7 +575,6 @@ impl ServerRuntime for AgentServerRuntime {
             rt,
             tracer: env.tracer.clone(),
             worker_token,
-            restoring: Arc::default(),
         })
     }
 
@@ -671,8 +690,12 @@ impl ServerRuntime for AgentServerRuntime {
 impl ServerJobs for AgentServerRuntime {
     /// Returns the running jobs, plus the kept jobs that a reload is still restoring.
     fn running_jobs(&self) -> Vec<RunningJobInfo> {
+        // Read `restoring` first. A job leaves `restoring` only after the pool lists it, so the
+        // job is in at least one of the two reads. For example, a job that launches between the
+        // two reads is in `restoring` at the first read. With the opposite order, the pool would
+        // not list it yet, and `restoring` would no longer have it.
+        let restoring = self.host.restoring.lock().clone();
         let mut jobs = self.host.active_jobs();
-        let restoring = self.restoring.lock().clone();
         let pending: Vec<_> = restoring
             .into_iter()
             .filter(|kept| !jobs.iter().any(|job| job.job.id == kept.job.id))
@@ -690,16 +713,24 @@ impl ServerJobs for AgentServerRuntime {
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), WorkerError>> {
         let (host, runtime) = (self.host.clone(), self.runtime.clone());
         let token_mode = self.settings().token_mode();
-        self.restoring.lock().extend(jobs.iter().cloned());
+        self.host.restoring.lock().extend(jobs.iter().cloned());
         let ids: Vec<String> = jobs.iter().map(|job| job.job.id.clone()).collect();
-        let restoring = self.restoring.clone();
         Box::pin(async move {
             let reload = async move {
-                let jobs = adopt_kept_jobs(&runtime, jobs, token_mode, &restoring).await;
-                host.reload(jobs, &restoring).await
+                let jobs = adopt_kept_jobs(&runtime, jobs, token_mode, &host.restoring).await;
+                let worker = runtime.worker().await;
+                let ended = |job_id: &str, status| {
+                    let ended = WorkerCommand::JobStatus { job_id: job_id.to_owned(), status };
+                    if let Some(worker) = &worker
+                        && worker.send(ended).is_err()
+                    {
+                        log::debug!(target: lk_agents_abi::LOG_TARGET, "the worker stopped before a job ended on reload");
+                    }
+                };
+                host.reload(jobs, ended).await
             };
             let reloaded = self.spawner.run(reload).await;
-            self.restoring.lock().retain(|job| !ids.contains(&job.job.id));
+            self.host.restoring.lock().retain(|job| !ids.contains(&job.job.id));
             reloaded
         })
     }
@@ -741,9 +772,13 @@ mod tests {
         }
     }
 
-    /// A pool with no running jobs. Its launch of the job `held` never returns.
+    /// A pool with no running jobs. It records each launch. Its launch of the job `held` never
+    /// returns, and its launch of the job `failing` fails.
+    #[derive(Default)]
     struct FinishedPool {
         held: &'static str,
+        failing: &'static str,
+        launched: Mutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -752,8 +787,12 @@ mod tests {
             Ok(())
         }
         async fn launch(&self, info: RunningJobInfo) -> Result<(), HostError> {
+            self.launched.lock().push(info.job.id.clone());
             if info.job.id == self.held {
                 std::future::pending::<()>().await;
+            }
+            if info.job.id == self.failing {
+                return Err(HostError::new("the job process failed"));
             }
             Ok(())
         }
@@ -766,11 +805,8 @@ mod tests {
         async fn close(&self) {}
     }
 
-    // Two kept jobs. The first job launches and finishes, and the launch of the second job never
-    // returns. Catches a finished job that stays in `restoring`, so the next reload captures it.
-    #[tokio::test]
-    async fn a_launched_job_leaves_the_restore_list_before_the_rest_launch() {
-        let job = |id: &str| RunningJobInfo {
+    fn kept(id: &str) -> RunningJobInfo {
+        RunningJobInfo {
             accept_arguments: Default::default(),
             job: livekit_protocol::Job { id: id.to_owned(), ..Default::default() },
             url: String::new(),
@@ -781,18 +817,69 @@ mod tests {
             accepted_at: None,
             assigned_at: None,
             launched_at: 0.0,
-        };
+        }
+    }
+
+    /// A host on `pool` that is restoring `jobs`.
+    fn restoring(pool: Arc<FinishedPool>, jobs: &[RunningJobInfo]) -> ServerCallbacks {
         let pools: PoolFactory = Arc::new(|_| Err("unused".into()));
         let host = ServerCallbacks::new(Arc::new(NoHost), pools);
-        let pool: Arc<dyn JobPool> = Arc::new(FinishedPool { held: "AJ_held" });
-        let _ = host.pool.set(Some(pool));
-        let jobs = vec![job("AJ_done"), job("AJ_held")];
-        let restoring = Mutex::new(jobs.clone());
-        let reload = host.reload(jobs, &restoring);
+        let _ = host.pool.set(Some(pool as Arc<dyn JobPool>));
+        host.restoring.lock().extend(jobs.iter().cloned());
+        host
+    }
+
+    fn ids(jobs: &[RunningJobInfo]) -> Vec<String> {
+        jobs.iter().map(|job| job.job.id.clone()).collect()
+    }
+
+    // Two kept jobs. The first job launches and finishes, and the launch of the second job never
+    // returns. Catches a finished job that stays in `restoring`, so the next reload captures it.
+    #[tokio::test]
+    async fn a_launched_job_leaves_the_restore_list_before_the_rest_launch() {
+        let pool = Arc::new(FinishedPool { held: "AJ_held", ..Default::default() });
+        let jobs = vec![kept("AJ_done"), kept("AJ_held")];
+        let host = restoring(pool, &jobs);
+        let reload = host.reload(jobs, |_, _| {});
         tokio::pin!(reload);
         assert!(futures_util::poll!(&mut reload).is_pending());
-        let ids: Vec<_> = restoring.lock().iter().map(|job| job.job.id.clone()).collect();
-        assert_eq!(ids, ["AJ_held"]);
+        assert_eq!(ids(&host.restoring.lock()), ["AJ_held"]);
+    }
+
+    // Two kept jobs, and the launch of the first job fails. Catches a reload that stops at the
+    // failure, so the second job never launches and neither job reports an end. The worker would
+    // then keep both as running jobs.
+    #[tokio::test]
+    async fn a_failed_launch_ends_its_job_and_the_rest_still_launch() {
+        let pool = Arc::new(FinishedPool { failing: "AJ_failing", ..Default::default() });
+        let jobs = vec![kept("AJ_failing"), kept("AJ_next")];
+        let host = restoring(pool.clone(), &jobs);
+        let ended = Mutex::new(Vec::new());
+        let reloaded = host.reload(jobs, |id, status| ended.lock().push((id.to_owned(), status)));
+        assert!(reloaded.await.is_err());
+        assert_eq!(*pool.launched.lock(), ["AJ_failing", "AJ_next"]);
+        assert_eq!(
+            *ended.lock(),
+            [("AJ_failing".to_owned(), livekit_protocol::JobStatus::JsFailed)]
+        );
+        assert!(host.restoring.lock().is_empty());
+    }
+
+    // Two kept jobs, and the server terminates the first one while it is still restoring.
+    // Catches a terminated job that launches anyway, or that never reports an end.
+    #[tokio::test]
+    async fn a_job_terminated_while_restoring_does_not_launch() {
+        let pool = Arc::new(FinishedPool::default());
+        let jobs = vec![kept("AJ_terminated"), kept("AJ_next")];
+        let host = restoring(pool.clone(), &jobs);
+        host.terminate_job("AJ_terminated".into()).await.unwrap();
+        let ended = Mutex::new(Vec::new());
+        host.reload(jobs, |id, status| ended.lock().push((id.to_owned(), status))).await.unwrap();
+        assert_eq!(*pool.launched.lock(), ["AJ_next"]);
+        assert_eq!(
+            *ended.lock(),
+            [("AJ_terminated".to_owned(), livekit_protocol::JobStatus::JsSuccess)]
+        );
     }
 
     // Catches: a manifest entry's kind or methods lost on the way to the register message, or an
