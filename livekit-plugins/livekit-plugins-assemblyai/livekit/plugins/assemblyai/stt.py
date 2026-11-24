@@ -77,6 +77,7 @@ class STTOptions:
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     speaker_labels: NotGivenOr[bool] = NOT_GIVEN
     max_speakers: NotGivenOr[int] = NOT_GIVEN
+    session_heartbeat: NotGivenOr[bool] = NOT_GIVEN
     domain: NotGivenOr[str] = NOT_GIVEN
     voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
     voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -177,6 +178,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         speaker_labels: NotGivenOr[bool] = NOT_GIVEN,
         max_speakers: NotGivenOr[int] = NOT_GIVEN,
+        session_heartbeat: NotGivenOr[bool] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -267,6 +269,8 @@ class STT(stt.STT):
                 `max_turn_silence` still take precedence over the mode's defaults.
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
+            session_heartbeat: Whether to enable periodic server Heartbeat messages (emitted
+                every 5 seconds with stream duration and health telemetry). Defaults to unset.
         """
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
@@ -394,6 +398,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             speaker_labels=speaker_labels,
             max_speakers=max_speakers,
+            session_heartbeat=session_heartbeat,
             domain=domain,
             voice_focus=voice_focus,
             voice_focus_threshold=voice_focus_threshold,
@@ -460,6 +465,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
+        session_heartbeat: NotGivenOr[bool] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -508,6 +514,8 @@ class STT(stt.STT):
             self._opts.continuous_partials = continuous_partials
         if is_given(interruption_delay):
             self._opts.interruption_delay = interruption_delay
+        if is_given(session_heartbeat):
+            self._opts.session_heartbeat = session_heartbeat
 
         for stream in self._streams:
             stream.update_options(
@@ -522,6 +530,7 @@ class STT(stt.STT):
                 vad_threshold=vad_threshold,
                 continuous_partials=continuous_partials,
                 interruption_delay=interruption_delay,
+                session_heartbeat=session_heartbeat,
             )
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
@@ -606,6 +615,7 @@ class SpeechStream(stt.SpeechStream):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
+        session_heartbeat: NotGivenOr[bool] = NOT_GIVEN,
         # Deprecated — use min_turn_silence instead
         min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
@@ -651,6 +661,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.continuous_partials = continuous_partials
         if is_given(interruption_delay):
             self._opts.interruption_delay = interruption_delay
+        if is_given(session_heartbeat):
+            self._opts.session_heartbeat = session_heartbeat
 
         # Send UpdateConfiguration message over the active websocket
         config_msg: dict = {"type": "UpdateConfiguration"}
@@ -674,6 +686,8 @@ class SpeechStream(stt.SpeechStream):
             config_msg["interruption_delay"] = interruption_delay
         if is_given(vad_threshold):
             config_msg["vad_threshold"] = vad_threshold
+        if is_given(session_heartbeat):
+            config_msg["session_heartbeat"] = session_heartbeat
 
         if len(config_msg) > 1:
             self._config_update_queue.put_nowait(config_msg)
@@ -900,6 +914,9 @@ class SpeechStream(stt.SpeechStream):
             if is_given(self._opts.voice_focus_threshold)
             else None,
             "mode": self._opts.mode if is_given(self._opts.mode) else None,
+            "session_heartbeat": self._opts.session_heartbeat
+            if is_given(self._opts.session_heartbeat)
+            else None,
         }
 
         headers = {
@@ -965,6 +982,17 @@ class SpeechStream(stt.SpeechStream):
                 self._session_id,
                 audio_duration,
                 session_duration,
+            )
+            return
+
+        if message_type == "Heartbeat":
+            logger.debug(
+                "AssemblyAI session heartbeat session=%s total_audio_received_ms=%s total_duration_ms=%s realtime_factor=%s max_speech_probability=%s",
+                self._session_id,
+                data.get("total_audio_received_ms"),
+                data.get("total_duration_ms"),
+                data.get("realtime_factor"),
+                data.get("max_speech_probability"),
             )
             return
 
