@@ -27,6 +27,7 @@ livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-bland = { workspace = true }
 livekit-plugins-boson-ai = { workspace = true }
 livekit-plugins-boson-avatar = { workspace = true }
+livekit-plugins-breezeblue = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
