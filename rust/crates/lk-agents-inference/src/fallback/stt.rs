@@ -313,6 +313,11 @@ impl Backend for SttBackend {
         self.inner.label()
     }
 
+    fn stat_labels(&self) -> Option<lk_agents_abi::productstats::ProviderLabels> {
+        let operation = lk_agents_abi::productstats::Operation::Stt;
+        Some(crate::telemetry::stat_labels(operation, &self.inner.id()))
+    }
+
     fn failed(&self, error: ProviderError, recoverable: bool) {
         self.inner.failed(error, recoverable);
     }
