@@ -1893,3 +1893,95 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+# ---------------------------------------------------------------------------
+# Error message handling
+# ---------------------------------------------------------------------------
+
+
+async def test_process_stream_event_error_raises_api_status_error():
+    """An Error frame raises APIStatusError with code, message, and retryable flag."""
+    from livekit.agents import APIStatusError
+
+    stream = _make_stream_for_unit_test()
+    stream._session_id = "test-session-123"
+
+    error_data = {
+        "type": "Error",
+        "error_code": 3005,
+        "error": "Session duration exceeded",
+    }
+
+    with pytest.raises(APIStatusError) as exc_info:
+        stream._process_stream_event(error_data)
+
+    err = exc_info.value
+    assert err.status_code == 3005
+    assert "AssemblyAI STT error [3005]: Session duration exceeded" in str(err)
+    assert err.request_id == "test-session-123"
+    assert err.retryable is True
+    assert err.body == error_data
+    assert stream._last_error is err
+
+
+async def test_process_stream_event_error_auth_non_retryable():
+    """Authentication and client errors are marked non-retryable."""
+    from livekit.agents import APIStatusError
+
+    stream = _make_stream_for_unit_test()
+
+    error_data = {
+        "type": "Error",
+        "error_code": 1008,
+        "error": "Authentication failed",
+        "error_type": "authentication_error",
+    }
+
+    with pytest.raises(APIStatusError) as exc_info:
+        stream._process_stream_event(error_data)
+
+    err = exc_info.value
+    assert err.status_code == 1008
+    assert "AssemblyAI STT error [1008] (authentication_error): Authentication failed" in str(err)
+    assert err.retryable is False
+
+
+async def test_process_stream_event_error_explicit_retryable():
+    """Explicit retryable flag from server frame overrides the code lookup default."""
+    from livekit.agents import APIStatusError
+
+    stream = _make_stream_for_unit_test()
+
+    error_data = {
+        "type": "Error",
+        "error_code": 3010,
+        "error": "Invalid sample rate",
+        "retryable": True,
+    }
+
+    with pytest.raises(APIStatusError) as exc_info:
+        stream._process_stream_event(error_data)
+
+    err = exc_info.value
+    assert err.retryable is True
+
+
+async def test_process_stream_event_error_without_error_code():
+    """Error frame without error_code defaults status_code to -1 and formats cleanly."""
+    from livekit.agents import APIStatusError
+
+    stream = _make_stream_for_unit_test()
+
+    error_data = {
+        "type": "Error",
+        "error": "Generic connection problem",
+    }
+
+    with pytest.raises(APIStatusError) as exc_info:
+        stream._process_stream_event(error_data)
+
+    err = exc_info.value
+    assert err.status_code == -1
+    assert "AssemblyAI STT error: Generic connection problem" in str(err)
+    assert err.retryable is True
