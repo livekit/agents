@@ -1,0 +1,453 @@
+{
+  "groups": [
+    {
+      "case": "controlled-activity-1200",
+      "variant": "before",
+      "profile": "prepared",
+      "n": 4,
+      "medians_ms": {
+        "client_connected_ms": 443.6,
+        "agent_ready_ui_ms": 1889.0,
+        "first_message_ack_ms": 1999.3,
+        "first_rendered_audio_ms": 1929.2,
+        "session_returned_ms": 1805.3,
+        "subscription_ready_ms": 1198.1,
+        "activity_start_delay_ms": 104.5
+      }
+    },
+    {
+      "case": "controlled-activity-1200",
+      "variant": "after",
+      "profile": "prepared",
+      "n": 4,
+      "medians_ms": {
+        "client_connected_ms": 426.1,
+        "agent_ready_ui_ms": 1765.2,
+        "first_message_ack_ms": 1874.9,
+        "first_rendered_audio_ms": 1808.4,
+        "session_returned_ms": 1674.3,
+        "subscription_ready_ms": 1200.8,
+        "activity_start_delay_ms": 4.1
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "variant": "before",
+      "profile": "prepared",
+      "n": 4,
+      "medians_ms": {
+        "client_connected_ms": 443.0,
+        "agent_ready_ui_ms": 1156.3,
+        "first_message_ack_ms": 1265.2,
+        "first_rendered_audio_ms": 1302.4,
+        "session_returned_ms": 1020.2,
+        "subscription_ready_ms": 1176.6,
+        "activity_start_delay_ms": 101.3
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "variant": "after",
+      "profile": "prepared",
+      "n": 4,
+      "medians_ms": {
+        "client_connected_ms": 432.8,
+        "agent_ready_ui_ms": 1147.8,
+        "first_message_ack_ms": 1254.5,
+        "first_rendered_audio_ms": 1301.6,
+        "session_returned_ms": 1011.6,
+        "subscription_ready_ms": 1172.7,
+        "activity_start_delay_ms": 3.3
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "variant": "before",
+      "profile": "prepared",
+      "n": 4,
+      "medians_ms": {
+        "client_connected_ms": 430.2,
+        "agent_ready_ui_ms": 1172.3,
+        "first_message_ack_ms": 1274.2,
+        "first_rendered_audio_ms": 1909.2,
+        "session_returned_ms": 1054.0,
+        "subscription_ready_ms": 1211.0,
+        "activity_start_delay_ms": 98.2
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "variant": "after",
+      "profile": "prepared",
+      "n": 4,
+      "medians_ms": {
+        "client_connected_ms": 436.5,
+        "agent_ready_ui_ms": 1164.1,
+        "first_message_ack_ms": 1274.1,
+        "first_rendered_audio_ms": 1808.0,
+        "session_returned_ms": 1045.0,
+        "subscription_ready_ms": 1204.2,
+        "activity_start_delay_ms": 3.8
+      }
+    }
+  ],
+  "contrasts": [
+    {
+      "case": "controlled-activity-1200",
+      "comparison": "Native preparation versus synchronous preparation",
+      "pairs": 4,
+      "metrics": {
+        "client_connected_ms": {
+          "before_median_ms": 443.6,
+          "after_median_ms": 426.1,
+          "difference_of_medians_ms": 17.5,
+          "paired_median_saving_ms": 12.1,
+          "paired_savings_ms": [
+            30.1,
+            6.4,
+            4.5,
+            17.8
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            4.5,
+            30.1
+          ]
+        },
+        "agent_ready_ui_ms": {
+          "before_median_ms": 1889.0,
+          "after_median_ms": 1765.2,
+          "difference_of_medians_ms": 123.8,
+          "paired_median_saving_ms": 115.4,
+          "paired_savings_ms": [
+            131.9,
+            16.0,
+            98.8,
+            133.1
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            16.0,
+            133.1
+          ]
+        },
+        "first_message_ack_ms": {
+          "before_median_ms": 1999.3,
+          "after_median_ms": 1874.9,
+          "difference_of_medians_ms": 124.4,
+          "paired_median_saving_ms": 107.8,
+          "paired_savings_ms": [
+            114.6,
+            27.5,
+            101.0,
+            139.8
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            27.5,
+            139.8
+          ]
+        },
+        "first_rendered_audio_ms": {
+          "before_median_ms": 1929.2,
+          "after_median_ms": 1808.4,
+          "difference_of_medians_ms": 120.7,
+          "paired_median_saving_ms": 108.8,
+          "paired_savings_ms": [
+            124.9,
+            6.1,
+            92.7,
+            140.4
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            6.1,
+            140.4
+          ]
+        },
+        "session_returned_ms": {
+          "before_median_ms": 1805.3,
+          "after_median_ms": 1674.3,
+          "difference_of_medians_ms": 131.0,
+          "paired_median_saving_ms": 117.0,
+          "paired_savings_ms": [
+            136.3,
+            36.6,
+            97.8,
+            138.7
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            36.6,
+            138.7
+          ]
+        },
+        "subscription_ready_ms": {
+          "before_median_ms": 1198.1,
+          "after_median_ms": 1200.8,
+          "difference_of_medians_ms": -2.7,
+          "paired_median_saving_ms": -18.6,
+          "paired_savings_ms": [
+            27.8,
+            -142.4,
+            -65.0,
+            34.2
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -142.4,
+            34.2
+          ]
+        },
+        "activity_start_delay_ms": {
+          "before_median_ms": 104.5,
+          "after_median_ms": 4.1,
+          "difference_of_medians_ms": 100.4,
+          "paired_median_saving_ms": 100.8,
+          "paired_savings_ms": [
+            100.2,
+            98.2,
+            101.5,
+            101.3
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            98.2,
+            101.5
+          ]
+        }
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "comparison": "Native preparation versus synchronous preparation",
+      "pairs": 4,
+      "metrics": {
+        "client_connected_ms": {
+          "before_median_ms": 443.0,
+          "after_median_ms": 432.8,
+          "difference_of_medians_ms": 10.2,
+          "paired_median_saving_ms": 2.6,
+          "paired_savings_ms": [
+            6.8,
+            -1.7,
+            26.2,
+            -3.3
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -3.3,
+            26.2
+          ]
+        },
+        "agent_ready_ui_ms": {
+          "before_median_ms": 1156.3,
+          "after_median_ms": 1147.8,
+          "difference_of_medians_ms": 8.6,
+          "paired_median_saving_ms": 0.0,
+          "paired_savings_ms": [
+            0.0,
+            -32.3,
+            33.9,
+            0.0
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -32.3,
+            33.9
+          ]
+        },
+        "first_message_ack_ms": {
+          "before_median_ms": 1265.2,
+          "after_median_ms": 1254.5,
+          "difference_of_medians_ms": 10.7,
+          "paired_median_saving_ms": 1.5,
+          "paired_savings_ms": [
+            0.3,
+            -34.3,
+            33.3,
+            2.8
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -34.3,
+            33.3
+          ]
+        },
+        "first_rendered_audio_ms": {
+          "before_median_ms": 1302.4,
+          "after_median_ms": 1301.6,
+          "difference_of_medians_ms": 0.8,
+          "paired_median_saving_ms": -6.7,
+          "paired_savings_ms": [
+            -5.4,
+            -56.1,
+            30.1,
+            -7.9
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -56.1,
+            30.1
+          ]
+        },
+        "session_returned_ms": {
+          "before_median_ms": 1020.2,
+          "after_median_ms": 1011.6,
+          "difference_of_medians_ms": 8.7,
+          "paired_median_saving_ms": 10.1,
+          "paired_savings_ms": [
+            8.0,
+            -54.5,
+            31.6,
+            12.1
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -54.5,
+            31.6
+          ]
+        },
+        "subscription_ready_ms": {
+          "before_median_ms": 1176.6,
+          "after_median_ms": 1172.7,
+          "difference_of_medians_ms": 3.8,
+          "paired_median_saving_ms": -0.2,
+          "paired_savings_ms": [
+            4.0,
+            -72.4,
+            32.0,
+            -4.4
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -72.4,
+            32.0
+          ]
+        },
+        "activity_start_delay_ms": {
+          "before_median_ms": 101.3,
+          "after_median_ms": 3.3,
+          "difference_of_medians_ms": 97.9,
+          "paired_median_saving_ms": 97.6,
+          "paired_savings_ms": [
+            92.5,
+            103.6,
+            98.1,
+            97.0
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            92.5,
+            103.6
+          ]
+        }
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "comparison": "Native preparation versus synchronous preparation",
+      "pairs": 4,
+      "metrics": {
+        "client_connected_ms": {
+          "before_median_ms": 430.2,
+          "after_median_ms": 436.5,
+          "difference_of_medians_ms": -6.3,
+          "paired_median_saving_ms": -6.0,
+          "paired_savings_ms": [
+            4.2,
+            7.8,
+            -16.2,
+            -92.3
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -92.3,
+            7.8
+          ]
+        },
+        "agent_ready_ui_ms": {
+          "before_median_ms": 1172.3,
+          "after_median_ms": 1164.1,
+          "difference_of_medians_ms": 8.2,
+          "paired_median_saving_ms": 8.2,
+          "paired_savings_ms": [
+            1049.8,
+            16.8,
+            -0.4,
+            -67.2
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -67.2,
+            1049.8
+          ]
+        },
+        "first_message_ack_ms": {
+          "before_median_ms": 1274.2,
+          "after_median_ms": 1274.1,
+          "difference_of_medians_ms": 0.2,
+          "paired_median_saving_ms": 0.2,
+          "paired_savings_ms": [
+            1043.2,
+            3.0,
+            -2.7,
+            -75.9
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -75.9,
+            1043.2
+          ]
+        },
+        "first_rendered_audio_ms": {
+          "before_median_ms": 1909.2,
+          "after_median_ms": 1808.0,
+          "difference_of_medians_ms": 101.2,
+          "paired_median_saving_ms": 99.6,
+          "paired_savings_ms": [
+            1073.6,
+            126.7,
+            72.5,
+            29.0
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            29.0,
+            1073.6
+          ]
+        },
+        "session_returned_ms": {
+          "before_median_ms": 1054.0,
+          "after_median_ms": 1045.0,
+          "difference_of_medians_ms": 9.0,
+          "paired_median_saving_ms": 9.0,
+          "paired_savings_ms": [
+            1062.1,
+            16.1,
+            1.8,
+            -108.5
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -108.5,
+            1062.1
+          ]
+        },
+        "subscription_ready_ms": {
+          "before_median_ms": 1211.0,
+          "after_median_ms": 1204.2,
+          "difference_of_medians_ms": 6.8,
+          "paired_median_saving_ms": 6.8,
+          "paired_savings_ms": [
+            1065.1,
+            9.2,
+            4.4,
+            -102.8
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            -102.8,
+            1065.1
+          ]
+        },
+        "activity_start_delay_ms": {
+          "before_median_ms": 98.2,
+          "after_median_ms": 3.8,
+          "difference_of_medians_ms": 94.3,
+          "paired_median_saving_ms": 94.3,
+          "paired_savings_ms": [
+            80.9,
+            99.7,
+            93.7,
+            95.0
+          ],
+          "paired_median_bootstrap_95pct_ms": [
+            80.9,
+            99.7
+          ]
+        }
+      }
+    }
+  ]
+}

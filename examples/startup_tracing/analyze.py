@@ -150,10 +150,10 @@ def analyze(inputs: list[Path], output: Path) -> None:
             examples.append((case, row, lanes, t0))
     grouped = defaultdict(list)
     for row in rows:
-        grouped[(row["case"], row["profile"])].append(row)
+        grouped[(row["case"], row["variant"], row["profile"])].append(row)
     summaries = []
-    for (case, profile), group in sorted(grouped.items()):
-        summary = {"case": case, "profile": profile, "n": len(group)}
+    for (case, build, profile), group in sorted(grouped.items()):
+        summary = {"case": case, "variant": build, "profile": profile, "n": len(group)}
         for metric in rows[0]:
             values = sorted(row[metric] for row in group if isinstance(row[metric], (int, float)))
             if values:
@@ -174,23 +174,24 @@ def analyze(inputs: list[Path], output: Path) -> None:
             summary.get("instant_registration_saving_bound_ms"),
         )
     comparisons = []
-    lookup = {(row["case"], row["profile"], row["sample"]): row for row in rows}
-    for case in sorted({row["case"] for row in rows}):
+    lookup = {(row["case"], row["variant"], row["profile"], row["sample"]): row for row in rows}
+    for case, build in sorted({(row["case"], row["variant"]) for row in rows}):
         for variant in ["parallel-output", "automatic", "prepared"]:
             ids = sorted(
                 {
                     row["sample"]
                     for row in rows
                     if row["case"] == case
-                    and (case, "example-order", row["sample"]) in lookup
-                    and (case, variant, row["sample"]) in lookup
+                    and row["variant"] == build
+                    and (case, build, "example-order", row["sample"]) in lookup
+                    and (case, build, variant, row["sample"]) in lookup
                 }
             )
             if not ids:
                 continue
             differences = [
-                lookup[(case, "example-order", index)]["first_rendered_audio_ms"]
-                - lookup[(case, variant, index)]["first_rendered_audio_ms"]
+                lookup[(case, build, "example-order", index)]["first_rendered_audio_ms"]
+                - lookup[(case, build, variant, index)]["first_rendered_audio_ms"]
                 for index in ids
             ]
             rng = random.Random(3610)
@@ -200,6 +201,7 @@ def analyze(inputs: list[Path], output: Path) -> None:
             comparisons.append(
                 {
                     "case": case,
+                    "build": build,
                     "baseline": "example-order",
                     "variant": variant,
                     "pairs": len(ids),
@@ -228,7 +230,8 @@ def analyze(inputs: list[Path], output: Path) -> None:
         group = [
             e
             for e in examples
-            if (e[0]["case"], e[0]["profile"]) == (summary["case"], summary["profile"])
+            if (e[0]["case"], e[0].get("variant", "after"), e[0]["profile"])
+            == (summary["case"], summary["variant"], summary["profile"])
         ]
         chosen = min(
             group,
@@ -239,7 +242,7 @@ def analyze(inputs: list[Path], output: Path) -> None:
         case, row, lanes, t0 = chosen
         end = max(item["first_rendered_audio_ms"] for item in rows) + 100
         body.append(
-            f"<section><h2>{html.escape(case['case'])} / {html.escape(case['profile'])} — median first audio {summary['first_rendered_audio_ms']['median']} ms</h2>"
+            f"<section><h2>{html.escape(case['case'])} / {html.escape(case.get('variant', 'after'))}/{html.escape(case['profile'])} — median first audio {summary['first_rendered_audio_ms']['median']} ms</h2>"
         )
         body.append(
             f"<p>First PCM: {row['first_pcm_ms']:.0f} ms · media ready: {row['subscription_ready_ms']:.0f} ms · wait: {row['pcm_waiting_for_media_ms']:.0f} ms · media slack: {row['media_slack_before_pcm_ms']:.0f} ms</p>"

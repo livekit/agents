@@ -1,5 +1,7 @@
 # Actual pre-PR versus post-PR startup benchmark
 
+**Historical result — the synchronous-preparation regression below is addressed by the [native preparation follow-up](../native-preparation-reports/README.md), which reruns the comparison on staging.**
+
 **Application parallelization improves delayed startup. The SDK preparation patch currently regresses the already-automatic flow and should stay draft.** This comparison uses actual pre-PR source trees and a separately built pre-PR native library, rather than disabling a feature on the new build.
 
 72 measured browser-triggered staging sessions, 12 excluded warmups, six repetitions per arm/case. All 72 received non-silent audio and a client-to-agent message acknowledgement. All assigned agent processes were warm. Median browser ICE RTT: **61 ms**. No browser errors or excluded measured trials.

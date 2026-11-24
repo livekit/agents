@@ -700,6 +700,7 @@ class JobContext:
         rtc_config: rtc.RtcConfiguration | None = None,
         single_peer_connection: bool | None = None,
         publish_tracks: Sequence[tuple[rtc.LocalTrack, rtc.TrackPublishOptions]] = (),
+        publish_audio_tracks: Sequence[rtc.AudioTrackToPublish] = (),
         # deprecated
         e2ee: rtc.E2EEOptions | None = None,
     ) -> None:
@@ -712,6 +713,8 @@ class JobContext:
             single_peer_connection: Use a single peer connection for both publish and subscribe. When None, uses the RTC default.
             publish_tracks: Prepared tracks and publication options to publish during connection.
                 Ignored when already connected; callers must then publish tracks normally.
+            publish_audio_tracks: Declarative audio publications prepared by native connect.
+                Ignored when already connected.
         """  # noqa: E501
         async with self._lock:
             if self._connected:
@@ -730,6 +733,8 @@ class JobContext:
             # the prepared tracks as part of connect without changing Session's API.
             if hasattr(room_options, "publish_tracks"):
                 room_options.publish_tracks = list(publish_tracks)
+            if hasattr(room_options, "publish_audio_tracks"):
+                room_options.publish_audio_tracks = list(publish_audio_tracks)
 
             with session_context.session_span(
                 "room_connect",

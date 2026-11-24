@@ -87,12 +87,20 @@ def wrap_async(cls: Any, method: str, label: str) -> None:
                 and "publish_tracks" in inspect.signature(original).parameters
             ):
                 kwargs["publish_tracks"] = ()
-            record("connect_initial_tracks", count=len(kwargs.get("publish_tracks", ())))
+                if "publish_audio_tracks" in inspect.signature(original).parameters:
+                    kwargs["publish_audio_tracks"] = ()
+            record(
+                "connect_initial_tracks",
+                count=len(kwargs.get("publish_tracks", ()))
+                + len(kwargs.get("publish_audio_tracks", ())),
+            )
         if cls is rtc.Room:
             options = kwargs.get("options")
             record(
                 "native_connect_config",
-                initial_track_count=len(getattr(options, "publish_tracks", ())),
+                initial_track_count=len(getattr(options, "publish_tracks", ()))
+                + len(getattr(options, "publish_audio_tracks", ())),
+                audio_source_count=len(getattr(options, "publish_audio_tracks", ())),
             )
         try:
             if label == "toolsets_setup" and CURRENT.get("activity_delay_ms", 0):
@@ -183,6 +191,7 @@ def setup_process(proc: Any) -> None:
         connect_accepts_initial_tracks="publish_tracks"
         in inspect.signature(JobContext.connect).parameters,
         rtc_accepts_initial_tracks="publish_tracks" in rtc.RoomOptions.__dataclass_fields__,
+        rtc_accepts_audio_sources="publish_audio_tracks" in rtc.RoomOptions.__dataclass_fields__,
     )
 
 
@@ -379,7 +388,10 @@ async def entrypoint(ctx: JobContext) -> None:
     if CURRENT["profile"] == "prepared-custom":
 
         async def start_custom() -> None:
-            await ctx.connect(single_peer_connection=True, publish_tracks=[custom._prepare_track()])
+            await ctx.connect(
+                single_peer_connection=True,
+                publish_audio_tracks=[custom._publication_for_connect()],
+            )
             await custom.start()
 
         tasks = [asyncio.create_task(starting), asyncio.create_task(start_custom())]

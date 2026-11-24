@@ -1723,7 +1723,9 @@ async def test_modern_stream_still_published_when_legacy_is_skipped() -> None:
 async def test_prepared_audio_output_publishes_once_without_pcm(published_on_join: bool) -> None:
     """Both connect-time and ordinary publication use the same empty source/track."""
     room = _FakeRoom()
-    publication = SimpleNamespace(track=None, sid="TR_initial", wait_for_subscription=AsyncMock())
+    publication = SimpleNamespace(
+        track=None, sid="TR_initial", name="roomio_audio", wait_for_subscription=AsyncMock()
+    )
     room.local_participant.track_publications = {}
     room.local_participant.publish_track = AsyncMock(return_value=publication)
     output = _ParticipantAudioOutput(
@@ -1787,3 +1789,37 @@ async def test_audio_output_starts_before_input_participant_and_is_cancelled_on_
     await room_io.aclose()
     assert stopped.is_set()
     assert room_io._init_atask.done()
+
+
+async def test_declarative_audio_connect_adopts_native_track_without_sync_creation() -> None:
+    """Describing and adopting a connect publication never creates a track on Python's loop."""
+    room = _FakeRoom()
+    native_track = MagicMock(spec=rtc.LocalAudioTrack)
+    publication = SimpleNamespace(
+        track=native_track, sid="TR_native", name="roomio_audio", wait_for_subscription=AsyncMock()
+    )
+    room.local_participant.track_publications = {publication.sid: publication}
+    room.local_participant.publish_track = AsyncMock()
+    with patch(
+        "livekit.rtc.LocalAudioTrack.create_audio_track",
+        side_effect=AssertionError("synchronous preparation"),
+    ):
+        output = _ParticipantAudioOutput(
+            room,
+            sample_rate=24000,
+            num_channels=1,
+            track_publish_options=rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+        try:
+            description = output._publication_for_connect()
+            assert description is not None and description.track is None
+            assert description.source is output._audio_source
+            assert output._publication_for_connect() is description
+            description._track = native_track  # Native connect result, installed by RTC Room.
+            await output.start()
+            assert output._track is native_track
+            assert output._publication is publication
+            assert output.subscribed.done()
+            room.local_participant.publish_track.assert_not_awaited()
+        finally:
+            await output.aclose()

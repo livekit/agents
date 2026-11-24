@@ -249,6 +249,8 @@ async def run(args):
                             ("prepared", "after"),
                             ("prepared-custom", "after"),
                         ]
+                        if args.compare_preparation:
+                            arms = [("prepared", "before"), ("prepared", "after")]
                         offset = sample % len(arms)
                         arms = arms[offset:] + arms[:offset]
                     for profile, variant in arms:
@@ -380,6 +382,7 @@ def main():
     parser.add_argument("--before-agents", type=Path)
     parser.add_argument("--before-rtc", type=Path)
     parser.add_argument("--before-native", type=Path)
+    parser.add_argument("--compare-preparation", action="store_true")
     args = parser.parse_args()
     if any((args.before_agents, args.before_rtc, args.before_native)) and not all(
         (args.before_agents, args.before_rtc, args.before_native)

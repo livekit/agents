@@ -625,10 +625,21 @@ async def test_job_connect_forwards_prepared_tracks_once() -> None:
     )
     track = MagicMock(spec=rtc.LocalAudioTrack)
     options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    await ctx.connect(single_peer_connection=True, publish_tracks=[(track, options)])
+    audio = (
+        rtc.AudioTrackToPublish(source=MagicMock(spec=rtc.AudioSource))
+        if hasattr(rtc, "AudioTrackToPublish")
+        else None
+    )
+    await ctx.connect(
+        single_peer_connection=True,
+        publish_tracks=[(track, options)],
+        publish_audio_tracks=[audio] if audio is not None else [],
+    )
     passed = room.connect.call_args.kwargs["options"]
     if hasattr(passed, "publish_tracks"):
         assert passed.publish_tracks == [(track, options)]
+    if audio is not None:
+        assert passed.publish_audio_tracks == [audio]
     assert passed.single_peer_connection is True
     await ctx.connect(publish_tracks=[(track, options)])
     room.connect.assert_awaited_once()

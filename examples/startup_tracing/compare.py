@@ -24,6 +24,7 @@ METRICS = [
     "first_rendered_audio_ms",
     "session_returned_ms",
     "subscription_ready_ms",
+    "activity_start_delay_ms",
 ]
 
 
@@ -40,8 +41,22 @@ def compare(source: Path, output: Path) -> None:
     cases = sorted({r["case"] for r in rows})
     summaries, contrasts = [], []
     randomizer = random.Random(3610)
+    preparation_pair = {(r["variant"], r["profile"]) for r in rows} == {
+        ("before", "prepared"),
+        ("after", "prepared"),
+    }
+    arms = [("before", "prepared"), ("after", "prepared")] if preparation_pair else ARMS
+    comparisons = (
+        [("Native preparation versus synchronous preparation", arms[0], arms[1])]
+        if preparation_pair
+        else [
+            ("Application sequencing + PRs (custom output)", ARMS[0], ARMS[3]),
+            ("SDK PRs only (automatic Session)", ARMS[1], ARMS[2]),
+            ("Original sequence to default prepared Session", ARMS[0], ARMS[2]),
+        ]
+    )
     for case in cases:
-        for variant, profile in ARMS:
+        for variant, profile in arms:
             group = [
                 r
                 for r in rows
@@ -59,11 +74,7 @@ def compare(source: Path, output: Path) -> None:
                     },
                 }
             )
-        for title, before, after in [
-            ("Application sequencing + PRs (custom output)", ARMS[0], ARMS[3]),
-            ("SDK PRs only (automatic Session)", ARMS[1], ARMS[2]),
-            ("Original sequence to default prepared Session", ARMS[0], ARMS[2]),
-        ]:
+        for title, before, after in comparisons:
             ids = sorted(
                 r["sample"]
                 for r in rows

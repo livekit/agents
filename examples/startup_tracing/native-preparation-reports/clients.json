@@ -1,0 +1,3728 @@
+[
+  {
+    "marks": {
+      "click": 1795482999471.1,
+      "credentials_ready": 1795482999486.1,
+      "connecting_ui_painted": 1795482999893,
+      "room_connected": 1795483000372.6,
+      "connect_returned": 1795483000372.9001,
+      "connected_ui_painted": 1795483000406.1,
+      "agent_visible": 1795483000954.8,
+      "agent_visible_ui_painted": 1795483000971.8,
+      "remote_track_announced": 1795483001151.5,
+      "agent_state_listening": 1795483001185.1,
+      "agent_interaction_ready": 1795483001185.2,
+      "first_message_send": 1795483001185.2,
+      "first_message_sent": 1795483001185.9001,
+      "agent_state_listening_painted": 1795483001206,
+      "agent_interaction_ready_painted": 1795483001206.1,
+      "track_subscribed": 1795483001254.1,
+      "audio_element_playing": 1795483001265,
+      "agent_state_speaking": 1795483001311.6,
+      "first_message_ack": 1795483001311.9001,
+      "agent_state_speaking_painted": 1795483001338.6,
+      "first_rendered_audio": 1795483001373,
+      "audio_playing_ui_painted": 1795483001406.1
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483000219.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483000219.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483000244.4001,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483000306.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483000954.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483001151,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483001151.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483001159.5,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483001184.8,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483001185,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483001248.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483001311.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 62,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "956433176483",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-956433176483",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": -1,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483003997.5999,
+      "credentials_ready": 1795483004024.4,
+      "connecting_ui_painted": 1795483004039.5,
+      "room_connected": 1795483004463,
+      "connect_returned": 1795483004463.2998,
+      "connected_ui_painted": 1795483004496.0999,
+      "agent_visible": 1795483004947.7,
+      "agent_visible_ui_painted": 1795483004979.2998,
+      "remote_track_announced": 1795483005149.5,
+      "agent_state_listening": 1795483005183.2,
+      "agent_interaction_ready": 1795483005183.2,
+      "first_message_send": 1795483005183.2,
+      "first_message_sent": 1795483005183.7998,
+      "agent_state_listening_painted": 1795483005211.9,
+      "agent_interaction_ready_painted": 1795483005211.9,
+      "track_subscribed": 1795483005246.9,
+      "audio_element_playing": 1795483005249.2998,
+      "agent_state_speaking": 1795483005307.2998,
+      "first_message_ack": 1795483005312.4,
+      "agent_state_speaking_painted": 1795483005329.5,
+      "first_rendered_audio": 1795483005370.5,
+      "audio_playing_ui_painted": 1795483005395.4
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483004310.0999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483004310.5999,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483004337,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483004399.7998,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483004947.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483005149,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483005149.7998,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483005157,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483005182.2998,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483005183.0999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483005244.0999,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483005307.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 66,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "67de1df2998e",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-67de1df2998e",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": -1,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483007847.5,
+      "credentials_ready": 1795483007871.5,
+      "connecting_ui_painted": 1795483007891.7,
+      "room_connected": 1795483008286.5,
+      "connect_returned": 1795483008286.9,
+      "connected_ui_painted": 1795483008311.2,
+      "agent_visible": 1795483008745.5999,
+      "agent_visible_ui_painted": 1795483008777.7998,
+      "remote_track_announced": 1795483008948.5,
+      "agent_state_listening": 1795483008976.5999,
+      "agent_interaction_ready": 1795483008976.7,
+      "first_message_send": 1795483008976.7,
+      "first_message_sent": 1795483008977.2,
+      "agent_state_listening_painted": 1795483008995.2,
+      "agent_interaction_ready_painted": 1795483008995.2,
+      "track_subscribed": 1795483009045.5,
+      "audio_element_playing": 1795483009048.5999,
+      "agent_state_speaking": 1795483009107.5999,
+      "first_message_ack": 1795483009108.0999,
+      "agent_state_speaking_painted": 1795483009127.9,
+      "first_rendered_audio": 1795483009168.7998,
+      "audio_playing_ui_painted": 1795483009195.0999
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483008134.0999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483008134.4,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483008160,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483008222.7998,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483008745.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483008947.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483008948.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483008956.5,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483008976.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483008981.5,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483009042.9,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483009107.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 64,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "c7db9c4a62eb",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-c7db9c4a62eb",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 0,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483011507.3,
+      "credentials_ready": 1795483011532.1,
+      "connecting_ui_painted": 1795483011546.2,
+      "room_connected": 1795483011939.5,
+      "connect_returned": 1795483011939.9,
+      "connected_ui_painted": 1795483011971.8,
+      "agent_visible": 1795483012396.6,
+      "agent_visible_ui_painted": 1795483012421.8,
+      "remote_track_announced": 1795483012597.8,
+      "agent_state_listening": 1795483012633.9,
+      "agent_interaction_ready": 1795483012634,
+      "first_message_send": 1795483012634,
+      "first_message_sent": 1795483012634.6,
+      "agent_state_listening_painted": 1795483012655,
+      "agent_interaction_ready_painted": 1795483012655,
+      "track_subscribed": 1795483012701.5,
+      "audio_element_playing": 1795483012705.7,
+      "agent_state_speaking": 1795483012762.6,
+      "first_message_ack": 1795483012767.6,
+      "agent_state_speaking_painted": 1795483012788.3,
+      "first_rendered_audio": 1795483012834,
+      "audio_playing_ui_painted": 1795483012855
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483011786.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483011788.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483011811.4,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483011874,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483012396.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483012597.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483012597.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483012605,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483012630.1,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483012633.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483012698.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483012762.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 65,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "b4bc47d3eadd",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-b4bc47d3eadd",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 0,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483015374.6,
+      "credentials_ready": 1795483015399.9,
+      "connecting_ui_painted": 1795483015414.7,
+      "room_connected": 1795483015823.2,
+      "connect_returned": 1795483015823.5,
+      "connected_ui_painted": 1795483015855.1,
+      "agent_visible": 1795483016310.9,
+      "agent_visible_ui_painted": 1795483016338.8,
+      "remote_track_announced": 1795483016512.3,
+      "agent_state_listening": 1795483016540.8,
+      "agent_interaction_ready": 1795483016540.9,
+      "first_message_send": 1795483016540.9,
+      "first_message_sent": 1795483016541.4,
+      "agent_state_listening_painted": 1795483016571.8,
+      "agent_interaction_ready_painted": 1795483016571.8,
+      "track_subscribed": 1795483016619.3,
+      "audio_element_playing": 1795483016621.5,
+      "first_message_ack": 1795483016678.7,
+      "agent_state_speaking": 1795483016684.7,
+      "agent_state_speaking_painted": 1795483016705.5,
+      "first_rendered_audio": 1795483016729,
+      "audio_playing_ui_painted": 1795483016755.4
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483015671.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483015671.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483015698.8,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483015766.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483016310.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483016511.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483016512.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483016521.5,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483016540.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483016546.2,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483016616.6,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483016684.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 65,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "3976fddea8a4",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-3976fddea8a4",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 1,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483019205.9,
+      "credentials_ready": 1795483019232.5,
+      "connecting_ui_painted": 1795483019242.5,
+      "room_connected": 1795483019652.8,
+      "connect_returned": 1795483019653.3,
+      "connected_ui_painted": 1795483019670.8,
+      "agent_visible": 1795483020140.2,
+      "agent_visible_ui_painted": 1795483020170.2,
+      "remote_track_announced": 1795483020280.3,
+      "agent_state_listening": 1795483020342.1,
+      "agent_interaction_ready": 1795483020342.1,
+      "first_message_send": 1795483020342.1,
+      "first_message_sent": 1795483020342.6,
+      "agent_state_listening_painted": 1795483020370.8,
+      "agent_interaction_ready_painted": 1795483020370.8,
+      "track_subscribed": 1795483020378.4,
+      "audio_element_playing": 1795483020381.8,
+      "agent_state_speaking": 1795483020442.8,
+      "agent_state_speaking_painted": 1795483020470.2,
+      "first_message_ack": 1795483020475.7,
+      "first_rendered_audio": 1795483020504.2,
+      "audio_playing_ui_painted": 1795483020537.5
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483019498.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483019499.3,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483019526.3,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483019590.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483020139.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483020279.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483020280.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483020288.1,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483020313.1,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483020341.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483020375.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483020442.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 61,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "d130ef6c96db",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-d130ef6c96db",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 1,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483022970.6,
+      "credentials_ready": 1795483022995.4,
+      "connecting_ui_painted": 1795483023010.7,
+      "room_connected": 1795483023430.1,
+      "connect_returned": 1795483023430.5,
+      "connected_ui_painted": 1795483023452.3,
+      "agent_visible": 1795483023914,
+      "agent_visible_ui_painted": 1795483023935.2,
+      "remote_track_announced": 1795483024054.2,
+      "agent_state_listening": 1795483024120.1,
+      "agent_interaction_ready": 1795483024120.1,
+      "first_message_send": 1795483024120.1,
+      "first_message_sent": 1795483024120.7,
+      "agent_state_listening_painted": 1795483024152.2,
+      "agent_interaction_ready_painted": 1795483024152.3,
+      "track_subscribed": 1795483024155.7,
+      "audio_element_playing": 1795483024157.9,
+      "agent_state_speaking": 1795483024220.1,
+      "agent_state_speaking_painted": 1795483024251.6,
+      "first_message_ack": 1795483024252.5,
+      "first_rendered_audio": 1795483024277.1,
+      "audio_playing_ui_painted": 1795483024301.4
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483023277.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483023278,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483023304.5,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483023369,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483023913.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483024053.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483024054.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483024061.3,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483024086.7,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483024120,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483024152.9,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483024220.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 63,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "bdf126aa338d",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-bdf126aa338d",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 2,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483026814.7,
+      "credentials_ready": 1795483026840.6,
+      "connecting_ui_painted": 1795483026850.7,
+      "room_connected": 1795483027248,
+      "connect_returned": 1795483027248.4001,
+      "connected_ui_painted": 1795483027278.5,
+      "agent_visible": 1795483027724.6,
+      "agent_visible_ui_painted": 1795483027745.5,
+      "remote_track_announced": 1795483027868.9001,
+      "agent_state_listening": 1795483027937,
+      "agent_interaction_ready": 1795483027937.1,
+      "first_message_send": 1795483027937.1,
+      "first_message_sent": 1795483027937.6,
+      "agent_state_listening_painted": 1795483027962.5,
+      "agent_interaction_ready_painted": 1795483027962.5,
+      "track_subscribed": 1795483027967.7,
+      "audio_element_playing": 1795483027970.1,
+      "agent_state_speaking": 1795483028028.4001,
+      "agent_state_speaking_painted": 1795483028045.3,
+      "first_message_ack": 1795483028063.3,
+      "first_rendered_audio": 1795483028091.1,
+      "audio_playing_ui_painted": 1795483028112.4001
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483027095.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483027096.1,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483027122.1,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483027184.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483027724.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483027868.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483027869,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483027877.8,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483027902.5,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483027936.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483027965,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483028028.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 66,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "b6cd44af1227",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-b6cd44af1227",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 2,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483030659.5,
+      "credentials_ready": 1795483030684,
+      "connecting_ui_painted": 1795483030694.1,
+      "room_connected": 1795483031085.2,
+      "connect_returned": 1795483031085.5,
+      "connected_ui_painted": 1795483031106.7,
+      "agent_visible": 1795483031559.2,
+      "agent_visible_ui_painted": 1795483031590.4001,
+      "remote_track_announced": 1795483031713.5,
+      "agent_state_listening": 1795483031773.9001,
+      "agent_interaction_ready": 1795483031773.9001,
+      "first_message_send": 1795483031773.9001,
+      "first_message_sent": 1795483031774.4001,
+      "agent_state_listening_painted": 1795483031806.5,
+      "agent_interaction_ready_painted": 1795483031806.6,
+      "track_subscribed": 1795483031815.3,
+      "audio_element_playing": 1795483031817.8,
+      "agent_state_speaking": 1795483031877.4001,
+      "first_message_ack": 1795483031903,
+      "agent_state_speaking_painted": 1795483031906.6,
+      "first_rendered_audio": 1795483031936,
+      "audio_playing_ui_painted": 1795483031956.6
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483030930.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483030931.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483030958.1,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483031022.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483031558.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483031713.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483031713.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483031722.6,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483031747.6,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483031773.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483031812.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483031877.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 62,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "006d62e0ab51",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-006d62e0ab51",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 3,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483034491,
+      "credentials_ready": 1795483034515.5,
+      "connecting_ui_painted": 1795483034535.3,
+      "room_connected": 1795483034913.4,
+      "connect_returned": 1795483034913.8,
+      "connected_ui_painted": 1795483034938.1,
+      "agent_visible": 1795483035401.9,
+      "agent_visible_ui_painted": 1795483035421.1,
+      "remote_track_announced": 1795483035544.6,
+      "agent_state_listening": 1795483035607.4,
+      "agent_interaction_ready": 1795483035607.4,
+      "first_message_send": 1795483035607.4,
+      "first_message_sent": 1795483035608,
+      "agent_state_listening_painted": 1795483035638.1,
+      "agent_interaction_ready_painted": 1795483035638.1,
+      "track_subscribed": 1795483035642.1,
+      "audio_element_playing": 1795483035644.5,
+      "agent_state_speaking": 1795483035702.9,
+      "agent_state_speaking_painted": 1795483035721.3,
+      "first_message_ack": 1795483035737.3,
+      "first_rendered_audio": 1795483035759.6,
+      "audio_playing_ui_painted": 1795483035788
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483034760.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483034761.3,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483034788.4,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483034851.6,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483035401.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483035544.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483035544.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483035553,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483035577.6,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483035607.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483035639.4,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483035702.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 64,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "86fce6315126",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-86fce6315126",
+      "case": "controlled-fast",
+      "mode": "controlled",
+      "sample": 3,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483038338.4001,
+      "credentials_ready": 1795483038363.2002,
+      "connecting_ui_painted": 1795483038373.5,
+      "room_connected": 1795483038830,
+      "connect_returned": 1795483038830.4001,
+      "connected_ui_painted": 1795483038853.1,
+      "agent_visible": 1795483039275.8,
+      "agent_visible_ui_painted": 1795483039303.6,
+      "remote_track_announced": 1795483039419.9001,
+      "track_subscribed": 1795483039521.8,
+      "audio_element_playing": 1795483039526.5,
+      "agent_state_listening": 1795483040105.8,
+      "agent_interaction_ready": 1795483040105.9001,
+      "first_message_send": 1795483040105.9001,
+      "first_message_sent": 1795483040106.6,
+      "agent_state_listening_painted": 1795483040136.4001,
+      "agent_interaction_ready_painted": 1795483040136.4001,
+      "agent_state_speaking": 1795483040166.7002,
+      "first_rendered_audio": 1795483040173,
+      "agent_state_speaking_painted": 1795483040186.6,
+      "audio_playing_ui_painted": 1795483040203.5,
+      "first_message_ack": 1795483040238.9001
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483038625.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483038625.7002,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483038652.9001,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483038719.3,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483039275.2002,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483039419.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483039420.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483039428.5,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483039454.7002,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483039519,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483040105.7002,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483040166.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 60,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "2479bf1bcfba",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-2479bf1bcfba",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": -1,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483042604,
+      "credentials_ready": 1795483042629,
+      "connecting_ui_painted": 1795483042638.9001,
+      "room_connected": 1795483043045,
+      "connect_returned": 1795483043045.4001,
+      "connected_ui_painted": 1795483043067.9001,
+      "agent_visible": 1795483043527.5,
+      "agent_visible_ui_painted": 1795483043552,
+      "remote_track_announced": 1795483043730.1,
+      "track_subscribed": 1795483043829.9001,
+      "audio_element_playing": 1795483043832,
+      "agent_state_listening": 1795483044457.8,
+      "agent_interaction_ready": 1795483044457.8,
+      "first_message_send": 1795483044457.9001,
+      "first_message_sent": 1795483044458.5,
+      "agent_state_listening_painted": 1795483044485.2,
+      "agent_interaction_ready_painted": 1795483044485.2,
+      "agent_state_speaking": 1795483044517.4001,
+      "first_rendered_audio": 1795483044531.5,
+      "agent_state_speaking_painted": 1795483044535.7,
+      "audio_playing_ui_painted": 1795483044551.8,
+      "first_message_ack": 1795483044593.2
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483042891,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483042891.3,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483042917.9001,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483042979.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483043526.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483043729.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483043730.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483043737.4001,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483043762.6,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483043827.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483044457.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483044517.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 65,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "396e9917062a",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-396e9917062a",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": -1,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483047081.7,
+      "credentials_ready": 1795483047106.4001,
+      "connecting_ui_painted": 1795483047131.2,
+      "room_connected": 1795483047532.7,
+      "connect_returned": 1795483047533.1,
+      "connected_ui_painted": 1795483047562.9001,
+      "agent_visible": 1795483048017.7,
+      "agent_visible_ui_painted": 1795483048046.2,
+      "remote_track_announced": 1795483048214.3,
+      "track_subscribed": 1795483048314.9001,
+      "audio_element_playing": 1795483048317.2,
+      "agent_state_listening": 1795483048953.8,
+      "agent_interaction_ready": 1795483048953.8,
+      "first_message_send": 1795483048953.8,
+      "first_message_sent": 1795483048954.5,
+      "agent_state_listening_painted": 1795483048978.6,
+      "agent_interaction_ready_painted": 1795483048978.6,
+      "agent_state_speaking": 1795483049018.3,
+      "first_rendered_audio": 1795483049021.7,
+      "agent_state_speaking_painted": 1795483049045.6,
+      "audio_playing_ui_painted": 1795483049045.6,
+      "first_message_ack": 1795483049082.5
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483047380.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483047380.9001,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483047407,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483047469.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483048017.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483048213.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483048214.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483048222.3,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483048247.9001,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483048312.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483048953.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483049018.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 64,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "61689bb7ccfa",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-61689bb7ccfa",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 0,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483051653.6,
+      "credentials_ready": 1795483051680.4001,
+      "connecting_ui_painted": 1795483051690.3,
+      "room_connected": 1795483052074.5,
+      "connect_returned": 1795483052075,
+      "connected_ui_painted": 1795483052102,
+      "agent_visible": 1795483052565.5,
+      "agent_visible_ui_painted": 1795483052585,
+      "remote_track_announced": 1795483052759.9001,
+      "track_subscribed": 1795483052859.1,
+      "audio_element_playing": 1795483052861.4001,
+      "agent_state_listening": 1795483053393.1,
+      "agent_interaction_ready": 1795483053393.1,
+      "first_message_send": 1795483053393.1,
+      "first_message_sent": 1795483053393.8,
+      "agent_state_listening_painted": 1795483053418.6,
+      "agent_interaction_ready_painted": 1795483053418.6,
+      "agent_state_speaking": 1795483053458.9001,
+      "first_rendered_audio": 1795483053468.7,
+      "agent_state_speaking_painted": 1795483053485.3,
+      "audio_playing_ui_painted": 1795483053501.9001,
+      "first_message_ack": 1795483053539.8
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483051922.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483051923.4001,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483051949.2,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483052014.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483052565,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483052759.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483052760,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483052767.7,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483052792.6,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483052856.4001,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483053393,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483053458.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 65,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "49ad2b4bfc71",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-49ad2b4bfc71",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 0,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483056147.4,
+      "credentials_ready": 1795483056174.5,
+      "connecting_ui_painted": 1795483056185,
+      "room_connected": 1795483056569.4,
+      "connect_returned": 1795483056569.9,
+      "connected_ui_painted": 1795483056595.9,
+      "agent_visible": 1795483057159.3,
+      "agent_visible_ui_painted": 1795483057178.4,
+      "remote_track_announced": 1795483057357.8,
+      "track_subscribed": 1795483057457.4,
+      "audio_element_playing": 1795483057460,
+      "agent_state_listening": 1795483057987.1,
+      "agent_interaction_ready": 1795483057987.1,
+      "first_message_send": 1795483057987.2,
+      "first_message_sent": 1795483057987.6,
+      "agent_state_listening_painted": 1795483058012.4,
+      "agent_interaction_ready_painted": 1795483058012.5,
+      "agent_state_speaking": 1795483058052.8,
+      "first_rendered_audio": 1795483058059.6,
+      "agent_state_speaking_painted": 1795483058078.4,
+      "audio_playing_ui_painted": 1795483058078.5,
+      "first_message_ack": 1795483058117.7
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483056416.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483056417.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483056443.4,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483056507,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483057158.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483057357.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483057357.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483057365.2,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483057390.3,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483057454.9,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483057986.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483058052.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 62,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "5a7451ce99f3",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-5a7451ce99f3",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 1,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483060563.2,
+      "credentials_ready": 1795483060588.0999,
+      "connecting_ui_painted": 1795483060606.7,
+      "room_connected": 1795483060991.5999,
+      "connect_returned": 1795483060992,
+      "connected_ui_painted": 1795483061010.5999,
+      "agent_visible": 1795483061488.5,
+      "agent_visible_ui_painted": 1795483061511,
+      "remote_track_announced": 1795483061624.5,
+      "track_subscribed": 1795483061730.4,
+      "audio_element_playing": 1795483061732.7,
+      "agent_state_listening": 1795483062425.5999,
+      "agent_interaction_ready": 1795483062425.5999,
+      "first_message_send": 1795483062425.7,
+      "first_message_sent": 1795483062426.2998,
+      "agent_state_listening_painted": 1795483062444.2998,
+      "agent_interaction_ready_painted": 1795483062444.2998,
+      "first_rendered_audio": 1795483062481.5,
+      "agent_state_speaking": 1795483062490.2998,
+      "audio_playing_ui_painted": 1795483062511,
+      "agent_state_speaking_painted": 1795483062511,
+      "first_message_ack": 1795483062561
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483060837.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483060837.7998,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483060864.5,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483060927.2998,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483061488,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483061624,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483061624.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483061631.9,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483061657.2998,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483061727.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483062425.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483062490.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 61,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "4dbbba2e60c2",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-4dbbba2e60c2",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 1,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483065029.5,
+      "credentials_ready": 1795483065054.9001,
+      "connecting_ui_painted": 1795483065065.7,
+      "room_connected": 1795483065468.7,
+      "connect_returned": 1795483065469.1,
+      "connected_ui_painted": 1795483065493.8,
+      "agent_visible": 1795483065926.3,
+      "agent_visible_ui_painted": 1795483065942.9001,
+      "remote_track_announced": 1795483066064,
+      "track_subscribed": 1795483066161,
+      "audio_element_playing": 1795483066165,
+      "agent_state_listening": 1795483066863.6,
+      "agent_interaction_ready": 1795483066863.6,
+      "first_message_send": 1795483066863.6,
+      "first_message_sent": 1795483066864.2,
+      "agent_state_listening_painted": 1795483066893.8,
+      "agent_interaction_ready_painted": 1795483066893.8,
+      "agent_state_speaking": 1795483066923.7,
+      "first_rendered_audio": 1795483066924,
+      "agent_state_speaking_painted": 1795483066942.9001,
+      "audio_playing_ui_painted": 1795483066943,
+      "first_message_ack": 1795483066993.5
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483065314.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483065315.3,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483065342.1,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483065403.1,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483065925.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483066063.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483066064.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483066072.4001,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483066097.3,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483066158.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483066863.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483066923.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 58,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "b2530e827c40",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-b2530e827c40",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 2,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483069498.1,
+      "credentials_ready": 1795483069525.7,
+      "connecting_ui_painted": 1795483069542.2,
+      "room_connected": 1795483069932.8,
+      "connect_returned": 1795483069933.2,
+      "connected_ui_painted": 1795483069963.6,
+      "agent_visible": 1795483070398.2,
+      "agent_visible_ui_painted": 1795483070430.2,
+      "remote_track_announced": 1795483070596.4001,
+      "track_subscribed": 1795483070694.3,
+      "audio_element_playing": 1795483070696.5,
+      "agent_state_listening": 1795483071232.9001,
+      "agent_interaction_ready": 1795483071232.9001,
+      "first_message_send": 1795483071232.9001,
+      "first_message_sent": 1795483071233.5,
+      "agent_state_listening_painted": 1795483071263.5,
+      "agent_interaction_ready_painted": 1795483071263.6,
+      "agent_state_speaking": 1795483071295.6,
+      "first_rendered_audio": 1795483071299.9001,
+      "agent_state_speaking_painted": 1795483071313.6,
+      "audio_playing_ui_painted": 1795483071330.2,
+      "first_message_ack": 1795483071361.1
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483069780.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483069780.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483069807.6,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483069872.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483070397.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483070595.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483070596.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483070603.8,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483070629,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483070691.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483071232.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483071295.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 64,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "071d5b56106f",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-071d5b56106f",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 2,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483073938.9,
+      "credentials_ready": 1795483073965.5999,
+      "connecting_ui_painted": 1795483073976.0999,
+      "room_connected": 1795483074369.0999,
+      "connect_returned": 1795483074369.5,
+      "connected_ui_painted": 1795483074386.7,
+      "agent_visible": 1795483074844.5,
+      "agent_visible_ui_painted": 1795483074870.7,
+      "remote_track_announced": 1795483075037.2998,
+      "track_subscribed": 1795483075139,
+      "audio_element_playing": 1795483075141.2998,
+      "agent_state_listening": 1795483075673.2998,
+      "agent_interaction_ready": 1795483075673.4,
+      "first_message_send": 1795483075673.4,
+      "first_message_sent": 1795483075674,
+      "agent_state_listening_painted": 1795483075703.4,
+      "agent_interaction_ready_painted": 1795483075703.4,
+      "agent_state_speaking": 1795483075733.5999,
+      "first_rendered_audio": 1795483075739.7998,
+      "agent_state_speaking_painted": 1795483075754.0999,
+      "audio_playing_ui_painted": 1795483075770,
+      "first_message_ack": 1795483075802.5999
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483074214.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483074214.7998,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483074242.2,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483074304.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483074844,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483075036.7998,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483075037.7998,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483075046.5,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483075072,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483075136.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483075673.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483075733.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 61,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "a9a565edf2de",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-a9a565edf2de",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 3,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483078315.5,
+      "credentials_ready": 1795483078341.2,
+      "connecting_ui_painted": 1795483078355,
+      "room_connected": 1795483078763.5,
+      "connect_returned": 1795483078764,
+      "connected_ui_painted": 1795483078796.5,
+      "agent_visible": 1795483079257,
+      "agent_visible_ui_painted": 1795483079280,
+      "remote_track_announced": 1795483079452,
+      "track_subscribed": 1795483079550,
+      "audio_element_playing": 1795483079552.2,
+      "agent_state_listening": 1795483080186.5,
+      "agent_interaction_ready": 1795483080186.6,
+      "first_message_send": 1795483080186.6,
+      "first_message_sent": 1795483080187.2,
+      "agent_state_listening_painted": 1795483080213.1,
+      "agent_interaction_ready_painted": 1795483080213.1,
+      "agent_state_speaking": 1795483080249.5,
+      "first_rendered_audio": 1795483080256.8,
+      "agent_state_speaking_painted": 1795483080279.9001,
+      "audio_playing_ui_painted": 1795483080279.9001,
+      "first_message_ack": 1795483080319
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483078611.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483078611.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483078637,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483078703.4001,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483079256.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483079451.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483079452.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483079460.9001,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483079486.1,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483079547.4001,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483080186.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483080249.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 66,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "8d44f6724bd9",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-8d44f6724bd9",
+      "case": "controlled-activity-1200",
+      "mode": "controlled",
+      "sample": 3,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 1200,
+      "pcm_delay_ms": 0
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483082746.1,
+      "credentials_ready": 1795483082770.9001,
+      "connecting_ui_painted": 1795483082781.3,
+      "room_connected": 1795483083173.6,
+      "connect_returned": 1795483083174,
+      "connected_ui_painted": 1795483083193.5,
+      "agent_visible": 1795483083649.8,
+      "agent_visible_ui_painted": 1795483083676.5,
+      "remote_track_announced": 1795483083852.1,
+      "agent_state_listening": 1795483083887.4001,
+      "agent_interaction_ready": 1795483083887.5,
+      "first_message_send": 1795483083887.5,
+      "first_message_sent": 1795483083888.1,
+      "agent_state_listening_painted": 1795483083910.4001,
+      "agent_interaction_ready_painted": 1795483083910.5,
+      "track_subscribed": 1795483083951.9001,
+      "audio_element_playing": 1795483083954.4001,
+      "first_message_ack": 1795483084017.3,
+      "agent_state_speaking": 1795483084489.6,
+      "agent_state_speaking_painted": 1795483084510.2,
+      "first_rendered_audio": 1795483084553.1,
+      "audio_playing_ui_painted": 1795483084576.5
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483083019.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483083019.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483083047,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483083111.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483083649.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483083851.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483083852.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483083861,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483083886,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483083887.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483083949.4001,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483084489.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 63,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "e3373d66daf0",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-e3373d66daf0",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": -1,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483087047.0999,
+      "credentials_ready": 1795483087072.5,
+      "connecting_ui_painted": 1795483087091.2,
+      "room_connected": 1795483087478.2,
+      "connect_returned": 1795483087478.7,
+      "connected_ui_painted": 1795483087511.9,
+      "agent_visible": 1795483087962.9,
+      "agent_visible_ui_painted": 1795483087995,
+      "remote_track_announced": 1795483088169.8,
+      "agent_state_listening": 1795483088200.7,
+      "agent_interaction_ready": 1795483088200.8,
+      "first_message_send": 1795483088200.8,
+      "first_message_sent": 1795483088201.2,
+      "agent_state_listening_painted": 1795483088227.9,
+      "agent_interaction_ready_painted": 1795483088227.9,
+      "track_subscribed": 1795483088273.8,
+      "audio_element_playing": 1795483088277.8,
+      "first_message_ack": 1795483088329.9,
+      "agent_state_speaking": 1795483088895,
+      "agent_state_speaking_painted": 1795483088911.3,
+      "first_rendered_audio": 1795483088934.3,
+      "audio_playing_ui_painted": 1795483088961.0999
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483087326,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483087326.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483087353.2,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483087416.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483087962.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483088169.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483088169.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483088176.9,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483088200.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483088201.9,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483088271.0999,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483088894.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 64,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "bfadde0b5b70",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-bfadde0b5b70",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": -1,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483091470.4,
+      "credentials_ready": 1795483091496.0999,
+      "connecting_ui_painted": 1795483091515.0999,
+      "room_connected": 1795483091899.5,
+      "connect_returned": 1795483091899.9,
+      "connected_ui_painted": 1795483091918.2,
+      "agent_visible": 1795483093363.2998,
+      "agent_visible_ui_painted": 1795483093384.5999,
+      "remote_track_announced": 1795483093570.2998,
+      "agent_state_listening": 1795483093611.0999,
+      "agent_interaction_ready": 1795483093611.0999,
+      "first_message_send": 1795483093611.0999,
+      "first_message_sent": 1795483093611.7,
+      "agent_state_listening_painted": 1795483093634.7998,
+      "agent_interaction_ready_painted": 1795483093634.7998,
+      "track_subscribed": 1795483093672.0999,
+      "audio_element_playing": 1795483093674.7,
+      "first_message_ack": 1795483093741.7998,
+      "agent_state_speaking": 1795483094286.4,
+      "agent_state_speaking_painted": 1795483094318,
+      "first_rendered_audio": 1795483094344.5,
+      "audio_playing_ui_painted": 1795483094368.4
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483091744.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483091745,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483091771.5,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483091840,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483093362.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483093569.7998,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483093570.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483093578,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483093603.5999,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483093611,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483093669.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483094286.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483094740.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      }
+    ],
+    "iceRttMs": 61,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "2765f818afdb",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-2765f818afdb",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 0,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483097055,
+      "credentials_ready": 1795483097080.7,
+      "connecting_ui_painted": 1795483097090.8,
+      "room_connected": 1795483097479.9001,
+      "connect_returned": 1795483097480.3,
+      "connected_ui_painted": 1795483097502.9001,
+      "agent_visible": 1795483097941.6,
+      "agent_visible_ui_painted": 1795483097969.5,
+      "remote_track_announced": 1795483098091.1,
+      "agent_state_listening": 1795483098150.6,
+      "agent_interaction_ready": 1795483098150.6,
+      "first_message_send": 1795483098150.6,
+      "first_message_sent": 1795483098151.2,
+      "agent_state_listening_painted": 1795483098169.5,
+      "agent_interaction_ready_painted": 1795483098169.6,
+      "track_subscribed": 1795483098190,
+      "audio_element_playing": 1795483098193.4001,
+      "first_message_ack": 1795483098283.2,
+      "agent_state_speaking": 1795483098796.8,
+      "agent_state_speaking_painted": 1795483098819.6,
+      "first_rendered_audio": 1795483098855.5,
+      "audio_playing_ui_painted": 1795483098885.7
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483097326.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483097326.4001,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483097353.4001,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483097414.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483097941.1,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483098090.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483098091.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483098099.4001,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483098124.5,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483098150.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483098187.3,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483098796.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 61,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "662d02ce6558",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-662d02ce6558",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 0,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483101117.9001,
+      "credentials_ready": 1795483101143.9001,
+      "connecting_ui_painted": 1795483101154.8,
+      "room_connected": 1795483101535.9001,
+      "connect_returned": 1795483101536.1,
+      "connected_ui_painted": 1795483101565.5,
+      "agent_visible": 1795483102014.2002,
+      "agent_visible_ui_painted": 1795483102032.2002,
+      "remote_track_announced": 1795483102213.9001,
+      "agent_state_listening": 1795483102258.4001,
+      "agent_interaction_ready": 1795483102258.5,
+      "first_message_send": 1795483102258.5,
+      "first_message_sent": 1795483102259,
+      "agent_state_listening_painted": 1795483102281.8,
+      "agent_interaction_ready_painted": 1795483102281.8,
+      "track_subscribed": 1795483102317.9001,
+      "audio_element_playing": 1795483102320.3,
+      "first_message_ack": 1795483102393.6,
+      "agent_state_speaking": 1795483102852,
+      "agent_state_speaking_painted": 1795483102881.6,
+      "first_rendered_audio": 1795483102914.5,
+      "audio_playing_ui_painted": 1795483102932.1
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483101383.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483101385.2002,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483101409.7002,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483101471.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483102013.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483102213.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483102214.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483102224.2002,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483102250.4001,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483102258.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483102315.5,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483102851.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 61,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "d38992412e60",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-d38992412e60",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 1,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483105364,
+      "credentials_ready": 1795483105391.4001,
+      "connecting_ui_painted": 1795483105407.3,
+      "room_connected": 1795483105789.8,
+      "connect_returned": 1795483105790.2,
+      "connected_ui_painted": 1795483105811.4001,
+      "agent_visible": 1795483106276.4001,
+      "agent_visible_ui_painted": 1795483106295.2,
+      "remote_track_announced": 1795483106474.4001,
+      "agent_state_listening": 1795483106513.7,
+      "agent_interaction_ready": 1795483106513.8,
+      "first_message_send": 1795483106513.8,
+      "first_message_sent": 1795483106514.2,
+      "agent_state_listening_painted": 1795483106544.7,
+      "agent_interaction_ready_painted": 1795483106544.7,
+      "track_subscribed": 1795483106574.6,
+      "audio_element_playing": 1795483106577,
+      "first_message_ack": 1795483106642.7,
+      "agent_state_speaking": 1795483107215,
+      "agent_state_speaking_painted": 1795483107244.7,
+      "first_rendered_audio": 1795483107287.3,
+      "audio_playing_ui_painted": 1795483107311.8
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483105635.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483105636.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483105663.5,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483105728.1,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483106275.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483106473.9001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483106474.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483106483.9001,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483106509,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483106513.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483106572,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483107214.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 60,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "9d834c8af21c",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-9d834c8af21c",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 1,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483109889,
+      "credentials_ready": 1795483109913.8,
+      "connecting_ui_painted": 1795483109923.7,
+      "room_connected": 1795483110320.9,
+      "connect_returned": 1795483110321.3,
+      "connected_ui_painted": 1795483110352.9,
+      "agent_visible": 1795483110801.7,
+      "agent_visible_ui_painted": 1795483110819.5999,
+      "remote_track_announced": 1795483111007.5,
+      "agent_state_listening": 1795483111036.3,
+      "agent_interaction_ready": 1795483111036.4,
+      "first_message_send": 1795483111036.4,
+      "first_message_sent": 1795483111037,
+      "agent_state_listening_painted": 1795483111052.9,
+      "agent_interaction_ready_painted": 1795483111052.9,
+      "track_subscribed": 1795483111106.5,
+      "audio_element_playing": 1795483111109,
+      "first_message_ack": 1795483111158.8,
+      "agent_state_speaking": 1795483111721.9,
+      "agent_state_speaking_painted": 1795483111752.9,
+      "first_rendered_audio": 1795483111777,
+      "audio_playing_ui_painted": 1795483111803.3
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483110168.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483110168.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483110193.5999,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483110258.7,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483110801.2,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483111007,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483111007.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483111015.4,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483111036.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483111041.3,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483111103.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483111721.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 60,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "a298b236db06",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-a298b236db06",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 2,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483113911,
+      "credentials_ready": 1795483113937.2998,
+      "connecting_ui_painted": 1795483113947.9,
+      "room_connected": 1795483114359.0999,
+      "connect_returned": 1795483114359.4,
+      "connected_ui_painted": 1795483114375.7,
+      "agent_visible": 1795483114825.2998,
+      "agent_visible_ui_painted": 1795483114842.2998,
+      "remote_track_announced": 1795483115020.5,
+      "agent_state_listening": 1795483115054.0999,
+      "agent_interaction_ready": 1795483115054.2,
+      "first_message_send": 1795483115054.2,
+      "first_message_sent": 1795483115054.5999,
+      "agent_state_listening_painted": 1795483115075.2,
+      "agent_interaction_ready_painted": 1795483115075.2998,
+      "track_subscribed": 1795483115123.9,
+      "audio_element_playing": 1795483115127.5,
+      "first_message_ack": 1795483115183.5,
+      "agent_state_speaking": 1795483115665.5999,
+      "agent_state_speaking_painted": 1795483115692.2,
+      "first_rendered_audio": 1795483115726.5,
+      "audio_playing_ui_painted": 1795483115758.4
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483114204.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483114206.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483114230.0999,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483114299.4,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483114824.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483115020,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483115020.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483115029.2998,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483115054,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483115055.2998,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483115121.2,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483115665.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 61,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "6edcd4da50da",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-6edcd4da50da",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 2,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483118205.4001,
+      "credentials_ready": 1795483118231.1,
+      "connecting_ui_painted": 1795483118250.2002,
+      "room_connected": 1795483118729,
+      "connect_returned": 1795483118729.2002,
+      "connected_ui_painted": 1795483118753.2002,
+      "agent_visible": 1795483119165.1,
+      "agent_visible_ui_painted": 1795483119186.8,
+      "remote_track_announced": 1795483119368.2002,
+      "agent_state_listening": 1795483119403.1,
+      "agent_interaction_ready": 1795483119403.2002,
+      "first_message_send": 1795483119403.2002,
+      "first_message_sent": 1795483119403.7002,
+      "agent_state_listening_painted": 1795483119420.1,
+      "agent_interaction_ready_painted": 1795483119420.2002,
+      "track_subscribed": 1795483119466.2002,
+      "audio_element_playing": 1795483119468.6,
+      "first_message_ack": 1795483119535.5,
+      "agent_state_speaking": 1795483120009.5,
+      "agent_state_speaking_painted": 1795483120036.8,
+      "first_rendered_audio": 1795483120071.5,
+      "audio_playing_ui_painted": 1795483120103.4001
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483118524.6,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483118525,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483118551.8,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483118615.6,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483119164.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483119367.8,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483119368.3,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483119376.4001,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483119401.9001,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483119403,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483119463.6,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483120009.4001,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 62,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "7ba4dfe84f41",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-7ba4dfe84f41",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 3,
+      "profile": "prepared",
+      "variant": "after",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  },
+  {
+    "marks": {
+      "click": 1795483122703.3,
+      "credentials_ready": 1795483122728.9,
+      "connecting_ui_painted": 1795483122738.8,
+      "room_connected": 1795483123134.5999,
+      "connect_returned": 1795483123134.8,
+      "connected_ui_painted": 1795483123166.7,
+      "agent_visible": 1795483123619.0999,
+      "agent_visible_ui_painted": 1795483123651,
+      "remote_track_announced": 1795483123757.4,
+      "agent_state_listening": 1795483123817.8,
+      "agent_interaction_ready": 1795483123817.9,
+      "first_message_send": 1795483123817.9,
+      "first_message_sent": 1795483123818.4,
+      "agent_state_listening_painted": 1795483123850.9,
+      "agent_interaction_ready_painted": 1795483123850.9,
+      "track_subscribed": 1795483123861.5999,
+      "audio_element_playing": 1795483123863.8,
+      "first_message_ack": 1795483123957.5,
+      "agent_state_speaking": 1795483124537.5,
+      "agent_state_speaking_painted": 1795483124567.5999,
+      "first_rendered_audio": 1795483124598.4,
+      "audio_playing_ui_painted": 1795483124617
+    },
+    "errors": [],
+    "signalEvents": [
+      {
+        "at_ms": 1795483122980.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": []
+      },
+      {
+        "at_ms": 1795483122981,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483123007.2,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483123071.8,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 0
+      },
+      {
+        "at_ms": 1795483123618.5999,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          0
+        ]
+      },
+      {
+        "at_ms": 1795483123756.9,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483123757.5,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483123765.2,
+        "direction": "received",
+        "type": "mediaSectionsRequirement"
+      },
+      {
+        "at_ms": 1795483123790.5999,
+        "direction": "sent",
+        "type": "offer"
+      },
+      {
+        "at_ms": 1795483123817.7,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      },
+      {
+        "at_ms": 1795483123859.0999,
+        "direction": "received",
+        "type": "answer",
+        "mappedTracks": 1
+      },
+      {
+        "at_ms": 1795483124537.4,
+        "direction": "received",
+        "type": "update",
+        "agentTracks": [
+          1
+        ]
+      }
+    ],
+    "iceRttMs": 60,
+    "audioContextState": "running",
+    "audioBaseLatencyMs": 5.333333333333333,
+    "pageErrors": [],
+    "scenario": {
+      "run_id": "0b3ad6a8f45e",
+      "trace_dir": "/private/tmp/native-audio-preparation-benchmark/traces",
+      "room": "agent-startup-trace-0b3ad6a8f45e",
+      "case": "controlled-pcm-1200",
+      "mode": "controlled",
+      "sample": 3,
+      "profile": "prepared",
+      "variant": "before",
+      "activity_delay_ms": 0,
+      "pcm_delay_ms": 1200
+    }
+  }
+]

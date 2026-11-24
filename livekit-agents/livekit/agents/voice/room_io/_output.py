@@ -57,6 +57,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._publish_options = track_publish_options
         self._publication: rtc.LocalTrackPublication | None = None
         self._track: rtc.LocalAudioTrack | None = None
+        self._connect_audio: rtc.AudioTrackToPublish | None = None
         self._subscribed_fut = asyncio.Future[None]()
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
@@ -88,12 +89,24 @@ class _ParticipantAudioOutput(io.AudioOutput):
         # playback_started fires once per segment; a mid-segment pause/resume does not re-arm this
         self._first_frame_event = asyncio.Event()
 
+    def _publication_for_connect(self) -> rtc.AudioTrackToPublish | None:
+        """Describe publication without constructing a native track on the event loop."""
+        if self._track is not None or not hasattr(rtc, "AudioTrackToPublish"):
+            return None
+        if self._connect_audio is None:
+            self._connect_audio = rtc.AudioTrackToPublish(
+                source=self._audio_source, name=self._track_name, options=self._publish_options
+            )
+        return self._connect_audio
+
     def _prepare_track(self) -> tuple[rtc.LocalAudioTrack, rtc.TrackPublishOptions]:
         """Prepare an empty audio track without waiting for model output."""
         if self._track is None:
-            self._track = rtc.LocalAudioTrack.create_audio_track(
+            native_track = self._connect_audio.track if self._connect_audio is not None else None
+            self._track = native_track or rtc.LocalAudioTrack.create_audio_track(
                 self._track_name, self._audio_source
             )
+            self._connect_audio = None
         return self._track, self._publish_options
 
     async def _publish_track(self) -> None:
@@ -114,6 +127,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     self._publication = await self._room.local_participant.publish_track(
                         track, options
                     )
+            if self._publication.name != self._track_name:
+                await self._replace_track()
             await self._publication.wait_for_subscription()
             if not self._subscribed_fut.done():
                 self._subscribed_fut.set_result(None)
@@ -136,6 +151,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._track_name = track_name
             if self._publication is None:
                 if self._track is None:
+                    if self._connect_audio is not None:
+                        self._connect_audio.name = track_name
                     return
                 # Resolve a prepared connect-time publication before renaming it.
                 self._publication = next(
@@ -150,12 +167,18 @@ class _ParticipantAudioOutput(io.AudioOutput):
                     self._track = None
                     return
 
-            await self._room.local_participant.unpublish_track(self._publication.sid)
-            track = rtc.LocalAudioTrack.create_audio_track(self._track_name, self._audio_source)
-            self._track = track
-            self._publication = await self._room.local_participant.publish_track(
-                track, self._publish_options
-            )
+            await self._replace_track()
+
+    async def _replace_track(self) -> None:
+        """Replace a publication after its requested name changes, under the output lock."""
+        if self._publication is None:
+            return
+        await self._room.local_participant.unpublish_track(self._publication.sid)
+        track = rtc.LocalAudioTrack.create_audio_track(self._track_name, self._audio_source)
+        self._track = track
+        self._publication = await self._room.local_participant.publish_track(
+            track, self._publish_options
+        )
 
     async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
         if self._forwarding_task is None:

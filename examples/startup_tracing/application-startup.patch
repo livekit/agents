@@ -44,7 +44,7 @@
  
      llm = openai.realtime.RealtimeModel(
          voice="marin",
-@@ -309,16 +301,49 @@
+@@ -309,16 +301,53 @@
      
      agent = MyAgent()
  
@@ -59,11 +59,15 @@
 -
 -    await audio_output.start()
 +    async def connect_room() -> None:
-+        if hasattr(audio_output, "_prepare_track"):
++        description = (
++            audio_output._publication_for_connect()
++            if hasattr(audio_output, "_publication_for_connect") else None
++        )
++        if description is not None:
 +            await ctx.connect(
 +                auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL,
 +                single_peer_connection=True,
-+                publish_tracks=[audio_output._prepare_track()],
++                publish_audio_tracks=[description],
 +            )
 +        else:
 +            # Existing installed SDKs still benefit from overlapping output/activity startup.
