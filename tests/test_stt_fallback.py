@@ -480,6 +480,40 @@ async def test_manual_flush_requires_support_from_every_fallback(supports_flush)
         await adapter.aclose()
 
 
+async def test_stream_reports_the_live_childs_manual_flush() -> None:
+    class _FixedFlushStream(FakeRecognizeStream):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self._manual_flush = self._stt.capabilities.manual_flush
+
+        @property
+        def manual_flush(self) -> bool:
+            return self._manual_flush
+
+    class _FixedFlushSTT(FakeSTT):
+        def stream(self, **kwargs: Any) -> FakeRecognizeStream:
+            stream = _FixedFlushStream(
+                stt=self, conn_options=kwargs.get("conn_options", DEFAULT_API_CONNECT_OPTIONS)
+            )
+            self._stream_ch.send_nowait(stream)
+            return stream
+
+    instances = [_FixedFlushSTT(), _FixedFlushSTT()]
+    for instance in instances:
+        instance.capabilities.manual_flush = True
+    adapter = FallbackAdapter(instances)
+    try:
+        async with adapter.stream() as stream:
+            await asyncio.wait_for(instances[0].stream_ch.recv(), timeout=1)
+            # a model switch on the primary turns its capability off; the live child keeps it
+            instances[0].capabilities.manual_flush = False
+            assert not adapter.capabilities.manual_flush
+            assert stream.manual_flush
+            stream.end_input()
+    finally:
+        await adapter.aclose()
+
+
 @pytest.mark.parametrize("primary_streams", [True, False])
 async def test_prewarm_reaches_only_the_primary(primary_streams: bool) -> None:
     """A non-streaming primary is wrapped in a StreamAdapter, which must forward prewarm too."""
