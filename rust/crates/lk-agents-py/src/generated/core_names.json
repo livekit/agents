@@ -179,6 +179,7 @@
     "_core_playback_progressed",
     "_core_playback_started",
     "_core_playback_withdraw_capture",
+    "_core_product_stats_plugin",
     "_core_realtime_connection_metrics",
     "_core_remote_id",
     "_core_remote_token",
