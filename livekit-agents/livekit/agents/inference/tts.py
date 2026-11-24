@@ -967,8 +967,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
                 elif msg_type == "error":
                     code = data.get("code")
-                    detail = data.get("data")
-                    text = f"{code}: {detail}" if code and detail else (detail or code or msg.data)
+                    detail = data.get("data") or data.get("message")
+                    text = ": ".join(str(p) for p in (code, detail) if p) or msg.data
                     raise APIError(
                         f"LiveKit Inference TTS returned error: {text}",
                         body=data,
@@ -1005,6 +1005,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.gracefully_cancel(*tasks)
                 if connection.handoff_id is not None:
                     await self._tts._retire(connection)
+                elif not connection.inbox.empty():
+                    # a frame that arrived after `done` belongs to no turn: don't hand it
+                    # to the next one
+                    self._tts._pool.remove(connection)
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
