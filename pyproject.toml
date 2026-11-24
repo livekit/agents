@@ -25,6 +25,7 @@ livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-bland = { workspace = true }
+livekit-plugins-byteplus = { workspace = true }
 livekit-plugins-boson-ai = { workspace = true }
 livekit-plugins-boson-avatar = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
