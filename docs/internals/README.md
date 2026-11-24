@@ -40,6 +40,9 @@ It covers shared ownership and bindings with existing legacy protocols; a new
 Protobuf session protocol is deferred and TBD. Its proposed API and unresolved
 decisions are separate from current contracts.
 
+[Multi-turn AMD](../proposals/amd.md) proposes answering-machine detection as a voice-core
+machine behind a per-turn hook seam, ported from the Python implementation's spec.
+
 Keep current contracts in their owning guide. Migration ledgers, dated file counts and
 completed audit checklists are not part of the implementation reference.
 Architecture links to component decisions instead of defining them again. Binding
