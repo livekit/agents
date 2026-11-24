@@ -1175,6 +1175,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         handle.add_done_callback(self._on_opening_done)
 
     def _on_opening_done(self, handle: SpeechHandle) -> None:
+        # a handle keeps its done callbacks, which would keep AMD reachable
+        handle.remove_done_callback(self._on_opening_done)
         if handle is self._opening:
             self._opening = None
 
@@ -1228,6 +1230,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._update_idle()
 
     def _on_speech_done(self, handle: SpeechHandle) -> None:
+        handle.remove_done_callback(self._on_speech_done)
         self._speeches.discard(handle)
         self._update_idle()
 
@@ -1243,6 +1246,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         handle.add_done_callback(self._on_reply_done)
 
     def _on_reply_done(self, handle: SpeechHandle) -> None:
+        handle.remove_done_callback(self._on_reply_done)
         self._reply_words.pop(handle, None)
         if (callback := self._item_callbacks.pop(handle, None)) is not None:
             handle._remove_item_added_callback(callback)

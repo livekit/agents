@@ -408,7 +408,9 @@ AMD keeps its own chat context. It never copies the Agent's history. It contains
 - one user message for each turn with text, in the format of section 6.1
 - one assistant message for each agent reply after AMD started. This includes a
   speech queued before AMD was entered, such as a greeting that AMD holds and that
-  plays during detection. The content is `(the agent spoke)`. The content is
+  plays during detection. A speech created with `add_to_chat_ctx=False` has no
+  entry, because the session does not record its reply. The content is
+  `(the agent spoke)`. The content is
   the reply's words when the likely-human mark is set (section 9.4), or when the
   stage is `machine-screening` or `machine-ivr` and the latest prediction is
   `uncertain`. AMD decides this when it allows the reply. For a speech that does not

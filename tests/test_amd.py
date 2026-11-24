@@ -2406,8 +2406,13 @@ def test_opening_takes_text_or_instructions_but_not_both() -> None:
 @pytest.mark.asyncio
 async def test_opening_text_plays_while_other_replies_stay_held() -> None:
     opening = "Hi, this is Alex from Acme Dental."
-    async with running(opening_text=opening) as (detector, session, classifier, model):
+    created: list[SpeechCreatedEvent] = []
+    async with running(
+        opening_text=opening, before_amd=lambda s: s.on("speech_created", created.append)
+    ) as (detector, session, classifier, model):
         await eventually(lambda: opening_messages(session) == [opening])
+        # a handle keeps its done callbacks, so AMD removes its own
+        await eventually(lambda: not created[0].speech_handle._done_callbacks)
         # the opening skips the reply hold; every other reply still waits for a prediction
         assert not playback_allowed(session)
         assert model.calls.empty()
@@ -3278,12 +3283,14 @@ async def test_amd_detaches_from_speeches_when_they_end_or_it_finishes() -> None
         playing = agent_speech(session)
         assert ended._item_added_callbacks and playing._item_added_callbacks
         ended._mark_done()
-        await eventually(lambda: not ended._item_added_callbacks)
+        # a handle keeps its done callbacks after it ends
+        await eventually(lambda: not ended._item_added_callbacks and not ended._done_callbacks)
 
         await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.HUMAN)
         await detector.execute()
         assert not playing._item_added_callbacks
+        assert not playing._done_callbacks
 
 
 @pytest.mark.asyncio
