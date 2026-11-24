@@ -9,6 +9,17 @@ recognition and synthesis.
 pip install livekit-plugins-stepfun
 ```
 
+### Realtime Support
+
+The official StepFun plugin currently supports STT and TTS.
+
+The legacy `stepfun.RealtimeModel` from the
+community-maintained package is not included in this release.
+
+Users relying on the legacy Realtime integration should
+remain on the previous package version until a migration
+path or official Realtime integration becomes available.
+
 ## Configuration
 
 Set `STEPFUN_API_KEY`, or pass `api_key=` to the constructors. StepFun runs two
