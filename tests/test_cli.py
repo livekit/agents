@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import signal
+import struct
 import sys
 import threading
 import time
@@ -28,7 +29,11 @@ from livekit.agents.cli._legacy import (
 )
 from livekit.agents.cli.cli import _ExitCli, _run_worker
 from livekit.agents.cli.log import setup_logging
+from livekit.agents.cli.tcp_console import AGENT_SAMPLE_RATE, WIRE_SAMPLE_RATE, TcpAudioOutput
+from livekit.agents.voice.remote_session import SessionHost, TcpSessionTransport
+from livekit.agents.voice.transcription import TranscriptSynchronizer
 from livekit.agents.worker import AgentServer, ServerEnvOption, ServerOptions
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 # signal handlers, the root logger and sys.stdout are process-global
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
@@ -461,3 +466,202 @@ async def test_next_segment_primes_again() -> None:
     await asyncio.sleep(0.01)
     await out.capture_frame(_frame(2))
     assert not _read(out).any()
+
+
+# -- TcpAudioOutput: resampler tail draining, empty-segment flush gating, and pause capability
+
+
+class _RecordingTcpTransport:
+    def __init__(self) -> None:
+        self.sent: list[agent_pb.AgentSessionMessage] = []
+
+    def send_message_threadsafe(self, msg: agent_pb.AgentSessionMessage) -> None:
+        self.sent.append(msg)
+
+
+def _tcp_frame(duration_s: float, value: int = 1000) -> rtc.AudioFrame:
+    samples = round(AGENT_SAMPLE_RATE * duration_s)
+    return rtc.AudioFrame(
+        data=np.full(samples, value, dtype=np.int16).tobytes(),
+        sample_rate=AGENT_SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def test_tcp_audio_output_reports_cannot_pause() -> None:
+    transport = _RecordingTcpTransport()
+    out = TcpAudioOutput(transport)  # type: ignore[arg-type]
+    sync = TranscriptSynchronizer(next_in_chain_audio=out, next_in_chain_text=None)
+    try:
+        assert not out.can_pause
+        assert not sync.audio_output.can_pause
+    finally:
+        await sync.aclose()
+
+
+async def test_tcp_audio_output_flush_drains_resampler_tail() -> None:
+    transport = _RecordingTcpTransport()
+    out = TcpAudioOutput(transport)  # type: ignore[arg-type]
+    try:
+        # A 20 ms segment stays inside the 24->48 kHz resampler until flush().
+        await out.capture_frame(_tcp_frame(0.02))
+        out.flush()
+
+        kinds = [msg.WhichOneof("message") for msg in transport.sent]
+        assert kinds == ["audio_output", "audio_playback_flush"]
+        audio_samples = sum(
+            msg.audio_output.samples_per_channel
+            for msg in transport.sent
+            if msg.HasField("audio_output")
+        )
+        assert audio_samples == round(WIRE_SAMPLE_RATE * 0.02)
+
+        out.notify_playout_finished()
+        ev = await asyncio.wait_for(out.wait_for_playout(), timeout=1.0)
+        assert not ev.interrupted
+        assert ev.playback_position == pytest.approx(0.02)
+    finally:
+        if out._flush_task is not None and not out._flush_task.done():
+            out._flush_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await out._flush_task
+
+
+async def test_tcp_audio_output_empty_flush_sends_no_wire_flush() -> None:
+    transport = _RecordingTcpTransport()
+    out = TcpAudioOutput(transport)  # type: ignore[arg-type]
+
+    out.flush()
+    assert transport.sent == []
+
+    # A following real segment still waits for its own AudioPlaybackFinished ack.
+    await out.capture_frame(_tcp_frame(0.1))
+    out.flush()
+    out.notify_playout_finished()
+    ev = await asyncio.wait_for(out.wait_for_playout(), timeout=1.0)
+    assert not ev.interrupted
+    assert ev.playback_position == pytest.approx(0.1)
+
+
+async def test_tcp_audio_output_clear_before_flush_finishes_and_discards_resampler_tail() -> None:
+    transport = _RecordingTcpTransport()
+    out = TcpAudioOutput(transport)  # type: ignore[arg-type]
+
+    # Interrupted mid-capture (e.g. proxy sink swap calls flush() + clear_buffer(), or
+    # clear_buffer() arrives before flush()): 20 ms of value=-10000 is held in the resampler.
+    try:
+        await out.capture_frame(_tcp_frame(0.02, value=-10000))
+        out.clear_buffer()
+        out.flush()
+        ev = await asyncio.wait_for(out.wait_for_playout(), timeout=0.2)
+        assert ev.interrupted
+
+        transport.sent.clear()
+
+        await out.capture_frame(_tcp_frame(0.05, value=10000))
+        out.flush()
+        out.notify_playout_finished()
+        await asyncio.wait_for(out.wait_for_playout(), timeout=1.0)
+
+        audio_msgs = [msg.audio_output for msg in transport.sent if msg.HasField("audio_output")]
+        samples = np.concatenate(
+            [np.frombuffer(frame.data, dtype=np.int16) for frame in audio_msgs]
+        )
+        assert len(samples) == round(WIRE_SAMPLE_RATE * 0.05)
+        assert np.all(samples[:400] > 0)
+    finally:
+        if out._flush_task is not None and not out._flush_task.done():
+            out._flush_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await out._flush_task
+
+
+async def test_tcp_audio_output_flush_then_clear_discards_resampler_tail() -> None:
+    transport = _RecordingTcpTransport()
+    out = TcpAudioOutput(transport)  # type: ignore[arg-type]
+
+    # Cancelled _audio_forwarding_task runs flush() then clear_buffer() in finally;
+    # if only clear_buffer() ran without flushing, the stale -10000 samples must still
+    # not leak into the next segment.
+    await out.capture_frame(_tcp_frame(0.02, value=-10000))
+    out.flush()
+    out.clear_buffer()
+    ev = await asyncio.wait_for(out.wait_for_playout(), timeout=0.2)
+    assert ev.interrupted
+
+    transport.sent.clear()
+
+    await out.capture_frame(_tcp_frame(0.05, value=10000))
+    out.flush()
+    out.notify_playout_finished()
+    await asyncio.wait_for(out.wait_for_playout(), timeout=1.0)
+
+    audio_msgs = [msg.audio_output for msg in transport.sent if msg.HasField("audio_output")]
+    samples = np.concatenate([np.frombuffer(frame.data, dtype=np.int16) for frame in audio_msgs])
+    assert len(samples) == round(WIRE_SAMPLE_RATE * 0.05)
+    assert np.all(samples[:400] > 0)
+
+
+async def test_tcp_audio_output_end_to_end_over_tcp_transport() -> None:
+    """Drive TcpAudioOutput -> TcpSessionTransport -> loopback broker -> SessionHost."""
+    broker_received: list[str] = []
+    broker_samples = 0
+    client_tasks: set[asyncio.Task[None]] = set()
+
+    async def _broker(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        nonlocal broker_samples
+        try:
+            while True:
+                header = await reader.readexactly(4)
+                (size,) = struct.unpack(">I", header)
+                payload = await reader.readexactly(size)
+                msg = agent_pb.AgentSessionMessage()
+                msg.ParseFromString(payload)
+                kind = msg.WhichOneof("message")
+                assert kind is not None
+                broker_received.append(kind)
+                if kind == "audio_output":
+                    broker_samples += msg.audio_output.samples_per_channel
+                elif kind == "audio_playback_flush":
+                    ack = agent_pb.AgentSessionMessage(
+                        audio_playback_finished=agent_pb.AgentSessionMessage.ConsoleIO.AudioPlaybackFinished()
+                    ).SerializeToString()
+                    writer.write(struct.pack(">I", len(ack)) + ack)
+                    await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+            with contextlib.suppress(ConnectionError, OSError):
+                await writer.wait_closed()
+
+    def _on_connect(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.create_task(_broker(reader, writer))
+        client_tasks.add(task)
+        task.add_done_callback(client_tasks.discard)
+
+    server = await asyncio.start_server(_on_connect, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    transport = TcpSessionTransport("127.0.0.1", port)
+    out = TcpAudioOutput(transport)
+    host = SessionHost(transport, audio_output=out)
+    await host.start()
+    try:
+        # Empty flush sends nothing on the wire, so no stray ack poisons the next turn.
+        out.flush()
+
+        # Short 20 ms utterance flushes its resampled tail and completes via TCP ack.
+        await out.capture_frame(_tcp_frame(0.02, value=4000))
+        out.flush()
+        ev = await asyncio.wait_for(out.wait_for_playout(), timeout=1.0)
+        assert not ev.interrupted
+        assert ev.playback_position == pytest.approx(0.02)
+        assert broker_received == ["audio_output", "audio_playback_flush"]
+        assert broker_samples == round(WIRE_SAMPLE_RATE * 0.02)
+    finally:
+        await host.aclose()
+        server.close()
+        await server.wait_closed()
+        if client_tasks:
+            await asyncio.gather(*client_tasks, return_exceptions=True)
