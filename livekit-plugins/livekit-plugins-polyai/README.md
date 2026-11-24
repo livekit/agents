@@ -58,5 +58,8 @@ To speak the reply with your own TTS plugin, pass `modalities=["text"]` and a `t
 
 Dialog-RSN-1 takes tools and `tool_choice` on the session only: per-reply `tools` and
 `tool_choice` in `generate_reply()` are dropped with a warning, and `generate_reply(instructions=...)`
-works. Turn timing isn't tunable: only `create_response` in `turn_detection` is read, and
-`interrupt_response=False` is rejected when the model is created.
+works. `tool_choice` takes `"auto"` only: `"none"`, which LiveKit asks for at the tool-call
+limit, hides the session's tools until the choice is back to `"auto"`, and other values are
+ignored. A tool takes `tool_speech` or a spoken argument, not both. Turn timing isn't tunable: only
+`create_response` in `turn_detection` is read, and `interrupt_response=False` is rejected when the
+model is created.
