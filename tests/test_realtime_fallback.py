@@ -31,6 +31,7 @@ class _StubAgentSession:
         self.interrupt_calls = 0
         self.generate_reply_calls = 0
         self.current_agent = _StubAgent(chat_ctx if chat_ctx is not None else ChatContext.empty())
+        self.amd: object | None = None
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         self.interrupt_calls += 1
@@ -431,6 +432,22 @@ async def test_no_regenerate_when_disabled() -> None:
     await session._swap_task
 
     # stale playout is still interrupted; only the re-issue of generate_reply is suppressed
+    assert session._agent_session.interrupt_calls == 1
+    assert session._agent_session.generate_reply_calls == 0
+
+
+async def test_no_regenerate_while_amd_runs() -> None:
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    session._agent_session = _StubAgentSession(agent_state="speaking")
+    # AMD rejects direct replies; its next turn decides whether the agent replies
+    session._agent_session.amd = object()
+
+    primary.active_session.emit_error(recoverable=False)
+    await session._swap_task
+
     assert session._agent_session.interrupt_calls == 1
     assert session._agent_session.generate_reply_calls == 0
 

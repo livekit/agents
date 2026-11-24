@@ -209,3 +209,9 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+def test_reports_provider():
+    from livekit.plugins.xai import STT
+
+    assert STT(api_key="test-key", http_session=object()).provider == "xAI"  # type: ignore[arg-type]
