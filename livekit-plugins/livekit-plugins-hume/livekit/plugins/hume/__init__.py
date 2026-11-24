@@ -22,26 +22,10 @@ from __future__ import annotations
 from livekit.agents import Plugin
 
 from .decision_model import DecisionModel
-from .tts import (
-    TTS,
-    AudioFormat,
-    ModelVersion,
-    Utterance,
-    VoiceById,
-    VoiceByName,
-    VoiceProvider,
-)
 from .version import __version__
 
 __all__ = [
-    "TTS",
     "DecisionModel",
-    "AudioFormat",
-    "ModelVersion",
-    "VoiceById",
-    "VoiceByName",
-    "VoiceProvider",
-    "Utterance",
 ]
 
 
