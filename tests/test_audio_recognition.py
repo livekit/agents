@@ -4,12 +4,13 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterable
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent
+from livekit.agents import AMD, Agent, AgentSession, AMDLifecycle
 from livekit.agents.utils import aio
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.agent import ModelSettings
@@ -195,7 +196,6 @@ def test_push_audio_routes_frame_to_every_consumer(
     # only the STT path sees the substitute frame
     ar._stt_pipeline.audio_ch.send_nowait.assert_called_once_with(silence if substitute else real)
     ar._vad_ch.send_nowait.assert_called_once_with(real)
-    ar._session.amd.push_audio.assert_called_once_with(real)
     ar._interruption_ch.send_nowait.assert_called_once_with(real)
 
 
@@ -204,7 +204,6 @@ def test_push_audio_skips_optional_consumers_when_unset(push_recognition: AudioR
     ar._stt_pipeline = None
     ar._vad_ch = None
     ar._interruption_ch = None
-    ar._session.amd = None
 
     ar._push_audio(_frame())
 
@@ -216,6 +215,66 @@ def test_push_audio_records_sample_rate_and_input_start(
 
     assert push_recognition._sample_rate == 24000
     assert push_recognition._input_started_at is not None
+
+
+def _amd_activity() -> AgentActivity:
+    activity = object.__new__(AgentActivity)
+    activity._started = True
+    activity._session = AgentSession(vad=None)
+    activity._session._agent_state = "listening"
+    activity._session._amd = MagicMock(_blocks_session_audio=False)
+    activity._session._turn_hooks = activity._session._amd._turn_hooks
+    activity._current_speech = None
+    activity._rt_session = MagicMock()
+    activity._audio_recognition = MagicMock()
+    return activity
+
+
+@pytest.mark.parametrize(
+    "lifecycle", [AMDLifecycle.INITIALIZED, AMDLifecycle.PENDING, AMDLifecycle.ACTIVE]
+)
+def test_amd_pre_answer_gate_discards_audio_for_all_consumers(lifecycle: AMDLifecycle) -> None:
+    activity = _amd_activity()
+    amd = AMD(activity._session, llm=None, stt=None)
+    amd._lifecycle = lifecycle
+    amd._run = resources = MagicMock()
+    activity._session._amd = amd
+    activity._session._turn_hooks = amd._turn_hooks
+    frame = _frame()
+    activity.push_audio(frame)
+
+    if lifecycle is AMDLifecycle.ACTIVE:
+        resources.stt.push_audio.assert_called_once_with(frame)
+    else:
+        resources.stt.push_audio.assert_not_called()
+
+    if lifecycle in {AMDLifecycle.INITIALIZED, AMDLifecycle.PENDING}:
+        activity._audio_recognition._push_audio.assert_not_called()
+        activity._rt_session.push_audio.assert_not_called()
+    else:
+        activity._audio_recognition._push_audio.assert_called_once_with(frame, stt_frame=None)
+        activity._rt_session.push_audio.assert_called_once_with(frame)
+
+
+@pytest.mark.parametrize("guard", ["aec_warmup", "uninterruptible"])
+def test_activity_preserves_amd_audio_when_session_stt_is_muted(guard: str) -> None:
+    activity = _amd_activity()
+    if guard == "aec_warmup":
+        activity._session._agent_state = "speaking"
+        activity._session._aec_warmup_remaining = 1
+        activity._session._aec_warmup_timer = object()
+    else:
+        activity._current_speech = SimpleNamespace(
+            done=lambda: False, interrupted=False, allow_interruptions=False
+        )
+        activity._session.options.interruption["discard_audio_if_uninterruptible"] = True
+    frame = _frame()
+    activity.push_audio(frame)
+    activity._session.amd.push_audio.assert_called_once_with(frame)
+    muted = activity._audio_recognition._push_audio.call_args.kwargs["stt_frame"]
+    assert bytes(muted.data) == bytes(len(frame.data) * frame.data.itemsize)
+    activity._audio_recognition._push_audio.assert_called_once_with(frame, stt_frame=muted)
+    activity._rt_session.push_audio.assert_called_once_with(muted)
 
 
 def _activity(agent: Agent, stt: object, turn_detection: object = None) -> MagicMock:
@@ -394,7 +453,6 @@ def _vad_recognition() -> AudioRecognition:
     ar._hooks = MagicMock()
     ar._session = MagicMock()
     ar._session._root_span_context = None
-    ar._session.amd = None
     ar._session._room_io = None
     ar._session.options.transcription_timeout = None
     return ar

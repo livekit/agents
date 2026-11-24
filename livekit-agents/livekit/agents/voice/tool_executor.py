@@ -639,6 +639,12 @@ class _ToolExecutor:
                 async with session._activity_lock:
                     pass
 
+        if session.amd is not None:
+            # AMD owns replies while it runs; its next reply sees the updates in the chat context
+            logger.debug("dropping tool reply while AMD runs")
+            self._pending_updates.clear()
+            return
+
         target_agent = activity.agent
 
         # no await after this line

@@ -13,8 +13,8 @@ from opentelemetry import trace
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
 from ..telemetry import trace_types, tracer
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from ..utils import aio
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import aio, is_given
 from .chat_context import ChatContext
 from .decisions import (
     Decision,
@@ -142,6 +142,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         input: str | ChatContext,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        extra_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
     ) -> DecisionResponse:
         """Evaluate a batch of decisions on the first model that answers.
 
@@ -151,6 +152,8 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
             decisions: Decisions keyed by name.
             conn_options: The adapter's ``attempt_timeout``, ``max_retry_per_model`` and
                 ``retry_interval`` replace the retry and timeout settings given here.
+            extra_headers: Headers sent with every attempt on every model, and with a
+                failed model's recovery check.
 
         Raises:
             APIConnectionError: If every model fails.
@@ -172,6 +175,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
                 timeout=self._attempt_timeout,
                 retry_interval=self._retry_interval,
             ),
+            extra_headers=dict(extra_headers) if is_given(extra_headers) else {},
         )
 
     async def _evaluate_impl(
@@ -180,6 +184,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         started = time.perf_counter()
         span = trace.get_current_span()
@@ -193,7 +198,10 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
                 try:
                     # each model emits its own metrics and validates its own response
                     response = await model.evaluate(
-                        input=input, decisions=decisions, conn_options=conn_options
+                        input=input,
+                        decisions=decisions,
+                        conn_options=conn_options,
+                        extra_headers=extra_headers,
                     )
                 except APIError as e:
                     logger.warning(
@@ -215,7 +223,12 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
                 self._set_available(model, status, False)
 
             self._try_recovery(
-                model, status, input=input, decisions=decisions, conn_options=conn_options
+                model,
+                status,
+                input=input,
+                decisions=decisions,
+                conn_options=conn_options,
+                extra_headers=extra_headers,
             )
 
         raise APIConnectionError(
@@ -240,6 +253,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> None:
         # a request still running at aclose must not start a check that outlives the adapter
         if self._closed:
@@ -255,7 +269,10 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
             ):
                 try:
                     await model.evaluate(
-                        input=input, decisions=decisions, conn_options=conn_options
+                        input=input,
+                        decisions=decisions,
+                        conn_options=conn_options,
+                        extra_headers=extra_headers,
                     )
                 except Exception as e:
                     logger.debug("%s recovery attempt failed: %s", _name(model), e)
