@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::productstats::runner::{Runner, RunnerCmd, RunnerKind};
 use lk_agents_abi::productstats::testkit::{TestCounts, TestDuration};
 use lk_agents_abi::telemetry::decl::{self, MetricDecl};
 use lk_agents_abi::telemetry::record::{Number, RecordSink as _};
-use lk_agents_abi::telemetry::runner::{Launch, Runner, RunnerKind};
 use lk_agents_telemetry::productstats::Sink as _;
 
 use super::super::otlp::proto::collector::metrics::v1::ExportMetricsServiceRequest;
@@ -20,8 +20,8 @@ const LIMIT: Duration = Duration::from_secs(5);
 
 fn stats() -> ProductStats {
     let resource = ProductStatsResource {
-        runner: Runner { launch: Launch::Start, kind: RunnerKind::Production },
-        ..super::resource("2.0.0", Some("3.12.4"))
+        runner: Runner { cmd: RunnerCmd::Start, kind: RunnerKind::Production },
+        ..super::resource("2.0.0", RuntimeName::Python, "3.12.4")
     };
     ProductStats::start(
         &crate::task::TokioSpawner::current(),
@@ -61,10 +61,6 @@ fn string(value: &Option<super::super::otlp::proto::common::v1::AnyValue>) -> &s
         Some(Any::StringValue(s)) => s,
         other => panic!("{other:?}"),
     }
-}
-
-fn keys(attributes: &[KeyValue]) -> Vec<&str> {
-    attributes.iter().map(|kv| kv.key.as_str()).collect()
 }
 
 fn decode(request: &Received) -> ExportMetricsServiceRequest {
@@ -116,13 +112,15 @@ fn values(request: &ExportMetricsServiceRequest) -> Vec<Point> {
 }
 
 // Catches: a product statistics export carrying a key it does not declare (an `lk.pii.*` key, a
-// job's identity, GenAI content), cumulative temporality, or a request off the collector's route
-// or without the observability bearer.
+// job's identity, GenAI content), a resource key missing, renamed or left at its default (the
+// storage the process opened after the installation), cumulative temporality, or a request off
+// the collector's route or without the observability bearer.
 #[tokio::test]
 async fn an_export_carries_only_declared_product_statistics_keys() {
     let (url, mut rx) = endpoint(ok).await;
     let stats = stats();
     stats.configure(Some(destination(&url)));
+    thread_storage(ThreadStorage::AgentDb);
     measure(&stats, &counts("a"), 2u64);
     measure(&stats, &counts("b"), 1u64);
     measure(&stats, &TestDuration, 0.3);
@@ -131,36 +129,39 @@ async fn an_export_carries_only_declared_product_statistics_keys() {
     assert_eq!(requests.len(), 1);
     let request = decode(&requests[0]);
     let resource = request.resource_metrics[0].resource.as_ref().unwrap();
-    let mut resource_keys = keys(&resource.attributes);
-    resource_keys.sort();
+    let mut resource: Vec<(&str, &str)> =
+        resource.attributes.iter().map(|kv| (kv.key.as_str(), string(&kv.value))).collect();
+    resource.sort();
     assert_eq!(
-        resource_keys,
+        resource,
         [
-            "lk.productstats.arch",
-            "lk.productstats.framework.version",
-            "lk.productstats.os",
-            "lk.productstats.python.version",
-            "lk.productstats.runner.kind",
-            "lk.productstats.runner.launch",
-            "service.name",
+            ("lk.product.agents.arch", std::env::consts::ARCH),
+            ("lk.product.agents.framework.version", "2.0.0"),
+            ("lk.product.agents.os", std::env::consts::OS),
+            ("lk.product.agents.runner.cmd", "start"),
+            ("lk.product.agents.runner.kind", "production"),
+            ("lk.product.agents.runtime.name", "python"),
+            ("lk.product.agents.runtime.version", "3.12.4"),
+            ("lk.product.agents.storage", "agent_db"),
+            ("service.name", "livekit-agents"),
         ]
     );
     let values = values(&request);
     for (name, labels, _) in &values {
-        assert!(name.starts_with("lk.productstats."), "{name}");
+        assert!(name.starts_with("lk.product.agents."), "{name}");
         for (key, _) in labels {
-            assert!(key.starts_with("lk.productstats.") && !key.starts_with("lk.pii."), "{key}");
+            assert!(key.starts_with("lk.product.agents.") && !key.starts_with("lk.pii."), "{key}");
         }
     }
-    let label = |v: &str| vec![("lk.productstats.test.label".to_owned(), v.to_owned())];
+    let label = |v: &str| vec![("lk.product.agents.test.label".to_owned(), v.to_owned())];
     let mut sorted = values;
     sorted.sort();
     assert_eq!(
         sorted,
         [
-            ("lk.productstats.test.counts".to_owned(), label("a"), 2),
-            ("lk.productstats.test.counts".to_owned(), label("b"), 1),
-            ("lk.productstats.test.duration".to_owned(), vec![], 1),
+            ("lk.product.agents.test.counts".to_owned(), label("a"), 2),
+            ("lk.product.agents.test.counts".to_owned(), label("b"), 1),
+            ("lk.product.agents.test.duration".to_owned(), vec![], 1),
         ]
     );
     assert!(stats.flush(LIMIT).await);
@@ -212,7 +213,7 @@ async fn an_idle_process_sends_nothing_and_a_waiting_window_is_sent_once_configu
     let requests = received(&mut rx);
     assert_eq!(requests.len(), 1);
     let labels: Vec<_> = values(&decode(&requests[0])).into_iter().map(|(_, l, _)| l).collect();
-    assert_eq!(labels, [[("lk.productstats.test.label".to_owned(), "held".to_owned())]]);
+    assert_eq!(labels, [[("lk.product.agents.test.label".to_owned(), "held".to_owned())]]);
 }
 
 // Catches: the customer's observability refusal (or its project's recording disabled) stopping

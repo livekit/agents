@@ -235,7 +235,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             asyncio_debug: opts.asyncio_debug,
             http_proxy: opts.http_proxy.clone().filter(|p| !p.is_empty()),
             health_timeout_ms,
-            launch: lk_agents_net::env::launch(),
+            cmd: lk_agents_net::env::runner_cmd(),
         };
         let outcome = self
             .spawner

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::productstats::ProductStatsResource;
+use lk_agents_abi::productstats::{ProductStatsResource, RuntimeName, ThreadStorage};
 use lk_agents_abi::telemetry::decl::{Attrs as _, Label};
 use lk_agents_abi::telemetry::record::{KeyValues, Measurement};
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
@@ -97,7 +97,8 @@ impl State {
                     return None;
                 }
                 let mut resource = KeyValues::new();
-                self.resource.write(&mut resource);
+                let storage = *THREAD_STORAGE.read();
+                ProductStatsResource { storage, ..self.resource.clone() }.write(&mut resource);
                 Some((destination.clone(), window, resource))
             }
         }
@@ -268,15 +269,31 @@ pub fn configure(livekit_url: &str, api_key: &str, api_secret: &str) {
     }
 }
 
-/// The process's resource: the framework, the host's runtime, the platform and the runner.
-pub fn resource(sdk_version: &str, python_version: Option<&str>) -> ProductStatsResource {
+/// Where the process stores its threads: the storage it opened last, read at each export; none
+/// until it opens one.
+static THREAD_STORAGE: RwLock<ThreadStorage> = RwLock::new(ThreadStorage::None);
+
+/// The process opens a thread storage of this kind, before or after the installation.
+pub fn thread_storage(storage: ThreadStorage) {
+    *THREAD_STORAGE.write() = storage;
+}
+
+/// The process's resource: the framework, the host's runtime, the platform and the runner; the
+/// thread storage is read at each export.
+pub fn resource(
+    sdk_version: &str,
+    runtime_name: RuntimeName,
+    runtime_version: &str,
+) -> ProductStatsResource {
     ProductStatsResource {
         service: Label(lk_agents_abi::telemetry::record::FRAMEWORK.to_owned()),
         framework_version: Label(sdk_version.to_owned()),
-        python_version: python_version.map(|v| Label(v.to_owned())),
+        runtime_name,
+        runtime_version: Label(runtime_version.to_owned()),
         os: Label(std::env::consts::OS.to_owned()),
         arch: Label(std::env::consts::ARCH.to_owned()),
         runner: crate::env::runner(),
+        storage: ThreadStorage::None,
     }
 }
 

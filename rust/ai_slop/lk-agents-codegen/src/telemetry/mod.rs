@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 const DECL: [&str; 2] = ["telemetry", "decl"];
 /// The ABI module of LiveKit's product statistics.
 const PRODUCT_STATS: &str = "productstats";
+/// The prefix of every key and metric name `productstats` owns, and of no other declaration's.
+const PRODUCT_STATS_PREFIX: &str = "lk.product.agents.";
 /// The ABI module of the dependency registries' constants, one submodule per registry.
 const SEMCONV: [&str; 2] = ["telemetry", "semconv"];
 
@@ -278,6 +280,8 @@ impl Reader<'_> {
             }
             if in_module {
                 product_stat(&attrs, &here)?;
+            } else {
+                observability(&attrs, &here)?;
             }
             unique(&attrs, &here)?;
             note(&attrs, &mut r)?;
@@ -303,6 +307,8 @@ impl Reader<'_> {
                     };
                     if in_module {
                         product_stat(&end, &format!("{here}'s end"))?;
+                    } else {
+                        observability(&end, &format!("{here}'s end"))?;
                     }
                     unique(&end, &format!("{here}'s end"))?;
                     note(&end, &mut r)?;
@@ -344,6 +350,12 @@ impl Reader<'_> {
                         label.label = Some(label.key.clone());
                     }
                     let (name, registry) = self.key(module, &metric.name, &here)?;
+                    if in_module != name.starts_with(PRODUCT_STATS_PREFIX) {
+                        return Err(format!(
+                            "{here} (`{name}`): `{PRODUCT_STATS_PREFIX}*` names the metrics of \
+                             `{PRODUCT_STATS}`, all of them and no other"
+                        ));
+                    }
                     let bounds = match &metric.bounds {
                         Some(path) => self.bounds(module, path, &here)?,
                         None => Vec::new(),
@@ -1028,8 +1040,25 @@ fn product_stat(attrs: &[Attr], here: &str) -> Result<(), String> {
                 a.key
             ));
         }
+        if a.registry == "agents" && !a.key.starts_with(PRODUCT_STATS_PREFIX) {
+            return Err(format!(
+                "{here} (`{}`): a product statistics key starts with `{PRODUCT_STATS_PREFIX}`",
+                a.key
+            ));
+        }
     }
     Ok(())
+}
+
+/// A declaration outside `productstats` never takes a product statistics key.
+fn observability(attrs: &[Attr], here: &str) -> Result<(), String> {
+    match attrs.iter().find(|a| a.key.starts_with(PRODUCT_STATS_PREFIX)) {
+        Some(a) => Err(format!(
+            "{here} (`{}`): `{PRODUCT_STATS_PREFIX}*` keys are declared in `{PRODUCT_STATS}`",
+            a.key
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Two fields of one attribute set under the same key.

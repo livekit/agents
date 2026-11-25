@@ -5,7 +5,7 @@ use crate::telemetry::instruments::DURATION_BOUNDS;
 
 /// A counter only tests record.
 #[metric(
-    name = "lk.productstats.test.counts",
+    name = "lk.product.agents.test.counts",
     kind = Counter,
     unit = "{count}",
     audience = ProductStats
@@ -13,13 +13,13 @@ use crate::telemetry::instruments::DURATION_BOUNDS;
 #[derive(Attrs)]
 pub struct TestCounts {
     /// What a test counted.
-    #[attr("lk.productstats.test.label")]
+    #[attr("lk.product.agents.test.label")]
     pub label: Label,
 }
 
 /// A histogram only tests record.
 #[metric(
-    name = "lk.productstats.test.duration",
+    name = "lk.product.agents.test.duration",
     kind = Histogram,
     unit = "s",
     bounds = DURATION_BOUNDS,

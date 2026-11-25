@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lk_agents_abi::telemetry::runner::{Launch, Runner};
+use lk_agents_abi::productstats::runner::{Runner, RunnerCmd};
 use lk_agents_abi::{Clock, Spawner};
 
 use crate::http::GatewayHttp;
@@ -161,16 +161,16 @@ pub fn server_setting(name: &str) -> Option<String> {
 }
 
 /// The command that started this process: the launcher's, or its worker's for a job process.
-static LAUNCH: parking_lot::RwLock<Launch> = parking_lot::RwLock::new(Launch::None);
+static RUNNER_CMD: parking_lot::RwLock<RunnerCmd> = parking_lot::RwLock::new(RunnerCmd::None);
 
 /// Registers the command that started this process, before its telemetry is installed.
-pub fn serve_launch(launch: Launch) {
-    *LAUNCH.write() = launch;
+pub fn serve_runner_cmd(cmd: RunnerCmd) {
+    *RUNNER_CMD.write() = cmd;
 }
 
 /// The command that started this process; `none` when no `lk agent` command did.
-pub fn launch() -> Launch {
-    *LAUNCH.read()
+pub fn runner_cmd() -> RunnerCmd {
+    *RUNNER_CMD.read()
 }
 
 /// The process's runner, derived once from the command that started it, its platform and the
@@ -178,7 +178,7 @@ pub fn launch() -> Launch {
 pub fn runner() -> Runner {
     static RUNNER: std::sync::OnceLock<Runner> = std::sync::OnceLock::new();
     *RUNNER.get_or_init(|| {
-        Runner::detect(|name| std::env::var(name).ok(), std::env::consts::OS, launch())
+        Runner::detect(|name| std::env::var(name).ok(), std::env::consts::OS, runner_cmd())
     })
 }
 

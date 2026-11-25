@@ -51,13 +51,13 @@ pub enum CliArgs {
 
 impl CliArgs {
     /// The command, as the process's runner reads it.
-    pub fn launch(&self) -> crate::telemetry::runner::Launch {
-        use crate::telemetry::runner::Launch;
+    pub fn runner_cmd(&self) -> crate::productstats::runner::RunnerCmd {
+        use crate::productstats::runner::RunnerCmd;
         match self {
-            CliArgs::Start { simulation: true, .. } => Launch::Simulation,
-            CliArgs::Start { dev: true, .. } => Launch::Dev,
-            CliArgs::Start { .. } => Launch::Start,
-            CliArgs::Console { .. } => Launch::Console,
+            CliArgs::Start { simulation: true, .. } => RunnerCmd::Simulation,
+            CliArgs::Start { dev: true, .. } => RunnerCmd::Dev,
+            CliArgs::Start { .. } => RunnerCmd::Start,
+            CliArgs::Console { .. } => RunnerCmd::Console,
         }
     }
 }

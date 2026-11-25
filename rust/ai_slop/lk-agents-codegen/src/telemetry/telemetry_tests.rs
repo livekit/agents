@@ -283,10 +283,10 @@ fn product_statistics_hold_only_bounded_values() {
         telemetry::read(&krate)
     };
     let group = |field: &str| format!("/// R.\n#[derive(Attrs)]\npub struct R {{ {field} }}");
-    read(&group("/// P.\n#[attr(\"lk.productstats.p\")] pub p: Vec<Label>, /// V.\n#[attr(\"lk.productstats.v\")] pub v: Label,")).unwrap();
+    read(&group("/// P.\n#[attr(\"lk.product.agents.p\")] pub p: Vec<Label>, /// V.\n#[attr(\"lk.product.agents.v\")] pub v: Label,")).unwrap();
     for field in [
-        "/// T.\n#[attr(\"lk.productstats.t\")] pub t: String,",
-        "/// T.\n#[attr(\"lk.productstats.t\")] pub t: Vec<String>,",
+        "/// T.\n#[attr(\"lk.product.agents.t\")] pub t: String,",
+        "/// T.\n#[attr(\"lk.product.agents.t\")] pub t: Vec<String>,",
         "/// T.\n#[attr(\"lk.pii.t\")] pub t: Content<String>,",
     ] {
         let error = read(&group(field)).err().unwrap_or_else(|| panic!("accepted: {field}"));
@@ -318,11 +318,55 @@ fn product_statistics_live_in_productstats_and_nowhere_else() {
         )
     };
     let stats = ", audience = ProductStats";
-    read(&metric("productstats.m", stats), &metric("other.m", "")).unwrap();
-    let error = read(&metric("productstats.m", ""), "").err().expect("accepted");
+    read(&metric("product.agents.m", stats), &metric("other.m", "")).unwrap();
+    let error = read(&metric("product.agents.m", ""), "").err().expect("accepted");
     assert!(error.contains("is `audience = ProductStats`"), "{error}");
     let error = read("", &metric("other.m", stats)).err().expect("accepted");
     assert!(error.contains("lives in `productstats`"), "{error}");
+}
+
+// Catches: a product statistic outside the `lk.product.agents.*` namespace its collector and
+// documentation name, or a customer declaration inside it (a metric or a key), which would read
+// as LiveKit's data.
+#[test]
+fn the_product_statistics_prefix_names_productstats_declarations_and_no_other() {
+    let read = |stats: &str, other: &str| {
+        let prelude = "use crate::telemetry::decl::Label;\nuse crate::telemetry::semconv::otel;\n";
+        let krate = Crate::from_files(
+            "abi",
+            &[
+                ("lib.rs", "pub mod telemetry; pub mod productstats; pub mod other;"),
+                ("telemetry/mod.rs", "pub mod decl; pub mod semconv;"),
+                ("telemetry/decl.rs", DECL),
+                ("telemetry/semconv.rs", SEMCONV),
+                ("productstats.rs", &format!("{prelude}{stats}")),
+                ("other.rs", &format!("{prelude}{other}")),
+            ],
+        )?;
+        telemetry::read(&krate)
+    };
+    let metric = |name: &str, audience: &str| {
+        format!(
+            "/// M.\n#[metric(name = \"{name}\", kind = Counter, unit = \"1\"{audience})]\n#[derive(Attrs)]\npub struct M;"
+        )
+    };
+    let group = |key: &str| {
+        format!("/// R.\n#[derive(Attrs)]\npub struct R {{ /// V.\n#[attr({key})] pub v: Label, }}")
+    };
+    let stats = ", audience = ProductStats";
+    // A dependency registry's key (the resource's `service.name`) keeps its own name.
+    read(&group("otel::GEN_AI_REQUEST_MODEL"), &group("\"lk.other.v\"")).unwrap();
+    read(&group("\"lk.product.agents.v\""), "").unwrap();
+    for (stats, other, message) in [
+        (metric("lk.productstats.m", stats), String::new(), "names the metrics of `productstats`"),
+        (String::new(), metric("lk.product.agents.m", ""), "names the metrics of `productstats`"),
+        (group("\"lk.other.v\""), String::new(), "key starts with `lk.product.agents.`"),
+        (String::new(), group("\"lk.product.agents.v\""), "keys are declared in `productstats`"),
+    ] {
+        let error =
+            read(&stats, &other).err().unwrap_or_else(|| panic!("accepted: {stats}{other}"));
+        assert!(error.contains(message), "{message}: {error}");
+    }
 }
 
 // Catches: an output missing a declaration or misreporting it, a dependency key redefined in

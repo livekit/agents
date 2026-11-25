@@ -8,28 +8,161 @@
       "brief": "Attributes declared in `lk_agents_abi::productstats`.",
       "attributes": [
         {
-          "id": "lk.productstats.arch",
+          "id": "lk.product.agents.arch",
           "type": "string",
           "stability": "development",
           "brief": "The CPU architecture (`std::env::consts::ARCH`)."
         },
         {
-          "id": "lk.productstats.framework.version",
+          "id": "lk.product.agents.framework.version",
           "type": "string",
           "stability": "development",
           "brief": "The framework's version."
         },
         {
-          "id": "lk.productstats.os",
+          "id": "lk.product.agents.os",
           "type": "string",
           "stability": "development",
           "brief": "The operating system (`std::env::consts::OS`)."
         },
         {
-          "id": "lk.productstats.python.version",
+          "id": "lk.product.agents.runtime.name",
+          "type": {
+            "members": [
+              {
+                "id": "python",
+                "value": "python",
+                "brief": "python",
+                "stability": "development"
+              },
+              {
+                "id": "node",
+                "value": "node",
+                "brief": "node",
+                "stability": "development"
+              },
+              {
+                "id": "bun",
+                "value": "bun",
+                "brief": "bun",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The runtime the agent runs on."
+        },
+        {
+          "id": "lk.product.agents.runtime.version",
           "type": "string",
           "stability": "development",
-          "brief": "The Python version the framework runs on."
+          "brief": "That runtime's version."
+        },
+        {
+          "id": "lk.product.agents.storage",
+          "type": {
+            "members": [
+              {
+                "id": "agent_db",
+                "value": "agent_db",
+                "brief": "agent_db",
+                "stability": "development"
+              },
+              {
+                "id": "sqlite",
+                "value": "sqlite",
+                "brief": "sqlite",
+                "stability": "development"
+              },
+              {
+                "id": "none",
+                "value": "none",
+                "brief": "none",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Where threads are stored."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.runner",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats::runner`.",
+      "attributes": [
+        {
+          "id": "lk.product.agents.runner.cmd",
+          "type": {
+            "members": [
+              {
+                "id": "dev",
+                "value": "dev",
+                "brief": "dev",
+                "stability": "development"
+              },
+              {
+                "id": "console",
+                "value": "console",
+                "brief": "console",
+                "stability": "development"
+              },
+              {
+                "id": "simulation",
+                "value": "simulation",
+                "brief": "simulation",
+                "stability": "development"
+              },
+              {
+                "id": "start",
+                "value": "start",
+                "brief": "start",
+                "stability": "development"
+              },
+              {
+                "id": "none",
+                "value": "none",
+                "brief": "none",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The command that started the process."
+        },
+        {
+          "id": "lk.product.agents.runner.kind",
+          "type": {
+            "members": [
+              {
+                "id": "production",
+                "value": "production",
+                "brief": "production",
+                "stability": "development"
+              },
+              {
+                "id": "development",
+                "value": "development",
+                "brief": "development",
+                "stability": "development"
+              },
+              {
+                "id": "ci",
+                "value": "ci",
+                "brief": "ci",
+                "stability": "development"
+              },
+              {
+                "id": "unknown",
+                "value": "unknown",
+                "brief": "unknown",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Production, development, CI or unknown."
         }
       ]
     },
@@ -386,85 +519,6 @@
           "type": "any",
           "stability": "development",
           "brief": "The `Usage` model's entries: one per model and kind; absent when nothing was used."
-        }
-      ]
-    },
-    {
-      "id": "registry.livekit.agents.runner",
-      "type": "attribute_group",
-      "brief": "Attributes declared in `lk_agents_abi::telemetry::runner`.",
-      "attributes": [
-        {
-          "id": "lk.productstats.runner.kind",
-          "type": {
-            "members": [
-              {
-                "id": "production",
-                "value": "production",
-                "brief": "production",
-                "stability": "development"
-              },
-              {
-                "id": "development",
-                "value": "development",
-                "brief": "development",
-                "stability": "development"
-              },
-              {
-                "id": "ci",
-                "value": "ci",
-                "brief": "ci",
-                "stability": "development"
-              },
-              {
-                "id": "unknown",
-                "value": "unknown",
-                "brief": "unknown",
-                "stability": "development"
-              }
-            ]
-          },
-          "stability": "development",
-          "brief": "Production, development, CI or unknown."
-        },
-        {
-          "id": "lk.productstats.runner.launch",
-          "type": {
-            "members": [
-              {
-                "id": "dev",
-                "value": "dev",
-                "brief": "dev",
-                "stability": "development"
-              },
-              {
-                "id": "console",
-                "value": "console",
-                "brief": "console",
-                "stability": "development"
-              },
-              {
-                "id": "simulation",
-                "value": "simulation",
-                "brief": "simulation",
-                "stability": "development"
-              },
-              {
-                "id": "start",
-                "value": "start",
-                "brief": "start",
-                "stability": "development"
-              },
-              {
-                "id": "none",
-                "value": "none",
-                "brief": "none",
-                "stability": "development"
-              }
-            ]
-          },
-          "stability": "development",
-          "brief": "The command that started the process."
         }
       ]
     },

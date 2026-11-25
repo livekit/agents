@@ -6285,27 +6285,37 @@
           "registry": "otel"
         },
         {
-          "key": "lk.productstats.framework.version",
+          "key": "lk.product.agents.framework.version",
           "type": "string",
           "required": true
         },
         {
-          "key": "lk.productstats.python.version",
+          "key": "lk.product.agents.runtime.name",
           "type": "string",
-          "required": false
+          "required": true,
+          "members": [
+            "python",
+            "node",
+            "bun"
+          ]
         },
         {
-          "key": "lk.productstats.os",
+          "key": "lk.product.agents.runtime.version",
           "type": "string",
           "required": true
         },
         {
-          "key": "lk.productstats.arch",
+          "key": "lk.product.agents.os",
           "type": "string",
           "required": true
         },
         {
-          "key": "lk.productstats.runner.launch",
+          "key": "lk.product.agents.arch",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "lk.product.agents.runner.cmd",
           "type": "string",
           "required": true,
           "members": [
@@ -6317,7 +6327,7 @@
           ]
         },
         {
-          "key": "lk.productstats.runner.kind",
+          "key": "lk.product.agents.runner.kind",
           "type": "string",
           "required": true,
           "members": [
@@ -6325,6 +6335,16 @@
             "development",
             "ci",
             "unknown"
+          ]
+        },
+        {
+          "key": "lk.product.agents.storage",
+          "type": "string",
+          "required": true,
+          "members": [
+            "agent_db",
+            "sqlite",
+            "none"
           ]
         }
       ]

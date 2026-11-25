@@ -26,7 +26,7 @@ impl lk_agents_abi::cli::Cli for Commands {
     fn parse_cli(argv: Vec<String>) -> lk_agents_abi::cli::CliParseResult {
         let parsed = parse_cli(argv);
         if let lk_agents_abi::cli::CliParseResult::Parsed { args } = &parsed {
-            lk_agents_net::env::serve_launch(args.launch());
+            lk_agents_net::env::serve_runner_cmd(args.runner_cmd());
         }
         parsed
     }

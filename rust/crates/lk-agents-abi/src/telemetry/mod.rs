@@ -21,7 +21,6 @@ pub mod host;
 pub mod instruments;
 pub mod record;
 pub mod report;
-pub mod runner;
 pub mod storage;
 
 /// Keys and names owned by the registries the agents registry depends on. A declaration names

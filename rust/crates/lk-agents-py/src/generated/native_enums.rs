@@ -2,6 +2,36 @@
 use pyo3::prelude::*;
 #[pyclass(eq, eq_int, from_py_object, module = "livekit.agents._core")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Runtime {
+    Python,
+    Node,
+    Bun,
+}
+pub fn runtime_from_py(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<::lk_agents_abi::productstats::RuntimeName> {
+    Ok(match obj.extract::<Runtime>()? {
+        Runtime::Python => ::lk_agents_abi::productstats::RuntimeName::Python,
+        Runtime::Node => ::lk_agents_abi::productstats::RuntimeName::Node,
+        Runtime::Bun => ::lk_agents_abi::productstats::RuntimeName::Bun,
+    })
+}
+pub fn runtime_to_py(
+    py: Python<'_>,
+    value: ::lk_agents_abi::productstats::RuntimeName,
+) -> PyResult<Bound<'_, PyAny>> {
+    Ok(Bound::new(
+        py,
+        match value {
+            ::lk_agents_abi::productstats::RuntimeName::Python => Runtime::Python,
+            ::lk_agents_abi::productstats::RuntimeName::Node => Runtime::Node,
+            ::lk_agents_abi::productstats::RuntimeName::Bun => Runtime::Bun,
+        },
+    )?
+    .into_any())
+}
+#[pyclass(eq, eq_int, from_py_object, module = "livekit.agents._core")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusCode {
     Unset,
     Ok,
@@ -122,6 +152,7 @@ pub fn role_to_py(
     .into_any())
 }
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<Runtime>()?;
     m.add_class::<StatusCode>()?;
     m.add_class::<SpanKind>()?;
     m.add_class::<Role>()?;

@@ -1,9 +1,9 @@
-use super::decl::{Attrs, SpanValue};
+use crate::telemetry::decl::{Attrs, SpanValue};
 
 /// The command that started the process: `none` when no `lk agent` command did (a script, a
 /// test).
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Launch {
+pub enum RunnerCmd {
     Dev,
     Console,
     Simulation,
@@ -24,10 +24,10 @@ pub enum RunnerKind {
 #[derive(Attrs, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Runner {
     /// The command that started the process.
-    #[attr("lk.productstats.runner.launch")]
-    pub launch: Launch,
+    #[attr("lk.product.agents.runner.cmd")]
+    pub cmd: RunnerCmd,
     /// Production, development, CI or unknown.
-    #[attr("lk.productstats.runner.kind")]
+    #[attr("lk.product.agents.runner.kind")]
     pub kind: RunnerKind,
 }
 
@@ -36,21 +36,23 @@ impl Runner {
     /// production; `dev`, `console` and `simulation` are development, `start` too on macOS and
     /// Windows; `start` elsewhere is production; no command is unknown. `os` is
     /// `std::env::consts::OS`.
-    pub fn detect(var: impl Fn(&str) -> Option<String>, os: &str, launch: Launch) -> Runner {
+    pub fn detect(var: impl Fn(&str) -> Option<String>, os: &str, cmd: RunnerCmd) -> Runner {
         let set = |name: &str| var(name).is_some_and(|v| !v.is_empty());
         let kind = if var("CI").is_some_and(|v| v.trim().eq_ignore_ascii_case("true")) {
             RunnerKind::Ci
         } else if set("LK_HOSTED_AGENTS") {
             RunnerKind::Production
         } else {
-            match launch {
-                Launch::Dev | Launch::Console | Launch::Simulation => RunnerKind::Development,
-                Launch::Start if matches!(os, "macos" | "windows") => RunnerKind::Development,
-                Launch::Start => RunnerKind::Production,
-                Launch::None => RunnerKind::Unknown,
+            match cmd {
+                RunnerCmd::Dev | RunnerCmd::Console | RunnerCmd::Simulation => {
+                    RunnerKind::Development
+                }
+                RunnerCmd::Start if matches!(os, "macos" | "windows") => RunnerKind::Development,
+                RunnerCmd::Start => RunnerKind::Production,
+                RunnerCmd::None => RunnerKind::Unknown,
             }
         };
-        Runner { launch, kind }
+        Runner { cmd, kind }
     }
 }
 
@@ -58,14 +60,14 @@ impl Runner {
 mod tests {
     use super::*;
 
-    // Catches: a rule applied out of order (CI or Cloud hosting losing to the launch), a laptop
+    // Catches: a rule applied out of order (CI or Cloud hosting losing to the command), a laptop
     // `start` counted as production, or a script counted as anything but unknown.
     #[test]
     fn the_first_matching_rule_decides_the_kind() {
-        use Launch::*;
+        use RunnerCmd::*;
         use RunnerKind::*;
         type Vars = &'static [(&'static str, &'static str)];
-        let cases: &[(Vars, &str, Launch, RunnerKind)] = &[
+        let cases: &[(Vars, &str, RunnerCmd, RunnerKind)] = &[
             (&[("CI", "true"), ("LK_HOSTED_AGENTS", "1")], "linux", Start, Ci),
             (&[("CI", "TRUE")], "macos", Dev, Ci),
             (&[("CI", "false")], "linux", None, Unknown),
@@ -79,10 +81,10 @@ mod tests {
             (&[], "linux", Start, Production),
             (&[], "linux", None, Unknown),
         ];
-        for (vars, os, launch, kind) in cases {
+        for (vars, os, cmd, kind) in cases {
             let var =
                 |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned());
-            assert_eq!(Runner::detect(var, os, *launch), Runner { launch: *launch, kind: *kind });
+            assert_eq!(Runner::detect(var, os, *cmd), Runner { cmd: *cmd, kind: *kind });
         }
     }
 }

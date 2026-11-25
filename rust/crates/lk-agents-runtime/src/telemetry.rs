@@ -172,7 +172,11 @@ fn env_app() -> Option<AppConfig> {
 pub struct Telemetry;
 
 impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
-    fn _core_telemetry_install(sdk_version: String, python_version: Option<String>) {
+    fn _core_telemetry_install(
+        sdk_version: String,
+        runtime: lk_agents_abi::productstats::RuntimeName,
+        runtime_version: String,
+    ) {
         let process = &*PROCESS;
         if process.slot.get().is_some() {
             return;
@@ -184,7 +188,7 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
             }
         };
         productstats::install(|| {
-            let resource = productstats::resource(&sdk_version, python_version.as_deref());
+            let resource = productstats::resource(&sdk_version, runtime, &runtime_version);
             ProductStats::start(&*spawner, crate::process::host_clock(), resource)
         });
         let exporter = process.slot.install(|| {
