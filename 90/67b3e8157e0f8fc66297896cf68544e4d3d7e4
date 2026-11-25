@@ -1,0 +1,77 @@
+rust/crates/lk-agents-fuzz/src/search/setup.rs
+  s_97503950a071fd::t_e7b1ceae3d949d 237-241,244-251,253-255
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_97503950a071fd::t_3cc7c57f1da099 121-139,271-385
+rust/crates/lk-agents-fuzz/src/rules/amd/amd_user_item_added_once.rs
+  s_97503950a071fd::t_04e715cb777aed 1-161
+rust/crates/lk-agents-fuzz/tests/regressions/amd/realtime.rs
+  s_97503950a071fd::t_b658a8fdbad405 1-485
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_realtime_tests.rs
+  s_97503950a071fd::t_dcd0e699af77a7 1-7,11,14,16-21,24,27-36,39-50,54-77,82,90-107,110-113,115-117,121,125,137-138,140,148,158-166,169-180,186-193,196-213,217-220,227-235,238-246,249-283,285-288,291-295,297-315,318-319,321-329,331-346,349-353,355-374,376-377,379-380,384-396,398-410,412-428,431-432,434-449,451-454,456-463,466-470,472-503,505-511,513-536,539-541,543-560,562-702,704-712
+rust/crates/lk-agents-fuzz/src/authored.rs
+  s_97503950a071fd::t_ab84d7c168309a 383-397,471-477
+rust/crates/lk-agents-fuzz/src/drive/apply/call.rs
+  s_97503950a071fd::t_26878ea3817cc8 617-622
+rust/crates/lk-agents-fuzz/src/drive/collect.rs
+  s_97503950a071fd::t_770060fb1d3139 228-230
+rust/crates/lk-agents-fuzz/src/drive/mod.rs
+  s_97503950a071fd::t_ee45d4a7f279b7 429-432,448
+rust/crates/lk-agents-fuzz/src/drive/start.rs
+  s_97503950a071fd::t_7f84a1fdc7ca22 205
+rust/crates/lk-agents-fuzz/src/fakes/amd.rs
+  s_97503950a071fd::t_8daf3a5470a36f 99-112
+rust/crates/lk-agents-fuzz/src/fakes/mod.rs
+  s_97503950a071fd::t_fb14fb644ea94b 224-229,732-736
+rust/crates/lk-agents-fuzz/src/fakes/realtime/client_tests.rs
+  s_97503950a071fd::t_dd2dad31c6d993 31,34
+rust/crates/lk-agents-fuzz/src/fakes/realtime/mod.rs
+  s_97503950a071fd::t_b934707643ff18 93-94,153-158,162,184,199-204,248-252,368
+rust/crates/lk-agents-fuzz/src/fakes/realtime/server.rs
+  s_97503950a071fd::t_98eb7ddb9b8deb 249-250,282,755-757
+rust/crates/lk-agents-fuzz/src/record/mod.rs
+  s_97503950a071fd::t_b1a2333b56648b 23,25,681-682
+rust/crates/lk-agents-fuzz/src/record/realtime.rs
+  s_97503950a071fd::t_8e9a4fd896cfde 1-70
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_97503950a071fd::t_ca69e7d0f1f4f6 14-17,26-33,58-95,125-163
+rust/crates/lk-agents-fuzz/src/rules/amd/machine_reply_waits_for_silence.rs
+  s_97503950a071fd::t_2443f8987306f3 16-18,27-33,52-80,121-140,163-181
+rust/crates/lk-agents-fuzz/src/rules/amd/realtime_turn_audio_committed.rs
+  s_97503950a071fd::t_8ce21c80706855 1-140
+rust/crates/lk-agents-fuzz/src/rules/amd/reply_follows_decision.rs
+  s_97503950a071fd::t_7e7c5b0590436a 14-18,27-39,77-90,93-99,178-190
+rust/crates/lk-agents-fuzz/src/rules/amd/stage_instructions_never_saved.rs
+  s_97503950a071fd::t_9c0250a60db296 13-17,26-34,42-56,71-77,111-139
+rust/crates/lk-agents-fuzz/tests/regressions/amd/mod.rs
+  s_97503950a071fd::t_ecab3887fe0090 12
+rust/crates/lk-agents-runtime/src/voice/amd/mod.rs
+  s_97503950a071fd::t_557cafbadbe292 301-302,310,423-424,440,451-452
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  s_97503950a071fd::t_1757ab2bdc176d 229-230,235-242,252,931-934
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_realtime_flow_tests.rs
+  s_97503950a071fd::t_f24d60c42e9536 1-402
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_rule_tests.rs
+  s_97503950a071fd::t_5f80d0b8b5156a 143-148
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_tests.rs
+  s_97503950a071fd::t_914cf81d33994d 49,265
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/realtime/gated.rs
+  s_97503950a071fd::t_f404926ce62d87 38-41,48-49
+rust/crates/lk-agents-voice/src/amd/mod.rs
+  s_97503950a071fd::t_6f80189c17f442 210-217,238-240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9067b3e8157e0f8fc66297896cf68544e4d3d7e4",
+  "prompts": {},
+  "sessions": {
+    "s_97503950a071fd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30a71d06-c812-45d8-9c68-e3f3e0e98f93",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
