@@ -157,7 +157,6 @@ identifier, never content.
 | `lk.product.agents.runner.cmd` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
 | `lk.product.agents.runner.kind` | `production` | What the process is, derived from the command and its environment: `production`, `development`, `ci` or `unknown` |
 | `lk.product.agents.storage` | `agent-db` | Where threads are stored: `agent-db`, `sqlite` or `none` |
-| `lk.product.agents.http_routes` | `1-5` | Custom HTTP routes the server declares, bucketed: `0`, `1-5`, `6+` |
 
 `runner.kind`, first match: `ci` when `CI=true`; `production` on LiveKit Cloud;
 `development` for `dev`, `console` and `simulation`, and for `start` on macOS or Windows;
@@ -245,8 +244,7 @@ One count per voice session, recorded when it starts, with the configuration it 
 | --- | --- |
 | `lk.product.agents.voice.pipeline` | `stt-llm-tts`, `realtime`, `realtime+tts` (a realtime model with a separate TTS), `duplex` |
 | `lk.product.agents.voice.turn_detection` | `vad`, `stt`, `realtime_llm`, `manual`, or `model` for a turn detection model |
-| `lk.product.agents.voice.false_interruption_recovery` | `on`, `off` |
-| `lk.product.agents.voice.backchannels` | `on`, `off` |
+| `lk.product.agents.voice.interruption` | how the session decides that the person is interrupting: `adaptive` (the interruption model classifies overlapping speech), `vad` (any detected speech interrupts), `off` (interruptions disabled) |
 
 **Feature usage**
 
