@@ -572,12 +572,9 @@ impl VoiceSession {
         Some((self.rtc.clone()?, Arc::clone(&self.room_io)))
     }
 
-    /// The capabilities of the realtime model the session opened on, `None` on a pipeline: what
-    /// AMD checks at entry.
-    pub(crate) fn amd_realtime(
-        &self,
-    ) -> Option<lk_agents_abi::llm::realtime::RealtimeCapabilities> {
-        self.realtime
+    /// The session opened on a realtime model: AMD sends it the transcripts it may need.
+    pub(crate) fn amd_realtime(&self) -> bool {
+        self.realtime.is_some()
     }
 
     /// What an AMD run executes against, and the agent running now. Refused unless running.

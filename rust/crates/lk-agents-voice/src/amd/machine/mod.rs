@@ -64,8 +64,8 @@ pub struct AmdSetup {
     pub amd_stt: bool,
     /// The classifier is an LLM, which can extract menus; a decision model cannot.
     pub extract_menus: bool,
-    /// A realtime model without user transcription and without session STT: AMD inserts each
-    /// turn's transcript (spec §7.2).
+    /// A realtime session: AMD sends each turn's transcript, and the session keeps it only for a
+    /// model without user transcription and without session STT (spec §7.2).
     pub insert_user_items: bool,
 }
 

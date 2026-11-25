@@ -140,8 +140,9 @@ pub enum AmdAnswer {
     /// The decision for a committed turn. It may arrive before or after the customer hook
     /// returns.
     ReplyDecided { run: AmdRunId, turn: TurnId, decision: ReplyDecision },
-    /// The transcript for a realtime model without user transcription and without session STT
-    /// (spec §7.2), also for an older turn's late final and a turn whose prediction was reused.
+    /// A turn's transcript on a realtime session (spec §7.2), also for an older turn's late final
+    /// and a turn whose prediction was reused. The session keeps it only for a model without user
+    /// transcription and without session STT, read when it arrives.
     InsertUserItem { run: AmdRunId, turn: TurnId, text: String },
     /// AMD completed. `pending` settles every turn committed under the gate whose decision is
     /// not applied yet.

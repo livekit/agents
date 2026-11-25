@@ -278,7 +278,7 @@ async fn enter_with(
             return Err(refused);
         }
     };
-    let Prepared { peer, run, machine, legs, dtmf_tool } = prepared;
+    let Prepared { peer, run, machine, legs, dtmf_tool, amd_stt } = prepared;
     let tasks = Arc::clone(peer.route.tasks());
     let mut models = OwnedModels {
         closers,
@@ -298,8 +298,6 @@ async fn enter_with(
     let close = CancellationToken::new();
     let (producer, outcome) = signal::once();
     let (entered_tx, entered) = tokio::sync::oneshot::channel();
-    // The session refuses a realtime model with neither session STT nor AMD's (spec §5.1).
-    let amd_stt = legs.stt.is_some();
     let executor =
         Executor::new(machine, peer.clone(), Legs { models, ..legs }, reports_tx, events_tx);
     let entry = Entry {
@@ -341,6 +339,9 @@ struct Prepared {
     machine: Amd,
     legs: Legs,
     dtmf_tool: ToolSpec,
+    /// The run has its own STT: the session refuses a realtime model with neither session STT
+    /// nor AMD's (spec §5.1).
+    amd_stt: bool,
 }
 
 fn prepare(
@@ -362,7 +363,8 @@ fn prepare(
     if stt.as_ref().is_some_and(|stt| !stt.model.capabilities().streaming) {
         return Err(AmdEnterError::NotStreaming);
     }
-    let (session_stt, realtime) = (session.legs().stt, session.amd_realtime());
+    let (session_stt, realtime, amd_stt) =
+        (session.legs().stt, session.amd_realtime(), stt.is_some());
     let (peer, agent) = session.amd_peer()?;
     let run = peer.route.next_run();
     let setup = AmdSetup {
@@ -370,10 +372,11 @@ fn prepare(
         session_id: format!("amd_{}", run.0),
         entered_at: peer.time.wall(),
         session_stt,
-        amd_stt: stt.is_some(),
+        amd_stt,
         extract_menus: classifier.extracts_menus(),
-        // The session's record has no words for the turn otherwise (spec §7.2).
-        insert_user_items: realtime.is_some_and(|caps| !caps.user_transcription) && !session_stt,
+        // The session decides on its live model and STT whether it needs the words (spec §7.2):
+        // a fallback swap can change the model's transcription after entry.
+        insert_user_items: realtime,
     };
     let callee = callee.unwrap_or_else(|| {
         let room = session.amd_room();
@@ -411,7 +414,7 @@ fn prepare(
         callee,
         models: OwnedModels { closers: Vec::new(), time: peer.time.clone(), cleanup: None },
     };
-    Ok(Prepared { peer, run, machine, legs, dtmf_tool })
+    Ok(Prepared { peer, run, machine, legs, dtmf_tool, amd_stt })
 }
 
 /// The run's task: everything one run owns, from its attach to its outcome.

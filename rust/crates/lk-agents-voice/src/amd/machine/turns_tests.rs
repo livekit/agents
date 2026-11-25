@@ -986,7 +986,7 @@ fn test_speech_across_a_commit_is_split_at_the_commit() {
 /// Ports `test_external_stt_preserves_history_without_native_transcription`: a realtime model
 /// without user transcription and without session STT gets each turn's transcript from AMD, once,
 /// before the decision and whatever the prediction. With session STT the session commits the
-/// transcript itself, so the host sets no `insert_user_items`.
+/// transcript itself and drops AMD's; this machine-level case leaves `insert_user_items` unset.
 #[test]
 fn test_external_stt_preserves_history_without_native_transcription() {
     use Category::*;
