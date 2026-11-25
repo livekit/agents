@@ -46,7 +46,7 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemini-2.5-flash"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
         tts=inference.TTS("cartesia/sonic-3"),
     )
 
