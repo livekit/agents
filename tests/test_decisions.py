@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
 
-from livekit.agents import APIError, APIStatusError, APITimeoutError
+from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.llm import (
     AgentConfigUpdate,
     AgentHandoff,
     ChatContext,
     ChatMessage,
+    DecisionModelFallbackAdapter,
     FunctionCall,
     FunctionCallOutput,
     ImageContent,
@@ -63,6 +65,7 @@ class StaticModel(decisions.DecisionModel):
         )
         self.outcomes = list(outcomes)
         self.requests: list[tuple[str, Mapping[str, decisions.Decision]]] = []
+        self.headers: list[Mapping[str, str]] = []
 
     @property
     def model(self) -> str:
@@ -78,8 +81,10 @@ class StaticModel(decisions.DecisionModel):
         input: str,
         decisions: Mapping[str, decisions.Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         self.requests.append((input, decisions))
+        self.headers.append(extra_headers)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -233,6 +238,21 @@ async def test_retryable_errors_obey_connection_options() -> None:
     assert response.errors == {}
 
 
+async def test_extra_headers_reach_every_attempt() -> None:
+    model = StaticModel(
+        APIStatusError("unavailable", status_code=503),
+        DecisionResponse(results=valid_results()),
+        DecisionResponse(results=valid_results()),
+    )
+    await evaluate(
+        model,
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+        extra_headers={"X-Feature": "test"},
+    )
+    await evaluate(model)
+    assert model.headers == [{"X-Feature": "test"}, {"X-Feature": "test"}, {}]
+
+
 async def test_non_retryable_errors_are_not_retried() -> None:
     model = StaticModel(APIStatusError("unauthorized", status_code=401))
     with pytest.raises(APIStatusError):
@@ -346,3 +366,204 @@ def test_transcript_includes_context_events_when_asked() -> None:
         "[agent handoff: booking -> receptionist]\n"
         "assistant: I can offer seven. [interrupted]"
     )
+
+
+CHECK: dict[str, decisions.Decision] = {"check": decisions.Probability("True?")}
+
+
+class SwitchModel(StaticModel):
+    """Answers as ``name`` until ``failure`` is set to an error to raise, or to ``"hang"``."""
+
+    def __init__(
+        self,
+        name: str,
+        failure: Exception | Literal["hang"] | None = None,
+        *,
+        kinds: list[decisions.DecisionKind] | None = None,
+    ) -> None:
+        super().__init__(kinds=kinds)
+        self.name = name
+        self.failure = failure
+
+    @property
+    def model(self) -> str:
+        return self.name
+
+    async def _evaluate_impl(
+        self,
+        *,
+        input: str,
+        decisions: Mapping[str, decisions.Decision],
+        conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
+    ) -> DecisionResponse:
+        self.requests.append((input, decisions))
+        self.headers.append(extra_headers)
+        if self.failure == "hang":
+            await asyncio.Event().wait()
+        if isinstance(self.failure, Exception):
+            raise self.failure
+        return DecisionResponse(results={name: ProbabilityResult(value=0.9) for name in decisions})
+
+
+def fallback(
+    *models: decisions.DecisionModel, **kwargs
+) -> tuple[DecisionModelFallbackAdapter, list[tuple[str, bool]]]:
+    """A fallback adapter and the availability changes it reports, as (model, available)."""
+    adapter = DecisionModelFallbackAdapter(list(models), **kwargs)
+    events: list[tuple[str, bool]] = []
+    adapter.on(
+        "decision_availability_changed", lambda ev: events.append((ev.model.model, ev.available))
+    )
+    return adapter, events
+
+
+async def test_fallback_sends_extra_headers_to_every_model_and_recovery_check() -> None:
+    primary = SwitchModel("primary", APIConnectionError("down"))
+    secondary = SwitchModel("secondary")
+    adapter, _ = fallback(primary, secondary)
+
+    response = await evaluate(adapter, decisions=CHECK, extra_headers={"X-Feature": "test"})
+    assert response.model == "secondary"
+    assert secondary.headers == [{"X-Feature": "test"}]
+    await asyncio.sleep(0.1)  # the failed primary's background check has run
+    # the request, then the recovery check
+    assert primary.headers == [{"X-Feature": "test"}, {"X-Feature": "test"}]
+
+    assert (await evaluate(adapter, decisions=CHECK)).model == "secondary"
+    assert secondary.headers[-1] == {}
+    await adapter.aclose()
+
+
+async def test_fallback_skips_a_failed_model_until_it_answers_again() -> None:
+    primary = SwitchModel("primary", APIConnectionError("down"))
+    adapter, events = fallback(primary, SwitchModel("secondary"))
+
+    assert (await evaluate(adapter, decisions=CHECK)).model == "secondary"
+    assert events == [("primary", False)]
+    assert adapter.model == "secondary"
+
+    await asyncio.sleep(1)  # the background check fails while the primary is down
+    primary.failure = None
+    # the request still skips the primary; its background check brings the primary back
+    assert (await evaluate(adapter, decisions=CHECK)).model == "secondary"
+    await asyncio.sleep(1)
+    assert events == [("primary", False), ("primary", True)]
+    assert (await evaluate(adapter, decisions=CHECK)).model == "primary"
+    await adapter.aclose()
+
+
+@pytest.mark.parametrize(
+    "failure", [APIStatusError("unauthorized", status_code=401), RuntimeError("boom")]
+)
+async def test_fallback_moves_on_after_any_request_failure(failure: Exception) -> None:
+    adapter, events = fallback(SwitchModel("primary", failure), SwitchModel("secondary"))
+    assert (await evaluate(adapter, decisions=CHECK)).model == "secondary"
+    assert events == [("primary", False)]
+    await adapter.aclose()
+
+
+@pytest.mark.parametrize(("options", "timeout"), [({}, 1.0), ({"attempt_timeout": 0.5}, 0.5)])
+async def test_fallback_applies_its_own_timeout_to_each_model(
+    options: dict[str, float], timeout: float
+) -> None:
+    adapter, _ = fallback(SwitchModel("primary", "hang"), SwitchModel("secondary"), **options)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    response = await evaluate(
+        adapter, decisions=CHECK, conn_options=APIConnectOptions(max_retry=3, timeout=10)
+    )
+    assert response.model == "secondary"
+    assert loop.time() - started == pytest.approx(timeout)
+    await adapter.aclose()
+
+
+async def test_fallback_caller_deadline_does_not_mark_a_model_unavailable() -> None:
+    secondary = SwitchModel("secondary")
+    adapter, events = fallback(SwitchModel("primary", "hang"), secondary, attempt_timeout=1.0)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(evaluate(adapter, decisions=CHECK), timeout=0.5)
+    assert events == []
+    assert secondary.requests == []
+
+
+async def test_fallback_starts_no_background_check_after_aclose() -> None:
+    primary = SwitchModel("primary", "hang")
+    adapter, _ = fallback(primary, SwitchModel("secondary"), attempt_timeout=0.5)
+    request = asyncio.create_task(evaluate(adapter, decisions=CHECK))
+    await asyncio.sleep(0.1)  # the request is waiting on the primary
+    await adapter.aclose()
+
+    assert (await request).model == "secondary"
+    await asyncio.sleep(1)
+    assert len(primary.requests) == 1
+
+
+async def test_fallback_retries_every_model_once_all_are_unavailable() -> None:
+    down = APIConnectionError("down")
+    secondary = SwitchModel("secondary", down)
+    adapter, events = fallback(SwitchModel("primary", down), secondary)
+
+    # both are SwitchModel, so only the model ids tell them apart
+    with pytest.raises(APIConnectionError, match=r"\(primary\).*\(secondary\)"):
+        await evaluate(adapter, decisions=CHECK)
+    await asyncio.sleep(1)  # the background checks fail too
+
+    secondary.failure = None
+    assert (await evaluate(adapter, decisions=CHECK)).model == "secondary"
+    assert events == [("primary", False), ("secondary", False), ("secondary", True)]
+    await adapter.aclose()
+
+
+async def test_fallback_returns_partial_errors_from_the_answering_model() -> None:
+    results = valid_results()
+    del results["intent"]
+    secondary = SwitchModel("secondary")
+    adapter, events = fallback(
+        StaticModel(DecisionResponse(results=results, errors={"intent": "declined"})), secondary
+    )
+    response = await evaluate(adapter)
+    assert response.errors == {"intent": "declined"}
+    assert secondary.requests == []
+    assert events == []
+
+
+async def test_fallback_reports_usage_once_per_request() -> None:
+    adapter, _ = fallback(SwitchModel("primary"), SwitchModel("secondary"))
+    collected: list[DecisionMetrics] = []
+    adapter.on("metrics_collected", collected.append)
+    await evaluate(adapter, decisions=CHECK)
+    [metrics] = collected
+    assert metrics.metadata is not None and metrics.metadata.model_name == "primary"
+
+
+async def test_fallback_empty_batch_does_not_bring_a_model_back() -> None:
+    primary = SwitchModel("primary", APIConnectionError("down"))
+    adapter, events = fallback(primary, SwitchModel("secondary"))
+    await evaluate(adapter, decisions=CHECK)
+    await asyncio.sleep(1)
+
+    # an empty batch never reaches a provider, so it says nothing about the primary
+    assert (await evaluate(adapter, decisions={})).results == {}
+    await asyncio.sleep(1)
+    assert events == [("primary", False)]
+    await adapter.aclose()
+
+
+async def test_fallback_supports_the_kinds_every_model_supports() -> None:
+    primary = SwitchModel("primary", kinds=["probability", "choice"])
+    adapter, events = fallback(primary, SwitchModel("secondary", kinds=["score", "probability"]))
+    assert adapter.capabilities.decision_kinds == ["probability"]
+    with pytest.raises(ValueError, match="does not support 'choice'"):
+        await evaluate(adapter, decisions={"intent": QUESTIONS["intent"]})
+    assert primary.requests == []
+    assert events == []
+
+
+def test_fallback_requires_models_with_a_shared_kind() -> None:
+    with pytest.raises(ValueError, match="at least one decision model"):
+        DecisionModelFallbackAdapter([])
+    with pytest.raises(ValueError, match="share no decision kind"):
+        DecisionModelFallbackAdapter(
+            [SwitchModel("a", kinds=["choice"]), SwitchModel("b", kinds=["score"])]
+        )

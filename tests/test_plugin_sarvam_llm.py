@@ -101,6 +101,76 @@ async def test_base_url_routing(kwargs: dict[str, Any], base_url: str) -> None:
     await llm.aclose()
 
 
+async def test_sarvam_105b_reasoning_is_off_by_default() -> None:
+    stream = _llm(model="sarvam-105b").chat(chat_ctx=_chat_ctx())
+    assert stream._extra_kwargs["reasoning_effort"] == "none"
+    await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "chat_kwargs", "expected"),
+    [
+        ({"reasoning_effort": "low"}, {}, "low"),
+        ({"reasoning_effort": None}, {}, None),  # explicit None: the endpoint's default
+        ({}, {"extra_kwargs": {"reasoning_effort": "high"}}, "high"),
+    ],
+)
+async def test_sarvam_105b_keeps_an_explicit_reasoning_effort(
+    kwargs: dict[str, Any], chat_kwargs: dict[str, Any], expected: str | None
+) -> None:
+    stream = _llm(model="sarvam-105b", **kwargs).chat(chat_ctx=_chat_ctx(), **chat_kwargs)
+    assert stream._extra_kwargs["reasoning_effort"] == expected
+    await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"model": "gemma4"},
+        {"model": "glm5.2"},
+        {"model": "sarvam-105b", "base_url": "https://api.sarvam.ai/v1"},
+        {"model": "sarvam-105b", "base_url": "https://proxy.example/sarvam/v1/"},
+    ],
+)
+async def test_no_reasoning_default_otherwise(kwargs: dict[str, Any]) -> None:
+    stream = _llm(**kwargs).chat(chat_ctx=_chat_ctx())
+    assert "reasoning_effort" not in stream._extra_kwargs
+    await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["https://api.sarvam.ai/v2", "https://proxy.example/sarvam/v2", "https://proxy.example"],
+)
+async def test_reasoning_default_with_a_pinned_non_v1_base_url(base_url: str) -> None:
+    stream = _llm(model="sarvam-105b", base_url=base_url).chat(chat_ctx=_chat_ctx())
+    assert stream._extra_kwargs["reasoning_effort"] == "none"
+    await stream.aclose()
+
+
+async def test_reasoning_default_follows_model_switches() -> None:
+    llm = _llm(model="gemma4")
+    llm.update_options(model="sarvam-105b")
+    stream = llm.chat(chat_ctx=_chat_ctx())
+    assert stream._extra_kwargs["reasoning_effort"] == "none"
+    await stream.aclose()
+
+    llm.update_options(model="glm5.2")
+    stream = llm.chat(chat_ctx=_chat_ctx())
+    assert "reasoning_effort" not in stream._extra_kwargs
+    await stream.aclose()
+
+
+def test_explicit_base_url_survives_model_switch() -> None:
+    llm = _llm(model="gemma4", base_url="https://example.invalid/v2")
+    client = llm._client
+    # gemma4 is on /v2 and sarvam-105b-conversations on /v1: without the explicit
+    # base_url this switch would rebuild the client on the auto-resolved /v1 URL
+    llm.update_options(model=_CONVERSATIONS)
+    assert llm._client is client
+    assert llm.model == _CONVERSATIONS
+
+
 def test_request_fields_are_forwarded_and_unsupported_ones_dropped() -> None:
     llm = _llm(
         temperature=0.7,

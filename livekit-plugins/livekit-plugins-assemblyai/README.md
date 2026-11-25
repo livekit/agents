@@ -21,7 +21,7 @@ from livekit.agents import AgentSession, TurnHandlingOptions
 from livekit.plugins import assemblyai
 
 session = AgentSession(
-    stt=assemblyai.STT(model="universal-3-6-pro", mode="balanced"),
+    stt=assemblyai.STT(model="assemblyai-stt-3-7-realtime-agent", mode="balanced"),
     tts=assemblyai.TTS(
         model="assemblyai-tts-1",
         voice="49c443a4-8a1d-5f7e-b70b-98bdbd9823c3",  # Audrey
@@ -36,14 +36,37 @@ session = AgentSession(
 
 ### Speech-to-text
 
-`assemblyai.STT` streams Universal-3.6 Pro by default (`model`). Useful options:
+`assemblyai.STT` streams AssemblyAI-STT-3.7-Realtime-Agent by default (`model`). Useful options:
 
-- `mode`: `"min_latency"`, `"balanced"` or `"max_accuracy"`.
+- `mode`: `"min_latency"`, `"balanced"`, `"max_accuracy"` or `"manual"` (see below).
 - `language_codes`: steer transcription toward one or more expected languages (`"es"` or
   `["en", "es"]`).
 - `prompt`: context about the audio, such as its domain or scenario, to help recognize likely
   vocabulary (up to 1,750 characters).
 - `keyterms_prompt`: names and terms the model should get right.
+
+#### Manual mode
+
+To let a LiveKit turn detector decide when the user is done, set `mode="manual"`. AssemblyAI then
+doesn't end turns on short pauses. When LiveKit ends the turn, the plugin sends AssemblyAI a
+`ForceEndpoint` and gets that turn's final transcript back right away.
+
+```python
+from livekit.agents import AgentSession, TurnHandlingOptions, inference
+from livekit.plugins import assemblyai
+
+session = AgentSession(
+    stt=assemblyai.STT(model="assemblyai-stt-3-7-realtime-agent", mode="manual"),
+    vad=inference.VAD(),
+    turn_handling=TurnHandlingOptions(turn_detection=inference.TurnDetector()),
+    # ... llm, tts, etc.
+)
+```
+
+Manual mode needs `assemblyai-stt-3-7-realtime-agent` and a LiveKit turn detector or VAD turn
+detection, and doesn't support `speaker_labels` yet. Leave `min_turn_silence` unset. `max_turn_silence` (10 s by default) only ends a turn
+when LiveKit never does. See
+[manual mode](https://www.assemblyai.com/docs/streaming/turn-detection#manual-mode).
 
 ### Text-to-speech
 

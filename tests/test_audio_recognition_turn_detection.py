@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import LanguageCode, stt, vad
+from livekit.agents import LanguageCode, llm, stt, vad
+from livekit.agents.telemetry import trace_types
 from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
@@ -60,7 +61,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     # each call hands out a fresh pending future, mirroring the real
     # predict; tests install resolved/pending futures directly on
     # ar._turn_detector_prediction_fut to model cached/awaiting predictions
-    stream_mock.predict = MagicMock(side_effect=asyncio.Future)
+    stream_mock.predict = MagicMock(side_effect=lambda **kwargs: asyncio.Future())
     stream_mock.flush = MagicMock()
     stream_mock.cancel_inference = MagicMock()
     stream_mock.prediction_timeout = 0.01
@@ -419,11 +420,14 @@ class TestPredictionFutureLifecycle:
     async def test_silence_tick_starts_request_once(self) -> None:
         ar = _make_full_recognition_for_eou()
         ar._speaking = True
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="assistant", content="How can I help?")
+        ar._hooks.retrieve_chat_ctx.return_value = chat_ctx
 
         await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.3))
         await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.4))
 
-        assert ar._turn_detector_stream.predict.call_count == 1
+        ar._turn_detector_stream.predict.assert_called_once_with(chat_ctx=chat_ctx)
         assert ar._turn_detector_prediction_fut is not None
 
     async def test_resumed_speech_without_sos_rearms_next_pause(self) -> None:
@@ -542,15 +546,28 @@ class TestPredictionFutureLifecycle:
         ]
         assert len(flush_warnings) == 1
 
-    async def test_predict_timeout_signals_fallback_and_drops_future(self) -> None:
+    async def test_predict_timeout_signals_fallback_and_drops_future(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A prediction timeout commits without a prediction and reports the timeout."""
         ar = _make_full_recognition_for_eou()
         ar._turn_detector_prediction_fut = asyncio.Future()
         chat_ctx = _make_chat_ctx_stub()
+        stream = ar._turn_detector_stream
+        stream.model = "turn-detector-v1"
+        stream.provider = "livekit"
+        stream.cancel_inference.side_effect = lambda **_: setattr(
+            stream, "model", "turn-detector-v1-mini"
+        )
 
-        ar._run_eou_detection(chat_ctx, trigger="vad")
-        assert ar._end_of_turn_task is not None
-        await ar._end_of_turn_task
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            ar._run_eou_detection(chat_ctx, trigger="vad")
+            assert ar._end_of_turn_task is not None
+            await ar._end_of_turn_task
+
+        [prediction_log] = [r for r in caplog.records if r.message == "eot prediction"]
+        assert prediction_log.__dict__[trace_types.ATTR_EOU_MODEL] == "turn-detector-v1"
+        assert prediction_log.__dict__[trace_types.ATTR_EOU_PROVIDER] == "livekit"
 
         ar._turn_detector_stream.cancel_inference.assert_called_once_with(timed_out=True)
         assert ar._turn_detector_prediction_fut is None

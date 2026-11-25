@@ -23,7 +23,7 @@ See https://docs.reson8.dev/integrations/livekit/ for more information.
 
 from livekit.agents import Plugin
 
-from ._utils import SUPPORTED_LANGUAGES, Encoding, FillerMode, SupportedLanguage
+from ._utils import SUPPORTED_LANGUAGES, Encoding, FillerMode, STTModel, SupportedLanguage
 from .log import logger
 from .stt import (
     STT,
@@ -37,6 +37,7 @@ from .version import __version__
 
 __all__ = [
     "STT",
+    "STTModel",
     "SUPPORTED_LANGUAGES",
     "AudioOptions",
     "BiasingOptions",

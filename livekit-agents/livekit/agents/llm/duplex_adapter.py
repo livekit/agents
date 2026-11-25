@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections import deque
 from collections.abc import Callable
@@ -703,8 +702,10 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._pending_reply.set_exception(RealtimeError(reason))
 
     async def aclose(self) -> None:
+        await (await self._release_and_close())
+
+    async def _release_and_close(self) -> asyncio.Future[None]:
         await aio.cancel_and_wait(self._segment_atask)
         self._close_burst()
         self._fail_pending_reply("the session closed before the model replied")
-        with contextlib.suppress(Exception):
-            await self._duplex.aclose()
+        return await self._duplex._release_and_close()

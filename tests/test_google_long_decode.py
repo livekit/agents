@@ -28,8 +28,22 @@ pytestmark = pytest.mark.unit
 ARGON = "gemini-4-argon"
 
 
+_llms: list[LLM] = []
+
+
+@pytest.fixture(autouse=True)
+async def _close_llms():
+    # PR #7994: forced httpx transport makes genai's httpx client close nondeterministically at GC; close here.
+    yield
+    for model in _llms:
+        await model.aclose()
+    _llms.clear()
+
+
 def _llm(model: str = ARGON, **kwargs: Any) -> LLM:
-    return LLM(model=model, api_key="test-key", **kwargs)
+    instance = LLM(model=model, api_key="test-key", **kwargs)
+    _llms.append(instance)
+    return instance
 
 
 def _response(
@@ -116,6 +130,8 @@ class TestModelDetection:
         [
             ("gemini-4-argon", True),
             ("gemini-4-carbon", True),
+            ("gemini-4-hydrogen", True),
+            ("gemini-4-neon", True),
             ("gemini-3-pro-preview", False),
             ("gemini-2.5-flash", False),
             ("gemma-4-27b-it", False),
@@ -248,6 +264,44 @@ class TestRequestShaping:
         cfg = extra["thinking_config"]
         assert cfg.thinking_budget is None
         assert cfg.thinking_level == types.ThinkingLevel.HIGH
+
+    @pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini-4-neon"])
+    @pytest.mark.parametrize("level", ["xhigh", "XHIGH"])
+    async def test_xhigh_goes_out_upper_case_where_supported(self, model: str, level: str) -> None:
+        extra = await _request_config(
+            _llm(model, thinking_config=types.ThinkingConfig(thinking_level=level))
+        )
+        cfg = extra["thinking_config"]
+        assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
+
+    @pytest.mark.parametrize(
+        "thinking_config",
+        [{"thinking_level": "xhigh"}, types.ThinkingConfig(thinking_level="xhigh")],
+    )
+    @pytest.mark.parametrize("model", ["gemini-4-hydrogen", "gemini-4-neon"])
+    async def test_a_per_call_xhigh_goes_out_upper_case_where_supported(
+        self, model: str, thinking_config: types.ThinkingConfigOrDict
+    ) -> None:
+        extra = await _request_config(
+            _llm(model), extra_kwargs={"thinking_config": thinking_config}
+        )
+        cfg = extra["thinking_config"]
+        assert cfg.model_dump(mode="json", exclude_none=True) == {"thinking_level": "XHIGH"}
+
+    @pytest.mark.parametrize(
+        "thinking_config",
+        [{"thinking_level": "xhigh"}, types.ThinkingConfig(thinking_level="xhigh")],
+    )
+    async def test_a_per_call_xhigh_is_rejected_where_unsupported(
+        self, thinking_config: types.ThinkingConfigOrDict
+    ) -> None:
+        with pytest.raises(ValueError, match="xhigh"):
+            await _request_config(_llm(), extra_kwargs={"thinking_config": thinking_config})
+
+    @pytest.mark.parametrize("model", [ARGON, "gemini-4-carbon", "gemini-3-pro-preview"])
+    def test_xhigh_is_rejected_where_unsupported(self, model: str) -> None:
+        with pytest.raises(ValueError, match="xhigh"):
+            _llm(model, thinking_config={"thinking_level": "xhigh"})
 
 
 def _tool_call_first_ctx() -> agents_llm.ChatContext:
