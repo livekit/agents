@@ -64,7 +64,7 @@ FULL_LINE_PATTERNS = [
 _TITLE = r"""(?<=\s)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')(?=\s*\))"""
 _OPEN_TITLE = r"""(?<=\s)(?:"(?:\\.|[^"\\])*(?:"\s*)?|'(?:\\.|[^'\\])*(?:'\s*)?)"""
 _URL_CHAR = rf"""(?:\\.|{_TITLE}|(?!{_TITLE})["']|[^()\\"'])"""
-_URL = rf"(?:<[^<>]*>)?(?:{_URL_CHAR}|\({_URL_CHAR}*\))*"
+_URL = rf"(?:<[^<>]*>|(?!<[^<>]*>))(?:{_URL_CHAR}|\({_URL_CHAR}*\))*"
 
 INLINE_PATTERNS = [
     # images: keep alt text ![alt](url) -> alt

@@ -316,6 +316,21 @@ async def test_link_text_kept(text: str, expected: str):
     assert await _outputs(filter_markdown, text) == {expected}
 
 
+async def test_quote_in_angle_bracket_destination_does_not_hold_the_stream():
+    source_ended = False
+
+    async def source():
+        nonlocal source_ended
+        yield "![the flyer](<dance '90s.png>) is ready. "
+        yield "It is on the next page. "
+        source_ended = True
+
+    stream = filter_markdown(source())
+    assert await anext(stream) == "the flyer is ready."
+    assert not source_ended
+    assert await _collect(stream) == " It is on the next page. "
+
+
 # Emoji test data
 EMOJI_INPUT = """Hello! 😀 Welcome to our app! 🎉
 
