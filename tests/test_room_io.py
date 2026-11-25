@@ -18,6 +18,7 @@ from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
+    _ParticipantVideoInputStream,
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
@@ -259,6 +260,17 @@ def _make_audio_input_stream(
         auto_gain_control=False,
         pre_connect_audio_handler=None,
     )
+
+
+def _make_video_track(sid: str, source: rtc.TrackSource.ValueType) -> tuple[MagicMock, MagicMock]:
+    track = MagicMock()
+    track.sid = sid
+    publication = MagicMock()
+    publication.source = source
+    publication.sid = sid
+    publication.track = track
+    publication.subscribed = True
+    return track, publication
 
 
 # -- teardown tests -----------------------------------------------------------
@@ -901,10 +913,109 @@ async def test_stream_creation_retry_is_bounded() -> None:
         await asyncio.sleep(2.0)
 
     assert create_stream.call_count == 3
-    assert audio_input._track is None
-    assert audio_input._publication is None
+    # the failed subscription stays selected so a later removal can still fall back
+    assert audio_input._track is track
+    assert audio_input._publication is publication
+    assert audio_input._create_exhausted is True
     assert not audio_input._create_tasks
     assert not audio_input._retry_tasks
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exhausted_creation_still_falls_back_to_another_track() -> None:
+    """A screen share that never opens must not block the camera fallback.
+
+    When the screen share's creation exhausts its retries, the subscription stays
+    selected. Otherwise the later removal of that screen share would not match and
+    the camera would never attach.
+    """
+    room = _FakeRoom()
+    video_input = _ParticipantVideoInputStream(room)
+    video_input.set_participant("test-user")
+
+    camera_track, camera_publication = _make_video_track("TR_CAM", rtc.TrackSource.SOURCE_CAMERA)
+    screen_track, screen_publication = _make_video_track(
+        "TR_SCREEN", rtc.TrackSource.SOURCE_SCREENSHARE
+    )
+    participant = MagicMock()
+    participant.identity = "test-user"
+    participant.track_publications = {
+        camera_publication.sid: camera_publication,
+        screen_publication.sid: screen_publication,
+    }
+
+    camera_stream = _MockAudioStream()
+    fallback_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.VideoStream.from_track",
+        side_effect=[
+            camera_stream,
+            RuntimeError("screen share creation failed"),
+            RuntimeError("screen share creation failed"),
+            RuntimeError("screen share creation failed"),
+            fallback_stream,
+        ],
+    ) as create_stream:
+        # the camera is selected first
+        assert video_input._on_track_available(camera_track, camera_publication, participant)
+        await asyncio.wait_for(camera_stream.started.wait(), timeout=1)
+
+        # the participant starts sharing their screen, but its stream never opens
+        assert video_input._on_track_available(screen_track, screen_publication, participant)
+        await asyncio.sleep(2.0)
+
+        assert create_stream.call_count == 4  # one camera + three screen share attempts
+        assert video_input._create_exhausted is True
+        # the failed screen share is still selected so its removal can be matched
+        assert video_input._track is screen_track
+        assert video_input._publication is screen_publication
+
+        # the participant stops sharing: the camera must be picked up again
+        screen_publication.subscribed = False
+        screen_publication.track = None
+        video_input._on_track_unsubscribed(screen_track, screen_publication, participant)
+        await asyncio.wait_for(fallback_stream.started.wait(), timeout=1)
+
+    assert video_input._publication is camera_publication
+    assert video_input._stream is fallback_stream
+    assert video_input._create_exhausted is False
+
+    await video_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exhausted_creation_accepts_a_fresh_subscription() -> None:
+    """A re-subscribed failed track starts a new generation and retries."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    retry_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[
+            RuntimeError("native creation failed"),
+            RuntimeError("native creation failed"),
+            RuntimeError("native creation failed"),
+            retry_stream,
+        ],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.sleep(2.0)
+        assert create_stream.call_count == 3
+        assert audio_input._create_exhausted is True
+
+        # the same track is subscribed again: that is a fresh attempt, not a duplicate
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(retry_stream.started.wait(), timeout=1)
+
+    assert create_stream.call_count == 4
+    assert audio_input._stream is retry_stream
+    assert audio_input._create_exhausted is False
 
     await audio_input.aclose()
 

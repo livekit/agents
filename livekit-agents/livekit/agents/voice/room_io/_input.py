@@ -76,6 +76,10 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._stream_gen = 0
         # transient failures are retried a bounded number of times per generation
         self._create_attempts = 0
+        # set when the retries for the current subscription were exhausted. The failed
+        # track/publication stay selected so a later removal can still fall back to
+        # another subscribed track; a new subscription starts a fresh generation.
+        self._create_exhausted = False
 
         self._room.on("track_subscribed", self._on_track_available)
         self._room.on("track_unsubscribed", self._on_track_unsubscribed)
@@ -334,6 +338,7 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._publication = None
         self._stream_gen += 1
         self._create_attempts = 0
+        self._create_exhausted = False
         for retry_task in tuple(self._retry_tasks):
             retry_task.cancel()
         if stream is not None:
@@ -345,6 +350,25 @@ class _ParticipantInputStream(Generic[T], ABC):
             # its stream still references — that task's stale path closes it instead
             return
         self._update_processor(None)
+
+    def _exhaust_stream_creation(self) -> None:
+        """Stop retrying a subscription whose creation keeps failing.
+
+        The failed track and publication stay selected so that a later unsubscribe or
+        unpublish still matches them and can fall back to another subscribed track —
+        e.g. a camera that was replaced by a screen share whose stream never opened.
+        Clearing them here would make that removal a no-op and the camera would never
+        attach. A new subscription or replacement track still starts a fresh
+        generation, because ``_on_track_available`` only rejects an exact duplicate
+        of a live subscription.
+        """
+        for retry_task in tuple(self._retry_tasks):
+            retry_task.cancel()
+        self._retry_tasks.clear()
+        self._create_attempts = STREAM_CREATE_MAX_ATTEMPTS
+        self._create_exhausted = True
+        # invalidate a creation that is still queued for the exhausted generation
+        self._stream_gen += 1
 
     def _on_track_available(
         self,
@@ -358,7 +382,8 @@ class _ParticipantInputStream(Generic[T], ABC):
             or publication.source not in self._accepted_sources
             or (self._track_sid is not None and publication.sid != self._track_sid)
             or (
-                self._publication is not None
+                not self._create_exhausted
+                and self._publication is not None
                 and self._publication.sid == publication.sid
                 and self._track is track
             )
@@ -447,10 +472,11 @@ class _ParticipantInputStream(Generic[T], ABC):
                             self._retry_tasks.add(retry_task)
                             retry_task.add_done_callback(self._retry_tasks.discard)
                         else:
-                            # The subscription is dead from RoomIO's perspective. Clear
-                            # it so a later track/publication event can start a fresh
-                            # generation; don't keep retrying a permanently broken track.
-                            self._close_stream()
+                            # The subscription is dead from RoomIO's perspective. Stop
+                            # retrying a permanently broken track, but keep the track and
+                            # publication selected: a later removal must still match them
+                            # so the fallback scan can attach another subscribed track.
+                            self._exhaust_stream_creation()
                     return
 
                 if gen != self._stream_gen or self._closed:
