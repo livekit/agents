@@ -24,6 +24,11 @@ impl ProviderId {
         }
     }
 
+    /// The provider telemetry carries: the vendor id as declared, absent when blank.
+    pub fn vendor(&self) -> Option<&str> {
+        Some(self.provider.trim()).filter(|vendor| !vendor.is_empty())
+    }
+
     pub fn metadata(&self) -> crate::metrics::base::Metadata {
         crate::metrics::base::Metadata {
             model_name: Some(self.model.clone()),
@@ -37,5 +42,19 @@ impl ProviderId {
             model_name: Some(self.model.clone()),
             model_provider: Some(self.provider.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderId;
+
+    // Catches: a declared provider respelled on its way to telemetry, or a blank one sent.
+    #[test]
+    fn the_vendor_is_the_declared_provider_and_absent_when_blank() {
+        let id = |provider: &str| ProviderId { provider: provider.into(), ..Default::default() };
+        assert_eq!(id("xai").vendor(), Some("xai"));
+        assert_eq!(id(" aws ").vendor(), Some("aws"));
+        assert_eq!(id("  ").vendor(), None);
     }
 }

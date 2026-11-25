@@ -36,26 +36,25 @@ pub(crate) use lk_agents_telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
 };
 
-/// The GenAI registry's spelling of a provider, `unknown` when it has none.
-pub fn provider_name(provider: &str) -> String {
-    gen_ai::provider_name(provider).unwrap_or_else(|| "unknown".to_owned())
+/// The provider a span or metric names: the vendor id the model declares, `unknown` without one.
+pub fn provider_name(id: &ProviderId) -> String {
+    id.vendor().unwrap_or("unknown").to_owned()
 }
 
-/// A model's `M` labels: its provider as the GenAI registry spells it, and its name.
+/// A model's `M` labels: its declared provider and its name.
 pub fn model_labels(id: &ProviderId) -> ModelLabels {
-    ModelLabels::of(Some(&provider_name(&id.provider)), Some(&id.model))
+    ModelLabels::of(Some(&provider_name(id)), Some(&id.model))
 }
 
-/// A provider statistic's labels. A provider the GenAI registry does not name keeps the plugin's
-/// own name; an unknown host (a self-hosted endpoint) is `other`, never sent.
+/// A provider statistic's labels: the declared provider; a host (a self-hosted endpoint) is
+/// `other`, never sent.
 pub fn stat_labels(operation: Operation, id: &ProviderId) -> ProviderLabels {
-    let raw = id.provider.trim();
-    let provider = match gen_ai::provider_name(raw) {
-        Some(name) if name == raw && raw.contains(['.', '/', ':', '@']) => "other".to_owned(),
+    let provider = match id.vendor() {
+        Some(name) if name.contains(['.', '/', ':', '@']) => "other",
         Some(name) => name,
-        None => String::new(),
+        None => "",
     };
-    lk_agents_telemetry::productstats::provider(operation, &provider, &id.model)
+    lk_agents_telemetry::productstats::provider(operation, provider, &id.model)
 }
 
 /// One provider request's product statistics: the request, its retries, its failure, its
@@ -146,7 +145,7 @@ impl LlmTrace {
                 cx,
                 LlmRequest {
                     operation: GenAiOperation::Chat,
-                    provider: provider_name(&id.provider),
+                    provider: provider_name(&id),
                     model: id.model.clone(),
                     stream: true,
                     output_type: OutputType::Text,
@@ -201,7 +200,7 @@ impl LlmTrace {
             span.cx(),
             LlmRequestRun {
                 attempt: Attempt {
-                    provider: provider_name(&self.id.provider),
+                    provider: provider_name(&self.id),
                     model: self.id.model.clone(),
                     retry_count,
                 },
@@ -299,7 +298,7 @@ impl LlmTrace {
         .record();
         let cx = span.cx();
         let usage = self.usage.clone().unwrap_or_default();
-        let provider = provider_name(&self.id.provider);
+        let provider = provider_name(&self.id);
         let labels = || GenAiLabels {
             operation: GenAiOperation::Chat,
             provider: Label(provider.clone()),
@@ -435,7 +434,7 @@ impl TtsTrace {
         let target = TtsTarget {
             streaming,
             label: tts.label(),
-            provider: provider_name(&id.provider),
+            provider: provider_name(&id),
             model: id.model.clone(),
         };
         use lk_agents_telemetry::start;
@@ -469,7 +468,7 @@ impl TtsTrace {
             &self.cx,
             TtsRequestRun {
                 attempt: Attempt {
-                    provider: provider_name(&self.id.provider),
+                    provider: provider_name(&self.id),
                     model: self.id.model.clone(),
                     retry_count,
                 },

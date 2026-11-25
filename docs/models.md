@@ -199,9 +199,9 @@ underscores), declared by its class or constructor. It is never a service, produ
 name, and never the endpoint's host: every AWS service is `aws`, every Google one `google`,
 every Azure one `azure`, LiveKit Inference and the local models `livekit`, and
 `openai.LLM.with_x_ai()` and `livekit.plugins.xai` both report `xai`. An OpenAI or Anthropic
-model given a `base_url` or a client without a vendor reports `"unknown"`. Telemetry spells a
-vendor the OpenTelemetry GenAI registry names as the registry does (`x_ai`, `aws.bedrock`,
-`gcp.gen_ai`, `azure.ai.openai`).
+model given a `base_url` or a client without a vendor reports `"unknown"`. Telemetry carries
+that id as declared: `gen_ai.provider.name` and the `model_provider` label are the model's
+`provider`, with no translation.
 
 An STT or TTS declares every fact fixed at construction in its `STTCapabilities` or
 `TTSCapabilities`, passed to the base constructor (`super().__init__(capabilities=...)`);
