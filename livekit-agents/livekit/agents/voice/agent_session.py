@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import json
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
@@ -1407,6 +1408,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         RuntimeError(f"session closed: {error}" if error else "session closed")
                     )
 
+                # every model's usage, final once the teardown has collected the last of it: the
+                # same rows the session report carries
+                close_span.set_attribute(
+                    trace_types.ATTR_SESSION_USAGE,
+                    json.dumps([u.model_dump(mode="json") for u in self.usage.model_usage]),
+                )
                 close_span.end()
                 otel_context.detach(close_token)
                 if self._session_span:

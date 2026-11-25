@@ -169,6 +169,7 @@ EventTypes = Literal[
     "metrics_collected",
     "remote_item_added",
     "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
+    "_delegated_response",  # a _DelegatedResponse, each response of a delegated model
     "error",
 ]
 

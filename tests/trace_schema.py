@@ -92,6 +92,7 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
             "keyterm_detection",
             "judge_evaluation",
             "amd",
+            "delegation",
         },
         "llm_fallback_adapter": {"llm_node", "keyterm_detection", "judge_evaluation", "amd"},
         "llm_request_run": {"llm_request"},
@@ -102,6 +103,8 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         # -- session-scoped features
         "keyterm_detection": {"agent_turn", "agent_session"},
         "amd": {"agent_session"},
+        # a realtime model's delegated work runs alongside the turns (GPT-Live's backend)
+        "delegation": {"agent_session"},
         # an evals judge runs wherever its caller does (a session hook, a turn, on_session_end)
         "judge_evaluation": {ANY},
         # -- RPC: handlers are session events, calls follow their caller

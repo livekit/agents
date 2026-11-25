@@ -63,6 +63,7 @@ DuplexEventTypes = Literal[
     "input_speech_stopped",
     "input_audio_transcription_completed",
     "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
+    "_delegated_response",  # a _DelegatedResponse, each response of a delegated model
     "session_reconnected",
     "metrics_collected",
     "error",
