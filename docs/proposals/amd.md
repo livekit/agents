@@ -417,7 +417,9 @@ opening.
   prompt.
 - **Tools.** The only tool AMD adds is the built-in `send_dtmf_events`, to a reply
   whose decision sets `dtmf` (spec §11.1), unless the agent already has a tool with
-  that id. This replaces Python's `on_reply_generation` hook. Preemptive generations
+  that id. The reply's agent frame gains the tool's policy metadata with the defaults
+  (no approval, duplicates allowed), because a reply's run refuses an offered tool
+  without it. The host resolves a call to it after the agent's and the session's tools. This replaces Python's `on_reply_generation` hook. Preemptive generations
   never get it: every allowed `machine-ivr` reply carries stage instructions and
   generates again anyway, except a likely-human reply, which waits for silence and
   gains nothing from a head start.
@@ -643,11 +645,11 @@ The completed category is the stage, except that after a played voicemail messag
 `machine-unavailable` stage reports `previous_stage` (spec §12.2). `LegFailed`, or a
 failing prediction or menu listener in the host, completes with `internal_error`; a
 classifier `APIError`, invalid output or timeout gives an `inference_error`
-prediction instead (spec §8.4). A menu extraction failure is silent. Python also
-treats a model's `ValueError` and `asyncio.TimeoutError` as `inference_error`. The
-core cannot tell those apart from other host errors, because a host error outside the
-API taxonomy carries only its class name. Here they end the run with
-`internal_error`.
+prediction instead (spec §8.4). A menu extraction failure is silent. A model's
+`ValueError` and `TimeoutError` (`asyncio.TimeoutError` is the same class) also give
+an `inference_error` prediction, as in Python: the Python binding classifies them as
+`HostErrorKind::Invalid` and `HostErrorKind::Timeout`, and the classifier reads that
+kind.
 
 The callee leg reports `participant_disconnected` when the participant leaves, and
 also when the room disconnects or closes, during setup or later.
@@ -681,6 +683,14 @@ loop never waits on AMD, and the executor reads them as it steps. Leg reports ar
 bounded by their producers. The host's events queue holds `EVENTS_CAPACITY` (128)
 events; past that the newest is dropped and logged, and `execute()` still returns the
 outcome.
+
+**Host.** The Python host enters a run with `VoiceSession.enter_amd(AmdEntry)` and
+reads it through `_core.AmdRun` (`lifecycle`, `next_event`, `execute`, `aclose`,
+`listener_failed`). The host creates the models named by strings and closes them after
+the run's completion arrives and before `execute()` returns and `amd_completed` fires,
+so the entry it sends marks every model as supplied. The executor forwards each
+prediction and the completion to the session's remote session host as it emits them,
+before the host reads them; a menu is not forwarded.
 
 **Decision model.** A decision model is the `DecisionModel` port: `choose(cx,
 ChoiceRequest)` makes one `evaluate` call with one `Choice` decision. The request
