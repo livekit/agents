@@ -169,6 +169,8 @@ class MCPToolset(AsyncToolset, Generic[Context_T]):
         )
     """
 
+    _mcp = True
+
     def __init__(
         self,
         *,

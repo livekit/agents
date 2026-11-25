@@ -473,7 +473,7 @@ class Agent(Generic[Context_T, Output_T]):
             **self._config.configuration(retries),
             tools=tool_infos(tools),
             output=self._host._output.spec(validated=self._config.validated_output),
-            mcp=any(isinstance(toolset, llm.mcp.MCPToolset) for toolset in tools.toolsets),
+            mcp=any(toolset._mcp for toolset in tools.toolsets),
         )
 
     async def _validate_output(self, ctx: RunContext, output: Any) -> Any:
