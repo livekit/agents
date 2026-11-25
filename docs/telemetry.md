@@ -156,7 +156,6 @@ identifier, never content.
 | `lk.productstats.os`, `lk.productstats.arch` | `linux`, `aarch64` | Which platforms to support |
 | `lk.productstats.runner.launch` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
 | `lk.productstats.runner.kind` | `production` | What the process is, derived from the launch and its environment: `production`, `development`, `ci` or `unknown` |
-| `lk.productstats.plugins` | `livekit.plugins.deepgram==1.2.3` | Versions of the loaded `livekit.plugins.*` packages; other packages are never listed |
 
 `runner.kind`, first match: `ci` when `CI=true`; `production` on LiveKit Cloud;
 `development` for `dev`, `console` and `simulation`, and for `start` on macOS or Windows;
