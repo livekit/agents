@@ -1,67 +1,99 @@
 rust/crates/lk-agents-fuzz/src/authored.rs
   s_bbb46b29e16294::t_56778d33c675d7 141,442-542
+  s_bbb46b29e16294::t_86edaac8326fb4 141,442-542
 rust/crates/lk-agents-fuzz/src/drive/apply/call.rs
   s_bbb46b29e16294::t_79fc88019106dc 85-88,551-589
+  s_bbb46b29e16294::t_066c066f3a096e 85-88,551-589
 rust/crates/lk-agents-fuzz/src/drive/collect.rs
   s_bbb46b29e16294::t_aa92443be1f0ad 58,358-386
+  s_bbb46b29e16294::t_42187c7adbac89 58,358-386
 rust/crates/lk-agents-fuzz/src/drive/finish.rs
   s_bbb46b29e16294::t_89546e8b86f3c4 17-44,83
+  s_bbb46b29e16294::t_b47680fd0fea6b 17-44,83
 rust/crates/lk-agents-fuzz/src/drive/mod.rs
   s_bbb46b29e16294::t_87e7e52584c0f4 697-699,733-736
+  s_bbb46b29e16294::t_15566e67c0c83a 697-699,733-736
 rust/crates/lk-agents-fuzz/src/drive/start.rs
   s_bbb46b29e16294::t_e13dfd2fc74889 375-382,416-417
+  s_bbb46b29e16294::t_48688ace323485 375-382,416-417
 rust/crates/lk-agents-fuzz/src/fakes/amd.rs
   s_bbb46b29e16294::t_f2c09cf61acea5 1-53
+  s_bbb46b29e16294::t_a68b724325d365 1-53
 rust/crates/lk-agents-fuzz/src/fakes/llm.rs
   s_bbb46b29e16294::t_eb4b5e7f4d7448 74-84
+  s_bbb46b29e16294::t_a22957a07fd774 74-84
 rust/crates/lk-agents-fuzz/src/fakes/mod.rs
   s_bbb46b29e16294::t_5a3b58af4fdbb2 26
+  s_bbb46b29e16294::t_262ca1250d2901 26
 rust/crates/lk-agents-fuzz/src/input.rs
   s_bbb46b29e16294::t_11af065e826106 10-11,126-127,449-460,485,672-682,792
+  s_bbb46b29e16294::t_443cd93b391b82 10-11,126-127,449-460,485,672-682,792
 rust/crates/lk-agents-fuzz/src/record/amd.rs
   s_bbb46b29e16294::t_dc57d16de76441 1-363
+  s_bbb46b29e16294::t_7728ccf82e552b 1-363
 rust/crates/lk-agents-fuzz/src/record/mod.rs
   s_bbb46b29e16294::t_0ce6e116c2b3d2 33,162-163,204-210,732-733
+  s_bbb46b29e16294::t_18a5f915a452b2 33,162-163,204-210,732-733
 rust/crates/lk-agents-fuzz/src/rules/amd/adopted_request_matches.rs
   s_bbb46b29e16294::t_8c1a0d2748d926 1-83
+  s_bbb46b29e16294::t_f4854ca9aeeea6 1-83
 rust/crates/lk-agents-fuzz/src/rules/amd/completion_respects_wait.rs
   s_bbb46b29e16294::t_a9b725631fb925 1-76
+  s_bbb46b29e16294::t_0bf79877f815ad 1-76
 rust/crates/lk-agents-fuzz/src/rules/amd/detached_is_prompt.rs
   s_bbb46b29e16294::t_469e35e75c76c4 1-77
+  s_bbb46b29e16294::t_1c7af746ad6fc5 1-77
 rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
   s_bbb46b29e16294::t_d2f8a5d3edd58c 1-91
+  s_bbb46b29e16294::t_b1c2c021a017d5 1-91
 rust/crates/lk-agents-fuzz/src/rules/amd/gate_answers_are_keyed.rs
   s_bbb46b29e16294::t_56d347ea4df55c 1-96
+  s_bbb46b29e16294::t_64f9ad1ba181e2 1-96
 rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
   s_bbb46b29e16294::t_516a4035fd875d 1-136
+  s_bbb46b29e16294::t_b669dcaf8552fd 1-136
 rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
   s_bbb46b29e16294::t_86faf5133026f7 1-165
+  s_bbb46b29e16294::t_56b2f52eb67866 1-165
 rust/crates/lk-agents-fuzz/src/rules/amd/machine_reply_waits_for_silence.rs
   s_bbb46b29e16294::t_d58037919bfd1d 1-101
+  s_bbb46b29e16294::t_cb8dc25e660cb8 1-101
 rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
   s_bbb46b29e16294::t_eb86bc396dc21a 1-130
+  s_bbb46b29e16294::t_86a002ba6edc26 1-130
 rust/crates/lk-agents-fuzz/src/rules/amd/reply_follows_decision.rs
   s_bbb46b29e16294::t_30f8e2b48d1af0 1-124
+  s_bbb46b29e16294::t_0bfcdc1878f5b8 1-124
 rust/crates/lk-agents-fuzz/src/rules/amd/stage_instructions_never_saved.rs
   s_bbb46b29e16294::t_6e924f8cde35f3 1-97
+  s_bbb46b29e16294::t_ab69d10216488b 1-97
 rust/crates/lk-agents-fuzz/src/search/conversation/answerer.rs
   s_bbb46b29e16294::t_1c7053de0ddd55 1-166
+  s_bbb46b29e16294::t_cd63b68fe5cfee 1-166
 rust/crates/lk-agents-fuzz/src/search/conversation/mod.rs
   s_bbb46b29e16294::t_22bbd5f50c9f83 26,429-430,458,516-517,691
+  s_bbb46b29e16294::t_c15a62bbe88697 26,429-430,458,516-517,691
 rust/crates/lk-agents-fuzz/tests/regressions/amd/detach.rs
   s_bbb46b29e16294::t_35255f6534430c 1-143
+  s_bbb46b29e16294::t_4b9c80ad319035 1-143
 rust/crates/lk-agents-fuzz/tests/regressions/amd/gate.rs
   s_bbb46b29e16294::t_40c7418b9b2834 1-199
+  s_bbb46b29e16294::t_f212996521a564 1-199
 rust/crates/lk-agents-fuzz/tests/regressions/amd/mod.rs
   s_bbb46b29e16294::t_584b18a35e7049 1-230
+  s_bbb46b29e16294::t_e542926dd9e496 1-230
 rust/crates/lk-agents-fuzz/tests/regressions/amd/opening.rs
   s_bbb46b29e16294::t_9bf45c3bf1d9a9 1-133
+  s_bbb46b29e16294::t_01077ef1cdce2d 1-133
 rust/crates/lk-agents-fuzz/tests/regressions/amd/payload.rs
   s_bbb46b29e16294::t_198f8274d5572e 1-262
+  s_bbb46b29e16294::t_d51aacfee73e55 1-262
 rust/crates/lk-agents-fuzz/tests/regressions/amd/silence.rs
   s_bbb46b29e16294::t_2bd261880a927a 1-98
+  s_bbb46b29e16294::t_ac063aa403fdf6 1-98
 rust/crates/lk-agents-fuzz/tests/regressions/main.rs
   s_bbb46b29e16294::t_0855bd97994420 61
+  s_bbb46b29e16294::t_96e0c6332c63e6 61
 rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
   s_bbb46b29e16294::t_0b3a541283266c 795-798
 rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_reply_tests.rs
@@ -70,6 +102,8 @@ rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_rule_tes
   s_bbb46b29e16294::t_0d3bfdbe6c2472 1-835
 rust/crates/lk-agents-voice/src/amd/mod.rs
   s_bbb46b29e16294::t_e678a7b1d0d2a0 187-189
+rust/crates/lk-agents-fuzz/src/rules/turns/correction_replaces_the_words.rs
+  s_bbb46b29e16294::t_fa660fa26ec1d4 110-114,118,168-180
 ---
 {
   "schema_version": "authorship/3.0.0",
