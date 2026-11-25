@@ -7,12 +7,14 @@ import pytest
 from openai.types.realtime import (
     ConversationItemAdded,
     ConversationItemCreateEvent,
+    ConversationItemDeletedEvent,
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     InputAudioBufferSpeechStartedEvent,
     RealtimeAudioConfig,
     RealtimeAudioConfigInput,
     RealtimeAudioConfigOutput,
+    RealtimeErrorEvent,
     RealtimeSessionCreateRequest,
     ResponseAudioDeltaEvent,
     ResponseCreatedEvent,
@@ -489,6 +491,64 @@ def test_held_turn_keeps_the_reply_anchored_behind_it() -> None:
         if isinstance(ev, ConversationItemCreateEvent)
     }
     assert created == {"reply": "item_1"}, "the truncated reply must stay behind the user turn"
+
+
+def _reject_by_event_id(session: RealtimeSession, event_id: str) -> None:
+    session._handle_error(
+        RealtimeErrorEvent.construct(
+            type="error",
+            event_id="evt",
+            error={
+                "type": "invalid_request_error",
+                "code": "item_delete_invalid_item_id",
+                "message": "no such item",
+                "event_id": event_id,
+            },
+        )
+    )
+
+
+def _deleted_without_id(session: RealtimeSession) -> None:
+    session._handle_conversion_item_deleted(
+        ConversationItemDeletedEvent.construct(
+            type="conversation.item.deleted", event_id="evt", item_id=""
+        )
+    )
+
+
+def test_delete_ack_without_id_answers_the_oldest_pending_delete() -> None:
+    # xAI acks a delete with item_id "", so the ack is matched to the deletes update_chat_ctx
+    # still waits on. one the server already rejected by event id is settled and must be skipped,
+    # or the ack removes the wrong item from the mirror and the real one waits out the timeout
+    session, _ = _make_session()
+    session._response_created_futures = {}  # type: ignore[attr-defined]
+    _mirror(session, ("phantom", "assistant", "dropped server-side"), ("stale", "user", "old"))
+
+    phantom_fut: asyncio.Future[None] = asyncio.Future()
+    stale_fut: asyncio.Future[None] = asyncio.Future()
+    session._item_delete_future = {"phantom": phantom_fut, "stale": stale_fut}  # type: ignore[attr-defined]
+    session._chat_ctx_event_futures = {"chat_ctx_delete_phantom": phantom_fut}  # type: ignore[attr-defined]
+
+    _reject_by_event_id(session, "chat_ctx_delete_phantom")
+    assert isinstance(phantom_fut.exception(), llm.RealtimeError)
+
+    _deleted_without_id(session)
+
+    assert stale_fut.done() and stale_fut.exception() is None
+    assert [item.id for item in session._remote_chat_ctx.to_chat_ctx().items] == ["phantom"]
+
+
+def test_delete_acks_without_id_are_matched_in_order() -> None:
+    session, _ = _make_session()
+    _mirror(session, ("first", "user", "one"), ("second", "user", "two"))
+    futs = {"first": asyncio.Future(), "second": asyncio.Future()}
+    session._item_delete_future = dict(futs)  # type: ignore[attr-defined]
+
+    _deleted_without_id(session)
+    assert futs["first"].done() and not futs["second"].done()
+    _deleted_without_id(session)
+    assert futs["second"].done()
+    assert session._remote_chat_ctx.to_chat_ctx().items == []
 
 
 def test_an_item_anchored_to_an_unannounced_one_is_appended() -> None:
