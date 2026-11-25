@@ -1,0 +1,45 @@
+rust/crates/lk-agents-runtime/src/voice/session/shared.rs
+  s_bbb46b29e16294::t_1065e751949173 46-81,264-265
+rust/crates/lk-agents-runtime/src/voice/effects.rs
+  s_bbb46b29e16294::t_5564e2ff1d81b2 201
+rust/crates/lk-agents-runtime/src/voice/session/builder.rs
+  s_bbb46b29e16294::t_c8fead39c49833 205-206,283,566
+rust/crates/lk-agents-runtime/src/voice/session/mod.rs
+  s_bbb46b29e16294::t_612b8296dfe9ef 282-295
+rust/crates/lk-agents-voice/src/agent_session/closing.rs
+  s_bbb46b29e16294::t_9247e7cdf462d9 398-399
+rust/crates/lk-agents-voice/src/agent_session/commands.rs
+  s_bbb46b29e16294::t_dd6079b8871c8a 48-67,629
+rust/crates/lk-agents-voice/src/agent_session/effects.rs
+  s_bbb46b29e16294::t_992b355ec138f6 90-91
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  s_bbb46b29e16294::t_7c180af9b956ff 1-16
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/mod.rs
+  s_bbb46b29e16294::t_d25855ee8b5d8e 15
+rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs
+  s_bbb46b29e16294::t_6de9c8e1a43e60 55
+rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs
+  s_bbb46b29e16294::t_323512ba2a48f8 629
+rust/crates/lk-agents-voice/src/amd.rs
+  s_bbb46b29e16294::t_4359071fa32c46 1-162
+rust/crates/lk-agents-voice/src/lib.rs
+  s_bbb46b29e16294::t_85a9816340368e 8
+rust/crates/lk-agents-voice/src/trace.rs
+  s_bbb46b29e16294::t_fbfa4390cb0709 31,57,686-704,1020,1055
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c75b9fd881be94e6046a8a8c200ed31f1a5e8248",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
