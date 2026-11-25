@@ -1,0 +1,43 @@
+rust/crates/lk-agents-voice/src/amd/machine/harness.rs
+  s_64d3c26af4526a::t_5337c9abc21733 1-589
+rust/crates/lk-agents-voice/src/amd/machine/invariants_tests.rs
+  s_64d3c26af4526a::t_e3264399f44438 1-123
+rust/crates/lk-agents-voice/src/amd/machine/limits_tests.rs
+  s_c48d1e4fb6b1e9::t_99c92a20fca1a7 1-609
+rust/crates/lk-agents-voice/src/amd/machine/replies_tests.rs
+  s_c48d1e4fb6b1e9::t_28bab8f041ead9 1-732
+rust/crates/lk-agents-voice/src/amd/machine/stage_tests.rs
+  s_c48d1e4fb6b1e9::t_c2bf87dae0afd3 1-125
+rust/crates/lk-agents-voice/src/amd/machine/turns_tests.rs
+  s_64d3c26af4526a::t_c850b20bbd837c 1-936
+rust/crates/lk-agents-voice/src/amd/machine/voicemail_tests.rs
+  s_c48d1e4fb6b1e9::t_50acfec0e07567 1-311
+rust/crates/lk-agents-voice/src/amd/machine/mod.rs
+  s_c48d1e4fb6b1e9::t_8d238fe3c277bf 426-449
+rust/crates/lk-agents-voice/src/amd/machine/stage.rs
+  s_c48d1e4fb6b1e9::t_36a891a51f4e8e 71-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "11de443241fdc2f07fe739824a9622ddcfebe985",
+  "prompts": {},
+  "sessions": {
+    "s_64d3c26af4526a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21353-af43-7743-8ece-4bfdefa38f1a",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_c48d1e4fb6b1e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ddd40469-ca1b-4682-b9a4-86846c967e06",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
