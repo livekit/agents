@@ -1,4 +1,4 @@
-"""Hermetic unit tests for the AWS Bedrock LLM plugin (no AWS access needed)."""
+"""AWS Bedrock LLM request shaping and error handling, without AWS access."""
 
 from __future__ import annotations
 
@@ -13,32 +13,49 @@ from livekit.plugins.aws.llm import LLMStream
 pytestmark = pytest.mark.unit
 
 
-async def _inference_config(model: str, **kwargs: object) -> dict:
-    instance = BedrockLLM(model=model, **kwargs)
+_APP_PROFILE = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile"
+
+
+@pytest.mark.parametrize(
+    ("model", "kwargs", "sent"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", {}, True),
+        ("amazon.nova-2-lite-v1:0", {}, True),
+        # gpt-oss accepts both, so the GPT-5.6/GPT-6 entries must not match it
+        ("openai.gpt-oss-120b-1:0", {}, True),
+        # these reject temperature/topP with a ValidationException
+        ("us.anthropic.claude-opus-4-7", {}, False),
+        ("anthropic.claude-opus-4-8", {}, False),
+        ("eu.anthropic.claude-opus-4-7", {}, False),
+        ("arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5", {}, False),
+        ("us.openai.gpt-6-sol", {}, False),
+        ("us.openai.gpt-6-luna", {}, False),
+        ("global.openai.gpt-6-sol", {}, False),
+        ("us.openai.gpt-5.6-sol", {}, False),
+        (
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.openai.gpt-6-luna",
+            {},
+            False,
+        ),
+        # an application profile hides its model, so it is never guessed from the name
+        (f"{_APP_PROFILE}/my-agent-llm", {}, True),
+        (f"{_APP_PROFILE}/claude-opus-4-7-prod", {}, True),
+        (f"{_APP_PROFILE}/my-agent-llm", {"supports_sampling_params": False}, False),
+        ("us.anthropic.claude-opus-4-7", {"supports_sampling_params": True}, True),
+    ],
+)
+async def test_sampling_params_sent_only_to_supporting_models(
+    model: str, kwargs: dict, sent: bool
+) -> None:
+    instance = BedrockLLM(model=model, temperature=0.5, top_p=0.9, **kwargs)
     stream = instance.chat(chat_ctx=ChatContext())
-    opts = stream._opts["inferenceConfig"]
+    config = stream._opts["inferenceConfig"]
     await stream.aclose()
-    return opts
-
-
-async def test_temperature_sent_for_supporting_models() -> None:
-    config = await _inference_config("us.anthropic.claude-sonnet-4-6", temperature=0.5, top_p=0.9)
-
-    assert config["temperature"] == 0.5
-    assert config["topP"] == 0.9
-
-
-async def test_temperature_omitted_for_opus_4_7(caplog: pytest.LogCaptureFixture) -> None:
-    # Claude Opus 4.7 rejects `temperature` with a ValidationException
-    # ("`temperature` is deprecated for this model").
-    config = await _inference_config("us.anthropic.claude-opus-4-7", temperature=0.5, top_p=0.9)
-
-    assert "temperature" not in config
-    assert "topP" not in config
+    assert config == ({"temperature": 0.5, "topP": 0.9} if sent else {})
 
 
 async def test_sampling_params_warning_logged_once(caplog: pytest.LogCaptureFixture) -> None:
-    # chat() runs once per turn; the warning must not repeat every turn.
+    # chat() runs once per turn; the warning must not repeat every turn
     with caplog.at_level("WARNING"):
         instance = BedrockLLM(model="us.anthropic.claude-opus-4-8", temperature=0.5)
         for _ in range(3):
@@ -47,85 +64,13 @@ async def test_sampling_params_warning_logged_once(caplog: pytest.LogCaptureFixt
 
     warnings = [r for r in caplog.records if "does not support" in r.message]
     assert len(warnings) == 1
-    # the model ID may contain customer data (inference-profile ARNs) and must
-    # stay out of the message body
+    # the model ID may contain customer data (inference-profile ARNs), so it stays out of the text
     assert "claude-opus-4-8" not in warnings[0].getMessage()
     assert warnings[0].__dict__.get("lk.pii.model") == "us.anthropic.claude-opus-4-8"
 
 
-async def test_explicit_override_for_opaque_inference_profiles() -> None:
-    # An application inference-profile ARN can hide the underlying model name;
-    # auto-detection deliberately never guesses for those (the profile name may
-    # merely reference a model, or target an unrelated one), so sampling params
-    # are sent by default and supports_sampling_params=False forces them out.
-    arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-agent-llm"
-    config = await _inference_config(arn, temperature=0.5, top_p=0.9)
-    assert config["temperature"] == 0.5
-
-    config = await _inference_config(
-        arn, temperature=0.5, top_p=0.9, supports_sampling_params=False
-    )
-    assert "temperature" not in config
-    assert "topP" not in config
-
-    # an explicit True keeps them even for known-rejecting models
-    config = await _inference_config(
-        "us.anthropic.claude-opus-4-7",
-        temperature=0.5,
-        supports_sampling_params=True,
-    )
-    assert config["temperature"] == 0.5
-
-
-async def test_application_profile_named_after_model_is_not_misclassified() -> None:
-    # A supporting-model application profile that merely references a rejecting
-    # model name must keep its explicitly configured sampling parameters.
-    arn = (
-        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-opus-4-7-prod"
-    )
-    config = await _inference_config(arn, temperature=0.5)
-    assert config["temperature"] == 0.5
-
-
-async def test_temperature_omitted_for_region_prefix_and_arn() -> None:
-    for model in (
-        "anthropic.claude-opus-4-8",
-        "eu.anthropic.claude-opus-4-7",
-        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5",
-    ):
-        config = await _inference_config(model, temperature=0.5)
-        assert "temperature" not in config
-
-
-async def test_sampling_params_omitted_for_openai_gpt_5_6_and_6() -> None:
-    # OpenAI GPT-5.6/GPT-6 reject both fields on Converse with a ValidationException
-    # ("This model doesn't support the temperature field. Remove temperature and try again.").
-    for model in (
-        "us.openai.gpt-6-sol",
-        "us.openai.gpt-6-luna",
-        "global.openai.gpt-6-sol",
-        "us.openai.gpt-5.6-sol",
-        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.openai.gpt-6-luna",
-    ):
-        config = await _inference_config(model, temperature=0.5, top_p=0.9)
-        assert "temperature" not in config
-        assert "topP" not in config
-
-
-async def test_sampling_params_kept_for_gpt_oss() -> None:
-    # gpt-oss accepts temperature/topP, so the GPT-5.6/GPT-6 entries must not match it.
-    config = await _inference_config("openai.gpt-oss-120b-1:0", temperature=0.5, top_p=0.9)
-    assert config == {"temperature": 0.5, "topP": 0.9}
-
-
-async def test_default_model_still_receives_temperature() -> None:
-    config = await _inference_config("amazon.nova-2-lite-v1:0", temperature=0.7)
-    assert config["temperature"] == 0.7
-
-
 def test_reasoning_deltas_skipped_without_warning(caplog: pytest.LogCaptureFixture) -> None:
-    # OpenAI GPT-6 streams reasoning as redactedContent bytes; gpt-oss and Claude thinking
-    # stream text (and signature). None is surfaced, so none should log "unknown chunk type".
+    # GPT-6 streams reasoning as redactedContent bytes, gpt-oss and Claude as text and signature
     for reasoning in ({"redactedContent": b"rsn_abc"}, {"text": "hmm"}, {"signature": "sig"}):
         chunk = {"contentBlockDelta": {"delta": {"reasoningContent": reasoning}}}
         with caplog.at_level("WARNING"):
@@ -152,12 +97,13 @@ _NAMED: ToolChoice = {"type": "function", "function": {"name": "get_weather"}}
 
 
 async def test_forced_tool_choice_sent_as_auto_for_opus_5_5() -> None:
-    # Claude Opus 5.5 and Fable 5.1 reject forced tool use with a ValidationException
-    # ('tool_choice: type "tool" and "any" are not supported for this model.').
+    # Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 reject forced tool use with a ValidationException
     for model in (
         "us.anthropic.claude-opus-5-5",
         "global.anthropic.claude-opus-5-5",
         "anthropic.claude-opus-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+        "global.anthropic.claude-sonnet-5-5",
         "us.anthropic.claude-fable-5-1",
     ):
         assert await _tool_choice(model, "required") == {"auto": {}}
@@ -165,9 +111,10 @@ async def test_forced_tool_choice_sent_as_auto_for_opus_5_5() -> None:
 
 
 async def test_forced_tool_choice_kept_for_other_models() -> None:
-    # Opus 5 and Fable 5 still accept any/tool; "claude-fable-5" must not match "-5-1".
+    # Opus 5, Sonnet 5 and Fable 5 still accept any/tool; "claude-fable-5" must not match "-5-1"
     for model in (
         "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-sonnet-5",
         "us.anthropic.claude-fable-5",
         "us.anthropic.claude-sonnet-4-6",
     ):
@@ -190,6 +137,29 @@ async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureF
     assert warnings[0].__dict__.get("lk.pii.model") == "us.anthropic.claude-opus-5-5"
 
 
+async def _request_messages(**kwargs: object) -> list[dict]:
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="user", content=["What's the weather in Paris?"])
+    stream = BedrockLLM(model="us.anthropic.claude-haiku-4-5", **kwargs).chat(
+        chat_ctx=chat_ctx, tools=[get_weather]
+    )
+    messages = stream._opts["messages"]
+    await stream.aclose()
+    return messages
+
+
+async def test_cache_messages_ends_the_conversation_with_a_cache_point() -> None:
+    cache_point = {"cachePoint": {"type": "default"}}
+    assert await _request_messages(cache_messages=True) == [
+        {"role": "user", "content": [{"text": "What's the weather in Paris?"}, cache_point]}
+    ]
+    assert await _request_messages() == [
+        {"role": "user", "content": [{"text": "What's the weather in Paris?"}]}
+    ]
+
+
+@pytest.mark.virtual_time
 @pytest.mark.parametrize(
     ("code", "status", "attempts"),
     [
@@ -201,7 +171,7 @@ async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureF
 async def test_bedrock_400_fails_fast_throttling_and_5xx_retried(
     monkeypatch: pytest.MonkeyPatch, code: str, status: int, attempts: int
 ) -> None:
-    # A 400 fails the same way on every retry; throttling and 5xx are still retried.
+    # a 400 fails the same way on every retry; throttling and 5xx are still retried
     calls = 0
 
     class _Client:

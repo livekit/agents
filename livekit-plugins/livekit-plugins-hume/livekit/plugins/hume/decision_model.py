@@ -144,6 +144,7 @@ class DecisionModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         raise ValueError("Hume decisions require audio: pass evaluate(audio=...)")
 
@@ -154,6 +155,7 @@ class DecisionModel(llm.DecisionModel):
         audio: rtc.AudioFrame,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         """``audio`` must be 5 seconds to 5 minutes long. It is mixed to mono and
         resampled to 16 kHz before upload. ``request_id`` is Hume's run id."""
@@ -188,7 +190,7 @@ class DecisionModel(llm.DecisionModel):
         try:
             async with session.post(
                 f"{self._base_url}{DECISIONS_PATH}",
-                headers={**DEFAULT_HEADERS, API_AUTH_HEADER: self._api_key},
+                headers={**DEFAULT_HEADERS, **extra_headers, API_AUTH_HEADER: self._api_key},
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
             ) as resp:

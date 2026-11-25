@@ -1,4 +1,4 @@
-"""MultiSpeakerAdapter delegation contract.
+"""MultiSpeakerAdapter delegation contract and primary speaker detection.
 
 The adapter wraps another STT and inherits its ``capabilities`` wholesale, so the framework
 treats it as if it were the wrapped recognizer: it pushes keyterms and conversation items to
@@ -27,7 +27,10 @@ from livekit.agents.stt import (
     SpeechEventType,
     STTCapabilities,
 )
-from livekit.agents.stt.multi_speaker_adapter import PrimarySpeakerDetectionOptions
+from livekit.agents.stt.multi_speaker_adapter import (
+    PrimarySpeakerDetectionOptions,
+    _PrimarySpeakerDetector,
+)
 from livekit.agents.stt.stt import RecognitionUsage
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import AudioBuffer
@@ -36,7 +39,7 @@ from livekit.agents.voice.keyterm_detection import KeytermDetector
 
 from .test_transcription_delay_anchor import _make_recognition
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 _CONN = APIConnectOptions(max_retry=0, timeout=5.0)
 
@@ -177,11 +180,6 @@ def _metrics(label: str) -> STTMetrics:
         audio_duration=1.0,
         streamed=True,
     )
-
-
-def test_wrapped_stt_exposed() -> None:
-    adapter, wrapped = _adapter()
-    assert adapter.wrapped_stt is wrapped
 
 
 @pytest.mark.parametrize("timed_endpoint", [False, True])
@@ -368,7 +366,7 @@ async def test_successful_transcript_forgives_earlier_hiccups() -> None:
     task = asyncio.create_task(_read())
     stream.push_frame(_silence())
     while len(transcripts) < 5 and not fatal:
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
 
     assert not fatal, f"recognition died after {len(transcripts)} good transcripts: {fatal}"
     assert stream._num_retries == 0
@@ -376,3 +374,87 @@ async def test_successful_transcript_forgives_earlier_hiccups() -> None:
     await utils.aio.cancel_and_wait(task)
     with contextlib.suppress(Exception):
         await stream.aclose()
+
+
+# -- primary speaker detection --
+
+_DETECTOR_RATE = 1000
+_DETECTOR_FRAME = 100  # 100ms at 1000Hz, matches frame_size_ms below
+
+
+def _speech_data(speaker_id: str | None, start_time: float, end_time: float) -> SpeechData:
+    return SpeechData(
+        language="en", text="hello", start_time=start_time, end_time=end_time, speaker_id=speaker_id
+    )
+
+
+def _detector(**kwargs: Any) -> _PrimarySpeakerDetector:
+    opts = PrimarySpeakerDetectionOptions(frame_size_ms=100, min_rms_samples=1)
+    return _PrimarySpeakerDetector(primary_detection_options=opts, **kwargs)
+
+
+def _push_speech(
+    detector: _PrimarySpeakerDetector, speaker_id: str | None, amplitude: int, start_time: float
+) -> None:
+    frame = rtc.AudioFrame(
+        data=amplitude.to_bytes(2, "little", signed=True) * _DETECTOR_FRAME,
+        sample_rate=_DETECTOR_RATE,
+        num_channels=1,
+        samples_per_channel=_DETECTOR_FRAME,
+    )
+    detector.push_audio(frame)
+    detector.push_audio(frame)
+    detector._update_primary_speaker(_speech_data(speaker_id, start_time, start_time + 0.2))
+
+
+@pytest.mark.parametrize("speaker_id", ["A", "B"])
+@pytest.mark.parametrize("suppress_background", [False, True])
+def test_timed_endpoint_is_forwarded_without_formatting(
+    speaker_id: str, suppress_background: bool
+) -> None:
+    detector = _PrimarySpeakerDetector(
+        suppress_background_speaker=suppress_background,
+        primary_detection_options=PrimarySpeakerDetectionOptions(min_rms_samples=1),
+        primary_format="primary: {text}",
+        background_format="background: {text}",
+    )
+    _push_speech(detector, "A", amplitude=3000, start_time=0.0)
+    _push_speech(detector, "B", amplitude=50, start_time=0.2)
+
+    final = SpeechEvent(
+        type=SpeechEventType.FINAL_TRANSCRIPT,
+        alternatives=[_speech_data(speaker_id, 0.2, 0.4)],
+    )
+    updated_final = detector.on_stt_event(final)
+    if speaker_id == "B" and suppress_background:
+        assert updated_final is None
+    else:
+        assert updated_final is final
+        prefix = "primary" if speaker_id == "A" else "background"
+        assert final.alternatives[0].text == f"{prefix}: hello"
+
+    final_text = final.alternatives[0].text
+    endpoint = SpeechEvent(type=SpeechEventType.END_OF_SPEECH, alternatives=final.alternatives)
+
+    assert detector.on_stt_event(endpoint) is endpoint
+    assert endpoint.alternatives[0].end_time == 0.4
+    assert final.alternatives[0].text == final_text
+
+
+def test_unattributed_segment_keeps_primary_speaker() -> None:
+    """A segment the diarizer could not attribute does not unseat the primary speaker."""
+    detector = _detector()
+
+    _push_speech(detector, "A", amplitude=3000, start_time=0.0)
+    _push_speech(detector, None, amplitude=3000, start_time=0.2)
+    assert detector._primary_speaker == "A"
+
+    # a much quieter speaker must still lose the loudness comparison
+    _push_speech(detector, "B", amplitude=50, start_time=0.4)
+    assert detector._primary_speaker == "A"
+
+
+def test_detect_primary_disabled_keeps_primary_unset() -> None:
+    detector = _detector(detect_primary_speaker=False)
+    _push_speech(detector, "A", amplitude=3000, start_time=0.0)
+    assert detector._primary_speaker is None

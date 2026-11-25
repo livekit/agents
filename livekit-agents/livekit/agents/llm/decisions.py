@@ -8,10 +8,11 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Generic, Literal
 
 from opentelemetry import trace
 from pydantic import BaseModel, Field
+from typing_extensions import Never, TypeVar
 
 from livekit import rtc
 
@@ -19,7 +20,8 @@ from .._exceptions import APIError, APITimeoutError
 from ..metrics import DecisionMetrics
 from ..metrics.base import Metadata
 from ..telemetry import gen_ai, trace_types, tracer
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..utils import is_given
 from .chat_context import ChatContext
 
 DecisionKind = Literal["probability", "choice", "score"]
@@ -212,7 +214,15 @@ def _validate_result(result: DecisionResult, decision: Decision) -> None:
             raise APIError("score is outside the defined scale", retryable=False)
 
 
-class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
+# an adapter names its extra events here; a model that names none keeps strict event names
+TEvent = TypeVar("TEvent", contravariant=True, default=Never)
+
+
+class DecisionModel(
+    ABC,
+    rtc.EventEmitter[Literal["metrics_collected"] | TEvent],
+    Generic[TEvent],
+):
     """Provider-neutral batched decisions over a text input or conversation, and audio
     for models with ``capabilities.audio_input``.
 
@@ -249,6 +259,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         decisions: Mapping[str, Decision],
         audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        extra_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
     ) -> DecisionResponse:
         """Evaluate a batch of decisions.
 
@@ -260,6 +271,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
             audio: A recording for the model to hear, combined into one frame. Requires
                 ``capabilities.audio_input``.
             conn_options: Retry and per-attempt timeout settings.
+            extra_headers: Headers sent with every attempt.
 
         Each requested name appears in either ``results`` or ``errors``. Request failures
         and malformed responses raise.
@@ -278,6 +290,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         if frame is not None:
             span.set_attribute("lk.decision_audio_duration", frame.duration)
         text = input if isinstance(input, str) else _format_transcript(input)
+        headers = dict(extra_headers) if is_given(extra_headers) else {}
         if not definitions:
             return DecisionResponse(results={}, model=self.model, provider=self.provider)
 
@@ -286,11 +299,18 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
             try:
                 request = (
                     self._evaluate_impl(
-                        input=text, decisions=definitions, conn_options=conn_options
+                        input=text,
+                        decisions=definitions,
+                        conn_options=conn_options,
+                        extra_headers=headers,
                     )
                     if frame is None
                     else self._evaluate_audio_impl(
-                        input=text, audio=frame, decisions=definitions, conn_options=conn_options
+                        input=text,
+                        audio=frame,
+                        decisions=definitions,
+                        conn_options=conn_options,
+                        extra_headers=headers,
                     )
                 )
                 response = await asyncio.wait_for(request, timeout=conn_options.timeout)
@@ -341,6 +361,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse: ...
 
     async def _evaluate_audio_impl(
@@ -350,6 +371,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         audio: rtc.AudioFrame,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         """Evaluate decisions over ``audio``. Models with ``audio_input`` override this."""
         raise NotImplementedError

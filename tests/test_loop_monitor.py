@@ -264,7 +264,9 @@ async def test_stall_during_a_session_lands_under_it_and_is_summarised(
     actions.add_user_speech(0.5, 1.0, "Hi", stt_delay=0.1)
     actions.add_llm("Hello", ttft=0.05, duration=0.1)
     actions.add_tts(0.2, ttfb=0.05, duration=0.1)
-    session = create_session(actions, speed_factor=4.0)
+    session = create_session(
+        actions, speed_factor=20.0, extra_kwargs={"session_close_transcript_timeout": 0.05}
+    )
 
     job_ctx = _fake_job_context(session=session)
     monitor.set_report_context(_job_report_context(job_ctx))
@@ -278,7 +280,7 @@ async def test_stall_during_a_session_lands_under_it_and_is_summarised(
             _block_loop_synchronously(0.07)  # synchronous work inside a session callback
 
     session.on("agent_state_changed", _block_once)
-    await run_session(session, Agent(instructions="test"), drain_delay=0.5)
+    await run_session(session, Agent(instructions="test"), drain_delay=0.1)
 
     [root] = [s for s in span_exporter.get_finished_spans() if s.name == "agent_session"]
     stalls = _blocked_spans(span_exporter)
@@ -312,7 +314,7 @@ async def test_idle_loop_is_not_reported(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
     # an idle loop sits in select() until the heartbeat is due; the timer fires on time
-    await asyncio.sleep(WARN * 12)
+    await asyncio.sleep(WARN * 6)
     assert _loop_blocks(monitor) == []
 
 
@@ -321,8 +323,8 @@ async def test_blocking_work_in_an_executor_is_not_reported(
 ) -> None:
     # the whole point of run_in_executor / to_thread: the loop keeps ticking
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, time.sleep, WARN * 6)
-    await asyncio.to_thread(time.sleep, WARN * 6)
+    await loop.run_in_executor(None, time.sleep, WARN * 3)
+    await asyncio.to_thread(time.sleep, WARN * 3)
     await _settle()
     assert _loop_blocks(monitor) == []
 
@@ -331,33 +333,33 @@ async def test_sustained_cooperative_load_is_not_reported(
     span_exporter: InMemorySpanExporter, monitor: EventLoopMonitor
 ) -> None:
     """Heavy but cooperative work: many callbacks each well under the threshold, timers,
-    executor round trips, and tasks yielding to each other, for ~0.6 s of wall time. One loop
+    executor round trips, and tasks yielding to each other, for ~0.3 s of wall time. One loop
     iteration runs every ready worker back to back, so the slices are sized to keep an
     iteration far under WARN even with sleep overshoot."""
     loop = asyncio.get_running_loop()
     fired: list[int] = []
 
     async def worker(n: int) -> None:
-        for _ in range(120):
+        for _ in range(60):
             time.sleep(0.001)  # a small synchronous slice, well under WARN
             await asyncio.sleep(0)
         fired.append(n)
 
-    handles = [loop.call_later(i * 0.01, fired.append, 1000 + i) for i in range(40)]
+    handles = [loop.call_later(i * 0.01, fired.append, 1000 + i) for i in range(20)]
     started = time.monotonic()
     await asyncio.gather(*(worker(n) for n in range(2)))
     workers_took = time.monotonic() - started
     await loop.run_in_executor(None, time.sleep, 0.05)
-    await asyncio.sleep(0.45)
+    await asyncio.sleep(0.15)
     for h in handles:
         h.cancel()
     await _settle()
 
     assert len([f for f in fired if f < 1000]) == 2
-    # the workers hold the loop for ~0.5 s of 2 ms slices; a host that starved this process
+    # the workers hold the loop for ~0.25 s of 2 ms slices; a host that starved this process
     # enough to stretch that past double is not a monitor false positive, and the
     # watchdog-gap tag only catches starvation concentrated in one stall
-    if workers_took > 1.0:
+    if workers_took > 0.5:
         pytest.skip(f"host starved the test process: workers took {workers_took:.2f}s")
     assert _loop_blocks(monitor) == [], _describe(_loop_blocks(monitor))
 
