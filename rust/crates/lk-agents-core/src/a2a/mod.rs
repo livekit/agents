@@ -193,9 +193,10 @@ pub fn host_error(e: ProviderError) -> StorageError {
         HostErrorKind::VersionConflict
         | HostErrorKind::NotSerializable
         | HostErrorKind::TooLarge => StorageError::Refused(error),
-        HostErrorKind::Other | HostErrorKind::Rpc { .. } => {
-            StorageError::Invalid(error.to_string())
-        }
+        HostErrorKind::Other
+        | HostErrorKind::Rpc { .. }
+        | HostErrorKind::Invalid
+        | HostErrorKind::Timeout => StorageError::Invalid(error.to_string()),
     }
 }
 

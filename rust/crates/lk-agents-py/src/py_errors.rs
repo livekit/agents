@@ -173,6 +173,12 @@ fn host_kind(value: &Bound<'_, PyAny>) -> HostErrorKind {
         let code = access::RpcError::code(value).and_then(|code| code.extract::<u32>());
         return HostErrorKind::Rpc { code: code.unwrap_or_default() };
     }
+    if value.is_instance_of::<pyo3::exceptions::PyValueError>() {
+        return HostErrorKind::Invalid;
+    }
+    if value.is_instance_of::<pyo3::exceptions::PyTimeoutError>() {
+        return HostErrorKind::Timeout;
+    }
     let storage: [(Import, HostErrorKind); 6] = [
         (access::ThreadNotFound::import, HostErrorKind::NotFound),
         (access::StorageUnavailable::import, HostErrorKind::Unavailable),

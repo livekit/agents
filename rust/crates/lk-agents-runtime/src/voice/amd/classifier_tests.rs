@@ -4,7 +4,9 @@
 use super::*;
 use crate::voice::amd::{ChoiceRequest, DecisionModel};
 use lk_agents_abi::ChoiceDelta;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, ErrorKind, HostError, ProviderError};
+use lk_agents_abi::errors::{
+    ApiError, ApiErrorKind, ErrorKind, HostError, HostErrorKind, ProviderError,
+};
 use lk_agents_abi::utils::stream::{Closed, ProviderStream, StreamOutput};
 use lk_agents_abi::{
     ChatItem, ChatRequest, FunctionCall, FunctionCallOutput, FunctionToolCall, LlmChunk, LlmStream,
@@ -493,6 +495,23 @@ async fn a_failure_outside_the_provider_taxonomy_fails_the_leg() {
     let got = classify_with(&llm(model.clone(), false), &request()).await;
     assert_eq!(got, In::LegFailed);
     assert_eq!(model.requests().len(), 1);
+}
+
+// Catches: a model's `ValueError` or `TimeoutError` ending the run, where Python's `_classify`
+// gives an `inference_error` prediction: `test_unexpected_inference_errors_finish_with_internal_error`
+// lists them beside `APIError`.
+#[tokio::test(start_paused = true)]
+async fn a_host_value_or_timeout_error_is_an_inference_error() {
+    let host = |kind| ProviderError::from(HostError { kind, ..HostError::new("bad") });
+    let cases = [
+        (HostErrorKind::Invalid, ClassifyError::Api),
+        (HostErrorKind::Timeout, ClassifyError::Timeout),
+    ];
+    for (kind, expected) in cases {
+        let model = FakeLlm::new(vec![Attempt::Refuse(host(kind))]);
+        let got = classify_with(&llm(model, false), &request()).await;
+        assert_eq!(got, failed(ReqId(7), expected));
+    }
 }
 
 // Catches: a classifier that ignores the session's `llm_conn_options`. Python:

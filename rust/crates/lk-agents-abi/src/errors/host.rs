@@ -15,7 +15,8 @@ impl CapturedError {
 
 /// What a caller branches on in a host failure. The adapter classifies the exception once, by
 /// class: cancellation, the storage failures a handler raises, one per `StorageError` variant,
-/// and an RPC error with its code (`rtc.RpcError`).
+/// an RPC error with its code (`rtc.RpcError`), and a model's invalid value or timeout, which
+/// AMD's classifier reads as an `inference_error`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HostErrorKind {
     #[default]
@@ -30,6 +31,10 @@ pub enum HostErrorKind {
     Rpc {
         code: u32,
     },
+    /// A `ValueError`.
+    Invalid,
+    /// A `TimeoutError` (`asyncio.TimeoutError` is the same class).
+    Timeout,
 }
 
 /// An error crossing a host boundary. Recovery policy belongs to the operation receiving it.

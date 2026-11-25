@@ -8,7 +8,7 @@
 pub use super::prompts::{CLASSIFY_PROMPT, MENU_PROMPT};
 use super::{AmdModel, ChoiceRequest, Classifier};
 use crate::telemetry;
-use lk_agents_abi::errors::{ApiErrorKind, ErrorKind, ProviderError};
+use lk_agents_abi::errors::{ApiErrorKind, ErrorKind, HostErrorKind, ProviderError};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{
     ApiConnectOptions, ChatContext, ChatItem, ChatMessage, ChatRequest, Clock, Closed, Llm, Role,
@@ -218,14 +218,9 @@ pub fn decision_choice(
     }
 }
 
-/// `APIError`, its timeout and invalid output give an `inference_error` prediction; any other
-/// failure (a host exception outside the API taxonomy) ends the run.
-///
-/// Gap: Python also maps a model's `ValueError` and `asyncio.TimeoutError` to `inference_error`
-/// (`detector.py` `_classify`). A host error outside the taxonomy carries only its class name,
-/// which is diagnostics and never a decision (`HostError::class`), so the core cannot tell those
-/// kinds apart: here they end the run with `internal_error`. An adapter that raises them as
-/// `APIError` (or `APITimeoutError`) gets Python's result.
+/// `APIError`, its timeout, a model's `ValueError` or `TimeoutError` and invalid output give an
+/// `inference_error` prediction (`detector.py` `_classify`); any other failure (a host exception
+/// outside these) ends the run.
 fn classify_error(error: &ProviderError) -> Option<ClassifyError> {
     let timeout = match error {
         ProviderError::Local(error) => {
@@ -234,7 +229,11 @@ fn classify_error(error: &ProviderError) -> Option<ClassifyError> {
         ProviderError::Host { api_kind: Some(kind), error_kind, .. } => {
             *kind == ApiErrorKind::Timeout || *error_kind == Some(ErrorKind::Timeout)
         }
-        ProviderError::Host { api_kind: None, .. } => return None,
+        ProviderError::Host { api_kind: None, error, .. } => match error.kind {
+            HostErrorKind::Invalid => false,
+            HostErrorKind::Timeout => true,
+            _ => return None,
+        },
     };
     Some(if timeout { ClassifyError::Timeout } else { ClassifyError::Api })
 }
