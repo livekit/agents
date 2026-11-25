@@ -129,8 +129,8 @@ parts off. At session end the framework uploads the session report; an
 ## Product statistics
 
 Separately from your telemetry, an agent connected to LiveKit Cloud sends LiveKit
-anonymous product statistics about the framework and its plugins, so LiveKit can
-see how they behave across versions and providers. They are never shown in your
+anonymous product statistics about how the framework, its plugins and its features are
+used, so LiveKit can decide what to build and maintain. They are never shown in your
 dashboard, never billed, and never contain customer data.
 
 - Where: `https://<your LiveKit Cloud host>/observability/productstats/agents/metrics/otlp/v0`,
@@ -145,148 +145,150 @@ dashboard, never billed, and never contain customer data.
 This list is complete: nothing else is sent. Every value is a closed set or a bounded
 identifier, never content.
 
-**Once per process, on every export**
+Naming, the same everywhere below:
 
-| Key | Example | Used for |
+- Every key starts with `lk.product.agents.`; the tables leave that prefix out.
+- A session is one call (`rtc_session`) or one text request (`a2a_session`).
+- A label that belongs to one metric is named under it (`model.transcription_delay.endpointing`).
+- Values LiveKit defines are lowercase with underscores (`agent_as_tool`). A plugin id keeps
+  the hyphens of its package name (`livekit-inference`).
+
+**Process**
+
+Sent once per process, with every export.
+
+| Key | Example | Meaning |
 | --- | --- | --- |
-| `service.name` | `livekit-agents` | Tells the framework apart from other senders |
-| `lk.product.agents.framework.version` | `2.0.0` | Which versions are in use |
-| `lk.product.agents.runtime.name` | `python` | The runtime the agent runs on: `python`, `node` or `bun` |
-| `lk.product.agents.runtime.version` | `3.12.4` | Which versions of each runtime to support |
-| `lk.product.agents.os`, `lk.product.agents.arch` | `linux`, `aarch64` | Which platforms to support |
-| `lk.product.agents.runner.cmd` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
-| `lk.product.agents.runner.kind` | `production` | What the process is, derived from the command and its environment: `production`, `development`, `ci` or `unknown` |
-| `lk.product.agents.storage` | `agent-db` | Where threads are stored: `agent-db`, `sqlite` or `none` |
+| `service.name` | `livekit-agents` | The sender; the only key without the prefix |
+| `framework.version` | `2.0.0` | The `livekit-agents` version |
+| `runtime.name` | `python` | The runtime the agent runs on: `python`, `node` or `bun` |
+| `runtime.version` | `3.12.4` | That runtime's version |
+| `os`, `arch` | `linux`, `aarch64` | The platform |
+| `runner.cmd` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
+| `runner.kind` | `production` | What the process is: `production`, `development`, `ci` or `unknown` |
+| `storage` | `agent_db` | Where threads are stored: `agent_db`, `sqlite` or `none` |
 
 `runner.kind`, first match: `ci` when `CI=true`; `production` on LiveKit Cloud;
 `development` for `dev`, `console` and `simulation`, and for `start` on macOS or Windows;
 `production` for `start` on Linux; `unknown` otherwise.
 
-**Model usage**
+**Models**
 
-Each metric carries the same labels:
+Every model metric carries the same four labels:
 
 | Label | Values |
 | --- | --- |
-| `lk.product.agents.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
-| `lk.product.agents.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
-| `lk.product.agents.model.provider` | the vendor that is called (`deepgram`, `cerebras`); a self-hosted endpoint is `other` |
-| `lk.product.agents.model.name` | the model's name as configured |
+| `model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
+| `model.plugin` | the code that runs: a plugin id (`deepgram`, `openai`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
+| `model.provider` | the vendor that is called (`deepgram`, `cerebras`); `other` for a self-hosted endpoint |
+| `model.name` | the model's name as configured |
 
-| Metric | Type | Counts |
-| --- | --- | --- |
-| `lk.product.agents.model.requests` | counter | Requests made to a model: one LLM completion or one TTS synthesis. Not counted for an STT, whose usage is `audio_duration` |
-| `lk.product.agents.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
-| `lk.product.agents.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
-| `lk.product.agents.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
-| `lk.product.agents.model.audio_duration` | counter, seconds | Audio the model heard (an STT) or spoke (a TTS) |
-| `lk.product.agents.model.characters` | counter | Characters of text the model was given to speak |
-| `lk.product.agents.model.input_tokens` | counter | Tokens the model consumed, as its provider reports them |
-| `lk.product.agents.model.output_tokens` | counter | Tokens the model produced, as its provider reports them |
+Plugin and provider are usually the same name. Both are kept because one plugin can reach
+several vendors: the plugin says which code to maintain, the provider says which vendor
+people use.
 
-Usage has one rule for every kind of model: the unit is the metric, and the kind of model
-is only a label. A model adds to each unit it is measured in and to no other, so:
-
-| Model | Adds to |
-| --- | --- |
-| An LLM | `requests`, `input_tokens`, `output_tokens` |
-| A TTS billed by characters | `requests`, `characters`, `audio_duration` |
-| A TTS billed by tokens | `requests`, `input_tokens`, `output_tokens`, `characters`, `audio_duration` |
-| A streaming STT | `requests` (one per stream), `audio_duration` |
-
-A new way of measuring a model is one new unit, never a metric for one kind of model.
-
-The transcription delay starts at the end of speech, which the STT does not always decide.
-So this metric alone is split by one extra label,
-`lk.product.agents.model.transcription_delay.endpointing`: `vad` when the session's VAD ended
-the speech, `stt` when the STT detects the end of speech itself.
-
-- A turn whose final transcript arrived before the end of speech has no delay to measure:
-  it records nothing, never a zero. So does a turn whose end of speech was not detected.
-- Delays are compared only within one `endpointing` value, as medians and percentiles per
-  provider and model. A `vad` delay includes the VAD's silence window; an `stt` delay
-  includes the STT's own silence window.
-
-Plugin and provider are usually the same name, and both are kept because they differ when
-one plugin reaches several vendors:
-
-| Setup | `plugin` | `provider` |
+| Setup | `model.plugin` | `model.provider` |
 | --- | --- | --- |
 | The Deepgram plugin | `deepgram` | `deepgram` |
 | The OpenAI plugin pointed at Cerebras (`openai.LLM.with_cerebras()`) | `openai` | `cerebras` |
 | The OpenAI plugin pointed at a self-hosted endpoint | `openai` | `other` |
 | LiveKit Inference | `livekit-inference` | `livekit`; the vendor is in the model name (`deepgram/nova-3`) |
 
-The plugin says which code to maintain; the provider says which vendor people use.
+- A plugin id is the last part of the package name, the same in every language:
+  `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram` in Node are
+  both `deepgram`.
+- LiveKit Inference is recorded like any other model, so plugins and Inference compare in
+  one place. The Inference service keeps its own usage records, and those, not these, are
+  the ones billing uses. Only the `inference` models get the `livekit-inference` id, by
+  what they are, never by the code they share: an OpenAI-compatible plugin is always
+  recorded under its own id.
+- The framework records these around every model; a plugin never does. A plugin written in
+  Python is counted exactly like a built-in one, and cannot add, change or skip a
+  statistic. A plugin that does not report its provider or model appears as `unknown`.
 
-A model served by LiveKit Inference is recorded like any other, under the plugin
-`livekit-inference`, so plugins and Inference compare in one place. The Inference service
-keeps its own usage records, and those, not these, are the ones billing uses. Only the
-`inference` models themselves get that plugin name, by what they are, never by the code
-they share: an OpenAI-compatible plugin is always recorded under its own id.
+Usage: the unit is the metric, and the kind of model is only a label.
 
-The plugin id is the last part of the package name, lowercase with hyphens, the same in
-every language: `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram`
-in Node are both `deepgram`.
+| Metric | Type | Counts |
+| --- | --- | --- |
+| `model.requests` | counter | Requests made to the model: one LLM completion, one TTS synthesis, one STT stream (one recognition for a non-streaming STT) |
+| `model.input_tokens` | counter | Tokens the model consumed, as its provider reports them |
+| `model.output_tokens` | counter | Tokens the model produced, as its provider reports them |
+| `model.characters` | counter | Characters of text the model was given to speak |
+| `model.audio_duration` | counter, seconds | Audio the model heard (an STT) or spoke (a TTS) |
 
-Model usage is recorded by the framework around every model, never by a plugin: a plugin
-written in Python is counted exactly like a built-in one, and a plugin cannot add, change
-or skip a statistic. The plugin, provider and model names are the ones the model reports
-about itself; a plugin that reports none appears as `unknown`.
+A model adds to each unit it is measured in and to no other:
 
-**App shape**
-
-One count per conversation, recorded when it ends: a call (`rtc_session`) or a text request
-(`a2a_session`). Its labels are read together, so the combinations are visible.
-
-| Metric | Counts |
+| Model | Adds to |
 | --- | --- |
-| `lk.product.agents.sessions` | Conversations handled |
+| An LLM | `requests`, `input_tokens`, `output_tokens` |
+| A TTS billed by characters | `requests`, `characters`, `audio_duration` |
+| A TTS billed by tokens | `requests`, `input_tokens`, `output_tokens`, `characters`, `audio_duration` |
+| A streaming STT | `requests`, `audio_duration` |
+
+A new way of measuring a model is one new unit, never a metric for one kind of model.
+
+Latency:
+
+| Metric | Type | Measures |
+| --- | --- | --- |
+| `model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
+| `model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
+| `model.transcription_delay` | histogram, seconds | Time from the end of the person's speech to the STT's final transcript, once per turn |
+
+The transcription delay starts at the end of speech, which the STT does not always decide.
+So it alone has a fifth label, `model.transcription_delay.endpointing`: `vad` when the
+session's VAD ended the speech, `stt` when the STT detects the end of speech itself.
+
+- A turn whose final transcript arrived before the end of speech has no delay to measure:
+  it records nothing, never a zero. So does a turn whose end of speech was not detected.
+- Delays are compared only within one `endpointing` value, as medians and percentiles per
+  provider and model. A `vad` delay includes the VAD's silence window; an `stt` delay
+  includes the STT's own.
+
+**Sessions**
+
+`sessions` counts sessions, once each when the session ends. Its labels are read
+together, so the combinations are visible.
 
 | Label | Values |
 | --- | --- |
-| `lk.product.agents.session.entrypoint` | `rtc_session`, `a2a_session` |
-| `lk.product.agents.session.topology` | `single`: one agent for the whole conversation; `handoff`: one agent replaced another; `agent_as_tool`: a local agent was called as a tool; `handoff+agent_as_tool`: both |
-| `lk.product.agents.session.delegation` | `none`: everything ran in this process; `remote`: a `RemoteAgent` was called |
+| `session.entrypoint` | `rtc_session`, `a2a_session` |
+| `session.topology` | `single`: one agent for the whole session; `handoff`: one agent replaced another; `agent_as_tool`: a local agent was called as a tool; `both`: a handoff and an agent as a tool |
+| `session.delegation` | `none`: everything ran in this process; `remote`: a `RemoteAgent` was called |
 
-**Voice configuration**
+**Voice sessions**
 
-One count per voice session, recorded when it starts, with the configuration it starts with.
-
-| Metric | Counts |
-| --- | --- |
-| `lk.product.agents.voice.sessions` | Voice sessions started |
+`voice.sessions` counts voice sessions, once each when the session starts, with the
+configuration it starts with.
 
 | Label | Values |
 | --- | --- |
-| `lk.product.agents.voice.pipeline` | `stt-llm-tts`, `realtime`, `realtime+tts` (a realtime model with a separate TTS), `duplex` |
-| `lk.product.agents.voice.turn_detection` | `vad`, `stt`, `realtime_llm`, `manual`, or `model` for a turn detection model |
-| `lk.product.agents.voice.interruption` | how the session decides that the person is interrupting: `adaptive` (the interruption model classifies overlapping speech), `vad` (any detected speech interrupts), `off` (interruptions disabled) |
-| `lk.product.agents.voice.false_interruption` | whether a false interruption pauses the agent's speech and resumes it: `on`, `off` |
+| `voice.pipeline` | `stt_llm_tts`, `realtime`, `realtime_tts` (a realtime model with a separate TTS), `duplex` |
+| `voice.turn_detection` | `vad`, `stt`, `realtime_llm`, `manual`, or `model` for a turn detection model |
+| `voice.interruption` | how the session decides that the person is interrupting: `adaptive` (the interruption model classifies overlapping speech), `vad` (any detected speech interrupts), `off` (interruptions disabled) |
+| `voice.false_interruption` | whether a false interruption pauses the agent's speech and resumes it: `on`, `off` |
 
-**Feature usage**
+**Features**
 
-One counter per feature. Each counts the conversations that used the feature: a
-conversation adds 1 to a counter the first time it uses that feature, and never more than
-1, however often it uses it.
+One counter per feature, each counting the sessions that used it. A session adds 1 to a
+counter the first time it uses that feature, and never more than 1. The counters are
+independent: a session that used MCP and `override_options` adds 1 to each of those two,
+and nothing to the others.
 
-| Metric | Counts the conversations that |
+| Metric | Counts the sessions that |
 | --- | --- |
-| `lk.product.agents.feature.mcp` | ran an agent that has an MCP toolset |
-| `lk.product.agents.feature.update_options` | called `session.update_options(...)` |
-| `lk.product.agents.feature.override_options` | entered `session.override_options(...)` |
-| `lk.product.agents.feature.model_switch` | changed a model while running: a different STT, TTS, LLM or realtime model than the one they started with |
-| `lk.product.agents.feature.language_switch` | heard the person change language: the STT reported a different language than earlier in the conversation |
-| `lk.product.agents.feature.background_audio` | played background audio |
+| `feature.mcp` | ran an agent that has an MCP toolset |
+| `feature.update_options` | called `session.update_options(...)` |
+| `feature.override_options` | entered `session.override_options(...)` |
+| `feature.background_audio` | played background audio |
+| `feature.language_switch` | heard the person change language: the STT reported a different language than earlier in the session |
+| `feature.model_switch` | changed a model while running: a different STT, TTS, LLM or realtime model than the one they started with |
 
-The counters are independent: a call that used MCP and `override_options` adds 1 to each
-of those two, and nothing to the others.
-
-`lk.product.agents.feature.model_switch` has one label, `lk.product.agents.model_switch.kind`:
-`stt`, `tts`, `llm` or `realtime`, the kind of model that changed. A call adds 1 for each
-kind it changed, so a call that swapped its TTS twice and its LLM once adds 1 under `tts`
-and 1 under `llm`. A switch counts however it is made: `update_options`,
-`override_options`, or an agent that brings its own model.
+A feature that needs more than a count gets labels on its own counter. One does so far:
+`feature.model_switch.kind` is the kind of model that changed, `stt`, `tts`, `llm` or
+`realtime`. A session adds 1 for each kind it changed, however the switch is made
+(`update_options`, `override_options`, or an agent that brings its own model): one that
+swapped its TTS twice and its LLM once adds 1 under `tts` and 1 under `llm`.
 
 **Never collected**
 
