@@ -1,0 +1,19 @@
+rust/crates/lk-agents-fuzz/src/rules/amd/observations_pair.rs
+  s_a4f60f66d399ba::t_a24ef37e26de3a 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "83b0515c78b92ebcce138d7dba91de55967f65e6",
+  "prompts": {},
+  "sessions": {
+    "s_a4f60f66d399ba": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_a4f60f66d399ba",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
