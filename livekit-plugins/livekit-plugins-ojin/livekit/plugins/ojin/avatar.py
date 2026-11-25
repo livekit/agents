@@ -951,6 +951,8 @@ class AvatarSession(BaseAvatarSession):
         reports flowing so the session degrades (silently, since the avatar
         carried the only audio track) instead of deadlocking.
         """
+        # aclose() clears the base class's reference to the session.
+        agent_session = self._agent_session
         await self.aclose()
 
         # Read after teardown, not before: the runner keeps draining the audio
@@ -984,8 +986,8 @@ class AvatarSession(BaseAvatarSession):
         audio_output = QueueAudioOutput(
             sample_rate=self._audio_sample_rate, wait_playback_start=True
         )
-        if self._agent_session is not None:
-            self._agent_session.output.replace_audio_tail(audio_output)
+        if agent_session is not None:
+            agent_session.output.replace_audio_tail(audio_output)
         else:
             # Defensive fallback for teardown paths before the output chain was
             # installed; normal runtime degradation always has an agent session.

@@ -21,7 +21,7 @@ from ojin.stv import FrameType, STVAudioFrame, STVEvent, STVVideoFrame
 
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioReceiver, AudioSegmentEnd, QueueAudioOutput
-from livekit.plugins.ojin.avatar import OjinVideoGenerator, _FrameSink
+from livekit.plugins.ojin.avatar import AvatarSession, OjinVideoGenerator, _FrameSink
 
 _BYTES_PER_SAMPLE = 2
 
@@ -427,3 +427,41 @@ async def test_idle_ticks_do_not_complete_a_captured_segment(harness: RunnerHarn
 
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(harness.audio_output.wait_for_playout(), 0.2)
+
+
+class _FakeAgentOutput:
+    def __init__(self) -> None:
+        self.tails: list[QueueAudioOutput] = []
+
+    def replace_audio_tail(self, tail: QueueAudioOutput) -> None:
+        self.tails.append(tail)
+
+
+class _FakeAgentSession:
+    def __init__(self) -> None:
+        self.output = _FakeAgentOutput()
+
+    def off(self, *_: Any) -> None:
+        pass
+
+
+def _avatar_session(monkeypatch: pytest.MonkeyPatch) -> AvatarSession:
+    monkeypatch.setenv("OJIN_API_KEY", "k")
+    monkeypatch.setenv("OJIN_CONFIG_ID", "c")
+    return AvatarSession()
+
+
+async def test_degrade_gives_the_drain_its_own_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """aclose() drops the base class's session reference; the drain must still get its own tail."""
+    session = _avatar_session(monkeypatch)
+    previous = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._audio_output = previous
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        assert len(fake_session.output.tails) == 1
+        assert fake_session.output.tails[0] is not previous
+    finally:
+        await session.aclose()
