@@ -1,0 +1,29 @@
+rust/crates/lk-agents-runtime/src/voice/amd/executor_tests.rs
+  s_4dc110b916ccc5::t_0a6ebbf6ab8922 1-345
+rust/crates/lk-agents-runtime/src/voice/amd/mod.rs
+  s_7741b04f9ec84e::t_5b74d9873ab558 161-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "351eb5196cffdc504039fe01a278d92fd0864520",
+  "prompts": {},
+  "sessions": {
+    "s_4dc110b916ccc5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2137c-bd0f-7553-bc58-3b3071c2e2fb",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_7741b04f9ec84e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7741b04f9ec84e",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
