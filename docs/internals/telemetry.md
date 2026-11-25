@@ -207,6 +207,34 @@ the usage ledger. `lk_agents_net::export` aggregates measurements per destinatio
 exports them on a fixed interval with delta temporality to Cloud and the
 temporality the user endpoint requests (cumulative by default).
 
+### Product statistics
+
+LiveKit's own statistics, never customer data. The list and its definitions are
+[telemetry.md](../telemetry.md#what-is-collected); this is where each is made.
+
+- Declared in `abi::productstats` (`models`, `sessions`, `features`, `runner`), every key under
+  `lk.product.agents.`. `lk-agents-codegen --check` refuses a declaration there without the
+  prefix, any other declaration with it, and a label that is not a closed enum or a `Label`.
+- An async crate records with `lk_agents_telemetry::productstats::measure` (or `record` for a
+  `ProductStat` made elsewhere). A sans-I/O machine makes a `ProductStat` where the fact is known
+  and hands it to its `Trace` (`product_stats`); it leaves with the session's telemetry records
+  as `Record::ProductStat`, which the tracer hands to the process's product statistics and
+  never to a customer's exporter.
+- Models: `ModelLabels::of(kind, &ProviderId)` derives the four labels. Requests, tokens,
+  characters, audio and first-output times are recorded where the request's span ends
+  (`lk-agents-inference/src/telemetry.rs`, `stt/retrying.rs`); what only a session knows (the
+  audio its STT reported, a realtime response, the transcription delay) in
+  `lk-agents-voice/src/agent_session/product_stats.rs`.
+- Sessions: the machines note `SessionFacts` (a handoff landed, a tool body started for a local
+  agent or a `RemoteAgent`, the agent has an MCP toolset). A voice session counts itself when its
+  spans close; a text request's runs report their facts to their turn (`HandlerPort::session_facts`),
+  which counts the request when it ends.
+- Features: `SessionFeatures::used(feature)` returns a count the first time only. The voice
+  machine holds it for MCP, language and model switches; the session owner for `update_options`,
+  `override_options` and background audio.
+- Tests read what was recorded with `productstats::testkit::Capture` (the thread's own), or from
+  the machine's drained records.
+
 ### Report records
 
 Chat history items, session options, the usage summary and evaluation results

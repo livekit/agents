@@ -303,3 +303,61 @@ async fn a_customer_observability_refusal_leaves_product_statistics_on() {
     let paths: Vec<String> = received(&mut rx).into_iter().map(|r| r.path).collect();
     assert_eq!(paths.iter().filter(|p| *p == PATH).count(), 2, "{paths:?}");
 }
+
+// Catches: a statistic declared that the documented list does not have, or a documented one not
+// declared: the registry generated from the declarations names exactly the documented keys.
+#[test]
+fn the_declared_keys_are_exactly_the_documented_list() {
+    const DOCUMENTED: &[&str] = &[
+        "arch",
+        "feature.background_audio",
+        "feature.language_switch",
+        "feature.mcp",
+        "feature.model_switch",
+        "feature.model_switch.kind",
+        "feature.override_options",
+        "feature.update_options",
+        "framework.version",
+        "model.audio_duration",
+        "model.characters",
+        "model.input_tokens",
+        "model.kind",
+        "model.name",
+        "model.output_tokens",
+        "model.plugin",
+        "model.provider",
+        "model.requests",
+        "model.transcription_delay",
+        "model.transcription_delay.endpointing",
+        "model.ttfb",
+        "model.ttft",
+        "os",
+        "runner.cmd",
+        "runner.kind",
+        "runtime.name",
+        "runtime.version",
+        "session.delegation",
+        "session.entrypoint",
+        "session.topology",
+        "sessions",
+        "storage",
+        "voice.false_interruption",
+        "voice.interruption",
+        "voice.pipeline",
+        "voice.sessions",
+        "voice.turn_detection",
+    ];
+    let registry = [
+        include_str!("../../../../../otel/registry/attributes.yaml"),
+        include_str!("../../../../../otel/registry/metrics.yaml"),
+    ];
+    let mut declared = std::collections::BTreeSet::new();
+    for file in registry {
+        for (at, _) in file.match_indices("lk.product.agents.") {
+            let key = &file[at + "lk.product.agents.".len()..];
+            let end = key.find(|c: char| !(c.is_ascii_lowercase() || c == '.' || c == '_'));
+            declared.insert(&key[..end.unwrap_or(key.len())]);
+        }
+    }
+    assert_eq!(declared.into_iter().collect::<Vec<_>>(), DOCUMENTED);
+}

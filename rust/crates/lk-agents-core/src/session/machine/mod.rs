@@ -627,7 +627,7 @@ impl Session {
             }
         }
         let run_effects = invocation.run.handle_with_running_tools(event, now, &running);
-        let called = invocation.run.session_facts();
+        let called = invocation.run.session_facts;
         self.facts.merge(called);
         self.run_effects(run_effects, now, effects);
     }

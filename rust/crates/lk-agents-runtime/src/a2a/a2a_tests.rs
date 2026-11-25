@@ -1122,8 +1122,9 @@ mod attachments {
 }
 
 // Catches: a text request not counted as one session when it ends (or counted per run under it),
-// counted as a call, a handler that failed not counted, or the local agents and `RemoteAgent`s
-// its runs called as tools missing from its topology and delegation.
+// counted as a call, a handler that failed not counted, the local agents and `RemoteAgent`s its
+// runs called as tools missing from its topology and delegation, or an agent's MCP toolset not
+// counted as the request's feature.
 #[tokio::test]
 async fn a_text_request_is_one_session_with_what_its_runs_called() {
     use lk_agents_abi::productstats::sessions::SessionFacts;
@@ -1140,16 +1141,19 @@ async fn a_text_request_is_one_session_with_what_its_runs_called() {
         ("lk.product.agents.sessions", labels, 1.0)
     };
     let called = SessionFacts { agent_as_tool: true, remote: true, ..SessionFacts::default() };
+    let with_mcp = SessionFacts { mcp: true, ..SessionFacts::default() };
+    let mcp = ("lk.product.agents.feature.mcp", Vec::new(), 1.0);
     for (n, (behavior, counted)) in [
-        (Behavior::Echo, session("single", "none")),
-        (Behavior::Ran(called), session("agent_as_tool", "remote")),
-        (Behavior::Raise, session("single", "none")),
+        (Behavior::Echo, vec![session("single", "none")]),
+        (Behavior::Ran(called), vec![session("agent_as_tool", "remote")]),
+        (Behavior::Ran(with_mcp), vec![session("single", "none"), mcp]),
+        (Behavior::Raise, vec![session("single", "none")]),
     ]
     .into_iter()
     .enumerate()
     {
         let message = a2a("hello", &format!("m{n}"), None, None);
         let _ = run_turn(&thread, message, None, Fake::new(behavior)).await;
-        assert_eq!(stats.take(), [counted]);
+        assert_eq!(stats.take(), counted);
     }
 }

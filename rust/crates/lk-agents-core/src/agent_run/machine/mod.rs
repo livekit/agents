@@ -251,8 +251,9 @@ pub struct AgentRun {
     next_id: u64,
     /// This invocation's requests and tool bodies.
     ledger: Ledger,
-    /// The agents this invocation called as tools, local and remote.
-    facts: lk_agents_abi::productstats::sessions::SessionFacts,
+    /// What its session's product statistics report of this invocation: the agents it called as
+    /// tools, local and remote, and its agent's MCP toolset.
+    pub session_facts: lk_agents_abi::productstats::sessions::SessionFacts,
     /// What reached the person as written, in order: it leads the answer.
     verbatim: Vec<String>,
     pending_call: Option<lk_agents_abi::a2a::turn::PendingCall>,
@@ -402,7 +403,7 @@ impl AgentRun {
             input,
             next_id: 0,
             ledger: Ledger::default(),
-            facts: lk_agents_abi::productstats::sessions::SessionFacts {
+            session_facts: lk_agents_abi::productstats::sessions::SessionFacts {
                 mcp: agent_mcp,
                 ..Default::default()
             },
@@ -493,7 +494,7 @@ impl AgentRun {
             self.ledger.tool_started();
             let tools = &self.agent.tools;
             if let Some(tool) = tools.iter().find(|tool| tool.spec.name == function_call.name) {
-                self.facts.tool_started(tool);
+                self.session_facts.tool_started(tool);
             }
         }
         fx
@@ -1218,12 +1219,6 @@ impl AgentRun {
     /// The latest snapshot of this invocation's usage.
     pub fn usage(&self) -> Usage {
         self.ledger.snapshot()
-    }
-
-    /// Whether this invocation called a local agent or a `RemoteAgent` as a tool, for its
-    /// session's product statistics.
-    pub fn session_facts(&self) -> lk_agents_abi::productstats::sessions::SessionFacts {
-        self.facts
     }
 
     /// What the invocation consumed; it changes [`revision`](Ledger::revision) as it moves.

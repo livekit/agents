@@ -374,6 +374,13 @@ The worker's own instruments are not a job's: the worker process holds their cur
 | `lk.agents.worker.idle_processes_target` | gauge | `{process}` | each change of the process pool |
 | `lk.agents.worker.process_ready.duration` | histogram | s | each job process that became ready |
 
+### Product statistics
+
+Exported only to LiveKit Cloud's product statistics collector, never to a customer's
+destination. Keys, values and definitions: [telemetry.md](../telemetry.md#what-is-collected).
+The generated registry (`rust/otel/registry`) lists them under `lk.product.agents.*`;
+`the_declared_keys_are_exactly_the_documented_list` fails on a stray or missing key.
+
 ### Report records
 
 | Scope | Body | Timestamp | Attributes |
