@@ -253,7 +253,7 @@ class AIPlatformLLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return "vertex_ai_model_garden"
+        return "google"
 
     def chat(
         self,

@@ -13,42 +13,57 @@ _PYTHON = Path(__file__).parents[2] / "python"
 _ID = re.compile(r"[a-z0-9_]+")
 
 
-def _declared(path: Path) -> list[tuple[int, str]]:
-    """Each name a file declares as a provider: what a ``provider`` property returns, and the
-    vendor an OpenAI-compatible constructor names."""
-    found: list[ast.expr] = []
+def _declared(path: Path) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """The names a file declares as providers, each with its line: those its ``provider``
+    properties return, and the vendors its OpenAI-compatible constructors name."""
+    returned: list[ast.expr] = []
+    named: list[ast.expr] = []
     for node in ast.walk(ast.parse(path.read_text())):
         if isinstance(node, ast.FunctionDef) and node.name == "provider":
-            found += [r.value for r in ast.walk(node) if isinstance(r, ast.Return) and r.value]
+            returned += [r.value for r in ast.walk(node) if isinstance(r, ast.Return) and r.value]
         elif isinstance(node, ast.keyword) and node.arg == "_provider":
-            found.append(node.value)
+            named.append(node.value)
         elif isinstance(node, ast.Call) and getattr(node.func, "id", "") == "ProviderEndpoint":
-            found += [k.value for k in node.keywords if k.arg == "provider"]
-    return [
-        (name.lineno, name.value)
-        for value in found
-        for name in ast.walk(value)
-        if isinstance(name, ast.Constant) and isinstance(name.value, str)
-    ]
+            named += [k.value for k in node.keywords if k.arg == "provider"]
+
+    def names(values: list[ast.expr]) -> list[tuple[int, str]]:
+        return [
+            (name.lineno, name.value)
+            for value in values
+            for name in ast.walk(value)
+            if isinstance(name, ast.Constant) and isinstance(name.value, str)
+        ]
+
+    return names(returned), names(named)
 
 
-def test_every_declared_provider_is_a_lowercase_id() -> None:
-    # Catches: a display name ("ElevenLabs", "Azure TTS", "d-id") declared as a provider, so one
-    # vendor is spelled several ways across plugins and dashboards.
-    sources = [
-        *(_PYTHON / "livekit-plugins").glob("*/livekit/plugins/**/*.py"),
-        *(_PYTHON / "livekit-agents/livekit/agents").rglob("*.py"),
+def test_a_provider_is_its_vendors_one_lowercase_id() -> None:
+    # Catches: a display name ("ElevenLabs", "d-id") declared as a provider, or a package naming
+    # its services ("Amazon Polly" and "AWS Bedrock", "Gemini" and "Vertex AI") instead of its
+    # one vendor, so a vendor is spelled several ways across plugins and dashboards.
+    packages = [
+        *(_PYTHON / "livekit-plugins").glob("*/livekit/plugins"),
+        _PYTHON / "livekit-agents/livekit/agents",
     ]
-    declared = [(path, line, name) for path in sources for line, name in _declared(path)]
-    assert len(declared) > 100, "the scan no longer finds the plugins' providers"
-    wrong = [
-        f"{path.relative_to(_PYTHON)}:{line}: {name!r}"
-        for path, line, name in declared
-        if not _ID.fullmatch(name)
-    ]
-    assert not wrong, "a provider is a lowercase id (letters, digits, underscores):\n" + "\n".join(
-        wrong
-    )
+    wrong: list[str] = []
+    declared = 0
+    for package in packages:
+        own: set[str] = set()
+        for path in package.rglob("*.py"):
+            returned, named = _declared(path)
+            declared += len(returned) + len(named)
+            own |= {name for _, name in returned} - {"unknown"}
+            wrong += [
+                f"{path.relative_to(_PYTHON)}:{line}: {name!r} is not a lowercase id"
+                for line, name in returned + named
+                if not _ID.fullmatch(name)
+            ]
+        if len(own) > 1:
+            wrong.append(
+                f"{package.relative_to(_PYTHON)}: one vendor has several ids {sorted(own)}"
+            )
+    assert declared > 100, "the scan no longer finds the plugins' providers"
+    assert not wrong, "a provider is its vendor's one lowercase id:\n" + "\n".join(wrong)
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +103,7 @@ async def test_one_vendor_has_one_id_whichever_plugin_reaches_it() -> None:
         assert by_groq.provider == "groq"
 
 
-async def test_azure_openai_reports_one_name_whatever_its_endpoint() -> None:
+async def test_azure_reports_one_name_whatever_its_service_or_endpoint() -> None:
     # Catches: the Azure resource's host, a private name, reported as the provider.
     endpoint = "https://private-resource.openai.azure.com"
     for model in (
@@ -102,7 +117,7 @@ async def test_azure_openai_reports_one_name_whatever_its_endpoint() -> None:
             azure_deployment="d", azure_endpoint=endpoint, api_key="k", delegation="client"
         ),
     ):
-        assert model.provider == "azure_openai"
+        assert model.provider == "azure"
 
 
 async def test_an_endpoint_the_caller_gave_reports_unknown_never_its_host() -> None:

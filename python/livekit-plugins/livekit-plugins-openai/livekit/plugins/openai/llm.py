@@ -924,7 +924,7 @@ class _AzureLLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return "azure_openai"
+        return "azure"
 
     async def aclose(self) -> None:
         await super().aclose()

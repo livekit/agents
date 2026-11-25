@@ -119,7 +119,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "amazon_polly"
+        return "aws"
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

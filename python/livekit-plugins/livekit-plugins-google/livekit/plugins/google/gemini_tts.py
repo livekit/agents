@@ -223,10 +223,7 @@ class GeminiTTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        if self._client.vertexai:
-            return "vertex_ai"
-        else:
-            return "gemini"
+        return "google"
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

@@ -59,7 +59,7 @@ pub enum Protocol {
 }
 
 /// The vendor of Azure OpenAI, which speaks the OpenAI dialect.
-pub const AZURE_OPENAI_VENDOR: &str = "azure_openai";
+pub const AZURE_VENDOR: &str = "azure";
 /// The vendor of an endpoint the caller named by URL only: its host is never reported.
 pub const UNKNOWN_VENDOR: &str = "unknown";
 
@@ -68,7 +68,7 @@ pub struct Dialect {
     pub provider: RealtimeProvider,
     /// `self._provider_label`. Appears in every error message the session emits.
     pub provider_label: &'static str,
-    /// The vendor telemetry names, spelled as the vendor's other plugins spell it.
+    /// The vendor telemetry names: one lowercase id per vendor, whatever the service.
     pub vendor: &'static str,
     /// `base_url` before the runtime turns it into a socket URL.
     pub default_base_url: &'static str,
@@ -281,7 +281,7 @@ pub const XAI: Dialect = Dialect {
 pub const VOICE_LIVE: Dialect = Dialect {
     provider: RealtimeProvider::VoiceLive,
     provider_label: "Azure Voice Live",
-    vendor: "azure_voice_live",
+    vendor: AZURE_VENDOR,
     default_base_url: "",
     api_key_env: "AZURE_VOICE_LIVE_API_KEY",
     default_voice: "en-US-AvaMultilingualNeural",

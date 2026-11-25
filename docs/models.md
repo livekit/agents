@@ -194,15 +194,14 @@ the core's client with the provider's own key and no LiveKit header, not on the
 `tool_choice`, `parallel_tool_calls` and `response_format` override them, so the
 framework can forbid tools on a turn.
 
-A model's `provider` is a lowercase id (letters, digits and underscores), declared by its class
-or constructor and never the endpoint's host. One vendor has one id whichever plugin reaches it:
-its plugin's name (`deepgram`, `elevenlabs`, `microsoft_ai`; `openai.LLM.with_x_ai()` and
-`livekit.plugins.xai` both report `xai`). A plugin that reaches several services names each:
-`aws_bedrock`, `amazon_polly`, `amazon_transcribe`, `amazon_nova_sonic`; `azure_speech`,
-`azure_openai`, `azure_voice_live`; `gemini`, `vertex_ai`, `vertex_ai_model_garden`,
-`google_cloud`. LiveKit Inference is `livekit`. An OpenAI or Anthropic model given a `base_url`
-or a client without a vendor reports `"unknown"`. Telemetry spells a vendor the OpenTelemetry
-GenAI registry names as the registry does (`x_ai`, `azure.ai.openai`, `aws.bedrock`).
+A model's `provider` is its vendor: one lowercase id per vendor (letters, digits and
+underscores), declared by its class or constructor. It is never a service, product or model
+name, and never the endpoint's host: every AWS service is `aws`, every Google one `google`,
+every Azure one `azure`, LiveKit Inference and the local models `livekit`, and
+`openai.LLM.with_x_ai()` and `livekit.plugins.xai` both report `xai`. An OpenAI or Anthropic
+model given a `base_url` or a client without a vendor reports `"unknown"`. Telemetry spells a
+vendor the OpenTelemetry GenAI registry names as the registry does (`x_ai`, `aws.bedrock`,
+`gcp.gen_ai`, `azure.ai.openai`).
 
 An STT or TTS declares every fact fixed at construction in its `STTCapabilities` or
 `TTSCapabilities`, passed to the base constructor (`super().__init__(capabilities=...)`);

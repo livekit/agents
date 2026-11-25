@@ -73,7 +73,7 @@ class VAD(_facades.VAD):
 
     @property
     def provider(self) -> str:
-        return "livekit_local_inference"
+        return "livekit"
 
 
 DEFAULT_SAMPLE_RATE = 16000

@@ -188,7 +188,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "azure_speech"
+        return "azure"
 
     async def _recognize_impl(
         self,

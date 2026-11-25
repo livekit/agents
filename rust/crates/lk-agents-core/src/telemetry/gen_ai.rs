@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use crate::agent_run::planning::INSTRUCTIONS_MESSAGE_ID;
 
-/// A plugin's `provider`, a lowercase id, in the GenAI registry's spelling; one outside the
-/// registry keeps its own. Punctuation and case are ignored, so another spelling of a listed
+/// A plugin's `provider`, its vendor's lowercase id, in the GenAI registry's spelling; one
+/// outside the registry keeps its own. A vendor with several registry names takes one. Punctuation and case are ignored, so another spelling of a listed
 /// id maps too. A provider is never an endpoint host, so none is translated.
 pub fn provider_name(provider: &str) -> Option<String> {
     let value = provider.trim();
@@ -19,14 +19,14 @@ pub fn provider_name(provider: &str) -> Option<String> {
     }
     let canonical: String = value.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
     let by_name = match canonical.as_str() {
-        "amazonbedrock" | "amazonnovasonic" | "awsbedrock" | "bedrock" => "aws.bedrock",
+        "aws" | "amazonbedrock" | "awsbedrock" | "bedrock" => "aws.bedrock",
         "anthropic" => "anthropic",
         "azureaiinference" => "azure.ai.inference",
-        "azureopenai" => "azure.ai.openai",
+        "azure" | "azureopenai" => "azure.ai.openai",
         "cohere" => "cohere",
         "deepseek" => "deepseek",
         "gemini" => "gcp.gemini",
-        "google" | "googlecloud" | "googlegenai" => "gcp.gen_ai",
+        "google" | "googlegenai" => "gcp.gen_ai",
         "groq" => "groq",
         "ibmwatsonxai" | "watsonx" => "ibm.watsonx.ai",
         "mistral" | "mistralai" => "mistral_ai",
@@ -244,12 +244,10 @@ mod tests {
     #[test]
     fn provider_names_follow_the_genai_registry() {
         assert_eq!(provider_name("openai").as_deref(), Some("openai"));
-        assert_eq!(provider_name("azure_openai").as_deref(), Some("azure.ai.openai"));
+        assert_eq!(provider_name("azure").as_deref(), Some("azure.ai.openai"));
         assert_eq!(provider_name("xai").as_deref(), Some("x_ai"));
-        assert_eq!(provider_name("aws_bedrock").as_deref(), Some("aws.bedrock"));
-        assert_eq!(provider_name("amazon_nova_sonic").as_deref(), Some("aws.bedrock"));
-        assert_eq!(provider_name("google_cloud").as_deref(), Some("gcp.gen_ai"));
-        assert_eq!(provider_name("vertex_ai_model_garden").as_deref(), Some("gcp.vertex_ai"));
+        assert_eq!(provider_name("aws").as_deref(), Some("aws.bedrock"));
+        assert_eq!(provider_name("google").as_deref(), Some("gcp.gen_ai"));
         assert_eq!(provider_name("mistralai").as_deref(), Some("mistral_ai"));
         assert_eq!(provider_name("deepgram").as_deref(), Some("deepgram"));
         assert_eq!(provider_name("api.openai.com").as_deref(), Some("api.openai.com"));

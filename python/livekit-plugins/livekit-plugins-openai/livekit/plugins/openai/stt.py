@@ -393,7 +393,7 @@ class STT(stt.STT):
             client=azure_client,
             use_realtime=use_realtime,
             vad=vad,
-            _provider="azure_openai",
+            _provider="azure",
         )
 
     @staticmethod

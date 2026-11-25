@@ -224,7 +224,7 @@ class TTS(tts.TTS):
             instructions=instructions,
             client=azure_client,
             response_format=response_format,
-            _provider="azure_openai",
+            _provider="azure",
         )
         tts._owns_client = True
         return tts

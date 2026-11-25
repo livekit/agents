@@ -214,7 +214,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "amazon_transcribe"
+        return "aws"
 
     async def _recognize_impl(
         self,

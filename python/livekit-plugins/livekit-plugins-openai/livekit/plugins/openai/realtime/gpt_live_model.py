@@ -245,7 +245,7 @@ class GPTLiveModel(llm.DuplexModel):
                 )
 
         if is_azure:
-            self._provider = "azure_openai"
+            self._provider = "azure"
         else:
             self._provider = "unknown" if is_given(base_url) else "openai"
         self._opts = _LiveOptions(

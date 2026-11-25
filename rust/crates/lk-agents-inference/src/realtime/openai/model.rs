@@ -14,7 +14,7 @@ use lk_agents_net::task::TokioSpawner;
 
 use super::session::{Auth, Connect, OpenAIRealtime};
 use super::wire::Azure;
-use crate::realtime::dialect::{AZURE_OPENAI_VENDOR, Dialect, OPENAI, UNKNOWN_VENDOR};
+use crate::realtime::dialect::{AZURE_VENDOR, Dialect, OPENAI, UNKNOWN_VENDOR};
 use crate::realtime::machine::{OptionsPatch, SessionOptions, transcription};
 use lk_agents_net::env::ProcessEnv;
 
@@ -93,7 +93,7 @@ fn vendor(config: &Config, named: Option<&Dialect>) -> Option<&'static str> {
     if named.is_some() {
         None
     } else if config.azure_deployment.is_some() || config.entra_token.is_some() {
-        Some(AZURE_OPENAI_VENDOR)
+        Some(AZURE_VENDOR)
     } else if config.base_url.as_deref().is_some_and(|url| !url.is_empty()) {
         Some(UNKNOWN_VENDOR)
     } else {
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(vendor(&config(None, Some("https://llm.internal/v1")), Some(&XAI)), None);
         let mut azure = config(None, Some("https://gateway.internal/openai"));
         azure.azure_deployment = Some("d".into());
-        assert_eq!(vendor(&azure, None), Some("azure_openai"));
+        assert_eq!(vendor(&azure, None), Some("azure"));
     }
 
     // Catches: a named dialect reading OpenAI's key or URL instead of its own.

@@ -187,7 +187,7 @@ class LLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return "aws_bedrock"
+        return "aws"
 
     def chat(
         self,
