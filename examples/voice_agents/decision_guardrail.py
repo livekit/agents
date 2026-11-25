@@ -16,18 +16,8 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import (
-    Agent,
-    AgentServer,
-    AgentSession,
-    Block,
-    DecisionEvaluated,
-    DecisionGuardrail,
-    JobContext,
-    Steer,
-    cli,
-    inference,
-)
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.agents.beta import Block, DecisionEvaluated, DecisionGuardrail, Steer
 from livekit.agents.llm import Choice, Decision, Probability, Score
 
 logger = logging.getLogger("decision-guardrail")
@@ -109,14 +99,14 @@ async def entrypoint(ctx: JobContext) -> None:
     @guardrail.on_user_turn(decisions=USER_TURN_DECISIONS)
     def check_user_turn(ev: DecisionEvaluated) -> Block | Steer | None:
         _log(ev)
-        if ev.value("abusive", 0.0) > 0.8:
+        if ev.get("abusive", 0.0) > 0.8:
             return Block(say="I want to help, but I can't continue if the call stays abusive.")
-        if ev.value("topic") == "off_topic":
+        if ev.get("topic") == "off_topic":
             return Steer(
                 "The user went off topic. Say briefly that you can only help with "
                 "Northwind travel, then ask how you can help with their trip."
             )
-        if ev.value("frustration", 0.0) >= 2:
+        if ev.get("frustration", 0.0) >= 2:
             return Steer("The user is frustrated. Apologize first and keep the reply short.")
         return None
 
@@ -125,7 +115,7 @@ async def entrypoint(ctx: JobContext) -> None:
     @guardrail.on_agent_sentence(decisions=SENTENCE_DECISIONS, on_error="block")
     def check_sentence(ev: DecisionEvaluated) -> Block | None:
         _log(ev)
-        if ev.value("promises_refund", 0.0) > 0.6:
+        if ev.get("promises_refund", 0.0) > 0.6:
             return Block(
                 say="Refunds depend on your fare, so let me check your booking before "
                 "I promise anything."

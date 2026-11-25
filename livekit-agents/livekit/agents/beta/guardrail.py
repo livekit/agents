@@ -11,7 +11,13 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from pydantic import BaseModel
 
 from .. import inference, llm
-from ..llm.decisions import Decision, DecisionModel, DecisionResponse, _format_transcript
+from ..llm.decisions import (
+    Decision,
+    DecisionModel,
+    DecisionResponse,
+    _format_transcript,
+    _validate_decisions,
+)
 from ..log import logger
 from ..tokenize.blingfire import SentenceTokenizer
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
@@ -19,8 +25,8 @@ from ..utils import aio
 from ..utils.misc import is_given
 
 if TYPE_CHECKING:
-    from .agent_session import AgentSession
-    from .events import ConversationItemAddedEvent, UserInputTranscribedEvent
+    from ..voice.agent_session import AgentSession
+    from ..voice.events import ConversationItemAddedEvent, UserInputTranscribedEvent
 
 GuardrailHook = Literal["user_turn", "agent_sentence", "agent_turn"]
 GuardrailInput = Literal["turn", "history"]
@@ -54,8 +60,10 @@ class DecisionEvaluated(BaseModel):
     complete reply. With ``input="history"``, the conversation was sent before it."""
     speech_id: str | None = None
     """The reply this check applies to, for ``agent_sentence`` and ``agent_turn``."""
+    item_id: str | None = None
+    """The chat message that was checked, for ``agent_turn``."""
 
-    def value(self, name: str, default: Any = None) -> Any:
+    def get(self, name: str, default: Any = None) -> Any:
         """The result for ``name``, or ``default`` if that decision has no result."""
         result = self.response.results.get(name)
         return default if result is None else result.value
@@ -89,6 +97,7 @@ class _Check:
 @dataclass
 class _EagerEvaluation:
     input: str  # the text the model received, so reuse can check it is still the same
+    decisions: Mapping[str, Decision]  # what it evaluated, in case they were updated since
     task: asyncio.Task[DecisionResponse]
 
 
@@ -113,7 +122,7 @@ class DecisionGuardrail:
             "abusive": Probability("The user is abusive or threatening."),
         })
         def before_reply(ev: DecisionEvaluated) -> Block | None:
-            if ev.value("abusive", 0.0) > 0.8:
+            if ev.get("abusive", 0.0) > 0.8:
                 return Block(say="I'm going to end the call here.")
             return None
 
@@ -127,7 +136,7 @@ class DecisionGuardrail:
         self,
         session: AgentSession,
         *,
-        model: str | DecisionModel,
+        model: inference.DecisionModels | str | DecisionModel,
         timeout: float = 1.0,
     ) -> None:
         if session._guardrail is not None:
@@ -148,6 +157,7 @@ class DecisionGuardrail:
         # the user turn in progress, accumulated from final transcripts (eager checks)
         self._turn_text = ""
         self._eager: dict[int, _EagerEvaluation] = {}
+        self._warned_rt_turn_detection = False
 
         session.on("user_input_transcribed", self._on_user_input_transcribed)
         session.on("conversation_item_added", self._on_conversation_item_added)
@@ -235,6 +245,29 @@ class DecisionGuardrail:
 
         return decorator
 
+    def update_decisions(
+        self, handler: Callable[..., Any], *, decisions: Mapping[str, Decision]
+    ) -> None:
+        """Replace the decisions a registered check evaluates.
+
+        Can be called from any handler, including the check's own, for example to stop
+        asking about something already settled. Evaluations already running keep their
+        decisions; the new ones apply from the next evaluation.
+
+        Args:
+            handler: The function the check was registered with.
+            decisions: The new decisions, evaluated together in one request.
+        """
+        self._validate(decisions)
+        checks = [check for check in self._checks if check.handler is handler]
+        if not checks:
+            raise ValueError(f"no guardrail check is registered with {handler!r}")
+        for check in checks:
+            check.decisions = dict(decisions)
+            # an eager evaluation of the old decisions can't be reused
+            if (eager := self._eager.pop(id(check), None)) is not None:
+                eager.task.cancel()
+
     async def aclose(self) -> None:
         if self._closed:
             return
@@ -261,8 +294,7 @@ class DecisionGuardrail:
         *,
         eager: bool = False,
     ) -> None:
-        if not decisions:
-            raise ValueError("a guardrail check needs at least one decision")
+        self._validate(decisions)
         self._checks.append(
             _Check(
                 hook=hook,
@@ -275,6 +307,12 @@ class DecisionGuardrail:
             )
         )
 
+    def _validate(self, decisions: Mapping[str, Decision]) -> None:
+        # fail at registration rather than on every evaluation, behind on_error's fallback
+        if not decisions:
+            raise ValueError("a guardrail check needs at least one decision")
+        _validate_decisions(decisions, capabilities=self._model.capabilities)
+
     def _checks_for(self, hook: GuardrailHook) -> list[_Check]:
         return [check for check in self._checks if check.hook == hook]
 
@@ -284,16 +322,35 @@ class DecisionGuardrail:
         task.add_done_callback(self._tasks.discard)
 
     def _reset_turn(self) -> None:
-        self._turn_text = ""
-        for eager in self._eager.values():
+        for eager in self._take_turn().values():
             eager.task.cancel()
-        self._eager.clear()
+
+    def _take_turn(self) -> dict[int, _EagerEvaluation]:
+        """End the user turn in progress and hand over its eager evaluations.
+
+        Called as soon as the turn ends, before anything can return early, so the next
+        turn always starts empty. The caller cancels whatever it doesn't reuse.
+        """
+        eager = self._eager
+        self._eager = {}
+        self._turn_text = ""
+        return eager
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._closed or not ev.is_final or not ev.transcript:
             return
         eager_checks = [c for c in self._checks_for("user_turn") if c.eager]
         if not eager_checks:
+            return
+        activity = self._session._activity
+        if activity is not None and activity._rt_turn_detection_enabled:
+            # the realtime model ends turns itself, so on_user_turn checks never run
+            if not self._warned_rt_turn_detection:
+                self._warned_rt_turn_detection = True
+                logger.warning(
+                    "on_user_turn guardrail checks don't run with a realtime model's "
+                    "server-side turn detection"
+                )
             return
 
         self._turn_text = f"{self._turn_text} {ev.transcript}".strip()
@@ -306,18 +363,28 @@ class DecisionGuardrail:
                 self._model.evaluate(input=evaluate_input, decisions=check.decisions)
             )
             task.add_done_callback(_retrieve_exception)
-            self._eager[id(check)] = _EagerEvaluation(input=_as_text(evaluate_input), task=task)
+            self._eager[id(check)] = _EagerEvaluation(
+                input=_as_text(evaluate_input), decisions=check.decisions, task=task
+            )
 
     def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
         if self._closed or not isinstance(ev.item, llm.ChatMessage):
             return
         if ev.item.role == "assistant" and (text := ev.item.text_content):
+            # the message is added while its reply is still the current speech
+            speech = self._session.current_speech
             for check in self._checks_for("agent_turn"):
                 evaluate_input: str | llm.ChatContext = text
                 if check.input == "history":
                     evaluate_input = self._session.history.copy()
                 self._spawn(
-                    self._run_check(check, evaluate_input, input_text=text, speech_id=ev.item.id)
+                    self._run_check(
+                        check,
+                        evaluate_input,
+                        input_text=text,
+                        speech_id=speech.id if speech is not None else None,
+                        item_id=ev.item.id,
+                    )
                 )
 
     def _agent_history(self) -> llm.ChatContext:
@@ -338,13 +405,14 @@ class DecisionGuardrail:
         return chat_ctx
 
     async def _user_turn_verdicts(
-        self, *, chat_ctx: llm.ChatContext, user_message: llm.ChatMessage
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        user_message: llm.ChatMessage,
+        eager: dict[int, _EagerEvaluation],
     ) -> list[_Verdict]:
         checks = self._checks_for("user_turn")
         transcript = user_message.text_content or ""
-        eager = self._eager
-        self._eager = {}
-        self._turn_text = ""
 
         pending: list[Awaitable[_Verdict]] = []
         for check in checks:
@@ -352,16 +420,19 @@ class DecisionGuardrail:
             evaluation: asyncio.Task[DecisionResponse] | None = None
             if (prior := eager.pop(id(check), None)) is not None:
                 # reuse only if the model saw the same input, including any changes the
-                # agent's on_user_turn_completed made to the context
-                if _normalize(prior.input) == _normalize(_as_text(evaluate_input)):
+                # agent's on_user_turn_completed made to the context, and the same
+                # decisions. A failed one is evaluated again rather than falling to on_error
+                if (
+                    prior.decisions is check.decisions
+                    and not _failed(prior.task)
+                    and _normalize(prior.input) == _normalize(_as_text(evaluate_input))
+                ):
                     evaluation = prior.task
                 else:
                     prior.task.cancel()
             pending.append(
                 self._run_check(check, evaluate_input, input_text=transcript, evaluation=evaluation)
             )
-        for leftover in eager.values():
-            leftover.task.cancel()
         return list(await asyncio.gather(*pending))
 
     async def _sentence_verdicts(
@@ -385,6 +456,7 @@ class DecisionGuardrail:
         *,
         input_text: str,
         speech_id: str | None = None,
+        item_id: str | None = None,
         evaluation: asyncio.Task[DecisionResponse] | None = None,
     ) -> _Verdict:
         failed: _Verdict = Block() if check.on_error == "block" else None
@@ -417,7 +489,11 @@ class DecisionGuardrail:
             return failed
 
         ev = DecisionEvaluated(
-            hook=check.hook, response=response, input_text=input_text, speech_id=speech_id
+            hook=check.hook,
+            response=response,
+            input_text=input_text,
+            speech_id=speech_id,
+            item_id=item_id,
         )
         try:
             verdict = check.handler(ev)
@@ -469,16 +545,19 @@ async def run_user_turn_checks(
     *,
     chat_ctx: llm.ChatContext,
     user_message: llm.ChatMessage,
+    eager: dict[int, _EagerEvaluation],
 ) -> Block | Steer | None:
-    """Run every ``on_user_turn`` check and combine their results."""
+    """Run every ``on_user_turn`` check and combine their results.
+
+    ``eager`` is the turn's state from :meth:`DecisionGuardrail._take_turn`. Evaluations
+    reused here are removed from it; the caller cancels the rest.
+    """
     if not guardrail._checks_for("user_turn"):
         return None
-    verdicts = await guardrail._user_turn_verdicts(chat_ctx=chat_ctx, user_message=user_message)
+    verdicts = await guardrail._user_turn_verdicts(
+        chat_ctx=chat_ctx, user_message=user_message, eager=eager
+    )
     return _combine(verdicts)
-
-
-def has_sentence_checks(guardrail: DecisionGuardrail) -> bool:
-    return bool(guardrail._checks_for("agent_sentence"))
 
 
 # a sentence with its pending check (None for whitespace, which isn't checked), or a
@@ -572,6 +651,13 @@ def _as_text(evaluate_input: str | llm.ChatContext) -> str:
     if isinstance(evaluate_input, str):
         return evaluate_input
     return _format_transcript(evaluate_input)
+
+
+def _failed(task: asyncio.Task[DecisionResponse]) -> bool:
+    """Whether a finished evaluation raised or left a decision without a result."""
+    if not task.done():
+        return False
+    return task.cancelled() or task.exception() is not None or bool(task.result().errors)
 
 
 def _retrieve_exception(task: asyncio.Task[Any]) -> None:

@@ -104,13 +104,6 @@ from .generation import (
     update_expressive_instructions,
     update_instructions,
 )
-from .guardrail import (
-    Block,
-    Steer,
-    gate_agent_sentences,
-    has_sentence_checks,
-    run_user_turn_checks,
-)
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
 from .tool_executor import (
     _reply_tool_choice,
@@ -129,6 +122,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from ..beta.guardrail import Block, _EagerEvaluation
     from ..llm import mcp
     from ._turn_hooks import TurnHooks
     from .agent_session import AgentSession, ExpressiveOptions
@@ -2913,6 +2907,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
+            if (guardrail := self._session._guardrail) is not None:
+                guardrail._reset_turn()
             logger.warning(
                 "skipping user input, speech scheduling is paused",
                 extra={"lk.pii.user_input": info.new_transcript},
@@ -2987,8 +2983,12 @@ class AgentActivity(RecognitionHooks):
         old_task = self._user_turn_completed_atask
         # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
         info.user_turn_span_adopted = info.user_turn_span is not None
+        # taken now, so the next turn starts empty however this one ends
+        guardrail_eager = (
+            guardrail._take_turn() if (guardrail := self._session._guardrail) is not None else {}
+        )
         self._user_turn_completed_atask = self._create_speech_task(
-            self._user_turn_completed_task(old_task, info, turn_hooks),
+            self._user_turn_completed_task(old_task, info, turn_hooks, guardrail_eager),
             name="AgentActivity._user_turn_completed_task",
         )
         if turn_hooks is not None:
@@ -3005,10 +3005,16 @@ class AgentActivity(RecognitionHooks):
         old_task: asyncio.Task[None] | None,
         info: _EndOfTurnInfo,
         turn_hooks: TurnHooks | None = None,
+        guardrail_eager: dict[int, _EagerEvaluation] | None = None,
     ) -> None:
+        if guardrail_eager is None:
+            guardrail_eager = {}
         try:
-            await self._user_turn_completed_impl(old_task, info, turn_hooks)
+            await self._user_turn_completed_impl(old_task, info, turn_hooks, guardrail_eager)
         finally:
+            # eager evaluations the checks didn't reuse, or the turn returned before them
+            for eager in guardrail_eager.values():
+                eager.task.cancel()
             _end_user_turn_span(info)
 
     async def _user_turn_completed_impl(
@@ -3016,6 +3022,7 @@ class AgentActivity(RecognitionHooks):
         old_task: asyncio.Task[None] | None,
         info: _EndOfTurnInfo,
         turn_hooks: TurnHooks | None = None,
+        guardrail_eager: dict[int, _EagerEvaluation] | None = None,
     ) -> None:
         if old_task is not None:
             # Let user hooks finish without cancellation. The tradeoff is a delayed realtime
@@ -3152,10 +3159,14 @@ class AgentActivity(RecognitionHooks):
 
         reply_instructions: NotGivenOr[str] = NOT_GIVEN
         if (guardrail := self._session._guardrail) is not None:
+            # imported here: livekit.agents.beta imports the voice package
+            from ..beta.guardrail import Block, Steer, run_user_turn_checks
+
             verdict = await run_user_turn_checks(
                 guardrail,
                 chat_ctx=temp_mutable_chat_ctx,
                 user_message=user_message,
+                eager=guardrail_eager if guardrail_eager is not None else {},
             )
             if isinstance(verdict, Block):
                 # nothing is generated for this turn, but the turn stays in the history
@@ -4021,7 +4032,9 @@ class AgentActivity(RecognitionHooks):
             text_source: AsyncIterable[str | FlushSentinel] = llm_gen_data.text_ch
             sentence_gate: AsyncGenerator[str | FlushSentinel, None] | None = None
             guardrail = self._session._guardrail
-            if guardrail is not None and has_sentence_checks(guardrail):
+            if guardrail is not None and guardrail._checks_for("agent_sentence"):
+                from ..beta.guardrail import gate_agent_sentences
+
                 # sentences reach the TTS and the transcript only once the guardrail allows them
                 text_source = sentence_gate = gate_agent_sentences(
                     guardrail,
@@ -4050,21 +4063,15 @@ class AgentActivity(RecognitionHooks):
                 _end_segment()
                 segment_ch.close()
 
+        sentence_block: Block | None = None
+
         async def _on_sentence_blocked(block: Block) -> None:
             # stop generating: no more text, and no tool calls after the blocked sentence.
-            # the sentences already allowed still play, and only they reach the history
+            # the sentences already allowed still play, and only they reach the history.
+            # its replacement is said after the playout, below
+            nonlocal sentence_block
+            sentence_block = block
             llm_task.cancel()
-            if (say := block.say) is None:
-                return
-
-            def _say_replacement(handle: SpeechHandle) -> None:
-                # skipped if the reply never played (a discarded preemptive reply) or the
-                # user cut in; the agent answers the user instead
-                if handle.interrupted or self._session._closing:
-                    return
-                self._session.say(say)
-
-            speech_handle.add_done_callback(_say_replacement)
 
         # start synthesis preemptively (before the speech is scheduled) when enabled;
         # otherwise it starts right after scheduling below
@@ -4350,6 +4357,16 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
             speech_handle._item_added([msg])
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+
+        if (
+            sentence_block is not None
+            and sentence_block.say
+            and not speech_handle.interrupted
+            and not self._session._closing
+        ):
+            # before the handle is done, so a session.run() still waiting on it collects
+            # the replacement. Skipped if the user cut in: the agent answers them instead
+            self._session.say(sentence_block.say)
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")

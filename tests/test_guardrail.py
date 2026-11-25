@@ -7,16 +7,17 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Block, DecisionEvaluated, DecisionGuardrail, Steer, utils
-from livekit.agents.llm import ChatContext, ChatMessage, decisions
-from livekit.agents.llm.decisions import DecisionResponse, ProbabilityResult
-from livekit.agents.types import APIConnectOptions, FlushSentinel
-from livekit.agents.voice.events import ConversationItemAddedEvent, UserInputTranscribedEvent
-from livekit.agents.voice.guardrail import (
+from livekit.agents import utils
+from livekit.agents.beta import Block, DecisionEvaluated, DecisionGuardrail, Steer
+from livekit.agents.beta.guardrail import (
     _combine,
     gate_agent_sentences,
     run_user_turn_checks,
 )
+from livekit.agents.llm import ChatContext, ChatMessage, decisions
+from livekit.agents.llm.decisions import DecisionResponse, ProbabilityResult
+from livekit.agents.types import APIConnectOptions, FlushSentinel
+from livekit.agents.voice.events import ConversationItemAddedEvent, UserInputTranscribedEvent
 
 pytestmark = pytest.mark.unit
 
@@ -64,6 +65,8 @@ class StubSession(utils.EventEmitter[Any]):
         self._guardrail: DecisionGuardrail | None = None
         self.history = ChatContext()
         self.agent_chat_ctx: ChatContext | None = None
+        self._activity: Any = None
+        self.current_speech: Any = None
 
     @property
     def current_agent(self) -> Any:
@@ -80,8 +83,23 @@ def _user_message(text: str) -> ChatMessage:
     return ChatMessage(role="user", content=[text])
 
 
+async def _check_turn(
+    guardrail: DecisionGuardrail | None, *, chat_ctx: ChatContext, user_message: ChatMessage
+) -> Block | Steer | None:
+    # as AgentActivity does: take the turn's eager state when it ends, cancel what's unused
+    assert guardrail is not None
+    eager = guardrail._take_turn()
+    try:
+        return await run_user_turn_checks(
+            guardrail, chat_ctx=chat_ctx, user_message=user_message, eager=eager
+        )
+    finally:
+        for evaluation in eager.values():
+            evaluation.task.cancel()
+
+
 async def _run_user_turn(session: StubSession, text: str) -> Block | Steer | None:
-    return await run_user_turn_checks(
+    return await _check_turn(
         session._guardrail, chat_ctx=ChatContext(), user_message=_user_message(text)
     )
 
@@ -99,7 +117,7 @@ async def test_user_turn_block_and_steer() -> None:
     @guardrail.on_user_turn(decisions=ABUSIVE, eager=False)
     def before_reply(ev: DecisionEvaluated) -> Block | Steer | None:
         assert ev.hook == "user_turn"
-        if ev.value("abusive") > 0.5:
+        if ev.get("abusive") > 0.5:
             return Block(say="Goodbye.")
         return Steer(instructions="Be brief.")
 
@@ -120,9 +138,7 @@ async def test_user_turn_history_input_includes_conversation() -> None:
 
     chat_ctx = ChatContext()
     chat_ctx.add_message(role="assistant", content="How can I help?")
-    await run_user_turn_checks(
-        session._guardrail, chat_ctx=chat_ctx, user_message=_user_message("my order")
-    )
+    await _check_turn(session._guardrail, chat_ctx=chat_ctx, user_message=_user_message("my order"))
     assert model.inputs == ["assistant: How can I help?\nuser: my order"]
     await guardrail.aclose()
 
@@ -215,7 +231,7 @@ async def test_eager_history_is_reevaluated_when_the_context_changed() -> None:
     await asyncio.sleep(0)
 
     # unchanged context: the eager evaluation is reused
-    await run_user_turn_checks(
+    await _check_turn(
         session._guardrail,
         chat_ctx=session.agent_chat_ctx.copy(),
         user_message=_user_message("it is 42"),
@@ -230,9 +246,7 @@ async def test_eager_history_is_reevaluated_when_the_context_changed() -> None:
     # on_user_turn_completed added a message: same transcript, different input
     edited = session.agent_chat_ctx.copy()
     edited.add_message(role="user", content="(order 42 was corrected to 43)")
-    await run_user_turn_checks(
-        session._guardrail, chat_ctx=edited, user_message=_user_message("it is 42")
-    )
+    await _check_turn(session._guardrail, chat_ctx=edited, user_message=_user_message("it is 42"))
     assert len(model.inputs) == 3
     assert "corrected to 43" in model.inputs[-1]
     await guardrail.aclose()
@@ -266,7 +280,7 @@ async def test_eager_evaluation_is_reused_when_transcript_matches() -> None:
 
     @guardrail.on_user_turn(decisions=ABUSIVE)
     def before_reply(ev: DecisionEvaluated) -> Block | None:
-        return Block() if ev.value("abusive") > 0.5 else None
+        return Block() if ev.get("abusive") > 0.5 else None
 
     session.emit(
         "user_input_transcribed", UserInputTranscribedEvent(transcript="you", is_final=True)
@@ -292,6 +306,67 @@ async def test_eager_evaluation_is_reused_when_transcript_matches() -> None:
     assert await _run_user_turn(session, "hello idiot") == Block()
     assert model.inputs[-2:] == ["hello", "hello idiot"]
     await guardrail.aclose()
+
+
+RESOLVED = {"resolved": decisions.Probability("The caller's issue is resolved.")}
+
+
+async def test_handler_can_switch_the_decisions_it_checks() -> None:
+    session = StubSession()
+    model = ScriptedModel(_contains("idiot"))
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+    seen: list[list[str]] = []
+
+    @guardrail.on_user_turn(decisions=ABUSIVE, eager=False)
+    def before_reply(ev: DecisionEvaluated) -> Block | None:
+        seen.append(sorted(ev.response.results))
+        if ev.get("abusive", 0.0) > 0.5:
+            # warned once: from now on only check whether the issue got resolved
+            guardrail.update_decisions(before_reply, decisions=RESOLVED)
+            return Block(say="Please keep it civil.")
+        return None
+
+    assert await _run_user_turn(session, "you idiot") == Block(say="Please keep it civil.")
+    assert await _run_user_turn(session, "you idiot again") is None
+    assert seen == [["abusive"], ["resolved"]]
+    await guardrail.aclose()
+
+
+async def test_eager_evaluation_of_replaced_decisions_is_not_reused() -> None:
+    session = StubSession()
+    model = ScriptedModel(_contains("idiot"))
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+    seen: list[list[str]] = []
+
+    @guardrail.on_user_turn(decisions=ABUSIVE)
+    def before_reply(ev: DecisionEvaluated) -> None:
+        seen.append(sorted(ev.response.results))
+
+    session.emit(
+        "user_input_transcribed", UserInputTranscribedEvent(transcript="hello", is_final=True)
+    )
+    await asyncio.sleep(0)
+    guardrail.update_decisions(before_reply, decisions=RESOLVED)
+
+    await _run_user_turn(session, "hello")
+    # the eager result covered the same transcript but the old decisions: evaluated again
+    assert model.inputs == ["hello", "hello"]
+    assert seen == [["resolved"]]
+    await guardrail.aclose()
+
+
+def test_update_decisions_needs_a_registered_handler_and_decisions() -> None:
+    session = StubSession()
+    guardrail = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+
+    @guardrail.on_user_turn(decisions=ABUSIVE)
+    def before_reply(ev: DecisionEvaluated) -> None:
+        return None
+
+    with pytest.raises(ValueError, match="at least one decision"):
+        guardrail.update_decisions(before_reply, decisions={})
+    with pytest.raises(ValueError, match="no guardrail check"):
+        guardrail.update_decisions(lambda ev: None, decisions=RESOLVED)
 
 
 async def _no_block(block: Block) -> None:
@@ -340,7 +415,7 @@ async def test_sentence_gate_blocks_from_the_failing_sentence() -> None:
 
     @guardrail.on_agent_sentence(decisions=OFF_POLICY)
     def during_reply(ev: DecisionEvaluated) -> Block | None:
-        return Block(say="Let me check.") if ev.value("off_policy") > 0.5 else None
+        return Block(say="Let me check.") if ev.get("off_policy") > 0.5 else None
 
     blocked: list[Block] = []
 
@@ -405,7 +480,7 @@ async def test_agent_turn_runs_on_assistant_messages() -> None:
 
     @guardrail.on_agent_turn(decisions={"empathetic": decisions.Probability("Apologized.")})
     async def after_reply(ev: DecisionEvaluated) -> None:
-        seen.append((ev.input_text, ev.value("empathetic")))
+        seen.append((ev.input_text, ev.get("empathetic")))
         done.set()
 
     session.emit(
@@ -446,3 +521,119 @@ async def test_one_guardrail_per_session() -> None:
     second = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
     assert session._guardrail is second
     await second.aclose()
+
+
+async def test_eager_state_is_cleared_when_a_turn_ends_before_the_check() -> None:
+    session = StubSession()
+    model = ScriptedModel(lambda _: 0.0)
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+
+    @guardrail.on_user_turn(decisions=ABUSIVE)
+    def before_reply(ev: DecisionEvaluated) -> None:
+        return None
+
+    session.emit(
+        "user_input_transcribed", UserInputTranscribedEvent(transcript="first", is_final=True)
+    )
+    await asyncio.sleep(0)
+    # the turn ends without reaching the check (StopResponse, an error, a cancelled turn)
+    for evaluation in guardrail._take_turn().values():
+        evaluation.task.cancel()
+
+    session.emit(
+        "user_input_transcribed", UserInputTranscribedEvent(transcript="second", is_final=True)
+    )
+    await asyncio.sleep(0)
+    await _run_user_turn(session, "second")
+    # the next turn's eager input doesn't carry the old text, so its result is reused
+    assert model.inputs == ["first", "second"]
+    await guardrail.aclose()
+
+
+async def test_failed_eager_evaluation_is_evaluated_again() -> None:
+    class FlakyModel(ScriptedModel):
+        async def _evaluate_impl(self, **kwargs: Any) -> DecisionResponse:  # type: ignore[override]
+            if not self.inputs:
+                self.inputs.append(kwargs["input"])
+                raise RuntimeError("provider down")
+            return await super()._evaluate_impl(**kwargs)
+
+    session = StubSession()
+    model = FlakyModel(_contains("idiot"))
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+
+    @guardrail.on_user_turn(decisions=ABUSIVE, on_error="block")
+    def before_reply(ev: DecisionEvaluated) -> Block | None:
+        return Block(say="Please keep it civil.") if ev.get("abusive") > 0.5 else None
+
+    session.emit(
+        "user_input_transcribed", UserInputTranscribedEvent(transcript="hello", is_final=True)
+    )
+    await asyncio.wait([e.task for e in guardrail._eager.values()])
+    # the eager request failed: on_error="block" would block a harmless turn
+    assert await _run_user_turn(session, "hello") is None
+    assert model.inputs == ["hello", "hello"]
+    await guardrail.aclose()
+
+
+def test_decisions_are_validated_against_the_model_capabilities() -> None:
+    session = StubSession()
+    guardrail = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+    topic = {"topic": decisions.Choice("The topic.", options={"a": "A", "b": "B"})}
+
+    with pytest.raises(ValueError, match="does not support 'choice'"):
+
+        @guardrail.on_user_turn(decisions=topic)
+        def before_reply(ev: DecisionEvaluated) -> None:
+            return None
+
+    @guardrail.on_agent_turn(decisions=ABUSIVE)
+    def after_reply(ev: DecisionEvaluated) -> None:
+        return None
+
+    with pytest.raises(ValueError, match="does not support 'choice'"):
+        guardrail.update_decisions(after_reply, decisions=topic)
+
+
+async def test_eager_checks_skip_realtime_server_turn_detection() -> None:
+    session = StubSession()
+    # the realtime model ends turns itself: on_user_turn checks never run
+    session._activity = SimpleNamespace(_rt_turn_detection_enabled=True)
+    model = ScriptedModel(lambda _: 0.0)
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+
+    @guardrail.on_user_turn(decisions=ABUSIVE)
+    def before_reply(ev: DecisionEvaluated) -> None:
+        return None
+
+    for text in ("first turn", "second turn"):
+        session.emit(
+            "user_input_transcribed", UserInputTranscribedEvent(transcript=text, is_final=True)
+        )
+    await asyncio.sleep(0)
+    assert model.inputs == []
+    assert guardrail._turn_text == ""
+    await guardrail.aclose()
+
+
+async def test_agent_turn_reports_the_message_and_its_speech() -> None:
+    session = StubSession()
+    session.current_speech = SimpleNamespace(id="speech_1")
+    guardrail = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+    seen: list[tuple[str | None, str | None]] = []
+    done = asyncio.Event()
+
+    @guardrail.on_agent_turn(decisions=ABUSIVE)
+    def after_reply(ev: DecisionEvaluated) -> None:
+        seen.append((ev.speech_id, ev.item_id))
+        done.set()
+
+    session.emit(
+        "conversation_item_added",
+        ConversationItemAddedEvent(
+            item=ChatMessage(id="item_1", role="assistant", content=["Hello."])
+        ),
+    )
+    await asyncio.wait_for(done.wait(), timeout=1.0)
+    assert seen == [("speech_1", "item_1")]
+    await guardrail.aclose()

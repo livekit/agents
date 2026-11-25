@@ -5,14 +5,8 @@ from collections.abc import Callable, Mapping
 
 import pytest
 
-from livekit.agents import (
-    Agent,
-    Block,
-    ConversationItemAddedEvent,
-    DecisionEvaluated,
-    DecisionGuardrail,
-    Steer,
-)
+from livekit.agents import Agent, ConversationItemAddedEvent
+from livekit.agents.beta import Block, DecisionEvaluated, DecisionGuardrail, Steer
 from livekit.agents.llm import decisions
 from livekit.agents.llm.decisions import DecisionResponse, ProbabilityResult
 from livekit.agents.types import APIConnectOptions
@@ -86,7 +80,7 @@ async def test_user_turn_block_skips_the_reply_and_says_the_replacement() -> Non
     def setup(guardrail: DecisionGuardrail) -> None:
         @guardrail.on_user_turn(decisions=FLAG)
         def before_reply(ev: DecisionEvaluated) -> Block | None:
-            return Block(say="I'm going to end the call here.") if ev.value("flag") else None
+            return Block(say="I'm going to end the call here.") if ev.get("flag") else None
 
     messages = await _run(actions, setup, keyword="idiot")
     assert messages == [
@@ -105,7 +99,7 @@ async def test_user_turn_steer_adds_instructions_for_the_reply() -> None:
     def setup(guardrail: DecisionGuardrail) -> None:
         @guardrail.on_user_turn(decisions=FLAG)
         def before_reply(ev: DecisionEvaluated) -> Steer | None:
-            return Steer(instructions="The issue is not resolved.") if ev.value("flag") else None
+            return Steer(instructions="The issue is not resolved.") if ev.get("flag") else None
 
     messages = await _run(actions, setup, keyword="broken")
     assert messages == [
@@ -125,7 +119,7 @@ async def test_agent_sentence_block_keeps_allowed_sentences_and_says_the_replace
     def setup(guardrail: DecisionGuardrail) -> None:
         @guardrail.on_agent_sentence(decisions=FLAG)
         def during_reply(ev: DecisionEvaluated) -> Block | None:
-            return Block(say="Let me check with a colleague.") if ev.value("flag") else None
+            return Block(say="Let me check with a colleague.") if ev.get("flag") else None
 
     messages = await _run(actions, setup, keyword="refund")
     assert messages[0] == ("user", "can I get my money back")
@@ -148,3 +142,43 @@ async def test_agent_turn_sees_each_reply() -> None:
 
     await _run(actions, setup, keyword="sorry")
     assert seen == ["Sorry for the wait, how can I help?"]
+
+
+async def test_agent_sentence_replacement_is_part_of_the_run_result() -> None:
+    from livekit.agents import AgentSession
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    # the replacement used to be said from a done callback that raced the run's own,
+    # so it was missing from about half the run results: repeat to catch an ordering bug
+    for _ in range(4):
+        llm = FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="can I get my money back",
+                    content="Thanks for asking about that order. You will get a full refund today.",
+                    ttft=0.1,
+                    duration=0.1,
+                )
+            ]
+        )
+        async with AgentSession(llm=llm) as session:
+            guardrail = DecisionGuardrail(session, model=KeywordModel("refund"))
+
+            @guardrail.on_agent_sentence(decisions=FLAG)
+            def during_reply(ev: DecisionEvaluated) -> Block | None:
+                return Block(say="Let me check with a colleague.") if ev.get("flag") else None
+
+            await session.start(Agent(instructions="You are a helpful assistant."))
+            result = await asyncio.wait_for(
+                session.run(user_input="can I get my money back"), timeout=5.0
+            )
+            said = [
+                (ev.item.text_content or "").strip()
+                for ev in result.events
+                if ev.type == "message" and ev.item.role == "assistant"
+            ]
+            assert said == [
+                "Thanks for asking about that order.",
+                "Let me check with a colleague.",
+            ]

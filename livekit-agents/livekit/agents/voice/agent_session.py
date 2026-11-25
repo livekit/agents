@@ -80,7 +80,6 @@ from .events import (
     UserState,
     UserStateChangedEvent,
 )
-from .guardrail import DecisionGuardrail
 from .ivr import IVRActivity
 from .keyterm_detection import (
     KeytermDetector,
@@ -110,6 +109,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from ..beta.guardrail import DecisionGuardrail
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
