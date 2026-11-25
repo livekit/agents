@@ -1,0 +1,89 @@
+rust/crates/lk-agents-fuzz/src/authored.rs
+  s_bbb46b29e16294::t_56778d33c675d7 141,442-542
+rust/crates/lk-agents-fuzz/src/drive/apply/call.rs
+  s_bbb46b29e16294::t_79fc88019106dc 85-88,551-589
+rust/crates/lk-agents-fuzz/src/drive/collect.rs
+  s_bbb46b29e16294::t_aa92443be1f0ad 58,358-386
+rust/crates/lk-agents-fuzz/src/drive/finish.rs
+  s_bbb46b29e16294::t_89546e8b86f3c4 17-44,83
+rust/crates/lk-agents-fuzz/src/drive/mod.rs
+  s_bbb46b29e16294::t_87e7e52584c0f4 697-699,733-736
+rust/crates/lk-agents-fuzz/src/drive/start.rs
+  s_bbb46b29e16294::t_e13dfd2fc74889 375-382,416-417
+rust/crates/lk-agents-fuzz/src/fakes/amd.rs
+  s_bbb46b29e16294::t_f2c09cf61acea5 1-53
+rust/crates/lk-agents-fuzz/src/fakes/llm.rs
+  s_bbb46b29e16294::t_eb4b5e7f4d7448 74-84
+rust/crates/lk-agents-fuzz/src/fakes/mod.rs
+  s_bbb46b29e16294::t_5a3b58af4fdbb2 26
+rust/crates/lk-agents-fuzz/src/input.rs
+  s_bbb46b29e16294::t_11af065e826106 10-11,126-127,449-460,485,672-682,792
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_bbb46b29e16294::t_dc57d16de76441 1-363
+rust/crates/lk-agents-fuzz/src/record/mod.rs
+  s_bbb46b29e16294::t_0ce6e116c2b3d2 33,162-163,204-210,732-733
+rust/crates/lk-agents-fuzz/src/rules/amd/adopted_request_matches.rs
+  s_bbb46b29e16294::t_8c1a0d2748d926 1-83
+rust/crates/lk-agents-fuzz/src/rules/amd/completion_respects_wait.rs
+  s_bbb46b29e16294::t_a9b725631fb925 1-76
+rust/crates/lk-agents-fuzz/src/rules/amd/detached_is_prompt.rs
+  s_bbb46b29e16294::t_469e35e75c76c4 1-77
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_bbb46b29e16294::t_d2f8a5d3edd58c 1-91
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_answers_are_keyed.rs
+  s_bbb46b29e16294::t_56d347ea4df55c 1-96
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
+  s_bbb46b29e16294::t_516a4035fd875d 1-136
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_bbb46b29e16294::t_86faf5133026f7 1-165
+rust/crates/lk-agents-fuzz/src/rules/amd/machine_reply_waits_for_silence.rs
+  s_bbb46b29e16294::t_d58037919bfd1d 1-101
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_bbb46b29e16294::t_eb86bc396dc21a 1-130
+rust/crates/lk-agents-fuzz/src/rules/amd/reply_follows_decision.rs
+  s_bbb46b29e16294::t_30f8e2b48d1af0 1-124
+rust/crates/lk-agents-fuzz/src/rules/amd/stage_instructions_never_saved.rs
+  s_bbb46b29e16294::t_6e924f8cde35f3 1-97
+rust/crates/lk-agents-fuzz/src/search/conversation/answerer.rs
+  s_bbb46b29e16294::t_1c7053de0ddd55 1-166
+rust/crates/lk-agents-fuzz/src/search/conversation/mod.rs
+  s_bbb46b29e16294::t_22bbd5f50c9f83 26,429-430,458,516-517,691
+rust/crates/lk-agents-fuzz/tests/regressions/amd/detach.rs
+  s_bbb46b29e16294::t_35255f6534430c 1-143
+rust/crates/lk-agents-fuzz/tests/regressions/amd/gate.rs
+  s_bbb46b29e16294::t_40c7418b9b2834 1-199
+rust/crates/lk-agents-fuzz/tests/regressions/amd/mod.rs
+  s_bbb46b29e16294::t_584b18a35e7049 1-230
+rust/crates/lk-agents-fuzz/tests/regressions/amd/opening.rs
+  s_bbb46b29e16294::t_9bf45c3bf1d9a9 1-133
+rust/crates/lk-agents-fuzz/tests/regressions/amd/payload.rs
+  s_bbb46b29e16294::t_198f8274d5572e 1-262
+rust/crates/lk-agents-fuzz/tests/regressions/amd/silence.rs
+  s_bbb46b29e16294::t_2bd261880a927a 1-98
+rust/crates/lk-agents-fuzz/tests/regressions/main.rs
+  s_bbb46b29e16294::t_0855bd97994420 61
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  s_bbb46b29e16294::t_0b3a541283266c 795-798
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_reply_tests.rs
+  s_bbb46b29e16294::t_ce60d4cae89222 1-539
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_rule_tests.rs
+  s_bbb46b29e16294::t_0d3bfdbe6c2472 1-835
+rust/crates/lk-agents-voice/src/amd/mod.rs
+  s_bbb46b29e16294::t_e678a7b1d0d2a0 187-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "00329c4b7e8ff448b9e5bc0bc1316d07489948ee",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
