@@ -155,9 +155,10 @@ pub enum AmdAnswer {
     /// The decision for a committed turn. It may arrive before or after the customer
     /// hook returns.
     ReplyDecided { run: AmdRunId, turn: TurnId, decision: ReplyDecision },
-    /// The transcript for a realtime model without user transcription and without
-    /// session STT (spec §7.2), also for an older turn's late final and a turn whose
-    /// prediction was reused. The session adds it to the chat record only.
+    /// A turn's transcript on a realtime session (spec §7.2), also for an older turn's
+    /// late final and a turn whose prediction was reused. The session keeps it only for
+    /// a model without user transcription and without session STT, read when it
+    /// arrives. It goes to the agent's context and history, never to the server.
     InsertUserItem { run: AmdRunId, turn: TurnId, text: String },
     /// AMD completed. `pending` settles every turn committed under the gate whose
     /// decision is not applied yet: the `wait` and "AMD completed" rows of spec §10.1.
@@ -373,19 +374,32 @@ returns early when session STT is disabled. With the gate attached and `!skip_re
   request may leave after an older response settles
 - the request carries the decision's stage instructions, passed through unchanged.
   The reply's tool follow-ups carry them too
-- a decision that allows DTMF sets the session tools to the agent's tools plus
-  `send_dtmf_events` with `UpdateTools`, before the reply's first request, because
-  `SpeechSpec.toolset` alone does not reach the server. The agent's tools come back
-  when the reply's speech ends, after its last tool follow-up. Python sends the tools
-  with each response instead; the result on the server is the same
-- the session keeps a gated turn's STT words only for a model without user
-  transcription. Otherwise the server's transcript of the committed audio is the
-  turn's item
-- AMD sends `InsertUserItem` only for a model without user transcription and without
-  session STT, so the item is never added twice. The session adds it to the chat
-  record and emits `conversation_item_added`, as `_add_realtime_transcript` does. It
-  does not send it to the server, which holds the turn's audio already. In any other
-  case the session drops it as `NotNeeded`
+- a decision that allows DTMF resolves its toolset once: the agent's tools, the
+  session's tools and `send_dtmf_events`, unless an agent tool has that name. The
+  speech runs that toolset. The session sets the server's tools to it with
+  `UpdateTools` before the reply's first request, because `SpeechSpec.toolset` alone
+  does not reach the server. The agent's tools come back when the reply's speech ends,
+  after its last tool follow-up. A fallback swap's frame also sends the agent's tools
+- the target is a per-response `tools` field on the realtime `GenerateReply`, as
+  Python's `generate_reply(tools=...)` sends. It would replace the swap and its
+  restore. `GenerateReply` is a host-recorded type on the realtime wire, so the field
+  changes the host ABI and every realtime plugin. This step keeps the swap
+- `commit_gated_turn_item` is the one owner of a gated turn's words, for a reply, a
+  denial and a turn superseded in its hook. A pipeline keeps the STT's words. A
+  realtime model with user transcription keeps none: the server's transcript of the
+  committed audio is the turn's item. A model without it keeps the session's STT
+  words, when there are some
+- AMD sends `InsertUserItem` for every turn of a realtime run. The session decides
+  on its live model and STT when the answer arrives: it keeps the words only for a
+  model without user transcription and without session STT, so the item is never
+  added twice. It adds them to the agent's context and history and emits
+  `conversation_item_added`, as `_add_realtime_transcript` does. In any other case it
+  drops them as `NotNeeded`. The runtime does not decide from the model at entry: a
+  handoff can change the model's transcription before AMD enters
+- both items stay off the wire. The server holds the turn's audio, so the realtime
+  projection (`for_realtime`) leaves these items out, as it leaves out the server's
+  own items. A later `UpdateChatCtx`, such as a host `update_chat_ctx` or a transcript
+  correction, does not send the turn again
 
 The opening also works on a realtime model (spec §10.6). Opening text uses the model's
 `say()` when it supports it and the session has no TTS. Opening instructions ask the
@@ -430,7 +444,12 @@ until `Activated`.
   over agent speech instead of committing it (spec §5.3). While the gate is attached,
   the session asks whether the server's turn detection runs, not whether the model
   has it. A model whose server detection the session switched off then drops the
-  backchannel too. Without the gate the check is unchanged.
+  backchannel too. Without the gate the check is unchanged: it reads the model's
+  capability, while Python's `_rt_turn_detection_enabled` reads whether detection is
+  enabled. That divergence predates AMD.
+- **False interruptions.** The same value decides `cancel_false_interruption` at
+  commit. Under the gate, a model whose server detection the session switched off
+  cancels a pending false interruption at commit, as Python does.
 
 - **Interruptions.** AMD's requirement is laid over every option layer while the run is
   attached, so a host `override_options` entered during AMD does not turn interruptions
@@ -700,6 +719,10 @@ protocol must hold under all of them.
   menu; hold → `wait`) and injects delays, failures and stale answers. A decision-model
   fake records `choice` calls. AMD's STT is a fake stream with its own lag. The fake
   LLM and the realtime fake record each request's messages, instructions and tools.
+  The realtime fake also records each socket's model transcription and each `say()`.
+  The session journals the speech each realtime request is for
+  (`RealtimeStep::Requested`), so the rules join a response to its turn by speech, not
+  by a time window.
 - **Scripted AMD.** Before the AMD machine exists, a scripted answerer drives the
   session's gate. It answers early (before the customer hook returns), late, for stale
   turns, detaches with a turn in its hook, and activates after participant speech.
@@ -788,6 +811,12 @@ followed its own rules:
   a reply from `Detach`.
 - `detached_is_prompt`: `Detached` follows `Detach` within a bound that does not
   depend on a customer hook.
+
+On a realtime model, `gated_turn_has_one_user_item` checks the words rule from what AMD
+sent and the fake server's commits: a turn has no item of the session's own when the
+socket's model transcribes, else exactly one, and none is empty.
+`realtime_turn_audio_committed` checks that every gated turn commits the server's buffer
+once, before its reply's request.
 
 `speech_is_heard` treats a speech as waiting legitimately while the gate holds it. The
 opening never waits on the hold. A reply to a bound turn with an applied allow waits only
