@@ -1,0 +1,19 @@
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_fe0b584e74cb4c::t_892ad54076262f 299-301,316-341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ce2eb06f2f16ccdeb299d1890eaf1dfe24c62a72",
+  "prompts": {},
+  "sessions": {
+    "s_fe0b584e74cb4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da1f6a87-9ec4-476b-ba24-265326562452",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
