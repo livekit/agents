@@ -650,6 +650,8 @@ pub struct PlanSpec {
     /// `None` renders the frame's instructions.
     pub instructions: Option<String>,
     pub turn_instructions: Option<String>,
+    /// `turn_instructions` stay for the reply's tool follow-ups (AMD's stage instructions).
+    pub keep_turn_instructions: bool,
     pub tools: Vec<lk_agents_abi::ToolSpec>,
     pub on_enter: bool,
     pub running_tool_calls: Vec<crate::generation::RunningToolCall>,
@@ -794,6 +796,7 @@ mod expressive_tests {
             new_message: None,
             instructions: None,
             turn_instructions: None,
+            keep_turn_instructions: false,
             tools: vec![],
             on_enter: false,
             running_tool_calls: vec![],

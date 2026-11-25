@@ -28,6 +28,7 @@ pub enum Step {
     Close(CloseStep),
     Detector(DetectorStep),
     Room(RoomStep),
+    Gate(GateStep),
 }
 
 macro_rules! step_families {
@@ -53,6 +54,7 @@ step_families!(
     Close(CloseStep),
     Detector(DetectorStep),
     Room(RoomStep),
+    Gate(GateStep),
 );
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -233,6 +235,102 @@ pub enum SpeechStep {
     ReleasedToTools {
         speech: SpeechId,
     },
+    /// The AMD gate holds the queue's head: chosen, not authorized.
+    HeadHeld {
+        speech: SpeechId,
+    },
+    /// The AMD gate's authorization hold changed.
+    AuthorizationHeld(crate::agent_session::machine::activity::amd_gate::Hold),
+}
+
+/// The AMD reply gate's steps (`agent_session::machine::activity::amd_gate`), once per change.
+#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
+pub enum GateStep {
+    /// A run attached: authorization is held from here.
+    Attached {
+        run: crate::amd::AmdRunId,
+    },
+    AttachRefused {
+        run: crate::amd::AmdRunId,
+        why: crate::amd::AmdAttachRefused,
+    },
+    /// `Activated` was applied: the activation instant.
+    Activated {
+        run: crate::amd::AmdRunId,
+    },
+    /// The opening was created; it alone bypasses the hold.
+    OpeningBypass {
+        speech: SpeechId,
+    },
+    /// The opening was not created.
+    OpeningDropped {
+        why: OpeningDrop,
+    },
+    /// Participant speech started before the opening's first playout: it was cancelled.
+    OpeningCancelled {
+        speech: SpeechId,
+    },
+    /// A turn committed under the gate; authorization is held for it.
+    Committed {
+        run: crate::amd::AmdRunId,
+        turn: crate::audio_recognition::TurnId,
+    },
+    /// The decision for the latest committed turn was accepted.
+    Decided {
+        run: crate::amd::AmdRunId,
+        turn: crate::audio_recognition::TurnId,
+        allow: bool,
+    },
+    /// The turn's customer hook returned before its decision: it waits for it.
+    Parked {
+        turn: crate::audio_recognition::TurnId,
+    },
+    /// An answer the gate did not apply.
+    AnswerDropped {
+        run: crate::amd::AmdRunId,
+        turn: Option<crate::audio_recognition::TurnId>,
+        why: AnswerDrop,
+    },
+    /// A newer commit denied an older turn (parked) or cancelled its held reply (`speech`).
+    Superseded {
+        turn: crate::audio_recognition::TurnId,
+        speech: Option<SpeechId>,
+    },
+    /// `Detach` settled a turn whose decision was not applied yet.
+    Settled {
+        turn: crate::audio_recognition::TurnId,
+        allow: bool,
+    },
+    /// `Detach` was applied and the gate removed.
+    Detached {
+        run: crate::amd::AmdRunId,
+    },
+}
+
+/// Why the gate did not apply an AMD answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum AnswerDrop {
+    /// No run is attached, or another one is.
+    OtherRun,
+    /// The decision names a turn other than the latest committed one.
+    NotLatest,
+    /// The latest turn already has a decision.
+    Duplicate,
+    /// `Activated` arrived twice.
+    AlreadyActive,
+    /// The session does not take this answer yet (realtime paths, implementation step 4).
+    Unsupported,
+}
+
+/// Why the gate did not create the opening (spec §10.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum OpeningDrop {
+    /// The participant was speaking at activation.
+    UserSpeaking,
+    /// Opening text with no TTS while audio output plays.
+    NoVoice,
+    /// Opening instructions with no LLM.
+    NoModel,
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -910,7 +1008,9 @@ impl Step {
                 | SpeechStep::IdleAskWithdrawn { speech, .. }
                 | SpeechStep::WatchdogArmed { speech, .. }
                 | SpeechStep::WatchdogCleared { speech }
+                | SpeechStep::HeadHeld { speech }
                 | SpeechStep::ReleasedToTools { speech } => Some(*speech),
+                SpeechStep::AuthorizationHeld(_) => None,
                 SpeechStep::SayRefused { .. }
                 | SpeechStep::FloorArmed { .. }
                 | SpeechStep::FloorReleased
@@ -995,6 +1095,22 @@ impl Step {
                 | HandoffStep::AgentUpdated { .. }
                 | HandoffStep::HookFinished { .. } => None,
             },
+            Step::Gate(step) => match step {
+                GateStep::OpeningBypass { speech } | GateStep::OpeningCancelled { speech } => {
+                    Some(*speech)
+                }
+                GateStep::Superseded { speech, .. } => *speech,
+                GateStep::Attached { .. }
+                | GateStep::AttachRefused { .. }
+                | GateStep::Activated { .. }
+                | GateStep::OpeningDropped { .. }
+                | GateStep::Committed { .. }
+                | GateStep::Decided { .. }
+                | GateStep::Parked { .. }
+                | GateStep::AnswerDropped { .. }
+                | GateStep::Settled { .. }
+                | GateStep::Detached { .. } => None,
+            },
             Step::Close(_) | Step::Detector(_) | Step::Room(_) => None,
         }
     }
@@ -1030,6 +1146,7 @@ pub fn step_names() -> Vec<String> {
         Close => close_step_vocabulary::NAMES;
         Detector => detector_step_vocabulary::NAMES;
         Room => room_step_vocabulary::NAMES;
+        Gate => gate_step_vocabulary::NAMES;
         Decided => crate::audio_recognition::observation::recognition_observation_vocabulary::NAMES;
     }
     assert_step_is_covered::<Names, &'static [&'static str]>();

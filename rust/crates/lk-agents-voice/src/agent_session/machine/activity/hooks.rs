@@ -469,6 +469,8 @@ pub(crate) enum TurnLimit {
 pub enum TurnLimitSkip {
     /// Scheduling is paused, a handoff blocks new turns, or the session closes.
     Paused,
+    /// An AMD run is attached: it owns replies.
+    AmdAttached,
     /// The callback is still running.
     Busy,
     /// The agent started speaking: the end of turn replied.
@@ -485,7 +487,10 @@ impl VoiceDriver {
     ) {
         // An open user turn ends as a release would, whatever the callback is doing.
         let user_turn = self.user_turn_limit_reached(self.step.now);
-        let skip = if self.turn_limit_blocked() {
+        // AMD owns replies while it runs, and a voicemail greeting runs long.
+        let skip = if self.activity.amd_attached() {
+            Some(TurnLimitSkip::AmdAttached)
+        } else if self.turn_limit_blocked() {
             Some(TurnLimitSkip::Paused)
         } else if matches!(self.activity.turn_limit, TurnLimit::Running(_)) {
             return self.record_trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Busy));

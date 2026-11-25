@@ -717,6 +717,11 @@ impl VoiceDriver {
         if self.session.closing_past_edge() || self.session.idle.held() || !self.is_idle() {
             return;
         }
+        // AMD owns replies while it runs: the outputs stay on the record, with no reply.
+        if self.activity.amd_attached() {
+            self.activity.tools.pending.clear();
+            return;
+        }
         let batch = Batch(std::mem::take(&mut self.activity.tools.pending));
         // An update still at the tail means the agent hasn't spoken since.
         let last_pending = batch.last_item_id();

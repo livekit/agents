@@ -100,6 +100,8 @@ fn effect_observation(effect: &VoiceEffect) -> Option<Step> {
         | VoiceEffect::AnswerExpert { .. }
         | VoiceEffect::CaptureInputOffers { .. }
         | VoiceEffect::RouteInput { .. } => return None,
+        // The gate journals its own `GateStep`s.
+        VoiceEffect::Amd { .. } => return None,
     };
     Some(step)
 }
@@ -435,6 +437,8 @@ impl VoiceDriver {
                 }
             }
         }
+        // After the user state moved: the gate reads it.
+        self.gate_session_event(now, ev);
     }
 
     /// A message's role and text reach an STT that consumes conversation context, unless

@@ -51,6 +51,8 @@ pub enum StorageRequest {
 #[derive(lk_agents_abi::Vocabulary)]
 pub enum VoiceEvent {
     Host(Sent),
+    /// An answer of the attached AMD run, applied by the reply gate.
+    Amd(crate::amd::AmdAnswer),
     Stt(crate::audio::Tagged<SpeechEvent>, Option<lk_agents_abi::ProviderId>),
     Vad(VadEvent),
     Room(RoomEventKind),
@@ -482,6 +484,7 @@ impl VoiceDriver {
                 self.on_api(now, command);
             }
             Some(VoiceEvent::RoomIo(ev)) => self.on_room_io(now, ev),
+            Some(VoiceEvent::Amd(answer)) => self.on_amd_answer(now, answer),
             Some(VoiceEvent::Gen(ev)) => self.on_generation(now, ev),
             Some(VoiceEvent::InputRouted { speech, request_id, result, usage }) => {
                 self.input_routed(speech, request_id, result, usage)
@@ -562,6 +565,7 @@ impl VoiceDriver {
 
         self.release_providers();
         self.settle_internal();
+        self.report_agent_busy(now);
         self.activity.finish_step();
         self.publish_gate();
         self.take_outbox()
@@ -626,6 +630,7 @@ impl VoiceDriver {
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
+            Command::Amd(cmd) => self.on_amd(now, cmd),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {
                     metrics: record,
@@ -698,6 +703,7 @@ impl VoiceDriver {
                     self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Debounced)
                 }
                 Timer::EndCallReply => self.end_call_reply_timed_out(now),
+                Timer::AmdSilence => self.amd_silence_elapsed(now),
                 Timer::OutputSettlement(binding) => self.output_settlement_overdue(now, binding),
                 // A realtime request the server never answered: the machine settles it.
                 Timer::RealtimeRequest(key) => self.realtime_request_timed_out(key),

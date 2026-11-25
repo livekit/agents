@@ -1,6 +1,7 @@
 use crate::agent_session::machine::activity::false_interruption::InterruptRefusal;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::machine::activity::voice_task::VoiceTaskCommandKind;
+use crate::amd::AmdCommandKind;
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::tool_executor::Toolset;
@@ -45,6 +46,8 @@ pub enum Command {
     Run(Box<crate::run_result::RunSpec>),
     #[vocabulary(kind = VoiceTaskCommandKind)]
     VoiceTask(crate::agent_session::machine::activity::voice_task::VoiceTaskCommand),
+    #[vocabulary(kind = AmdCommandKind)]
+    Amd(crate::amd::AmdCommand),
 }
 
 /// Monotonic within a session.
@@ -127,6 +130,7 @@ pub enum Answer {
     Drain(Result<(), DrainRefused>),
     Handoff(Result<(), HandoffRefused>),
     Dtmf(crate::workflows::machine::dtmf::DtmfOutcome),
+    AmdAttach(Result<(), crate::amd::AmdAttachRefused>),
     /// The value of the task's validated `Completed`.
     VoiceTask(
         Result<
@@ -542,6 +546,8 @@ pub enum HandoffRefused {
     DrainRefused,
     /// A `VoiceTask` holds the floor; its parent waits on it.
     TaskRunning,
+    /// An AMD run is attached: agent handoffs wait for it to complete.
+    AmdAttached,
 }
 
 /// The provider a three-state argument hands over.
@@ -606,6 +612,7 @@ impl Command {
             | Command::DelegateUsage(_)
             | Command::SetStaticKeyterms(_)
             | Command::Dtmf(_)
+            | Command::Amd(_)
             | Command::Run(_) => Vec::new(),
         }
     }

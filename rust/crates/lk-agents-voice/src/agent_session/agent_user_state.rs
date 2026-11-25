@@ -49,6 +49,10 @@ impl AgentUserState {
         self.agent
     }
 
+    pub(crate) fn user_speaking(&self) -> bool {
+        self.user == UserState::Speaking
+    }
+
     pub(crate) fn someone_speaking(&self) -> bool {
         self.agent == AgentState::Speaking || self.user == UserState::Speaking
     }

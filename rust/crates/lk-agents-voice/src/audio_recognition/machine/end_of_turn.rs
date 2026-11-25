@@ -274,6 +274,7 @@ impl AudioRecognition {
             | Timer::Filler(_)
             | Timer::DtmfDebounce
             | Timer::EndCallReply
+            | Timer::AmdSilence
             | Timer::OutputSettlement(_)
             | Timer::InterruptionTimeout(_)
             | Timer::ConsecutiveSpeechDelay

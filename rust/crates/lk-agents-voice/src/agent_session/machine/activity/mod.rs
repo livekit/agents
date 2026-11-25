@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+pub(crate) mod amd_gate;
 pub(crate) mod drain;
 mod exact;
 mod experts;
@@ -155,6 +156,10 @@ pub(crate) struct AgentActivity {
     preemptive: Option<Preemptive>,
     model: ActivityModel,
     launching: BTreeSet<SpeechId>,
+    /// The attached AMD run's reply gate.
+    gate: Option<amd_gate::Gate>,
+    /// Decisions `Detach` settled for turns still in their customer hook.
+    amd_settled: BTreeMap<crate::audio_recognition::TurnId, crate::amd::ReplyDecision>,
 }
 
 enum ActivityModel {
@@ -410,6 +415,11 @@ impl VoiceDriver {
             // A VoiceTask's parent waits on it, so no agent replaces it.
             ActivityCommand::Update(update) if self.activity.voice_tasks.running() => {
                 let refused = crate::agent_session::HandoffRefused::TaskRunning;
+                self.refuse_handoff(update, refused)
+            }
+            // AMD owns replies while it runs; a handoff waits for it to complete.
+            ActivityCommand::Update(update) if self.activity.amd_attached() => {
+                let refused = crate::agent_session::HandoffRefused::AmdAttached;
                 self.refuse_handoff(update, refused)
             }
             ActivityCommand::Update(update) => {
@@ -686,6 +696,9 @@ impl VoiceDriver {
         {
             state.item_added(&entry.item);
         }
+        if let Some(speech) = tell_speech {
+            self.observe_reply_item(speech, &entry.item);
+        }
         let publish = match outcome {
             CommitOutcome::Added => entry.visibility.history(),
             CommitOutcome::Promoted => {
@@ -811,6 +824,8 @@ impl AgentActivity {
                 None => ActivityModel::Pipeline,
             },
             launching: Default::default(),
+            gate: None,
+            amd_settled: Default::default(),
         }
     }
 }

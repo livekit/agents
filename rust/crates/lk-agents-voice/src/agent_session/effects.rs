@@ -220,6 +220,12 @@ pub enum VoiceEffect {
         /// The speech's turn, which the rendering runs under; `None` once it ended.
         turn: Option<crate::telemetry::SpanContext>,
     },
+    /// What the reply gate tells the attached AMD run (`docs/proposals/amd.md`). Executed by the
+    /// AMD executor; dropped when none runs.
+    Amd {
+        run: crate::amd::AmdRunId,
+        observation: crate::amd::AmdObservation,
+    },
     /// Cancel only this call's refusal renderer. Deferred tool-reply rendering and other
     /// calls keep their independent lifetimes. Idempotent when no renderer is pending.
     CancelToolRefusal {
@@ -275,6 +281,9 @@ pub enum Timer {
     DtmfDebounce,
     /// An ended call's realtime reply to the tool result has not started yet.
     EndCallReply,
+    /// The AMD gate's silence hold: the participant has been silent long enough for the held
+    /// reply. Only the deadline the gate armed opens it.
+    AmdSilence,
     /// A cut segment's sink has not reported playback finished: past it, the binding is released.
     OutputSettlement(crate::agent_session::RequestId),
     /// An interrupted speech that never reported its end is released (`SpeechHandle._cancel`).

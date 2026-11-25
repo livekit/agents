@@ -369,6 +369,9 @@ impl VoiceRuntime {
             E::CancelToolRefusal { speech, call } => {
                 self.speeches.end_callback(speech, HostCallbackId::ToolRefusal(call))
             }
+            // No AMD executor runs yet (`docs/proposals/amd.md`, implementation step 3): the
+            // gate's observations have no reader.
+            E::Amd { .. } => {}
         }
     }
 

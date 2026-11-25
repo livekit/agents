@@ -288,7 +288,9 @@ impl VoiceDriver {
         plan.tools = offered.clone();
         plan.record = None;
         plan.new_message = None;
-        plan.turn_instructions = None;
+        if !plan.keep_turn_instructions {
+            plan.turn_instructions = None;
+        }
         plan.on_enter = false;
         plan.running_tool_calls = Vec::new();
         let mut reply = ReplyRun::new(run, toolset.agent.clone(), plan, realtime, request);

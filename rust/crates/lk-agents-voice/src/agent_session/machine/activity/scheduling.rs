@@ -38,6 +38,10 @@ mod speech_scheduler {
         Delaying {
             next: Option<SpeechId>,
         },
+        /// Chosen next, but an AMD gate holds authorization: it counts as current for the commit
+        /// interrupt, preemptive refusal and detach cancellation, and is authorized once the hold
+        /// lets it go.
+        Held(SpeechId),
         /// Authorized: playing, or inside a tool.
         Current(SpeechId),
     }
@@ -126,7 +130,19 @@ mod speech_scheduler {
         pub fn current_speech(&self) -> Option<SpeechId> {
             match self.step {
                 SchedulingStep::Current(speech) => Some(speech),
-                SchedulingStep::Idle | SchedulingStep::Delaying { .. } => None,
+                SchedulingStep::Idle
+                | SchedulingStep::Delaying { .. }
+                | SchedulingStep::Held(_) => None,
+            }
+        }
+
+        /// The head the gate holds: chosen, not authorized.
+        pub fn held_speech(&self) -> Option<SpeechId> {
+            match self.step {
+                SchedulingStep::Held(speech) => Some(speech),
+                SchedulingStep::Idle
+                | SchedulingStep::Delaying { .. }
+                | SchedulingStep::Current(_) => None,
             }
         }
 
@@ -245,16 +261,19 @@ mod speech_scheduler {
         pub fn no_current_speech(&self) -> bool {
             match self.step {
                 SchedulingStep::Idle | SchedulingStep::Delaying { next: None, .. } => true,
-                SchedulingStep::Delaying { next: Some(_), .. } | SchedulingStep::Current(_) => {
-                    false
-                }
+                SchedulingStep::Delaying { next: Some(_), .. }
+                | SchedulingStep::Held(_)
+                | SchedulingStep::Current(_) => false,
             }
         }
 
-        /// The next speech, chosen but not yet current (the consecutive-speech gap).
+        /// The next speech, chosen but not yet current (the consecutive-speech gap, or held by the
+        /// AMD gate).
         pub fn next_speech(&self) -> Option<SpeechId> {
             match self.step {
-                SchedulingStep::Delaying { next: Some(next), .. } => Some(next),
+                SchedulingStep::Delaying { next: Some(next), .. } | SchedulingStep::Held(next) => {
+                    Some(next)
+                }
                 SchedulingStep::Idle
                 | SchedulingStep::Delaying { next: None, .. }
                 | SchedulingStep::Current(_) => None,
@@ -288,8 +307,8 @@ mod speech_scheduler {
             self.speech_q.push_back(speech);
         }
 
-        /// The owed gap expires where it is read, and the head is authorized or armed behind the
-        /// gap.
+        /// The owed gap expires where it is read, and the head is authorized, armed behind the
+        /// gap, or held while `may_authorize` refuses it.
         /// `min_delay` is the effective `min_consecutive_speech_delay` (the driving agent's, else
         /// the session's), read at each pass.
         pub(super) fn scheduling_pass(
@@ -297,6 +316,7 @@ mod speech_scheduler {
             now: Ts,
             gap_elapsed: bool,
             min_delay: Duration,
+            may_authorize: impl Fn(SpeechId) -> bool,
         ) -> SchedulingPass {
             let mut released = false;
             let candidate = loop {
@@ -317,6 +337,7 @@ mod speech_scheduler {
                         released = true;
                         next
                     }
+                    SchedulingStep::Held(held) => held,
                     SchedulingStep::Idle => match self.speech_q.pop_front() {
                         Some(speech) => speech,
                         None => return SchedulingPass { released, next: NextSpeech::Stay },
@@ -333,6 +354,14 @@ mod speech_scheduler {
                 let until = now.saturating_add(delay);
                 self.step = SchedulingStep::Delaying { next: Some(candidate) };
                 return SchedulingPass { released, next: NextSpeech::Delayed { until } };
+            }
+            if !may_authorize(candidate) {
+                let held = std::mem::replace(&mut self.step, SchedulingStep::Held(candidate));
+                let next = match held {
+                    SchedulingStep::Held(previous) if previous == candidate => NextSpeech::Stay,
+                    _ => NextSpeech::Held(candidate),
+                };
+                return SchedulingPass { released, next };
             }
             self.step = SchedulingStep::Current(candidate);
             self.set_status(candidate, Status::Current);
@@ -381,6 +410,7 @@ mod speech_scheduler {
                 SchedulingStep::Delaying { next: Some(next) } if next == speech => {
                     SchedulingStep::Delaying { next: None }
                 }
+                SchedulingStep::Held(held) if held == speech => SchedulingStep::Idle,
                 step => step,
             };
             let working = self.speeches.values().any(|e| e.status == Status::Working);
@@ -477,6 +507,11 @@ mod speech_scheduler {
                     self.step = SchedulingStep::Idle;
                     true
                 }
+                // Nothing is authorized past the close's edge: the held head is let go.
+                SchedulingStep::Held(_) => {
+                    self.step = SchedulingStep::Idle;
+                    false
+                }
                 SchedulingStep::Idle | SchedulingStep::Current(_) => false,
             }
         }
@@ -560,6 +595,10 @@ mod speech_scheduler {
                     Some(Status::Queued),
                     "the next speech {next:?} was released or is not queued"
                 ),
+                SchedulingStep::Held(held) => debug_assert!(
+                    status(&held).is_none_or(|s| s == Status::Queued),
+                    "the held speech {held:?} is not queued"
+                ),
                 SchedulingStep::Delaying { next: None, .. } | SchedulingStep::Idle => {}
             }
             let current = self.speeches.values().filter(|e| e.status == Status::Current).count();
@@ -599,6 +638,8 @@ mod speech_scheduler {
         Delayed {
             until: Ts,
         },
+        /// The gate holds this head; it stays chosen.
+        Held(SpeechId),
         Authorized(SpeechId),
     }
 
@@ -808,6 +849,9 @@ impl VoiceDriver {
             // Asking again supersedes the previous preemptive generation rather than racing it.
             self.cancel_preemptive_generation(now, PreemptiveDiscard::Superseded);
         }
+        let created =
+            crate::amd::SpeechObservation::Created { kind, add_to_chat_ctx, playing: false };
+        self.observe_speech(speech, created);
         let s = &mut self.activity.speech_scheduler;
         s.admit(speech, state, kind, add_to_chat_ctx, status);
         if voice_run == VoiceRunParticipation::Joins
@@ -890,8 +934,14 @@ impl VoiceDriver {
         }
         let gap_elapsed = self.pop_due(now, |t| t == Timer::ConsecutiveSpeechDelay).is_some();
         let min_delay = self.session.config.effective.speech.min_consecutive_speech_delay();
-        let SchedulingPass { released, next } =
-            self.activity.speech_scheduler.scheduling_pass(now, gap_elapsed, min_delay);
+        let gate = &self.activity.gate;
+        let may_authorize = |speech| gate.as_ref().is_none_or(|gate| gate.authorizes(speech));
+        let SchedulingPass { released, next } = self.activity.speech_scheduler.scheduling_pass(
+            now,
+            gap_elapsed,
+            min_delay,
+            may_authorize,
+        );
         if released {
             self.record_trace(SpeechStep::FloorReleased);
         }
@@ -901,6 +951,7 @@ impl VoiceDriver {
                 self.set_deadline(Timer::ConsecutiveSpeechDelay, until);
                 return self.record_trace(SpeechStep::FloorArmed { until });
             }
+            NextSpeech::Held(speech) => return self.record_trace(SpeechStep::HeadHeld { speech }),
             NextSpeech::Authorized(candidate) => candidate,
         };
         let Some(state) = self.activity.speech_scheduler.speech_mut(candidate) else {

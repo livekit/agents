@@ -395,6 +395,12 @@ impl VoiceDriver {
                 return;
             }
             Command::VoiceTask(_) => return,
+            // An attach somebody awaits: refused as closing.
+            Command::Amd(crate::amd::AmdCommand::Attach { call, .. }) => {
+                let refused = crate::amd::AmdAttachRefused::Closing;
+                self.answer(call, Answer::AmdAttach(Err(refused)));
+                return;
+            }
             // A run somebody awaits: refused as closing, on the stream.
             Command::Run(spec) => {
                 self.emit_now(SessionEvent::RunRefused {
@@ -498,6 +504,8 @@ impl VoiceDriver {
         if host_commit_pending {
             self.perform_pending_commit(now);
         }
+        // A turn parked on AMD's decision keeps its words, with no reply.
+        self.gate_close(now);
         self.record_effect(VoiceEffect::EotClose);
         // Skips timers the turn machine just cancelled, so each cancel is journalled once.
         for t in [
