@@ -156,6 +156,8 @@ identifier, never content.
 | `lk.product.agents.os`, `lk.product.agents.arch` | `linux`, `aarch64` | Which platforms to support |
 | `lk.product.agents.runner.cmd` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
 | `lk.product.agents.runner.kind` | `production` | What the process is, derived from the command and its environment: `production`, `development`, `ci` or `unknown` |
+| `lk.product.agents.storage` | `agent-db` | Where threads are stored: `agent-db`, `sqlite` or `none` |
+| `lk.product.agents.http_routes` | `1-5` | Custom HTTP routes the server declares, bucketed: `0`, `1-5`, `6+` |
 
 `runner.kind`, first match: `ci` when `CI=true`; `production` on LiveKit Cloud;
 `development` for `dev`, `console` and `simulation`, and for `start` on macOS or Windows;
@@ -216,22 +218,65 @@ written in Python is counted exactly like a built-in one, and a plugin cannot ad
 or skip a statistic. The plugin, provider and model names are the ones the model reports
 about itself; a plugin that reports none appears as `unknown`.
 
+**App shape**
+
+One count per conversation, recorded when it ends: a call (`rtc_session`) or a text request
+(`a2a_session`). Its labels are read together, so the combinations are visible.
+
+| Metric | Counts |
+| --- | --- |
+| `lk.product.agents.sessions` | Conversations handled |
+
+| Label | Values |
+| --- | --- |
+| `lk.product.agents.session.entrypoint` | `rtc_session`, `a2a_session` |
+| `lk.product.agents.session.agents` | `single`: one agent for the whole conversation; `handoff`: one agent replaced another; `agent_as_tool`: a local agent was called as a tool; `handoff+agent_as_tool`: both |
+| `lk.product.agents.session.delegation` | `none`: everything ran in this process; `remote`: a `RemoteAgent` was called |
+
+**Voice configuration**
+
+One count per voice session, recorded when it starts, with the configuration it starts with.
+
+| Metric | Counts |
+| --- | --- |
+| `lk.product.agents.voice.sessions` | Voice sessions started |
+
+| Label | Values |
+| --- | --- |
+| `lk.product.agents.voice.pipeline` | `stt-llm-tts`, `realtime`, `realtime+tts` (a realtime model with a separate TTS), `duplex` |
+| `lk.product.agents.voice.turn_detection` | `vad`, `stt`, `realtime_llm`, `manual`, or `model` for a turn detection model |
+| `lk.product.agents.voice.false_interruption_recovery` | `on`, `off` |
+| `lk.product.agents.voice.backchannels` | `on`, `off` |
+
 **Feature usage**
+
+A feature is counted once per conversation that used it at least once, however many times
+it was used.
 
 | Metric | Label | Counts |
 | --- | --- | --- |
-| `lk.product.agents.sessions` | `lk.product.agents.session.kind`: `voice`, `text` | Sessions started |
-| `lk.product.agents.feature.sessions` | `lk.product.agents.feature` | Sessions that used the feature at least once |
+| `lk.product.agents.feature.sessions` | `lk.product.agents.feature` | Conversations that used the feature |
+| `lk.product.agents.voice_task.sessions` | `lk.product.agents.voice_task` | Conversations that ran the task |
 
-`lk.product.agents.feature` is one of: `voice_task`, `remote_agent`, `local_agent_tool`,
-`tool_approval`, `mcp_toolset`, `avatar`, `channel`, `context_store`, `simulation`,
-`override_options`.
+`lk.product.agents.feature` is one of: `mcp`, `update_options`, `override_options`,
+`realtime_model_switch`, `background_audio`.
+
+`lk.product.agents.voice_task` is the name of a prebuilt task (`GetEmailTask`,
+`GetDtmfTask`, `WarmTransfer`), or `custom` for any task an application defines. A feature
+that needs more than its name, like this one, gets its own metric and labels instead of a
+value of `lk.product.agents.feature`.
+
+**Channels**
+
+| Metric | Label | Counts |
+| --- | --- | --- |
+| `lk.product.agents.channel.messages` | `lk.product.agents.channel`: `sms`, `whatsapp`, `email`; `lk.product.agents.channel.attachments`: `yes`, `no` | Messages received on a channel |
 
 **Never collected**
 
 - Content: transcripts, prompts, replies, tool arguments or results, audio.
-- Names and ids of rooms, participants, jobs, threads, agents or tools; host names, user
-  names or paths.
+- Names and ids of rooms, participants, jobs, threads, agents, tools, endpoints or
+  application-defined tasks; host names, user names or paths.
 - Failures, retries, fallbacks, reconnects, crashes, stalls and job outcomes.
 
 Product statistics are Telemetry Data under section 7.2 of the LiveKit Terms of
