@@ -1,0 +1,19 @@
+rust/crates/lk-agents-voice/src/trace.rs
+  s_ac28acddd9b311::t_890449e8a2d202 32,59,329-386,1178-1187,1224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f5d5242c6e7c3a35d120e4b9ce630e0e55e12e97",
+  "prompts": {},
+  "sessions": {
+    "s_ac28acddd9b311": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_ac28acddd9b311",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
