@@ -203,6 +203,23 @@ async fn eventually(what: &str, check: impl Fn() -> bool) {
 
 // Catches: framing by network chunk: a character, a CRLF or a field split across chunks, a
 // chunk boundary inside `[DONE]`, or events delivered before their blank line.
+// Catches: a direct endpoint's host reported as the provider, or an endpoint that names no
+// vendor reported as the gateway.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_direct_endpoint_reports_its_declared_vendor_never_its_host() {
+    use lk_agents_abi::Llm as _;
+    let llm = llm(&Peer { url: "https://llm.internal/v1".into(), ..Default::default() });
+    assert_eq!(llm.id().provider, "livekit");
+    let direct = |vendor: Option<&str>| Auth::ProviderKey {
+        key: "sk".into(),
+        vendor: vendor.map(str::to_owned),
+    };
+    llm.update_options(|opts| opts.auth = direct(Some("cerebras")));
+    assert_eq!(llm.id().provider, "cerebras");
+    llm.update_options(|opts| opts.auth = direct(None));
+    assert_eq!(llm.id().provider, "unknown");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_completion_cut_at_hostile_boundaries_streams_whole() {
     let peer = Peer::start(vec![Reply::Sse(vec![

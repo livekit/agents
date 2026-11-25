@@ -401,7 +401,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "AssemblyAI"
+        return "assemblyai"
 
     async def _recognize_impl(
         self,

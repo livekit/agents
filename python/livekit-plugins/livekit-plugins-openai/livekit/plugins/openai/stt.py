@@ -63,7 +63,7 @@ from openai.types.realtime.realtime_transcription_session_audio_input_param impo
 
 from .log import logger
 from .models import STTModels
-from .utils import AsyncAzureADTokenProvider, error_kind, http_timeout
+from .utils import AsyncAzureADTokenProvider, error_kind, http_timeout, vendor
 
 # OpenAI Realtime API has a timeout of 15 mins, we'll attempt to restart the session
 # before that timeout is reached
@@ -177,6 +177,7 @@ class STT(stt.STT):
         client: openai.AsyncClient | None = None,
         use_realtime: NotGivenOr[bool] = NOT_GIVEN,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
+        _provider: NotGivenOr[str] = NOT_GIVEN,
     ):
         """
         Create a new instance of OpenAI STT.
@@ -283,6 +284,7 @@ class STT(stt.STT):
                 " OPENAI_API_KEY environment variable"
             )
 
+        self._provider = vendor(_provider, own_endpoint=is_given(base_url) or client is not None)
         self._client = client or openai.AsyncClient(
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,
@@ -306,7 +308,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return self._client.base_url.netloc.decode("utf-8")
+        return self._provider
 
     @staticmethod
     def with_azure(
@@ -391,6 +393,7 @@ class STT(stt.STT):
             client=azure_client,
             use_realtime=use_realtime,
             vad=vad,
+            _provider="azure",
         )
 
     @staticmethod
@@ -423,6 +426,7 @@ class STT(stt.STT):
             detect_language=detect_language,
             prompt=prompt,
             use_realtime=False,
+            _provider="ovhcloud",
         )
 
     def stream(

@@ -9627,6 +9627,13 @@ pub mod llm_provider_options {
                 "msgpack_body",
                 |v| v.extract::<bool>(),
             )?,
+            provider: crate::py_values::attr_with(obj, "ProviderEndpoint", "provider", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
         })
     }
 }

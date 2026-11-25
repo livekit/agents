@@ -88,7 +88,7 @@ class LLMAdapter(llm.LLM[Never], Generic[ContextT]):
 
     @property
     def provider(self) -> str:
-        return "LangChain"
+        return "langchain"
 
     def chat(
         self,

@@ -6,7 +6,8 @@ from collections.abc import Awaitable, Callable
 import httpx2 as httpx
 
 from livekit.agents import APIConnectOptions
-from livekit.agents.types import ErrorKind
+from livekit.agents.types import ErrorKind, NotGivenOr
+from livekit.agents.utils import is_given
 
 AsyncAzureADTokenProvider = Callable[[], str | Awaitable[str]]
 
@@ -15,6 +16,14 @@ def get_base_url(base_url: str | None) -> str:
     if not base_url:
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     return base_url
+
+
+def vendor(named: NotGivenOr[str], *, own_endpoint: bool) -> str:
+    """The ``provider`` a model reports: the vendor its constructor names, else OpenAI, or
+    ``"unknown"`` on an endpoint the caller gave (a base URL or a client)."""
+    if is_given(named):
+        return named
+    return "unknown" if own_endpoint else "openai"
 
 
 __all__ = ["get_base_url", "AsyncAzureADTokenProvider"]

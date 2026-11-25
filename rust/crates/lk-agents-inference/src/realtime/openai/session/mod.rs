@@ -42,6 +42,8 @@ pub enum Auth {
 /// Where and how a session connects.
 pub struct Connect {
     pub base_url: String,
+    /// The vendor when the endpoint is not the dialect's own (Azure OpenAI, a caller's base URL).
+    pub vendor: Option<&'static str>,
     pub azure: Option<Azure>,
     pub auth: Auth,
     pub conn: ApiConnectOptions,
@@ -51,6 +53,7 @@ impl Connect {
     pub fn openai(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
         Connect {
             base_url: base_url.into(),
+            vendor: None,
             azure: None,
             auth: Auth::Bearer(api_key.into()),
             conn: ApiConnectOptions::default(),
@@ -213,25 +216,13 @@ pub(crate) enum Cmd {
 }
 
 impl OpenAIRealtime {
-    /// `provider`: `urlparse(base_url).netloc`.
+    /// `provider`: the vendor, never the endpoint's host.
     pub fn provider(&self) -> String {
-        let url = &self.connect.base_url;
-        let s = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
-        s.split(['/', '?']).next().unwrap_or(s).to_owned()
+        self.connect.vendor.unwrap_or(self.dialect.vendor).to_owned()
     }
 
     pub fn model(&self) -> String {
         self.options().model.clone()
-    }
-
-    /// The `model_provider` the metrics name: the host's `provider` (LiveKit Inference reports
-    /// `"livekit"`, as its host class does).
-    fn metrics_provider(&self) -> String {
-        if self.dialect.provider_label == crate::realtime::dialect::INFERENCE.provider_label {
-            "livekit".to_owned()
-        } else {
-            self.provider()
-        }
     }
 
     /// `RealtimeModel.label`.
@@ -280,7 +271,7 @@ impl OpenAIRealtime {
         let machine = RealtimeMachine::new(self.dialect.clone(), opts, caps, self.ids.short(""))
             .with_response_timeout(self.connect.conn.read_timeout.map(Duration::from_secs_f64))
             .with_label(label.clone())
-            .with_provider(self.metrics_provider())
+            .with_provider(self.provider())
             .with_wall_anchor(
                 // The wall time of `Ts::ZERO`; the epoch rather than a panic if it underflows.
                 self.clock

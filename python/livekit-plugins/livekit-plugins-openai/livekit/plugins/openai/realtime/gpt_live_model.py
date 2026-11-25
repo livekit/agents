@@ -244,6 +244,10 @@ class GPTLiveModel(llm.DuplexModel):
                     "Responses deployment in the same resource; or use delegation='client'"
                 )
 
+        if is_azure:
+            self._provider = "azure"
+        else:
+            self._provider = "unknown" if is_given(base_url) else "openai"
         self._opts = _LiveOptions(
             model=model,
             voice=voice,
@@ -337,7 +341,7 @@ class GPTLiveModel(llm.DuplexModel):
 
     @property
     def provider(self) -> str:
-        return urlparse(self._opts.base_url).netloc
+        return self._provider
 
     def audio_gate(self) -> llm.AudioGate:
         return llm.FixedGate(_SILENCE_RMS, min_silence_duration=_MIN_SILENCE_DURATION)

@@ -58,11 +58,18 @@ pub enum Protocol {
     Beta,
 }
 
+/// The vendor of Azure OpenAI, which speaks the OpenAI dialect.
+pub const AZURE_VENDOR: &str = "azure";
+/// The vendor of an endpoint the caller named by URL only: its host is never reported.
+pub const UNKNOWN_VENDOR: &str = "unknown";
+
 #[derive(Debug, Clone)]
 pub struct Dialect {
     pub provider: RealtimeProvider,
     /// `self._provider_label`. Appears in every error message the session emits.
     pub provider_label: &'static str,
+    /// The vendor telemetry names: one lowercase id per vendor, whatever the service.
+    pub vendor: &'static str,
     /// `base_url` before the runtime turns it into a socket URL.
     pub default_base_url: &'static str,
     /// The env var `api_key=None` falls back to; read by the host, named in its error message.
@@ -188,6 +195,7 @@ impl Dialect {
 pub const OPENAI: Dialect = Dialect {
     provider: RealtimeProvider::Openai,
     provider_label: "OpenAI Realtime API",
+    vendor: "openai",
     default_base_url: lk_agents_abi::llm::realtime::OPENAI_BASE_URL,
     api_key_env: "OPENAI_API_KEY",
     default_model: "gpt-realtime",
@@ -223,6 +231,7 @@ pub const OPENAI: Dialect = Dialect {
 pub const INFERENCE: Dialect = Dialect {
     provider: RealtimeProvider::Inference,
     provider_label: "LiveKit Inference Realtime",
+    vendor: "livekit",
     extra_fatal_codes: &[
         "unsupported_transcription_model",
         "unsupported_audio_transport",
@@ -235,6 +244,7 @@ pub const INFERENCE: Dialect = Dialect {
 pub const XAI: Dialect = Dialect {
     provider: RealtimeProvider::Xai,
     provider_label: "xAI Realtime API",
+    vendor: "xai",
     // Already `wss://` with a path; `process_base_url` only appends `?model=`.
     default_base_url: "wss://api.x.ai/v1/realtime",
     api_key_env: "XAI_API_KEY",
@@ -271,6 +281,7 @@ pub const XAI: Dialect = Dialect {
 pub const VOICE_LIVE: Dialect = Dialect {
     provider: RealtimeProvider::VoiceLive,
     provider_label: "Azure Voice Live",
+    vendor: AZURE_VENDOR,
     default_base_url: "",
     api_key_env: "AZURE_VOICE_LIVE_API_KEY",
     default_voice: "en-US-AvaMultilingualNeural",

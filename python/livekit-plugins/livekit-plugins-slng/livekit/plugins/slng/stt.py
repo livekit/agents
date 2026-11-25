@@ -274,7 +274,7 @@ class STT(stt.STT[Literal["slng_event"]]):
 
     @property
     def provider(self) -> str:
-        return "SLNG"
+        return "slng"
 
     async def _recognize_impl(
         self,

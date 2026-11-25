@@ -148,7 +148,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "AsyncAI"
+        return "asyncai"
 
     def prewarm(self) -> None:
         self._mux.prewarm()

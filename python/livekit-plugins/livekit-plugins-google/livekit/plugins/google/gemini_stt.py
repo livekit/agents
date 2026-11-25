@@ -127,7 +127,7 @@ class GeminiSTT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Vertex AI" if self._endpoint.vertexai else "Gemini"
+        return "google"
 
     def stream(
         self,

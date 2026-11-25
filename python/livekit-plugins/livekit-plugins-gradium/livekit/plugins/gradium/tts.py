@@ -150,7 +150,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Gradium"
+        return "gradium"
 
     def update_options(
         self,

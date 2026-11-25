@@ -267,7 +267,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Baseten"
+        return "baseten"
 
     @property
     def session(self) -> http.HttpSession:

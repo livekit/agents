@@ -153,7 +153,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Inworld"
+        return "inworld"
 
     def update_options(
         self,

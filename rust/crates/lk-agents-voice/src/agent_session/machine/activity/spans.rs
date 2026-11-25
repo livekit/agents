@@ -368,8 +368,7 @@ impl VoiceDriver {
             agent_label: label.clone(),
             operation: telemetry::GenAiOperation::CreateAgent,
             agent_name: label.clone(),
-            provider: llm
-                .and_then(|l| lk_agents_core::telemetry::gen_ai::provider_name(&l.provider)),
+            provider: llm.and_then(|l| l.vendor()).map(str::to_owned),
             model: llm.map(|l| l.model.clone()),
         };
         let reserved =

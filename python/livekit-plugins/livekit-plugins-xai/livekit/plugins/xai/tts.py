@@ -133,7 +133,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "xAI"
+        return "xai"
 
     def update_options(
         self,
