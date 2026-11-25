@@ -1,0 +1,21 @@
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_fe0b584e74cb4c::t_a1200d8d090f04 16-18
+rust/crates/lk-agents-fuzz/src/rules/amd/realtime_turn_audio_committed.rs
+  s_fe0b584e74cb4c::t_cc48546d583ed3 16-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4d8bb96255dedcb6452b94bbd75e935d1442413d",
+  "prompts": {},
+  "sessions": {
+    "s_fe0b584e74cb4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da1f6a87-9ec4-476b-ba24-265326562452",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
