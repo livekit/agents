@@ -1,0 +1,25 @@
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_bbb46b29e16294::t_115d377369efe6 12,138-140,174-181,287-293,296-298,301-303,308-313,318-368,418-420,429,433-440,442-445,447-478
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
+  s_bbb46b29e16294::t_5e539b522ee1a6 48-51
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_bbb46b29e16294::t_24f71096439bc2 55-58,85-90
+rust/crates/lk-agents-fuzz/src/rules/amd/machine_reply_waits_for_silence.rs
+  s_bbb46b29e16294::t_c6cdb07b601566 3-4,54-67,70,73,75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "71abfaafe0c5ede8531549e51515e9f9990767f1",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
