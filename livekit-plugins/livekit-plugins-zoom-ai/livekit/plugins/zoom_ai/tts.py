@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
@@ -56,6 +57,25 @@ MAX_INPUT_CHARS = 4000
 TTSVoices = Literal[
     "alex", "ariel", "ava", "brooke", "hazel", "jenna", "mark", "reid", "scott", "tony"
 ]  # fmt: skip
+
+
+def _retry_after(headers: Any, body: str) -> float | None:
+    """The wait Zoom asks for before the next request, in seconds, if it gives one.
+
+    ``Retry-After`` comes with a 429 and a 503; a 503's JSON body also carries it as
+    ``metadata.retry_after_seconds``.
+    """
+    value: Any = headers.get("Retry-After")
+    if value is None:
+        try:
+            value = (json.loads(body).get("metadata") or {}).get("retry_after_seconds")
+        except (TypeError, ValueError, AttributeError):  # no body, or not a JSON object
+            return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):  # absent, or an HTTP date
+        return None
+    return seconds if seconds > 0 else None
 
 
 def _split_text(text: str, limit: int = MAX_INPUT_CHARS) -> list[str]:
@@ -131,6 +151,8 @@ class TTS(tts.TTS):
         self._url = _check_url(base, "base_url", data="text") + "/synthesize"
         self._session = http_session
         self._opts = _TTSOptions(voice=voice, speed=speed, volume=volume)
+        # Monotonic time before which no request is sent: the Retry-After Zoom last gave.
+        self._not_before = 0.0
 
     @property
     def model(self) -> str:
@@ -224,6 +246,16 @@ class ChunkedStream(tts.ChunkedStream):
         # Non-ASCII text stays UTF-8 rather than \u escapes, which keeps a request of the
         # longest input within the API's 32 KiB body limit.
         body = json.dumps(self._payload(text), ensure_ascii=False).encode("utf-8")
+        # Zoom asks clients to wait out Retry-After before trying again; a request sooner
+        # than that is refused, and would use up the retries before the wait is over.
+        if (wait := self._tts._not_before - time.monotonic()) > 0:
+            if wait > self._conn_options.timeout:
+                # longer than a reply can wait: stop the retries (a FallbackAdapter moves on)
+                raise APIConnectionError(
+                    f"Zoom TTS asked to wait {wait:.1f}s before the next request",
+                    retryable=False,
+                )
+            await asyncio.sleep(wait)
         try:
             # Leaving this block mid-stream, as an interruption does, closes the
             # connection, which stops synthesis on the server.
@@ -237,6 +269,10 @@ class ChunkedStream(tts.ChunkedStream):
                     error = await resp.text()
                     # Zoom explains a refusal (a bad API key or voice, say) in the JSON body.
                     reason = _zoom_reason(error)
+                    if (retry_after := _retry_after(resp.headers, error)) is not None:
+                        self._tts._not_before = max(
+                            self._tts._not_before, time.monotonic() + retry_after
+                        )
                     raise APIStatusError(
                         f"Zoom TTS error (HTTP {resp.status})" + (f": {reason}" if reason else ""),
                         status_code=resp.status,

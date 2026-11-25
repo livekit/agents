@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -43,7 +44,12 @@ class FakeZoomTTS:
     async def synthesize(self, request: web.Request) -> web.StreamResponse:
         raw = await request.read()
         self.requests.append(
-            {"headers": dict(request.headers), "raw": raw, "json": json.loads(raw)}
+            {
+                "headers": dict(request.headers),
+                "raw": raw,
+                "json": json.loads(raw),
+                "at": time.monotonic(),
+            }
         )
         return await self.reply(request)
 
@@ -210,6 +216,61 @@ async def test_unavailable_service_is_retried(server, http) -> None:
 
     assert audio[: len(PCM)] == PCM
     assert len(fake.requests) == 2
+
+
+def test_retry_after_parsing() -> None:
+    assert zoom_tts._retry_after({"Retry-After": "10"}, "") == 10.0
+    body = json.dumps({"code": 503, "metadata": {"retry_after_seconds": 10}})
+    assert zoom_tts._retry_after({}, body) == 10.0
+    assert zoom_tts._retry_after({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, "") is None
+    assert zoom_tts._retry_after({}, "not json") is None
+    assert zoom_tts._retry_after({"Retry-After": "0"}, "") is None
+
+
+async def test_retry_waits_for_retry_after(server, http) -> None:
+    """A retry is sent only after the wait Zoom asked for, not the framework's shorter one."""
+    fake, base = server
+
+    async def rate_limited_once(request: web.Request) -> web.StreamResponse:
+        if len(fake.requests) == 1:
+            return web.json_response(
+                {"code": 429, "reason": "RATE_LIMIT_EXCEEDED", "message": "Too many requests"},
+                status=429,
+                headers={"Retry-After": "1"},
+            )
+        return await stream_pcm(request)
+
+    fake.reply = rate_limited_once
+    audio = await synthesize(make_tts(http, base), "Hi.", ONE_RETRY)
+
+    assert audio[: len(PCM)] == PCM
+    assert len(fake.requests) == 2
+    assert fake.requests[1]["at"] - fake.requests[0]["at"] >= 0.9
+
+
+async def test_retry_after_longer_than_the_timeout_stops_the_retries(server, http) -> None:
+    """A reply can't wait that long, so the stream fails at once (a FallbackAdapter moves on)."""
+    fake, base = server
+
+    async def unavailable(request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "code": 503,
+                "reason": "SERVICE_UNAVAILABLE",
+                "message": "Try again later",
+                "metadata": {"retry_after_seconds": 30},
+            },
+            status=503,
+        )
+
+    fake.reply = unavailable
+    started = time.monotonic()
+    with pytest.raises(APIConnectionError, match="asked to wait") as excinfo:
+        await synthesize(make_tts(http, base), "Hi.", ONE_RETRY)
+
+    assert not excinfo.value.retryable
+    assert len(fake.requests) == 1
+    assert time.monotonic() - started < 2
 
 
 async def test_stream_that_ends_early_is_a_connection_error(server, http) -> None:
