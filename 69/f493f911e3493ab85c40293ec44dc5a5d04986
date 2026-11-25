@@ -1,0 +1,31 @@
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_b05fc877f33147::t_44ab1db0050129 138-139,468-487
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_b05fc877f33147::t_8901d72369e1e9 116-117,120,212,218,220-225
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_b05fc877f33147::t_786fb7e40e1734 15-16,89-92
+rust/crates/lk-agents-fuzz/src/rules/turns/forwarded_while_enabled.rs
+  s_b05fc877f33147::t_04903680f984b1 163-165,170-183
+rust/crates/lk-agents-fuzz/src/search/conversation/answerer.rs
+  s_b05fc877f33147::t_5c8ff48e500af1 107,109
+rust/crates/lk-agents-fuzz/src/search/conversation/mod.rs
+  s_b05fc877f33147::t_d1ad75c8d39b06 456
+rust/crates/lk-agents-fuzz/src/search/setup.rs
+  s_b05fc877f33147::t_4b3dd8244e5dc5 237-244,254-256,271
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69f493f911e3493ab85c40293ec44dc5a5d04986",
+  "prompts": {},
+  "sessions": {
+    "s_b05fc877f33147": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_b05fc877f33147",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
