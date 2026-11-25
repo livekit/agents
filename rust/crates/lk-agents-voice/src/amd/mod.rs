@@ -13,11 +13,13 @@
 //!
 //! Attaching a run is a session command, [`AmdCommand::Attach`].
 //!
-//! A run's effects are declared in [`effects`], its public notifications in [`events`], its
-//! options in [`options`].
+//! The run's own policy is the pure [`machine::Amd`]: observations, leg results and deadlines in,
+//! [`effects::AmdEffect`]s out. Its public notifications are in [`events`], its options in
+//! [`options`].
 
 pub mod effects;
 pub mod events;
+pub mod machine;
 pub mod options;
 
 use crate::agent_session::RequestId;
