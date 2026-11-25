@@ -33,7 +33,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .log import logger
-from .utils import _resolve_session
+from .utils import _resolve_region, _resolve_session
 
 if TYPE_CHECKING:
     import aioboto3  # type: ignore
@@ -85,6 +85,7 @@ def _model_rejects_sampling_params(model_id: str) -> bool:
 @dataclass
 class _LLMOptions:
     model: str
+    region: str
     temperature: NotGivenOr[float]
     tool_choice: NotGivenOr[ToolChoice]
     max_output_tokens: NotGivenOr[int]
@@ -102,7 +103,7 @@ class LLM(llm.LLM):
         model: NotGivenOr[str] = DEFAULT_TEXT_MODEL,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        region: NotGivenOr[str] = "us-east-1",
+        region: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -127,7 +128,7 @@ class LLM(llm.LLM):
                 Defaults to 'amazon.nova-2-lite-v1:0'.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key
-            region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
+            region (str, optional): The region to use for AWS API requests. Defaults to the session's default client config region, then ``AWS_REGION``, then the region configured for the session (e.g. ``AWS_DEFAULT_REGION``), or "us-east-1" if none is set.
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
                 Ignored (with a warning) for models that reject sampling parameters, e.g. Claude
                 Opus 4.7/4.8, Opus 5, Sonnet 5, Fable 5 and OpenAI GPT-5.6/GPT-6.
@@ -160,8 +161,6 @@ class LLM(llm.LLM):
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
                 self._session.set_credentials(api_key, api_secret)
-            if is_given(region) and region:
-                self._session.set_config_variable("region", region)
 
         bedrock_model = (
             model if is_given(model) else os.environ.get("BEDROCK_INFERENCE_PROFILE_ARN")
@@ -172,6 +171,8 @@ class LLM(llm.LLM):
             )
         self._opts = _LLMOptions(
             model=bedrock_model,
+            # passed to every client, so it also applies to a session given by the caller
+            region=_resolve_region(self._session, region if is_given(region) else None),
             temperature=temperature,
             tool_choice=tool_choice,
             max_output_tokens=max_output_tokens,
@@ -337,7 +338,9 @@ class LLMStream(llm.LLMStream):
         retryable = True
         try:
             config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
-            async with self._session.create_client("bedrock-runtime", config=config) as client:
+            async with self._session.create_client(
+                "bedrock-runtime", region_name=self._llm._opts.region, config=config
+            ) as client:
                 try:
                     response = await client.converse_stream(**self._opts)
                 except ClientError as e:

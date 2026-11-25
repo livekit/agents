@@ -35,7 +35,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTSLanguages, TTSSpeechEngine, TTSTextType
-from .utils import DEFAULT_REGION, _resolve_session, _strip_nones
+from .utils import _resolve_region, _resolve_session, _strip_nones
 
 if TYPE_CHECKING:
     import aioboto3  # type: ignore
@@ -84,7 +84,7 @@ class TTS(tts.TTS):
             speech_engine(TTSSpeechEngine, optional): The engine to use for the synthesis. Defaults to "generative".
             text_type(TTSTextType, optional): Type of text to synthesize. Use "ssml" for SSML-enhanced text. Defaults to "text".
             sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
-            region(str, optional): The region to use for the synthesis. Defaults to the region configured for the session (e.g. ``AWS_DEFAULT_REGION``), or "us-east-1" if none is set.
+            region(str, optional): The region to use for the synthesis. Defaults to the session's default client config region, then ``AWS_REGION``, then the region configured for the session (e.g. ``AWS_DEFAULT_REGION``), or "us-east-1" if none is set.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
             session(AioSession, optional): Optional aiobotocore session to use. Passing a legacy
@@ -107,7 +107,7 @@ class TTS(tts.TTS):
             speech_engine=speech_engine,
             text_type=text_type,
             # passed to every client, so it also applies to a session given by the caller
-            region=region or self._session.get_config_variable("region") or DEFAULT_REGION,
+            region=_resolve_region(self._session, region),
             language=LanguageCode(language) if is_given(language) and language else None,
             sample_rate=sample_rate,
         )

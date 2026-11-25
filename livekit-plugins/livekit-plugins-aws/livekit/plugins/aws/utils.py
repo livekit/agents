@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from aiobotocore.session import AioSession, get_session  # type: ignore
 
 from .log import logger
@@ -41,3 +43,19 @@ def _resolve_session(session: object | None) -> AioSession:
         "session must be an aiobotocore.session.AioSession "
         f"(or a legacy aioboto3.Session), got {type(session).__name__}."
     )
+
+
+def _resolve_region(session: AioSession, region: str | None) -> str:
+    """Return the region to create clients for.
+
+    In order: the ``region`` argument, the ``region_name`` of the session's default client
+    config (``session.set_default_client_config``), ``AWS_REGION`` (as the STT reads it;
+    botocore itself only reads ``AWS_DEFAULT_REGION``), the session's ``region`` setting
+    (``AWS_DEFAULT_REGION`` or the profile), then ``DEFAULT_REGION``.
+    """
+    if region:
+        return region
+    default_config = session.get_default_client_config()
+    if default_config is not None and default_config.region_name:
+        return str(default_config.region_name)
+    return os.getenv("AWS_REGION") or session.get_config_variable("region") or DEFAULT_REGION
