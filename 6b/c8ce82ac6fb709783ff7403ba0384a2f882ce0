@@ -1,0 +1,83 @@
+rust/crates/lk-agents-fuzz/src/authored.rs
+  s_bbb46b29e16294::t_86edaac8326fb4 141,442-542
+rust/crates/lk-agents-fuzz/src/drive/apply/call.rs
+  s_bbb46b29e16294::t_066c066f3a096e 85-88,551-589
+rust/crates/lk-agents-fuzz/src/drive/collect.rs
+  s_bbb46b29e16294::t_42187c7adbac89 58,358-386
+rust/crates/lk-agents-fuzz/src/drive/finish.rs
+  s_bbb46b29e16294::t_b47680fd0fea6b 17-44,83
+rust/crates/lk-agents-fuzz/src/drive/mod.rs
+  s_bbb46b29e16294::t_15566e67c0c83a 697-699,733-736
+rust/crates/lk-agents-fuzz/src/drive/start.rs
+  s_bbb46b29e16294::t_48688ace323485 375-382,416-417
+rust/crates/lk-agents-fuzz/src/fakes/amd.rs
+  s_bbb46b29e16294::t_a68b724325d365 1-53
+rust/crates/lk-agents-fuzz/src/fakes/llm.rs
+  s_bbb46b29e16294::t_a22957a07fd774 74-84
+rust/crates/lk-agents-fuzz/src/fakes/mod.rs
+  s_bbb46b29e16294::t_262ca1250d2901 26
+rust/crates/lk-agents-fuzz/src/input.rs
+  s_bbb46b29e16294::t_443cd93b391b82 10-11,126-127,449-460,485,672-682,792
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_bbb46b29e16294::t_7728ccf82e552b 1-363
+rust/crates/lk-agents-fuzz/src/record/mod.rs
+  s_bbb46b29e16294::t_18a5f915a452b2 33,162-163,204-210,732-733
+rust/crates/lk-agents-fuzz/src/rules/amd/adopted_request_matches.rs
+  s_bbb46b29e16294::t_f4854ca9aeeea6 1-83
+rust/crates/lk-agents-fuzz/src/rules/amd/completion_respects_wait.rs
+  s_bbb46b29e16294::t_0bf79877f815ad 1-76
+rust/crates/lk-agents-fuzz/src/rules/amd/detached_is_prompt.rs
+  s_bbb46b29e16294::t_1c7af746ad6fc5 1-77
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_bbb46b29e16294::t_b1c2c021a017d5 1-91
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_answers_are_keyed.rs
+  s_bbb46b29e16294::t_64f9ad1ba181e2 1-96
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
+  s_bbb46b29e16294::t_b669dcaf8552fd 1-136
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_bbb46b29e16294::t_56b2f52eb67866 1-165
+rust/crates/lk-agents-fuzz/src/rules/amd/machine_reply_waits_for_silence.rs
+  s_bbb46b29e16294::t_cb8dc25e660cb8 1-101
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_bbb46b29e16294::t_86a002ba6edc26 1-120
+rust/crates/lk-agents-fuzz/src/rules/amd/reply_follows_decision.rs
+  s_bbb46b29e16294::t_0bfcdc1878f5b8 1-124
+rust/crates/lk-agents-fuzz/src/rules/amd/stage_instructions_never_saved.rs
+  s_bbb46b29e16294::t_ab69d10216488b 1-97
+rust/crates/lk-agents-fuzz/src/rules/turns/correction_replaces_the_words.rs
+  s_bbb46b29e16294::t_fa660fa26ec1d4 110-114,118,168-180
+rust/crates/lk-agents-fuzz/src/search/conversation/answerer.rs
+  s_bbb46b29e16294::t_cd63b68fe5cfee 1-166
+rust/crates/lk-agents-fuzz/src/search/conversation/mod.rs
+  s_bbb46b29e16294::t_c15a62bbe88697 26,429-430,458,516-517,691
+rust/crates/lk-agents-fuzz/tests/regressions/amd/detach.rs
+  s_bbb46b29e16294::t_4b9c80ad319035 1-143
+rust/crates/lk-agents-fuzz/tests/regressions/amd/gate.rs
+  s_bbb46b29e16294::t_f212996521a564 1-197
+rust/crates/lk-agents-fuzz/tests/regressions/amd/mod.rs
+  s_bbb46b29e16294::t_e542926dd9e496 1-230
+rust/crates/lk-agents-fuzz/tests/regressions/amd/opening.rs
+  s_bbb46b29e16294::t_01077ef1cdce2d 1-133
+rust/crates/lk-agents-fuzz/tests/regressions/amd/payload.rs
+  s_bbb46b29e16294::t_d51aacfee73e55 1-262
+rust/crates/lk-agents-fuzz/tests/regressions/amd/silence.rs
+  s_bbb46b29e16294::t_ac063aa403fdf6 1-98
+rust/crates/lk-agents-fuzz/tests/regressions/main.rs
+  s_bbb46b29e16294::t_96e0c6332c63e6 61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6bc8ce82ac6fb709783ff7403ba0384a2f882ce0",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
