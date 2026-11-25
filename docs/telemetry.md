@@ -203,7 +203,9 @@ one plugin reaches several vendors:
 The plugin says which code to maintain; the provider says which vendor people use.
 
 A model served by LiveKit Inference records no model usage here: LiveKit already has it
-from the Inference service.
+from the Inference service. Only the `inference` models themselves are left out, by what
+they are, never by the code they share: an OpenAI-compatible plugin is always recorded,
+whichever endpoint it calls.
 
 The plugin id is the last part of the package name, lowercase with hyphens, the same in
 every language: `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram`
