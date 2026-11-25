@@ -29,7 +29,7 @@ impl Rule for DtmfOnlyWhenAllowed {
         let amd = r.amd_view();
         let mut ivr_requests = std::collections::BTreeSet::new();
         for turn in amd.gated_turns() {
-            let Some(Answer::Decide { at, verdict: AmdVerdict::Ivr, .. }) = amd.allowed_at(&turn)
+            let Some(Answer::Decide { at, verdict: AmdVerdict::Ivr, .. }) = amd.deciding(&turn)
             else {
                 continue;
             };

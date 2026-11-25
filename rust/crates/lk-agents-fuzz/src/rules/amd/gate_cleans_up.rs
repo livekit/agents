@@ -1,6 +1,6 @@
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
 use lk_agents_voice::amd::{AmdObservation, AmdRunId};
-use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::trace::{GateStep, SpeechStep, Step};
 
 use crate::{
     authored::Authored,
@@ -10,19 +10,16 @@ use crate::{
 };
 
 // Spec §14 invariant 10, the AMD proposal "Detach" steps 2 and 5: once the session reports
-// `Detached`, the run observes nothing more, a later turn is answered with no decision (no gate,
-// no hold), and replies are as interruptible as they were before the run attached.
+// `Detached`, the run observes nothing more, the gate neither holds authorization nor acts on a
+// later turn, and replies are as interruptible as they were before the run attached.
 
 pub struct GateCleansUp;
-
-/// How long an ungated turn may take to reach its model.
-const BOUND_MS: u64 = 2_000;
 
 impl Rule for GateCleansUp {
     const CONTRACT: Contract = Contract {
         id: "gate_cleans_up",
-        guarantee: "After Detached, AMD observes nothing, the next turn replies with no \
-                    decision, and replies are as interruptible as before the run attached.",
+        guarantee: "After Detached, AMD observes nothing, the gate neither holds nor acts, and \
+                    replies are as interruptible as before the run attached.",
         examples: &[clean],
         counterexamples: &[observed_after, still_gated, interruptions_kept_forced],
         probe: Some(a_turn_after_completion),
@@ -39,45 +36,27 @@ impl Rule for GateCleansUp {
                 format!("run {} observed {late:?} after it detached", attachment.run)
             });
             let next = attachments.get(index + 1).map_or(Observed::END, |a| a.attached);
-            let events = r.host_view().events();
-            for (at, event) in &events {
-                let SessionEvent::UserTurnCompleted(done) = event else { continue };
-                if *at < detached || *at > next {
-                    continue;
-                }
-                // Measured from the turn's customer hook, which waits for older turns' hooks:
-                // no bound on the session covers customer code.
-                let Some(from) = amd.hook_returned_for(done.turn.0, *at) else { continue };
-                let due = from.at_ms + BOUND_MS;
-                if r.now().at_ms < due || r.close_begun().is_some_and(|c| c.at_ms <= due) {
-                    continue;
-                }
-                let item = events.iter().find_map(|(_, e)| match e {
-                    SessionEvent::ConversationItemAdded {
-                        item,
-                        source: lk_agents_voice::agent::Source::UserTurn { turn },
-                        ..
-                    } if *turn == done.turn => item.as_message().map(|m| m.id.clone()),
-                    _ => None,
-                });
-                let Some(item) = item else { continue };
-                // An adopted preemptive generation answers too: it asked before the commit, under
-                // its own item, with the same words (proposal "Preemptive generation").
-                let answered = amd.requests().into_iter().any(|q| {
-                    let fresh = q.opened > *at && q.last_user().is_some_and(|m| m.id == item);
-                    let adopted = amd.preemptive(&q)
-                        && q.last_user().is_some_and(|m| m.text == done.new_transcript)
-                        && q.speech.is_some_and(|s| amd.first_audio(s).is_some_and(|h| h > *at));
-                    q.opened.at_ms <= due && (fresh || adopted)
-                });
-                check.expect_with(Subject::Session, answered, || {
-                    format!(
-                        "turn {:?} committed at {} ms, after run {} detached, was not answered \
-                         by {due} ms",
-                        done.turn, at.at_ms, attachment.run
-                    )
-                });
-            }
+            // No gate and no hold until the next attach (spec §14 invariant 10, owned by "a DST
+            // rule after Detached: no gate, no hold"). Whether a later turn is answered depends
+            // on the session's ordinary rules (hooks, interrupts, faults), not on the gate.
+            let gated: Vec<_> = r
+                .journal()
+                .iter()
+                .filter(|(at, _)| *at > detached && *at < next)
+                .filter(|(_, step)| match step {
+                    Step::Speech(SpeechStep::AuthorizationHeld(_) | SpeechStep::HeadHeld { .. }) => {
+                        true
+                    }
+                    // A late answer of the finished run is dropped, which is cleanup working.
+                    Step::Gate(GateStep::AnswerDropped { .. }) => false,
+                    Step::Gate(_) => true,
+                    _ => false,
+                })
+                .map(|(at, step)| (at.at_ms, step.clone()))
+                .collect();
+            check.expect_with(Subject::Session, gated.is_empty(), || {
+                format!("after run {} detached the gate still acted: {gated:?}", attachment.run)
+            });
             let reconfigured = r.applied().iter().any(|a| {
                 matches!(&a.input, Input::Configure { knob: Knob::Interruptions, .. } | Input::Override { knob: Knob::Interruptions, .. } | Input::SetAllowInterruptions { .. })
             });
@@ -128,7 +107,13 @@ fn observed_after() -> Recording {
 }
 
 fn still_gated() -> Recording {
-    attached().user_turn(None, 1, "hello").later(3_000).done()
+    attached()
+        .user_turn(None, 1, "hello")
+        .journal(Step::Speech(SpeechStep::AuthorizationHeld(lk_agents_voice::amd::Hold::Undecided {
+            turn: lk_agents_voice::audio_recognition::TurnId(1),
+        })))
+        .later(3_000)
+        .done()
 }
 
 fn interruptions_kept_forced() -> Recording {

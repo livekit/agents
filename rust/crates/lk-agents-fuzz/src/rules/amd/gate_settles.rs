@@ -81,12 +81,16 @@ impl Rule for GateSettles {
                 )
             });
             let replied = !amd.requests_answering(&turn).is_empty();
-            let kept = turn.item_id.is_some();
+            // A turn with no words has none to keep.
+            let kept = turn.item_id.is_some() || turn.words.trim().is_empty();
             // `StopResponse` ignores the turn, as Python does (`agent_activity.py`).
             let stopped = amd.stopped(&turn);
             // Dropped behind a speech it could not interrupt, or while scheduling was paused: an
             // exit with no reply (proposal "Turn exits").
-            let dropped = amd.dropped_unanswered(&turn);
+            // `TurnEnd::Dropped` also covers a reply scheduling rejected (a drain begun while
+            // the turn waited), the traced refusal `reply_follows_decision` allows.
+            let dropped = amd.dropped_unanswered(&turn)
+                || matches!(ended, Some((_, TurnEnd::Dropped)));
             check.expect_with(Subject::Session, replied || kept || stopped || dropped, || {
                 format!(
                     "turn {} ended ({ended:?}) with neither a reply nor its words saved",
@@ -95,8 +99,16 @@ impl Rule for GateSettles {
             });
             // A stored allow can be replaced by `Detach.pending`, so the turn's own end says
             // whether it was answered.
+            // A reply made for it counts even if it never reached its model: an injected port
+            // failure, or an interrupt before its request (`reply_follows_decision` allows a
+            // traced refusal).
+            let made = observed.iter().any(|(_, o)| {
+                matches!(o, AmdObservation::ReplyCreated { turn: t, speech }
+                    if *t == TurnId(turn.turn)
+                        && r.host_view().speech(speech.0).created_at().is_some())
+            });
             if matches!(ended, Some((_, TurnEnd::Replied))) {
-                check.expect_with(Subject::Session, replied, || {
+                check.expect_with(Subject::Session, replied || made, || {
                     format!("turn {} ended as replied ({answer:?}) and nothing answered it", turn.turn)
                 });
             }

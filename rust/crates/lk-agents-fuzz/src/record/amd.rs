@@ -288,8 +288,8 @@ impl<'a> AmdView<'a> {
     }
 
     /// [`Self::hook_returned`] for any turn, gated or not, committed at `committed`: the end of
-    /// its own hook, or, when it never got one, of every older turn's hook still running at its
-    /// commit, which it waited behind. `None` while one of those runs.
+    /// its own hook, or, when it never got one, of every older turn's hook, which it waited
+    /// behind (an older turn's hook can be issued after this commit). `None` while one runs.
     pub fn hook_returned_for(&self, turn: u64, committed: Observed) -> Option<Observed> {
         use lk_agents_voice::agent_session::HookKind;
         use lk_agents_voice::trace::HandoffStep;
@@ -304,11 +304,12 @@ impl<'a> AmdView<'a> {
                 Step::Handoff(HandoffStep::HookIssued {
                     hook,
                     kind: HookKind::OnUserTurnCompleted,
+                    turn: Some(t),
                     ..
                 }) if own.is_none() => {
-                    if self.turn_hook(step, turn).is_some() {
+                    if t.0 == turn {
                         own = Some(*hook);
-                    } else if *at < committed {
+                    } else if t.0 < turn {
                         older.push(*hook);
                     }
                 }
@@ -368,7 +369,8 @@ impl<'a> AmdView<'a> {
         })
     }
 
-    /// The answer that decided `turn`: its first decision, applied once both it and the hook's
+    /// The answer that decided `turn`, which rules about a decision's payload (stage, silence,
+    /// DTMF) must read rather than the first one sent: its first decision, applied once both it and the hook's
     /// return came, unless its run's detach came first and settled the turn with `pending`
     /// (proposal "Detach", step 3: `pending` replaces a decision not applied yet).
     pub fn deciding(&self, turn: &GatedTurn) -> Option<Answer> {
@@ -463,6 +465,16 @@ impl<'a> AmdView<'a> {
                     && d.fields.iter().any(|(_, value)| *value == turn.words)
             }
             _ => false,
+        })
+    }
+
+    /// Whether the session's end of turn `turn` asked for no reply (`skip_reply`), which its
+    /// `EndOfTurn` verdict does not show.
+    pub fn skips_reply(&self, turn: u64) -> bool {
+        use lk_agents_voice::audio_recognition::observation::RecognitionObservation;
+        self.0.journal().iter().any(|(_, step)| {
+            matches!(step, Step::Decided(RecognitionObservation::EndOfTurn(info))
+                if info.turn_id.0 == turn && info.skip_reply)
         })
     }
 

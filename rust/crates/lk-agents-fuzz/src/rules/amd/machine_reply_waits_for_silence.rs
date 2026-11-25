@@ -33,7 +33,7 @@ impl Rule for MachineReplyWaitsForSilence {
         for turn in amd.gated_turns() {
             let Some(Answer::Decide {
                 verdict: AmdVerdict::Silence | AmdVerdict::Ivr, at: decided, ..
-            }) = amd.allowed_at(&turn)
+            }) = amd.deciding(&turn)
             else {
                 continue;
             };
