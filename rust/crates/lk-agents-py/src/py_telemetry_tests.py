@@ -69,18 +69,3 @@ def test_the_bridge_forwards_an_sdk_span_with_its_ids() -> None:
     finally:
         _core._core_telemetry_export = real  # type: ignore[attr-defined]
     assert forwarded == [("app.work", span_id)]
-
-
-def test_diagnostics_count() -> None:
-    d = telemetry.diagnostics()
-    assert (
-        min(
-            d.dropped,
-            d.failed,
-            d.conflicts,
-            d.incomplete_cleanup,
-            d.swept_spans,
-            d.abandoned_sessions,
-        )
-        >= 0
-    )

@@ -120,19 +120,6 @@ pub(crate) enum App {
     Metrics(Vec<Metric>),
 }
 
-impl Batch {
-    /// What a failed or abandoned batch counts.
-    pub fn records(&self) -> usize {
-        match self {
-            Batch::Cloud { payload: Cloud::Spans(s), .. } => s.len(),
-            Batch::Cloud { payload: Cloud::Logs(l), .. } => l.len(),
-            Batch::Cloud { payload: Cloud::Metrics(m), .. }
-            | Batch::App { payload: App::Metrics(m), .. } => m.len(),
-            Batch::App { payload: App::Spans(s), .. } => s.len(),
-        }
-    }
-}
-
 /// Which records a take selects.
 #[derive(Clone, Copy)]
 pub(crate) struct Take<'a> {
@@ -141,14 +128,6 @@ pub(crate) struct Take<'a> {
     pub metrics: bool,
     /// Everything queued, not only full batches.
     pub all: bool,
-}
-
-/// What `record` decided, for the caller's diagnostics and wake-up.
-#[derive(Default)]
-pub(crate) struct Admitted {
-    pub dropped: u64,
-    /// A queue reached a full batch.
-    pub batch_ready: bool,
 }
 
 pub(crate) struct State {
@@ -177,10 +156,10 @@ impl State {
         }
     }
 
-    /// False when the job was already open.
-    pub fn open_job(&mut self, key: JobKey, identity: SessionIdentity, now: u64) -> bool {
+    /// Does nothing when the job is already open.
+    pub fn open_job(&mut self, key: JobKey, identity: SessionIdentity, now: u64) {
         if self.jobs.contains_key(&key) {
-            return false;
+            return;
         }
         let metrics = Aggregator::new(super::config::Temporality::Delta, now);
         self.jobs.insert(
@@ -194,15 +173,14 @@ impl State {
                 metrics,
             },
         );
-        true
     }
 
-    /// Releases the held spans when the job records traces, else drops them. False when the job
-    /// is not open or already decided.
-    pub fn register_job(&mut self, key: &JobKey, recording: CloudRecording, now: u64) -> bool {
-        let Some(job) = self.jobs.get_mut(key) else { return false };
+    /// Releases the held spans when the job records traces, else drops them. Does nothing when
+    /// the job is not open or already decided.
+    pub fn register_job(&mut self, key: &JobKey, recording: CloudRecording, now: u64) {
+        let Some(job) = self.jobs.get_mut(key) else { return };
         if !matches!(job.decision, Decision::Undecided) {
-            return false;
+            return;
         }
         let held = std::mem::take(&mut job.held);
         if self.cloud.is_some() && recording.traces {
@@ -214,7 +192,6 @@ impl State {
             job.metrics = Aggregator::new(super::config::Temporality::Delta, now);
         }
         job.decision = Decision::Recording(recording);
-        true
     }
 
     /// Stops a job's Cloud export after the project refused it.
@@ -230,12 +207,11 @@ impl State {
         self.jobs.get(key).is_some_and(|job| matches!(job.decision, Decision::Disabled))
     }
 
-    /// Removes a job; returns the records it still had queued.
-    pub fn remove_job(&mut self, key: &JobKey) -> usize {
-        let Some(mut job) = self.jobs.remove(key) else { return 0 };
-        let queued = job.spans.len() + job.logs.len();
-        Self::clear(&mut job, &mut self.cloud_usage);
-        queued
+    /// Removes a job and what it still had queued.
+    pub fn remove_job(&mut self, key: &JobKey) {
+        if let Some(mut job) = self.jobs.remove(key) {
+            Self::clear(&mut job, &mut self.cloud_usage);
+        }
     }
 
     fn clear(job: &mut Job, usage: &mut Usage) {
@@ -259,10 +235,11 @@ impl State {
         }
     }
 
-    pub fn record(&mut self, record: Record, bytes: usize) -> Admitted {
-        let mut admitted = Admitted::default();
+    /// Queues a record on each destination that admits it; a full queue drops it. True when a
+    /// queue reached a full batch.
+    pub fn record(&mut self, record: Record, bytes: usize) -> bool {
         if self.closed {
-            return admitted;
+            return false;
         }
         let job = match &record {
             Record::Span(s) => s.job.as_ref(),
@@ -271,66 +248,53 @@ impl State {
         };
         let cloud = self.cloud_action(job, &record);
         let identity = job.and_then(|k| self.jobs.get(k)).map(|j| j.identity.clone());
-        self.record_app(&record, identity, bytes, &mut admitted);
-        let (Some(action), Some(key)) = (cloud, job) else { return admitted };
-        let Some(job) = self.jobs.get_mut(key) else {
-            admitted.dropped += 1;
-            return admitted;
-        };
+        let mut batch_ready = self.record_app(&record, identity, bytes);
+        let (Some(action), Some(key)) = (cloud, job) else { return batch_ready };
+        let Some(job) = self.jobs.get_mut(key) else { return batch_ready };
         match (action, record) {
             (Action::Export, Record::Span(span)) => {
                 if self.cloud_usage.admit(&self.limits, bytes) {
                     job.spans.push_back((span, bytes));
-                    admitted.batch_ready |= job.spans.len() >= BATCH_RECORDS;
-                } else {
-                    admitted.dropped += 1;
+                    batch_ready |= job.spans.len() >= BATCH_RECORDS;
                 }
             }
             (Action::Export, Record::Log(log)) => {
                 if self.cloud_usage.admit(&self.limits, bytes) {
                     job.logs.push_back((log, bytes));
-                    admitted.batch_ready |= job.logs.len() >= BATCH_RECORDS;
-                } else {
-                    admitted.dropped += 1;
+                    batch_ready |= job.logs.len() >= BATCH_RECORDS;
                 }
             }
             (Action::Export | Action::Hold, Record::Measurement(m)) => {
-                admitted.dropped += u64::from(!job.metrics.record(&m));
+                job.metrics.record(&m);
             }
-            (Action::Hold, Record::Span(span)) => {
-                if self.cloud_usage.admit(&self.limits, bytes) {
-                    job.held.push((span, bytes));
-                } else {
-                    admitted.dropped += 1;
-                }
+            (Action::Hold, Record::Span(span)) if self.cloud_usage.admit(&self.limits, bytes) => {
+                job.held.push((span, bytes));
             }
-            (Action::Capacity, _) => admitted.dropped += 1,
             _ => {}
         }
-        admitted
+        batch_ready
     }
 
+    /// True when the application's span queue reached a full batch.
     fn record_app(
         &mut self,
         record: &Record,
         identity: Option<Arc<SessionIdentity>>,
         bytes: usize,
-        admitted: &mut Admitted,
-    ) {
-        let Some(app) = &mut self.app else { return };
+    ) -> bool {
+        let Some(app) = &mut self.app else { return false };
         match record {
             Record::Span(span) if app.config.traces.is_some() => {
                 if app.usage.admit(&self.limits, bytes) {
                     app.spans.push_back((AppSpan { span: span.clone(), job: identity }, bytes));
-                    admitted.batch_ready |= app.spans.len() >= BATCH_RECORDS;
-                } else {
-                    admitted.dropped += 1;
                 }
+                app.spans.len() >= BATCH_RECORDS
             }
             Record::Measurement(m) if app.config.metrics.is_some() => {
-                admitted.dropped += u64::from(!app.metrics.record(m));
+                app.metrics.record(m);
+                false
             }
-            _ => {}
+            _ => false,
         }
     }
 

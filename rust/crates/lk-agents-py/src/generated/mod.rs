@@ -418,8 +418,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::TelemetrySpan>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_install, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::configure, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::diagnostics, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_export, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::set_capture_content, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;

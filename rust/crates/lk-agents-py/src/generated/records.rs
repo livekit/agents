@@ -23243,47 +23243,6 @@ pub mod telemetry {
         Ok(value)
     }
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
-    static TELEMETRY_DIAGNOSTICS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn telemetry_diagnostics_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::telemetry::host::TelemetryDiagnostics,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::host::TelemetryDiagnostics {
-            dropped,
-            failed,
-            conflicts,
-            incomplete_cleanup,
-            swept_spans,
-            abandoned_sessions,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("dropped", ::pyo3::IntoPyObjectExt::into_bound_py_any(dropped, py)?)?;
-        kwargs.set_item("failed", ::pyo3::IntoPyObjectExt::into_bound_py_any(failed, py)?)?;
-        kwargs.set_item("conflicts", ::pyo3::IntoPyObjectExt::into_bound_py_any(conflicts, py)?)?;
-        kwargs.set_item(
-            "incomplete_cleanup",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(incomplete_cleanup, py)?,
-        )?;
-        kwargs.set_item(
-            "swept_spans",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(swept_spans, py)?,
-        )?;
-        kwargs.set_item(
-            "abandoned_sessions",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(abandoned_sessions, py)?,
-        )?;
-        crate::py_calls::call(
-            TELEMETRY_DIAGNOSTICS
-                .import(py, "livekit.agents._generated.telemetry", "TelemetryDiagnostics")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
     // Declared in rust/crates/lk-agents-abi/src/telemetry/record.rs.
     pub fn span_context_from_py(
         obj: &pyo3::Bound<'_, pyo3::PyAny>,

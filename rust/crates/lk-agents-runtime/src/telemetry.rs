@@ -9,7 +9,7 @@ use lk_agents_abi::FunctionCall;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::decl::{BoolString, GenAiContent, Label, json};
-use lk_agents_abi::telemetry::host::{EndedSpan, TelemetryConfigError, TelemetryDiagnostics};
+use lk_agents_abi::telemetry::host::{EndedSpan, TelemetryConfigError};
 use lk_agents_abi::telemetry::instruments::{
     ConnectionAcquireTime, ExecuteToolDuration, InterruptionNumRequests, LlmInputAudioTokens,
     LlmInputCachedTokens, LlmInputTextTokens, LlmInputTokens, LlmOutputAudioTokens,
@@ -74,12 +74,6 @@ struct Process {
     tracer: Tracer,
     /// `configure()`'s application endpoint, applied at installation when it comes first.
     app: Mutex<Option<AppConfig>>,
-    /// Configuration conflicts the host found (a tracer provider it cannot bridge).
-    conflicts: AtomicU64,
-    /// Spans a voice session's close ended because their owner never did (a framework bug).
-    swept_spans: AtomicU64,
-    /// Voice sessions dropped without their close; their open spans were ended and exported.
-    abandoned_sessions: AtomicU64,
     /// The rate limit on the process's `event_loop_blocked` spans.
     blocked: Blocked,
     /// The voice sessions running, which a stall of their job's loop is folded into.
@@ -125,9 +119,6 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
         slot,
         tracer,
         app: Mutex::new(None),
-        conflicts: AtomicU64::new(0),
-        swept_spans: AtomicU64::new(0),
-        abandoned_sessions: AtomicU64::new(0),
         blocked: Blocked::default(),
         sessions: Mutex::new(BTreeMap::new()),
     }
@@ -135,12 +126,6 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
 
 fn seed() -> u64 {
     lk_agents_telemetry::random_seed()
-}
-
-/// A voice session ended: the spans its close swept and whether it was dropped without it.
-pub(crate) fn session_ended(swept: u32, abandoned: bool) {
-    PROCESS.swept_spans.fetch_add(u64::from(swept), Ordering::Relaxed);
-    PROCESS.abandoned_sessions.fetch_add(u64::from(abandoned), Ordering::Relaxed);
 }
 
 /// The process tracer.
@@ -246,23 +231,6 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
             exporter.configure_app(config);
         }
         Ok(())
-    }
-
-    fn _core_telemetry_diagnostics() -> TelemetryDiagnostics {
-        let d = PROCESS.slot.get().map(|e| e.diagnostics()).unwrap_or_default();
-        let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-        TelemetryDiagnostics {
-            dropped: d.dropped,
-            failed: d.failed,
-            conflicts: d.conflicts + read(&PROCESS.conflicts),
-            incomplete_cleanup: d.incomplete_cleanup,
-            swept_spans: read(&PROCESS.swept_spans),
-            abandoned_sessions: read(&PROCESS.abandoned_sessions),
-        }
-    }
-
-    fn _core_telemetry_conflict() {
-        PROCESS.conflicts.fetch_add(1, Ordering::Relaxed);
     }
 
     fn _core_telemetry_export(span: EndedSpan, job: Option<String>) {

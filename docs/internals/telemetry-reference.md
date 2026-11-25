@@ -144,7 +144,7 @@ framework sends content as recorded and keys it so the redaction finds it.
 | `chat_history.json` is `{"items": [...]}` in the `ChatContext` dictionary shape; `metrics.started_speaking_at` and `stopped_speaking_at` are unix seconds on the header's `start_time` clock | the transcript encoder is golden-tested against that shape |
 | `session_summary` is a JSON object of at most 16 KiB forwarded to agent evaluations (`agent-evals.sessions`); billing reads the audio's own duration | the summary is a declared record within the bound |
 | Metrics sums and histograms must be delta; a record's room is read from the first top-level `room_id` or `roomID` attribute | Cloud metrics are delta; the identity stamp writes `room_id` beside the shared `lk.room_id` |
-| A 401 "project data recording is disabled by owner" applies to every signal | the destination stops for that job and counts the refusal |
+| A 401 "project data recording is disabled by owner" applies to every signal | the destination stops for that job |
 
 Compatibility rules:
 

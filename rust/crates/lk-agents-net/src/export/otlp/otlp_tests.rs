@@ -296,27 +296,29 @@ async fn spans_are_held_until_the_recording_decision() {
     exporter.open_job(key("AJ_1"), identity("AJ_1"));
     exporter.open_job(key("AJ_2"), identity("AJ_2"));
     exporter.open_job(key("AJ_3"), identity("AJ_3"));
-    exporter.record(span("job_entrypoint", Some("AJ_1"), vec![]));
-    exporter.record(span("job_entrypoint", Some("AJ_2"), vec![]));
     let held = super::destination::HELD_SPANS;
     for _ in 0..=held {
-        exporter.record(span("job_entrypoint", Some("AJ_3"), vec![]));
+        exporter.record(span("job_entrypoint", Some("AJ_1"), vec![]));
     }
+    exporter.record(span("job_entrypoint", Some("AJ_2"), vec![]));
+    exporter.record(span("job_entrypoint", Some("AJ_3"), vec![]));
     assert!(exporter.flush(None, LIMIT).await);
     assert!(received(&mut rx).is_empty(), "nothing is sent before the decision");
-    assert_eq!(exporter.diagnostics().dropped, 1, "the hold is bounded");
 
     exporter.register_job(&key("AJ_1"), recording());
     exporter.register_job(&key("AJ_2"), CloudRecording { traces: false, ..recording() });
     exporter.close_job(&key("AJ_3"), LIMIT).await;
     assert!(exporter.flush(None, LIMIT).await);
-    let requests = received(&mut rx);
-    assert_eq!(requests.len(), 1);
-    let traces: ExportTraceServiceRequest = requests[0].decode();
-    let spans = &traces.resource_spans[0].scope_spans[0].spans;
-    assert_eq!((spans.len(), spans[0].name.as_str()), (1, "job_entrypoint"));
-    assert_eq!(attr(&spans[0].attributes, "job_id").cloned(), string("AJ_1"));
-    assert_eq!(exporter.diagnostics(), Diagnostics { dropped: 1, ..Default::default() });
+    let mut released = 0;
+    for request in received(&mut rx) {
+        let traces: ExportTraceServiceRequest = request.decode();
+        for span in &traces.resource_spans[0].scope_spans[0].spans {
+            assert_eq!(span.name, "job_entrypoint");
+            assert_eq!(attr(&span.attributes, "job_id").cloned(), string("AJ_1"));
+            released += 1;
+        }
+    }
+    assert_eq!(released, held, "the hold is bounded, and only the recorded job is sent");
 }
 
 fn sensitive() -> Record {
@@ -468,16 +470,15 @@ async fn cloud_metrics_are_delta_per_job_and_application_metrics_cumulative() {
     assert_eq!(app[0].1[0].1.len(), 1, "only declared labels");
 }
 
-// Catches: a full queue blocking or growing instead of dropping and counting.
+// Catches: a full queue blocking or growing instead of dropping.
 #[tokio::test]
-async fn a_full_queue_drops_and_counts() {
+async fn a_full_queue_drops() {
     let (url, mut rx) = endpoint(ok).await;
     let exporter = exporter(Limits { records: 3, bytes: usize::MAX });
     exporter.configure_app(Some(AppConfig::with_endpoint(&url)));
     for _ in 0..5 {
         exporter.record(span("tts_request", None, vec![]));
     }
-    assert_eq!(exporter.diagnostics().dropped, 2);
     assert!(exporter.flush(None, LIMIT).await);
     let traces: ExportTraceServiceRequest = received(&mut rx)[0].decode();
     assert_eq!(traces.resource_spans[0].scope_spans[0].spans.len(), 3);
@@ -486,16 +487,20 @@ async fn a_full_queue_drops_and_counts() {
     small.configure_app(Some(AppConfig::with_endpoint(&url)));
     small.record(span("tts_request", None, vec![]));
     small.record(span("tts_request", None, vec![("lk.pii.text".into(), "x".repeat(400).into())]));
-    assert_eq!(small.diagnostics().dropped, 1, "the byte bound applies too");
+    assert!(small.flush(None, LIMIT).await);
+    let traces: ExportTraceServiceRequest = received(&mut rx)[0].decode();
+    let spans = &traces.resource_spans[0].scope_spans[0].spans;
+    assert_eq!(spans.len(), 1, "the byte bound applies too");
+    assert!(spans[0].attributes.is_empty(), "the span over the bound is the one dropped");
 }
 
-// Catches: export continuing after the project disabled recording, or the refusal counted as a
-// failure.
+// Catches: export continuing after the project disabled recording.
 #[tokio::test]
 async fn recording_disabled_stops_that_jobs_export() {
     let refused = std::sync::atomic::AtomicBool::new(false);
     let (url, mut rx) = endpoint(move |path| {
-        let first = path.contains("traces") && !refused.swap(true, Ordering::Relaxed);
+        let first =
+            path.contains("traces") && !refused.swap(true, std::sync::atomic::Ordering::Relaxed);
         Some(if first { (401, DISABLED) } else { (200, b"" as &[u8]) })
     })
     .await;
@@ -517,8 +522,6 @@ async fn recording_disabled_stops_that_jobs_export() {
     let traces: ExportTraceServiceRequest = requests[0].decode();
     let span = &traces.resource_spans[0].scope_spans[0].spans[0];
     assert_eq!(attr(&span.attributes, "job_id").cloned(), string("AJ_2"));
-    let diagnostics = exporter.diagnostics();
-    assert_eq!((diagnostics.recording_disabled, diagnostics.failed), (1, 0));
 }
 
 // Catches: headers not sent, or a new configuration applied to what the previous one already
@@ -549,7 +552,6 @@ async fn the_application_endpoint_speaks_protobuf_with_its_headers() {
     assert_eq!(proto[0].header("content-type"), Some("application/x-protobuf"));
     assert_eq!(proto[0].header("content-encoding"), Some("gzip"));
     assert_eq!(only_span(&proto[0]).name, "second");
-    assert_eq!(exporter.diagnostics().failed, 1, "the 500 is counted");
 }
 
 // Catches: shutdown waiting on an endpoint that never answers, or accepting records after it.
@@ -564,9 +566,6 @@ async fn shutdown_is_bounded_by_its_deadline() {
     exporter.shutdown(Duration::from_millis(300)).await;
     assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
     assert_eq!(received(&mut rx).len(), 1, "the hung request; metrics abandoned");
-    let diagnostics = exporter.diagnostics();
-    assert_eq!(diagnostics.incomplete_cleanup, 1);
-    assert_eq!(diagnostics.failed + diagnostics.dropped, 2);
     exporter.record(span("late", None, vec![]));
     exporter.shutdown(LIMIT).await;
     assert!(received(&mut rx).is_empty());

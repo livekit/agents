@@ -52,7 +52,7 @@ the framework's metrics.
 Backends that accept OTLP (Langfuse, Logfire, Datadog, Honeycomb, Grafana and
 an OpenTelemetry Collector) need nothing else. The framework's spans and the
 application's spans share trace ids, so the backend shows one trace per
-conversation.
+conversation. Export never blocks or fails a conversation.
 
 ## Application spans
 
@@ -82,7 +82,7 @@ cancellation.
 An application that installs its own `opentelemetry-sdk` `TracerProvider`, before
 starting the server, keeps it: its processors and exporters receive its spans as
 before, and the framework also exports them with the session's telemetry. A
-provider that is not the SDK's is left alone and reported in `diagnostics()`;
+provider that is not the SDK's is left alone;
 its spans are not exported by the framework.
 
 Model requests, tool calls and agent turns follow the OpenTelemetry GenAI
@@ -280,22 +280,6 @@ value of `lk.product.agents.feature`.
 
 Product statistics are Telemetry Data under section 7.2 of the LiveKit Terms of
 Service.
-
-## Diagnostics
-
-`telemetry.diagnostics()` returns the process's export counters as a
-`TelemetryDiagnostics` dataclass:
-
-| Attribute | Counts |
-| --- | --- |
-| `dropped` | records refused by a full export queue or a metric cardinality limit, or abandoned at a deadline |
-| `failed` | export requests a destination rejected or that failed |
-| `conflicts` | configuration conflicts reported |
-| `incomplete_cleanup` | job cleanups whose final flush did not finish in time |
-| `swept_spans` | spans a voice session's close ended because the framework never did (a bug to report) |
-| `abandoned_sessions` | voice sessions dropped without their close; their open spans were still exported |
-
-Export never blocks or fails a conversation.
 
 ## Logs
 

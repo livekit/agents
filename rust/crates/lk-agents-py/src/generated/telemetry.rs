@@ -256,24 +256,6 @@ pub fn configure(
     Ok(())
 }
 
-/// The process's export counters.
-#[pyfunction]
-pub fn diagnostics<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(
-        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_diagnostics,
-    );
-    crate::generated::records::telemetry::telemetry_diagnostics_to_py(py, out)
-}
-
-/// Counts a configuration conflict the host found (a tracer provider it cannot bridge).
-#[pyfunction]
-pub fn _core_telemetry_conflict(py: Python<'_>) -> PyResult<()> {
-    py.detach(
-        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_conflict,
-    );
-    Ok(())
-}
-
 /// Records a span the application's OpenTelemetry SDK ended (the bridge of an SDK provider),
 /// counted on `job`'s sessions.
 #[pyfunction]
