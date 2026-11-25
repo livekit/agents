@@ -156,9 +156,6 @@ pub enum AmdEnterError {
     Options(#[from] AmdOptionsError),
     #[error("amd requires a streaming STT")]
     NotStreaming,
-    /// A realtime model with neither session STT nor AMD's own: AMD would classify nothing.
-    #[error("amd requires session STT or AMD STT with realtime models")]
-    RealtimeWithoutStt,
     /// The session refused the attach (spec §5.1 entry checks).
     #[error(transparent)]
     Refused(#[from] AmdAttachRefused),
@@ -301,6 +298,8 @@ async fn enter_with(
     let close = CancellationToken::new();
     let (producer, outcome) = signal::once();
     let (entered_tx, entered) = tokio::sync::oneshot::channel();
+    // The session refuses a realtime model with neither session STT nor AMD's (spec §5.1).
+    let amd_stt = legs.stt.is_some();
     let executor =
         Executor::new(machine, peer.clone(), Legs { models, ..legs }, reports_tx, events_tx);
     let entry = Entry {
@@ -308,6 +307,7 @@ async fn enter_with(
         peer: peer.clone(),
         observed,
         dtmf_tool,
+        amd_stt,
         call,
         attached,
         executor,
@@ -363,9 +363,6 @@ fn prepare(
         return Err(AmdEnterError::NotStreaming);
     }
     let (session_stt, realtime) = (session.legs().stt, session.amd_realtime());
-    if realtime.is_some() && !session_stt && stt.is_none() {
-        return Err(AmdEnterError::RealtimeWithoutStt);
-    }
     let (peer, agent) = session.amd_peer()?;
     let run = peer.route.next_run();
     let setup = AmdSetup {
@@ -423,6 +420,8 @@ struct Entry {
     peer: AmdPeer,
     observed: UnboundedSender<AmdObservation>,
     dtmf_tool: ToolSpec,
+    /// The run has its own STT.
+    amd_stt: bool,
     call: Call,
     attached: Awaited<Result<(), AmdAttachRefused>>,
     executor: Executor,
@@ -438,6 +437,7 @@ impl Entry {
             peer,
             observed,
             dtmf_tool,
+            amd_stt,
             call,
             attached,
             executor,
@@ -448,7 +448,8 @@ impl Entry {
         // Routed before the attach, so the observations the gate sends at attach are heard.
         // Routes are keyed by run: a refused run never displaces the one attached.
         peer.route.attach(run, observed);
-        let attach = Command::Amd(AmdCommand::Attach { run, dtmf_tool, call: Some(call.id) });
+        let attach =
+            Command::Amd(AmdCommand::Attach { run, dtmf_tool, amd_stt, call: Some(call.id) });
         let answer = match send_command(&peer.api, VoiceCommandOrigin::Host, attach, Some(call)) {
             Ok(()) => attached.await.ok(),
             Err(_) => None,

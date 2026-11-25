@@ -207,8 +207,14 @@ pub enum AmdCommand {
     /// Install the gate for `run`, hold authorization, and set the attached rules. Answered with
     /// [`Answer::AmdAttach`](crate::agent_session::Answer::AmdAttach). `dtmf_tool` declares
     /// AMD's built-in `send_dtmf_events`, which the host runs: a reply whose decision allows DTMF
-    /// offers it, unless the agent has a tool by that name.
-    Attach { run: AmdRunId, dtmf_tool: lk_agents_abi::ToolSpec, call: Option<RequestId> },
+    /// offers it, unless the agent has a tool by that name. `amd_stt` says the run has its own STT,
+    /// which a realtime model without session STT needs (spec §5.1).
+    Attach {
+        run: AmdRunId,
+        dtmf_tool: lk_agents_abi::ToolSpec,
+        amd_stt: bool,
+        call: Option<RequestId>,
+    },
 }
 
 /// Why the session refused to attach a run.
@@ -229,6 +235,9 @@ pub enum AmdAttachRefused {
         "amd requires a realtime model with per-response tools and client-controlled tool replies"
     )]
     RealtimeTools,
+    /// A realtime model with neither session STT nor AMD's own: AMD would classify nothing.
+    #[error("amd requires session STT or AMD STT with realtime models")]
+    RealtimeNoStt,
     #[error("the session is closing")]
     Closing,
 }

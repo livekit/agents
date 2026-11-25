@@ -426,6 +426,10 @@ pub struct RealtimeSetup {
     pub duplex: bool,
     /// Delays the case sets instead of the seed drawing them.
     pub delays: crate::fakes::RealtimeDelays,
+    /// The model transcribes the user's audio (`capabilities.user_transcription`). Off, the
+    /// server sends no input transcription, and a session without STT has the turn's words only
+    /// from AMD (spec §7.2).
+    pub user_transcription: bool,
 }
 
 impl Default for RealtimeSetup {
@@ -441,6 +445,7 @@ impl Default for RealtimeSetup {
             fallback: false,
             duplex: false,
             delays: Default::default(),
+            user_transcription: true,
         }
     }
 }

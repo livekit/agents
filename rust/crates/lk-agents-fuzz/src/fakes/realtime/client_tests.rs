@@ -28,9 +28,10 @@ fn socket(
         fallback: false,
         timing: Default::default(),
         delays,
+        user_transcription: true,
     };
     let fake = FakeRealtime::new(registry.clone(), setup.clone(), clock.clone(), spawner);
-    let caps = capabilities(None, false, false);
+    let caps = capabilities(None, false, false, true);
     let socket = Arc::new(Socket {
         setup,
         caps,

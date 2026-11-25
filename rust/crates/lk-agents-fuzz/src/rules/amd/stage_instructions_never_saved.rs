@@ -10,7 +10,11 @@ use crate::{
 
 // Spec §14 invariant 8: stage
 // instructions reach every request of the reply they were decided for, its tool follow-ups
-// included (spec §10.2), and never the conversation the session records or saves.
+// included (spec §10.2), and never the conversation the session records or saves. On a realtime
+// model they are the response's per-response instructions, passed through unchanged (proposal,
+// Decisions: "Realtime per-response instructions are passed through unchanged"), and a reply
+// with none carries none (`agent_activity.py`: `reply_instructions or NOT_GIVEN`); the session's
+// own instructions never take them (`test_stage_instructions_expire_after_first_human_reply`).
 
 pub struct StageInstructionsNeverSaved;
 
@@ -19,8 +23,15 @@ impl Rule for StageInstructionsNeverSaved {
         id: "stage_instructions_never_saved",
         guarantee: "A staged reply's requests carry AMD's stage instructions, and no recorded or \
                     saved item ever does.",
-        examples: &[staged_and_unsaved],
-        counterexamples: &[staged_but_lost, staged_and_saved],
+        examples: &[staged_and_unsaved, realtime_staged],
+        counterexamples: &[
+            staged_but_lost,
+            staged_and_saved,
+            realtime_staged_but_lost,
+            realtime_staged_but_rewritten,
+            realtime_plain_reply_staged,
+            realtime_stage_in_the_session_instructions,
+        ],
         probe: Some(a_screener),
     };
 
@@ -28,6 +39,21 @@ impl Rule for StageInstructionsNeverSaved {
         let amd = r.amd_view();
         let mut staged_any = false;
         for turn in amd.gated_turns() {
+            if let Some(deciding) = amd.deciding(&turn) {
+                let stage = amd.decision(&deciding).instructions;
+                for response in amd.rt_responses_answering(&turn) {
+                    if response.at <= deciding.at() {
+                        continue;
+                    }
+                    check.expect_with(Subject::Session, response.instructions == stage, || {
+                        format!(
+                            "turn {}'s realtime response {} carried instructions {:?}; its \
+                             decision gave {stage:?}",
+                            turn.turn, response.req_id, response.instructions
+                        )
+                    });
+                }
+            }
             let Some(Answer::Decide { at, verdict, .. }) = amd.deciding(&turn) else { continue };
             if !verdict.staged() {
                 continue;
@@ -40,6 +66,13 @@ impl Rule for StageInstructionsNeverSaved {
                     request.carries(STAGE),
                     || format!("request {} of turn {}'s staged reply lost its stage", request.chat, turn.turn),
                 );
+            }
+        }
+        for (at, _, sent) in r.rt_sent() {
+            if let crate::record::RtSent::Instructions(text) = sent {
+                check.expect_with(Subject::Session, !text.contains(STAGE), || {
+                    format!("the realtime session's instructions took AMD's stage at {} ms", at.at_ms)
+                });
             }
         }
         if !staged_any {
@@ -73,6 +106,35 @@ fn staged() -> Authored {
 
 fn staged_and_unsaved() -> Recording {
     staged().request(10, 1, "you have reached the screener", &[STAGE], &[]).done()
+}
+
+fn realtime_staged() -> Recording {
+    staged().rt_response("rt_1", Some(STAGE)).done()
+}
+
+fn realtime_staged_but_lost() -> Recording {
+    staged().rt_response("rt_1", None).done()
+}
+
+/// Appended to the agent's instructions instead of passed through.
+fn realtime_staged_but_rewritten() -> Recording {
+    staged().rt_response("rt_1", Some(&format!("You are a test agent.\n{STAGE}"))).done()
+}
+
+fn realtime_plain_reply_staged() -> Recording {
+    Authored::new()
+        .sent(Input::AmdAttach {})
+        .user_turn(Some(1), 1, "hello this is Sam")
+        .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Allow })
+        .rt_response("rt_1", Some(STAGE))
+        .done()
+}
+
+fn realtime_stage_in_the_session_instructions() -> Recording {
+    staged()
+        .rt_sent(crate::record::RtSent::Instructions(format!("You are a test agent. {STAGE}")))
+        .rt_response("rt_1", Some(STAGE))
+        .done()
 }
 
 fn staged_but_lost() -> Recording {

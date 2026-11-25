@@ -234,14 +234,25 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     }
     // AMD through its executor on a call in ten, drawn after everything else. The answerer then
     // answers the executor's model requests instead of the gate (`search::conversation::answerer`).
-    // A realtime call mostly detects turns on the client, as AMD requires; the rest are refused.
+    // AMD enters only a realtime model with client-side turn detection, per-response tools and
+    // client tool replies, and some STT (spec §5.1). A realtime call mostly detects turns on the
+    // client, and AMD brings its own recogniser when the session has none; the rest are refused.
+    // A model without its own transcription leaves the turn's words to the session's recogniser,
+    // or to AMD's `InsertUserItem` (spec §7.2).
     if rng.u8(0..100) < 10 {
         let realtime = setup.realtime.is_some();
-        if let Some(server) = setup.realtime.as_mut().filter(|_| rng.u8(0..100) < 75) {
-            server.turn_detection = false;
-            server.duplex = false;
+        let mut client_side = false;
+        if let Some(server) = setup.realtime.as_mut() {
+            client_side = rng.u8(0..100) < 75;
+            if client_side {
+                server.turn_detection = false;
+                server.duplex = false;
+            }
+            server.user_transcription = rng.bool();
         }
-        setup.amd = Some(amd(rng, setup.stt, realtime));
+        let mut amd = amd(rng, setup.stt, realtime);
+        amd.own_stt |= client_side && !setup.stt;
+        setup.amd = Some(amd);
         // Mostly a caller in the room to listen to; otherwise AMD finds no participant.
         if setup.room_legs.is_none() && !setup.console && rng.u8(0..100) < 80 {
             setup.room_legs = Some(RoomLegs { pre_connect: None });

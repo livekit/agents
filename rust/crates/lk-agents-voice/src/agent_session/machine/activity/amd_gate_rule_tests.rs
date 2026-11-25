@@ -140,7 +140,12 @@ impl Gate {
     }
 
     fn attach(&mut self, run: AmdRunId) -> usize {
-        self.send(Command::Amd(AmdCommand::Attach { run, dtmf_tool: dtmf_tool(), call: None }))
+        self.send(Command::Amd(AmdCommand::Attach {
+            run,
+            dtmf_tool: dtmf_tool(),
+            amd_stt: false,
+            call: None,
+        }))
     }
 
     /// AMD's answers are inputs of their own, not host commands.

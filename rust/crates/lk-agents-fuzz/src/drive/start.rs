@@ -202,6 +202,7 @@ impl Run {
                         fallback: server.fallback && server.fallback_provider.is_none(),
                         timing: setup.timing(),
                         delays: server.delays,
+                        user_transcription: server.user_transcription,
                     };
                     let primary = fakes::FakeRealtime::new(
                         registry.clone(),

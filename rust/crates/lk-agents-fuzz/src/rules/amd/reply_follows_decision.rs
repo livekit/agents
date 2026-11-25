@@ -11,8 +11,11 @@ use crate::{
 // decision for it, from `ReplyDecided` or `Detach`. A denied turn yields no reply, an allowed one
 // at most one. It also owns spec §14 invariants 3 (`wait` never replies) and 13 (a
 // customer-handled stage never replies, including turns `Detach` settles): the scripted
-// answerer denies both. Judged on what answered the turn: model requests made for its words and
-// audio at the sink, never the session's own account of its gate.
+// answerer denies both. Judged on what answered the turn: model requests made for its words,
+// response requests the realtime server received in the turn's window, and audio at the sink,
+// never the session's own account of its gate. On a realtime model the response is asked only
+// after the allowing decision (proposal, Realtime: `reply_to_turn` sends it once, after an
+// allowed decision).
 
 pub struct ReplyFollowsDecision;
 
@@ -21,8 +24,19 @@ impl Rule for ReplyFollowsDecision {
         id: "reply_follows_decision",
         guarantee: "A turn committed under the AMD gate is answered, and heard, only after an \
                     allowing decision for it, at most once; a denied turn is never answered.",
-        examples: &[allowed_then_answered, denied_and_silent, decided_before_the_host_heard],
-        counterexamples: &[answered_before_its_decision, denied_but_heard, answered_twice],
+        examples: &[
+            allowed_then_answered,
+            denied_and_silent,
+            decided_before_the_host_heard,
+            realtime_asked_after_the_allow,
+        ],
+        counterexamples: &[
+            answered_before_its_decision,
+            denied_but_heard,
+            answered_twice,
+            realtime_asked_before_the_decision,
+            realtime_asked_for_a_denied_turn,
+        ],
         probe: Some(an_allowed_turn),
     };
 
@@ -60,11 +74,29 @@ impl Rule for ReplyFollowsDecision {
                     },
                 );
             }
+            let responses = amd.rt_responses_answering(&turn);
+            for response in &responses {
+                check.expect_with(
+                    Subject::Session,
+                    allowed.is_some_and(|a| a.at() < response.at),
+                    || {
+                        format!(
+                            "turn {} ({:?}) was answered by realtime response {} asked at {} ms, \
+                             but no decision allowed it before then ({allowed:?})",
+                            turn.turn, turn.words, response.req_id, response.at.at_ms
+                        )
+                    },
+                );
+            }
             let answers = amd.answers_for(&turn);
             if !answers.is_empty() && allowed.is_none() {
-                check.expect_with(Subject::Session, heard.is_empty() && requests.iter().all(|q| amd.preemptive(q)), || {
-                    format!("turn {} was denied ({answers:?}) and was answered", turn.turn)
-                });
+                check.expect_with(
+                    Subject::Session,
+                    heard.is_empty()
+                        && requests.iter().all(|q| amd.preemptive(q))
+                        && responses.is_empty(),
+                    || format!("turn {} was denied ({answers:?}) and was answered", turn.turn),
+                );
             }
             if !heard.is_empty() {
                 check.expect_with(Subject::Session, heard.len() <= 1, || {
@@ -141,6 +173,19 @@ fn decided_before_the_host_heard() -> Recording {
         .request(10, 1, words, &[], &[])
         .pushed(10)
         .done()
+}
+
+fn realtime_asked_after_the_allow() -> Recording {
+    attached().sent(decide(AmdVerdict::Allow)).rt_response("rt_1", None).done()
+}
+
+/// The realtime reply is asked at the commit, as an ungated turn's is.
+fn realtime_asked_before_the_decision() -> Recording {
+    attached().rt_response("rt_1", None).sent(decide(AmdVerdict::Allow)).done()
+}
+
+fn realtime_asked_for_a_denied_turn() -> Recording {
+    attached().sent(decide(AmdVerdict::Wait)).rt_response("rt_1", None).done()
 }
 
 fn denied_and_silent() -> Recording {

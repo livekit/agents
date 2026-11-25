@@ -225,6 +225,9 @@ impl Run {
                 Record::Heard { at, generation, ms, whole } => {
                     self.record.record_heard(at, generation % 255, ms, whole);
                 }
+                Record::RtSent { at, socket, sent } => {
+                    self.record.record_rt_sent(at, socket, sent);
+                }
                 Record::Held { at, socket, items } => {
                     let items = items.into_iter().map(|(g, ms)| (g % 255, ms)).collect();
                     self.record.record_held(at, socket, items);

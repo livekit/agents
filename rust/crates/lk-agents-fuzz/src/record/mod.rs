@@ -20,7 +20,9 @@ use lk_agents_voice::{
 use crate::input::Input;
 
 mod probes;
+mod realtime;
 pub use probes::{Fault, Probe, Site, Wait};
+pub use realtime::{Breach, RtSent};
 mod recognition;
 mod remote;
 pub use recognition::{Recognised, Recognition, SttReport};
@@ -478,25 +480,6 @@ impl Tag {
     }
 }
 
-/// A client frame the realtime server refused, or a request it answered from the wrong state
-/// (`fakes::realtime::server`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Breach {
-    /// Refused with an `error` event. `knowing`: when the client sent it, it had already been told
-    /// what makes it invalid (the response it cancels was done, the one it asks over had been
-    /// created, the item it names never was); otherwise it raced an event still on the wire.
-    Refused { event: String, code: &'static str, why: &'static str, knowing: bool },
-    /// A response asked for while the conversation ended in a function call without its output,
-    /// whose output the client sent afterwards: the reply read the conversation without it.
-    AskedBeforeOutput { response: String, request: Option<String>, call_id: String },
-    /// A client `response.cancel` stopped the server's answer to the person's turn (its VAD ended
-    /// the turn and replied), before any of its audio and with no onset told over it: the server
-    /// saw no reason for it.
-    /// `generation` is the reply as the run knows it (`Kind::Generation`), once the client was
-    /// told of it; `None` is a cancel landing on a reply the client never heard of.
-    CancelledUnprompted { response: String, generation: Option<u32> },
-}
-
 /// What the avatar worker's runner was handed and did, as its receiver, its generator and its
 /// synchronizer saw it (`fakes::avatar`). A segment is a run of received audio, numbered by the
 /// receiver from zero; a frame's `from` is when the earliest audio in it was received.
@@ -695,6 +678,8 @@ pub struct Recording {
     first_audio_due: BTreeMap<u32, u64>,
     /// What each realtime socket's server refused or answered wrongly, by socket.
     breaches: Vec<(Observed, u32, Breach)>,
+    /// What the session sent each realtime socket, by socket, as the server receives it.
+    rt_sent: Vec<(Observed, u32, RtSent)>,
     /// Each failed attempt the framework reported to a fake provider, and its `recoverable`.
     provider_failed: Vec<(Observed, Kind, bool)>,
     /// Each recogniser report and what its stream made of it.
@@ -1044,11 +1029,6 @@ impl Recording {
 
     pub fn record_provider_failed(&mut self, at: Observed, kind: Kind, recoverable: bool) {
         self.provider_failed.push((at, kind, recoverable));
-    }
-
-    /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
-    pub fn record_breach(&mut self, at: Observed, socket: u32, breach: Breach) {
-        self.breaches.push((at, socket, breach));
     }
 
     /// The person heard `ms` of a realtime generation's audio.

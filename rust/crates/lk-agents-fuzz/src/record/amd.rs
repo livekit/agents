@@ -118,6 +118,25 @@ impl Request<'_> {
     }
 }
 
+/// One response request the session sent a realtime socket (`GenerateReply`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RtResponse {
+    pub socket: u32,
+    pub at: Observed,
+    pub req_id: String,
+    /// The per-response instructions it carried.
+    pub instructions: Option<String>,
+    /// The session's tools on the socket when it was sent: the last `UpdateTools` before it, or
+    /// `None` when none was sent.
+    pub tools: Option<Vec<String>>,
+}
+
+impl RtResponse {
+    pub fn offers(&self, tool: &str) -> bool {
+        self.tools.as_ref().is_some_and(|tools| tools.iter().any(|t| t == tool))
+    }
+}
+
 pub struct AmdView<'a>(&'a Recording);
 
 impl Recording {
@@ -247,6 +266,121 @@ impl<'a> AmdView<'a> {
             }
         }
         out
+    }
+
+    /// The decision an answer stands for: the executor's own, or the one the scripted answerer
+    /// builds from its verdict (`fakes::amd`).
+    pub fn decision(&self, answer: &Answer) -> lk_agents_voice::amd::ReplyDecision {
+        use lk_agents_voice::amd::AmdAnswer;
+        let view = self.0.amd_run();
+        for (_, run) in view.entered() {
+            for (at, sent) in view.answers(run) {
+                if at != answer.at() {
+                    continue;
+                }
+                match (sent, answer) {
+                    (
+                        AmdAnswer::ReplyDecided { turn, decision, .. },
+                        Answer::Decide { turn: t, .. },
+                    ) if turn.0 == *t => {
+                        return decision;
+                    }
+                    (AmdAnswer::Detach { pending, .. }, Answer::Detach { .. }) => return pending,
+                    _ => {}
+                }
+            }
+        }
+        match *answer {
+            Answer::Decide { verdict, .. } => crate::fakes::amd::decision(verdict),
+            Answer::Detach { category, forbid, .. } => crate::fakes::amd::pending(category, forbid),
+        }
+    }
+
+    /// Every `InsertUserItem` the session took, with its run, turn and words.
+    pub fn inserted_items(&self) -> Vec<(Observed, u64, u64, String)> {
+        use lk_agents_voice::amd::AmdAnswer;
+        let view = self.0.amd_run();
+        let mut out = Vec::new();
+        for (_, run) in view.entered() {
+            for (at, answer) in view.answers(run) {
+                if let AmdAnswer::InsertUserItem { run, turn, text } = answer {
+                    out.push((at, run.0, turn.0, text));
+                }
+            }
+        }
+        out.sort_by_key(|(at, ..)| *at);
+        out
+    }
+
+    /// Every response request the session sent a realtime socket, in order.
+    pub fn rt_responses(&self) -> Vec<RtResponse> {
+        use super::RtSent;
+        let mut tools: std::collections::BTreeMap<u32, Vec<String>> = Default::default();
+        let mut out = Vec::new();
+        for (at, socket, sent) in self.0.rt_sent() {
+            match sent {
+                RtSent::Tools(set) => {
+                    tools.insert(*socket, set.clone());
+                }
+                RtSent::Response { req_id, instructions } => out.push(RtResponse {
+                    socket: *socket,
+                    at: *at,
+                    req_id: req_id.clone(),
+                    instructions: instructions.clone(),
+                    tools: tools.get(socket).cloned(),
+                }),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// When the session committed a realtime socket's input buffer, in order.
+    pub fn rt_commits(&self) -> Vec<Observed> {
+        (self.0.rt_sent().iter())
+            .filter(|(_, _, sent)| *sent == super::RtSent::CommitAudio)
+            .map(|(at, ..)| *at)
+            .collect()
+    }
+
+    /// Where `turn`'s realtime reply may be asked for: from its commit to the next turn the host
+    /// heard committed, a newer gated turn, or a host `say()` or `generate_reply()`.
+    fn rt_window(&self, turn: &GatedTurn) -> Observed {
+        let next_commit = self.0.host_view().events().into_iter().find_map(|(at, e)| match e {
+            SessionEvent::UserTurnCompleted(done)
+                if at > turn.committed && done.turn.0 != turn.turn =>
+            {
+                Some(at)
+            }
+            _ => None,
+        });
+        let host_speech = self.0.applied().iter().find_map(|a| {
+            (a.accepted
+                && a.at > turn.committed
+                && matches!(a.input, Input::Say { .. } | Input::GenerateReply { .. }))
+            .then_some(a.at)
+        });
+        [turn.superseded, next_commit, host_speech]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(Observed::END)
+    }
+
+    /// The response requests that answer `turn` on a realtime model: every one asked in its
+    /// window, the opening's aside (a realtime response carries no turn of its own).
+    pub fn rt_responses_answering(&self, turn: &GatedTurn) -> Vec<RtResponse> {
+        let until = self.rt_window(turn);
+        self.rt_responses()
+            .into_iter()
+            .filter(|q| q.at > turn.committed && q.at < until)
+            .filter(|q| q.instructions.as_deref() != Some(crate::fakes::amd::OPENING_INSTRUCTIONS))
+            .collect()
+    }
+
+    /// Whether the session ran on a realtime model: it sent a realtime socket anything.
+    pub fn realtime(&self) -> bool {
+        !self.0.rt_sent().is_empty()
     }
 
     /// Whether the session refused run `run`'s attach.

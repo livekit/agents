@@ -35,15 +35,18 @@ impl RealtimeActivity {
 }
 
 impl VoiceDriver {
-    /// Why AMD cannot run on this realtime session (spec §5.1): the server detects turns, or a
-    /// response cannot carry the decision's tools, or the server answers tool results itself.
-    pub(crate) fn realtime_amd_refusal(&self) -> Option<AmdAttachRefused> {
+    /// Why AMD cannot run on this realtime session (spec §5.1), in `detector.py`'s order: the
+    /// server detects turns, a response cannot carry the decision's tools or the server answers
+    /// tool results itself, or nothing transcribes the callee: neither session STT nor AMD's own.
+    pub(crate) fn realtime_amd_refusal(&self, amd_stt: bool) -> Option<AmdAttachRefused> {
         let rt = self.activity.realtime_activity()?;
         let caps = rt.session.capabilities;
         if rt.server_segments() {
             Some(AmdAttachRefused::RealtimeServerTurnDetection)
         } else if caps.auto_tool_reply_generation || !caps.per_response_tool_choice {
             Some(AmdAttachRefused::RealtimeTools)
+        } else if !self.activity.audio_recognition.stt_enabled() && !amd_stt {
+            Some(AmdAttachRefused::RealtimeNoStt)
         } else {
             None
         }

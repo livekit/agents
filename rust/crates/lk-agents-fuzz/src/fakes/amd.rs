@@ -96,6 +96,20 @@ pub mod probe {
         }
     }
 
+    /// [`call`] on a realtime model with client-side turn detection, per-response tools and
+    /// client tool replies, the only realtime model AMD enters on (spec §5.1). The session's
+    /// recogniser makes the turn's words; the model transcribes the audio too.
+    pub fn realtime_call(inputs: Vec<Input>) -> Case {
+        let realtime = crate::drive::RealtimeSetup {
+            turn_detection: false,
+            tool_calls: Some(0),
+            ..Default::default()
+        };
+        let mut case = call(inputs);
+        case.setup.realtime = Some(realtime);
+        case
+    }
+
     /// AMD attaches and starts listening, with this opening.
     pub fn attached(opening: Option<AmdOpening>) -> Vec<Input> {
         vec![Input::AmdAttach {}, Input::AmdActivate { opening }]

@@ -9,6 +9,7 @@ mod executor;
 mod gate;
 mod opening;
 mod payload;
+mod realtime;
 mod silence;
 
 use lk_agents_abi::Role;

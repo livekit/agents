@@ -380,6 +380,21 @@ impl Authored {
         self
     }
 
+    /// The session sent realtime socket 0 this command.
+    pub fn rt_sent(mut self, sent: crate::record::RtSent) -> Self {
+        let at = self.next();
+        self.recording.record_rt_sent(at, 0, sent);
+        self
+    }
+
+    /// The session asked realtime socket 0 for a response, with these per-response instructions.
+    pub fn rt_response(self, req_id: &str, instructions: Option<&str>) -> Self {
+        self.rt_sent(crate::record::RtSent::Response {
+            req_id: req_id.into(),
+            instructions: instructions.map(str::to_owned),
+        })
+    }
+
     /// The person heard `ms` of a realtime generation's audio.
     pub fn heard(mut self, generation: u32, ms: u64) -> Self {
         let at = self.next();
@@ -450,6 +465,13 @@ impl Authored {
     pub fn amd_entered(mut self, run: u64) -> Self {
         let at = self.next();
         self.recording.record_amd_entered(at, Ok(lk_agents_voice::amd::AmdRunId(run)));
+        self
+    }
+
+    /// The session took this answer from AMD's executor.
+    pub fn amd_answer(mut self, answer: lk_agents_voice::amd::AmdAnswer) -> Self {
+        let at = self.next();
+        self.recording.record_amd_answer(at, answer);
         self
     }
 

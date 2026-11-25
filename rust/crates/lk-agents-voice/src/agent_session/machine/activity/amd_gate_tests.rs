@@ -46,6 +46,7 @@ fn attached(hosted: bool) -> VoiceDriver {
         Command::Amd(AmdCommand::Attach {
             run: RUN,
             dtmf_tool: super::rule_tests::dtmf_tool(),
+            amd_stt: false,
             call: None,
         }),
     );
@@ -261,6 +262,7 @@ fn only_the_opening_bypasses_the_hold() {
         Command::Amd(AmdCommand::Attach {
             run: RUN,
             dtmf_tool: super::rule_tests::dtmf_tool(),
+            amd_stt: false,
             call: None,
         }),
     );

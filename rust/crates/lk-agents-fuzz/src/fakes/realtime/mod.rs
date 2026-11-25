@@ -90,6 +90,8 @@ pub struct ServerSetup {
     pub fallback: bool,
     pub timing: crate::fakes::Timing,
     pub delays: RealtimeDelays,
+    /// `capabilities.user_transcription`: off, the server transcribes no user item.
+    pub user_transcription: bool,
 }
 
 pub struct FakeRealtime {
@@ -148,11 +150,16 @@ fn client_machine(
 
 /// A LiveKit Inference realtime model's capabilities: server detection left at its default is the
 /// driver's to switch off; switched off by the developer, it stays off.
-fn capabilities(vad: Option<Vad>, configured: bool, text_only: bool) -> RealtimeCapabilities {
+fn capabilities(
+    vad: Option<Vad>,
+    configured: bool,
+    text_only: bool,
+    user_transcription: bool,
+) -> RealtimeCapabilities {
     RealtimeCapabilities {
         message_truncation: true,
         turn_detection: vad.is_some(),
-        user_transcription: true,
+        user_transcription,
         auto_tool_reply_generation: false,
         audio_output: !text_only,
         manual_function_calls: true,
@@ -174,7 +181,7 @@ impl Realtime for FakeRealtime {
 
     fn capabilities(&self) -> RealtimeCapabilities {
         let vad = self.setup.vad;
-        capabilities(vad, vad.is_some(), self.setup.text_only)
+        capabilities(vad, vad.is_some(), self.setup.text_only, self.setup.user_transcription)
     }
 
     /// Running when it returns, as the real session is: it connects in the background.
@@ -189,7 +196,12 @@ impl Realtime for FakeRealtime {
             let vad = self.setup.vad.filter(|_| !disabled);
             let seed = self.setup.seed ^ (nth << 32);
             let setup = ServerSetup { vad, seed, ..self.setup.clone() };
-            let caps = capabilities(vad, self.setup.vad.is_some(), self.setup.text_only);
+            let caps = capabilities(
+                vad,
+                self.setup.vad.is_some(),
+                self.setup.text_only,
+                self.setup.user_transcription,
+            );
             let now = self.clock.now();
             // A connection slower than the client's bound is reported as timed out.
             let bound = ApiConnectOptions::default().connect_timeout.map(Duration::from_secs_f64);
@@ -233,6 +245,11 @@ impl RealtimeSession for Session {
 
     /// Never blocks: queued for the pump, which sends it once the connection is up.
     fn send(&self, cmd: RealtimeCommand) {
+        if let Some(slot) = self.socket.slot.get()
+            && let Some(sent) = crate::record::RtSent::of(&cmd)
+        {
+            self.socket.registry.record_rt_sent(slot.nth, sent);
+        }
         self.socket.state.lock().unwrap().commands.push_back(cmd);
         self.socket.wake.notify_one();
     }
@@ -348,6 +365,7 @@ impl Socket {
         let ids = format!("{}s{connection}c", self.slot.get().map_or(0, |s| s.nth));
         let mut server = Server::new(self.setup.seed ^ connection, ids);
         server.provider = self.setup.provider;
+        server.transcribes = self.setup.user_transcription;
         server.configure(
             self.setup.vad,
             !self.setup.text_only,

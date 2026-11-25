@@ -11,7 +11,10 @@ use crate::{
 // `send_dtmf_events` is offered once in a reply whose decision set `dtmf`, and in no other
 // request, a preemptive generation included. An agent that defines its own tool with that id
 // keeps it in every request, so the tool appearing outside a DTMF reply is judged only when no
-// request made outside one already carried it.
+// request made outside one already carried it. A realtime response takes the session's tools, so
+// the session sets them to the decision's tools for the response and restores them after
+// (proposal, Realtime): every response asked for a DTMF reply finds the tool among the tools the
+// server last received, and every other response does not.
 
 pub struct DtmfOnlyWhenAllowed;
 
@@ -20,8 +23,14 @@ impl Rule for DtmfOnlyWhenAllowed {
         id: "dtmf_only_when_allowed",
         guarantee: "AMD's DTMF tool is offered exactly once in a reply AMD allowed it for, and \
                     nowhere else.",
-        examples: &[offered_to_the_ivr_reply],
-        counterexamples: &[missing_from_the_ivr_reply, offered_twice, offered_to_a_plain_reply],
+        examples: &[offered_to_the_ivr_reply, realtime_tools_set_and_restored],
+        counterexamples: &[
+            missing_from_the_ivr_reply,
+            offered_twice,
+            offered_to_a_plain_reply,
+            realtime_tools_never_set,
+            realtime_tools_never_restored,
+        ],
         probe: Some(an_ivr_menu),
     };
 
@@ -43,6 +52,44 @@ impl Rule for DtmfOnlyWhenAllowed {
                 let offered = request.tools.iter().filter(|t| *t == SEND_DTMF_TOOL).count();
                 check.expect_with(Subject::Resource(Kind::Chat, request.chat), offered == 1, || {
                     format!("request {} of an IVR reply offered the DTMF tool {offered} times", request.chat)
+                });
+            }
+        }
+        let agents_own_tool = amd.agent_declared_at(SEND_DTMF_TOOL).is_some();
+        let mut dtmf_responses = std::collections::BTreeSet::new();
+        for turn in amd.gated_turns() {
+            let Some(deciding) = amd.deciding(&turn) else { continue };
+            if !amd.decision(&deciding).dtmf {
+                continue;
+            }
+            for response in amd.rt_responses_answering(&turn) {
+                if response.at <= deciding.at() {
+                    continue;
+                }
+                dtmf_responses.insert(response.req_id.clone());
+                let offered = (response.tools.iter().flatten())
+                    .filter(|t| *t == SEND_DTMF_TOOL)
+                    .count();
+                check.expect_with(Subject::Session, offered == 1, || {
+                    format!(
+                        "realtime response {} of turn {}'s DTMF reply found the DTMF tool {offered} \
+                         times among the session's tools ({:?})",
+                        response.req_id, turn.turn, response.tools
+                    )
+                });
+            }
+        }
+        if !agents_own_tool {
+            for response in amd.rt_responses() {
+                if dtmf_responses.contains(&response.req_id) {
+                    continue;
+                }
+                check.expect_with(Subject::Session, !response.offers(SEND_DTMF_TOOL), || {
+                    format!(
+                        "realtime response {} at {} ms found AMD's DTMF tool among the session's \
+                         tools outside a DTMF reply",
+                        response.req_id, response.at.at_ms
+                    )
                 });
             }
         }
@@ -73,6 +120,45 @@ fn ivr() -> Authored {
 
 fn offered_to_the_ivr_reply() -> Recording {
     ivr().request(10, 1, "press one for sales", &[], &[SEND_DTMF_TOOL]).done()
+}
+
+fn realtime_ivr() -> Authored {
+    use crate::record::RtSent;
+    Authored::new()
+        .rt_sent(RtSent::Tools(vec!["lookup".into()]))
+        .sent(Input::AmdAttach {})
+        .user_turn(Some(1), 1, "press one for sales")
+        .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Ivr })
+}
+
+fn realtime_tools_set_and_restored() -> Recording {
+    use crate::record::RtSent;
+    realtime_ivr()
+        .rt_sent(RtSent::Tools(vec!["lookup".into(), SEND_DTMF_TOOL.into()]))
+        .rt_response("rt_1", Some(crate::fakes::amd::STAGE))
+        .later(2_000)
+        .rt_sent(RtSent::Tools(vec!["lookup".into()]))
+        .user_turn(Some(1), 2, "hello this is Sam")
+        .sent(Input::AmdDecide { turn: Ref::new(1), verdict: AmdVerdict::Allow })
+        .rt_response("rt_2", None)
+        .done()
+}
+
+/// `SpeechSpec.toolset` alone does not reach the server.
+fn realtime_tools_never_set() -> Recording {
+    realtime_ivr().rt_response("rt_1", Some(crate::fakes::amd::STAGE)).done()
+}
+
+fn realtime_tools_never_restored() -> Recording {
+    use crate::record::RtSent;
+    realtime_ivr()
+        .rt_sent(RtSent::Tools(vec!["lookup".into(), SEND_DTMF_TOOL.into()]))
+        .rt_response("rt_1", Some(crate::fakes::amd::STAGE))
+        .later(2_000)
+        .user_turn(Some(1), 2, "hello this is Sam")
+        .sent(Input::AmdDecide { turn: Ref::new(1), verdict: AmdVerdict::Allow })
+        .rt_response("rt_2", None)
+        .done()
 }
 
 fn missing_from_the_ivr_reply() -> Recording {

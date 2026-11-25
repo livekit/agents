@@ -221,6 +221,12 @@ pub enum Record {
         ms: u64,
         whole: bool,
     },
+    /// A command the session sent the n-th realtime socket, as the server receives it.
+    RtSent {
+        at: Observed,
+        socket: u32,
+        sent: crate::record::RtSent,
+    },
     /// What a realtime socket's server held as a connection closed.
     Held {
         at: Observed,
@@ -721,6 +727,11 @@ impl Registry {
     pub(super) fn record_heard(&self, generation: u32, ms: u64, whole: bool) {
         let at = self.stamps.next();
         self.write(Record::Heard { at, generation, ms, whole });
+    }
+
+    pub(super) fn record_rt_sent(&self, socket: u32, sent: crate::record::RtSent) {
+        let at = self.stamps.next();
+        self.write(Record::RtSent { at, socket, sent });
     }
 
     pub(super) fn record_held(&self, socket: u32, items: Vec<(u32, u64)>) {

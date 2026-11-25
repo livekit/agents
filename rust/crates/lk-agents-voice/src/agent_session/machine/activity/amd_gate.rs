@@ -226,13 +226,20 @@ impl super::AgentActivity {
 impl VoiceDriver {
     pub(crate) fn on_amd(&mut self, now: Ts, cmd: AmdCommand) {
         match cmd {
-            AmdCommand::Attach { run, dtmf_tool, call } => {
-                self.attach_amd(now, run, dtmf_tool, call)
+            AmdCommand::Attach { run, dtmf_tool, amd_stt, call } => {
+                self.attach_amd(now, run, dtmf_tool, amd_stt, call)
             }
         }
     }
 
-    fn attach_amd(&mut self, now: Ts, run: AmdRunId, dtmf_tool: ToolSpec, call: Option<RequestId>) {
+    fn attach_amd(
+        &mut self,
+        now: Ts,
+        run: AmdRunId,
+        dtmf_tool: ToolSpec,
+        amd_stt: bool,
+        call: Option<RequestId>,
+    ) {
         let refused = if self.session.closing.is_some() {
             Some(AmdAttachRefused::Closing)
         } else if self.activity.gate.is_some() {
@@ -242,7 +249,7 @@ impl VoiceDriver {
         } else if self.activity.voice_tasks.running() {
             Some(AmdAttachRefused::TaskRunning)
         } else {
-            self.realtime_amd_refusal()
+            self.realtime_amd_refusal(amd_stt)
         };
         if let Some(why) = refused {
             self.record_trace(GateStep::AttachRefused { run, why });
@@ -921,3 +928,7 @@ mod rule_tests;
 #[cfg(test)]
 #[path = "amd_gate_realtime_tests.rs"]
 mod realtime_tests;
+
+#[cfg(test)]
+#[path = "amd_gate_realtime_flow_tests.rs"]
+mod realtime_flow_tests;
