@@ -5,6 +5,8 @@ Support for [Zoom Scribe](https://developers.zoom.us/docs/ai-services/scribe/) s
 - **Live** ([docs](https://developers.zoom.us/docs/ai-services/scribe/live-mode/)): streaming over WebSocket. Scribe's own VAD ends each speech turn and returns its final transcript.
 - **Fast** ([docs](https://developers.zoom.us/docs/ai-services/scribe/fast-mode/)): one HTTP request per utterance. Not streaming, so `AgentSession` pairs it with a VAD.
 
+And a `DecisionModel` for [Zoom Decisions](https://developers.zoom.us/docs/ai-services/decisions/): probability, choice and score decisions about a conversation, a batch in one request.
+
 See [zoom.ai](https://www.zoom.ai/) for all Zoom AI Services APIs and features.
 
 ## Installation
@@ -21,7 +23,7 @@ uv add "livekit-agents[zoom-ai]"
 
 ## Pre-requisites
 
-The plugin needs a Zoom AI Services API key with the Scribe permissions. Get your credentials at [zoom.ai](https://www.zoom.ai/).
+The plugin needs a Zoom AI Services API key with the Scribe or Decisions permissions. Get your credentials at [zoom.ai](https://www.zoom.ai/).
 
 Set it in your `.env` file:
 
@@ -90,7 +92,34 @@ event = await zoom_ai.STT(mode="fast", http_session=session).recognize(frames)  
 
 For transcription, a longer `silence_duration_ms` (such as 600) keeps sentences with pauses together and can improve accuracy; the 350 ms default is tuned for voice agents.
 
+### Decisions
+
+```python
+from livekit.agents import llm
+from livekit.plugins import zoom_ai
+
+model = zoom_ai.DecisionModel()  # or model="zoom-decisions-pro"
+response = await model.evaluate(
+    input=chat_ctx,  # or a string
+    decisions={
+        "handoff": llm.Probability("The caller asks for a human."),
+        "intent": llm.Choice(
+            "What does the caller want?",
+            options={"order_status": "Where an order is", "refund": "Money back", "other": ""},
+        ),
+        "frustration": llm.Score(
+            "How frustrated is the caller?", levels=["Calm", "Annoyed", "Angry"]
+        ),
+    },
+)
+response.results["handoff"].value  # probability, 0 to 1
+```
+
+Each decision maps to a Zoom question: `Probability` to `predicate`, `Choice` to `choice` and `Score` to `score`. A question Zoom declines is reported in `response.errors`, and the others still answer. It also works wherever LiveKit takes a `DecisionModel`, such as answering machine detection. `zoom-guardrails` takes no questions, so it isn't available as a `DecisionModel`.
+
 ## Options
+
+### STT
 
 Options map to the Scribe API fields of the same name; see the [Scribe docs](https://developers.zoom.us/docs/ai-services/scribe/) for what each one does and its availability. For a Scribe feature without an option here, pass its fields in `extra_kwargs`.
 
@@ -110,3 +139,11 @@ Options map to the Scribe API fields of the same name; see the [Scribe docs](htt
 | `text_polishing` | `False` | Polished text as the transcript, with the original in `metadata["transcript"]`; if polishing fails, the original text. `en-US` only |
 | `extra_kwargs` | `None` | Other Scribe request fields, e.g. `{"config": {"language_detection": {"candidate_languages": ["en-US", "fr-FR"]}}}` to restrict language detection |
 | `base_url` | `https://api.zoom.us/v2/aiservices/scribe` | Scribe API base URL |
+
+### DecisionModel
+
+| Option | Default | Description |
+|---|---|---|
+| `model` | `"zoom-decisions"` | `"zoom-decisions"` (tuned for latency and cost) or `"zoom-decisions-pro"` (higher accuracy for complex decisions) |
+| `api_key` | `$ZOOM_AI_API_KEY` | Zoom AI Services API key |
+| `base_url` | `https://api.zoom.us/v2/aiservices/decisions` | Decisions API base URL; requests go to `<base>/decide` |
