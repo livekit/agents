@@ -322,3 +322,73 @@ async def test_a_cancelled_call_propagates() -> None:
         await call
 
     assert sent == []
+
+
+class _RecordingClient(_FakeClient):
+    """Records the kwargs of each call_tool and returns a text result."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__(names)
+        self.calls: list[dict[str, Any]] = []
+
+    async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> Any:
+        import mcp.types
+
+        self.calls.append(kwargs)
+        return mcp.types.CallToolResult(content=[mcp.types.TextContent(type="text", text="ok")])
+
+
+def _recording_server(tool_names: list[str] | None = None) -> tuple[_FakeMCPServer, Any]:
+    server = _FakeMCPServer(tool_names)
+    client = _RecordingClient(tool_names or ["echo"])
+    server._client = client  # type: ignore[assignment]
+    return server, client
+
+
+@pytest.mark.asyncio
+async def test_default_timeout_defers_to_the_session() -> None:
+    server, client = _recording_server()
+    tool = _build_mcp_tool(server, MCPToolOptions())
+
+    await tool({})
+
+    assert client.calls[0]["read_timeout_seconds"] is None
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_passed_to_call_tool() -> None:
+    server, client = _recording_server()
+    tool = _build_mcp_tool(server, MCPToolOptions(timeout=120))
+
+    await tool({})
+
+    assert client.calls[0]["read_timeout_seconds"] == 120
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_passed_when_reporting_progress() -> None:
+    server, client = _recording_server()
+    tool = _build_mcp_tool(server, MCPToolOptions(timeout=120, report_progress=True))
+
+    await tool(None, {})  # no progress is reported, so the run context is never used
+
+    assert client.calls[0]["read_timeout_seconds"] == 120
+    assert client.calls[0]["progress_callback"] is not None
+
+
+@pytest.mark.asyncio
+async def test_list_tools_applies_timeout_per_tool() -> None:
+    server, client = _recording_server(["get_weather", "book_flight"])
+    tools = await server.list_tools(tool_options={"book_flight": MCPToolOptions(timeout=120)})
+    by_name = {t.info.name: t for t in tools}
+
+    await by_name["get_weather"]({})
+    await by_name["book_flight"]({})
+
+    assert [c["read_timeout_seconds"] for c in client.calls] == [None, 120]
+
+
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_a_timeout_that_is_not_positive_is_rejected(timeout: float) -> None:
+    with pytest.raises(ValueError, match="greater than 0"):
+        _resolve_tool_options(MCPToolOptions(timeout=timeout))
