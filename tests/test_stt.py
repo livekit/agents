@@ -28,6 +28,7 @@ from livekit.plugins import (
     gradium,
     inworld,
     mistralai,
+    murf,
     nvidia,
     openai,
     reson8,
@@ -65,6 +66,7 @@ UNTIMED_EOS_REASONS = {
     "livekit.plugins.sarvam.realtime": "Sarvam can emit EOS before its timed final arrives",
     "livekit.plugins.nvidia": "NVIDIA EOS timing is deferred until live validation",
     "livekit.plugins.reson8": "Reson8 emits EOS without a provider speech-end timestamp",
+    "livekit.plugins.murf": "Murf finals carry no word timestamps",
 }
 
 
@@ -89,6 +91,7 @@ STTs: list[Callable[[], stt.STT]] = [
         azure,
         aws,
         reson8,
+        murf,
         # rtzr,
         # TODO: only Business account allowed outside South Korea
         # clova,
