@@ -4,7 +4,6 @@ import asyncio
 import base64
 import functools
 import json
-import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, TypeVar
 from urllib.parse import parse_qsl, urlsplit
@@ -947,9 +946,6 @@ async def test_tts_replaces_a_connection_past_its_lifetime(
     speech: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sprag_tts, "SOCKET_MAX_LIFETIME", 1.0)
-    # virtual time covers time.time but not the monotonic clock the lifetime is measured on
-    loop_clock = types.SimpleNamespace(monotonic=asyncio.get_running_loop().time)
-    monkeypatch.setattr(sprag_tts, "time", loop_clock)
     server, session = speech()
     tts = TTS(http_session=session)
     try:

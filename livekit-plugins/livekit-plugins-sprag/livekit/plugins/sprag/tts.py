@@ -140,7 +140,7 @@ class TTS(tts.TTS):
         except BaseException:
             await ws.close()
             raise
-        self._connected_at[ws] = time.monotonic()
+        self._connected_at[ws] = time.perf_counter()
         return ws
 
     async def _configure(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -169,7 +169,7 @@ class TTS(tts.TTS):
 
     def _expired(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         connected_at = self._connected_at.get(ws)
-        return connected_at is not None and time.monotonic() - connected_at > SOCKET_MAX_LIFETIME
+        return connected_at is not None and time.perf_counter() - connected_at > SOCKET_MAX_LIFETIME
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
