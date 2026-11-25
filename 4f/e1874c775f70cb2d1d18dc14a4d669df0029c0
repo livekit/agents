@@ -1,0 +1,29 @@
+python/livekit-agents/livekit/agents/voice/agent_run.py
+  s_342953b2c18827::t_84fb320265f22d 430-432,671-678
+python/livekit-agents/livekit/agents/__init__.py
+  s_342953b2c18827::t_c322bc4bade10f 76,80-85,94,213-220
+python/livekit-agents/livekit/agents/voice/__init__.py
+  s_342953b2c18827::t_bc1798076bfdeb 704-713,743-750
+python/livekit-agents/livekit/agents/voice/agent_session.py
+  s_342953b2c18827::t_413b2d174e95b1 95,135-137,229-233
+python/livekit-agents/livekit/agents/voice/amd.py
+  s_342953b2c18827::t_6ac5b66893fcac 1-422
+tests/host/test_amd_host.py
+  s_342953b2c18827::t_05870107a583cd 1-327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4fe1874c775f70cb2d1d18dc14a4d669df0029c0",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
