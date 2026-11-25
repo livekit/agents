@@ -1,0 +1,55 @@
+rust/crates/lk-agents-runtime/src/voice/amd/amd_tests.rs
+  s_4dc110b916ccc5::t_4d4b54726d4272 1-24
+rust/crates/lk-agents-runtime/src/voice/amd/callee_tests.rs
+  s_4dc110b916ccc5::t_ee3faffa9c7ef9 1-19
+rust/crates/lk-agents-runtime/src/voice/amd/executor.rs
+  s_4dc110b916ccc5::t_cf06e371d67aae 1-459
+rust/crates/lk-agents-runtime/src/voice/session/shared.rs
+  s_4dc110b916ccc5::t_7781af9a0794ed 49-51,53-62,66-70,80-97,105,108-114,219-220
+rust/crates/lk-agents-runtime/src/voice/amd/callee.rs
+  s_8fb15b894415b9::t_42b5f171491a5c 1-157
+rust/crates/lk-agents-runtime/src/voice/amd/classifier.rs
+  s_8fb15b894415b9::t_d1f1dd0ee78ffb 1-506
+rust/crates/lk-agents-runtime/src/voice/amd/classifier_tests.rs
+  s_8fb15b894415b9::t_df355fd6d00af4 1-340
+rust/crates/lk-agents-runtime/src/voice/amd/mod.rs
+  s_8fb15b894415b9::t_7ac94b53eadfd7 1-200
+rust/crates/lk-agents-runtime/src/voice/amd/prompts.rs
+  s_8fb15b894415b9::t_d2250bf7c6e08b 1-88
+rust/crates/lk-agents-runtime/src/voice/amd/stt.rs
+  s_8fb15b894415b9::t_6bf0633bcf13ec 1-104
+rust/crates/lk-agents-runtime/src/voice/legs.rs
+  s_8fb15b894415b9::t_d99c1d66eb0b21 33,121-133
+rust/crates/lk-agents-runtime/src/voice/mod.rs
+  s_8fb15b894415b9::t_8af0bd63107014 1
+rust/crates/lk-agents-runtime/src/voice/session/builder.rs
+  s_8fb15b894415b9::t_a4780890b3532d 476-483
+rust/crates/lk-agents-runtime/src/voice/session/mod.rs
+  s_8fb15b894415b9::t_d8db0f1a317e7b 565-582
+rust/crates/lk-agents-voice/src/amd/effects.rs
+  s_8fb15b894415b9::t_f63ca067fb3b45 178-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad21c92bd4a19ac6530bd7c68f2ebbecf503150f",
+  "prompts": {},
+  "sessions": {
+    "s_4dc110b916ccc5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a2137c-bd0f-7553-bc58-3b3071c2e2fb",
+        "model": "gpt-6.2-sol"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_8fb15b894415b9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_8fb15b894415b9",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
