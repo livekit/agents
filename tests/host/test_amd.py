@@ -842,21 +842,16 @@ async def test_unexpected_inference_errors_finish_with_internal_error(
 # -- decision models (§4.1, §8.1, §11.2)
 
 
-def _choice_model(*kinds: str) -> Any:
+def _choice_model(*kinds: llm.DecisionKind) -> Any:
     """A decision model answering each request with the next queued category; ``None`` answers
-    with an error for the choice. Built on ``main``'s ``llm.DecisionModel``."""
-    from livekit.agents.llm import (  # type: ignore[attr-defined]
-        ChoiceResult,
-        DecisionCapabilities,
-        DecisionModel,
-        DecisionResponse,
-    )
+    with an error for the choice, an exception raises it. Built on ``main``'s
+    ``llm.DecisionModel``."""
 
-    class ChoiceModel(DecisionModel):  # type: ignore[misc]
+    class ChoiceModel(llm.DecisionModel):
         def __init__(self) -> None:
-            super().__init__(capabilities=DecisionCapabilities(decision_kinds=list(kinds)))
+            super().__init__(capabilities=llm.DecisionCapabilities(decision_kinds=list(kinds)))
             self.requests: list[tuple[str, Mapping[str, Any], Mapping[str, str]]] = []
-            self.answers: asyncio.Queue[str | None] = asyncio.Queue()
+            self.answers: asyncio.Queue[str | BaseException | None] = asyncio.Queue()
 
         async def _evaluate_impl(
             self,
@@ -868,9 +863,11 @@ def _choice_model(*kinds: str) -> Any:
         ) -> Any:
             self.requests.append((input, decisions, dict(extra_headers)))
             category = await self.answers.get()
+            if isinstance(category, BaseException):
+                raise category
             if category is None:
-                return DecisionResponse(results={}, errors={"category": "refused"})
-            return DecisionResponse(results={"category": ChoiceResult(value=category)})
+                return llm.DecisionResponse(results={}, errors={"category": "refused"})
+            return llm.DecisionResponse(results={"category": llm.ChoiceResult(value=category)})
 
     return ChoiceModel()
 
@@ -910,7 +907,12 @@ async def test_decision_model_classifies_with_one_choice_and_skips_menus() -> No
         assert menus == []
 
 
-async def test_decision_model_error_is_an_inference_error() -> None:
+# The implementation's dev test (`test_a_value_error_from_the_model_is_an_inference_error`) adds
+# the raised `ValueError`, which `detector.py` on `main` also counts as an inference error.
+@pytest.mark.parametrize(
+    "failure", [None, ValueError("unparseable output")], ids=["choice_error", "value_error"]
+)
+async def test_decision_model_error_is_an_inference_error(failure: BaseException | None) -> None:
     model = _choice_model("choice")
     session, microphone = voice_session(["Hello?"])
     async with session:
@@ -920,7 +922,7 @@ async def test_decision_model_error_is_an_inference_error() -> None:
             detector.on("amd_prediction", predictions.append)
             microphone.speak(0.3)
             await until(lambda: model.requests, "the decision model was never asked")
-            model.answers.put_nowait(None)
+            model.answers.put_nowait(failure)
             await until(lambda: predictions, "no prediction")
             assert predictions[0].reason == AMDReason.INFERENCE_ERROR
             assert predictions[0].category == AMDCategory.UNCERTAIN
@@ -1570,6 +1572,40 @@ async def test_dtmf_tool_propagates_cancelled_publish() -> None:
         await task
 
 
+# From the implementation's dev tests (`tests/host/test_amd_host.py`).
+async def test_an_ivr_reply_runs_the_dtmf_tool() -> None:
+    """The model's ``send_dtmf_events`` call in an IVR reply finds AMD's tool with its policy, so
+    the reply's run executes the body instead of refusing an unknown tool (§11.1)."""
+
+    def answer(chat_ctx: llm.ChatContext) -> Any:
+        texts = [i.text_content or "" for i in chat_ctx.items if i.type == "message"]
+        if any("stage" in t for t in texts[:2]):
+            return tool_call("record_result", category="machine-ivr")
+        if any(i.type == "function_call_output" for i in chat_ctx.items):
+            return "Done."
+        return tool_call("send_dtmf_events", events=["1"])
+
+    model = FakeLLM(answer)
+    session, microphone = voice_session(["press 1 for sales"], llm_model=model)
+    executed: list[Any] = []
+    session.on("function_tools_executed", executed.append)
+    async with session:
+        await session.start(Agent(instructions="Reach sales."))
+        async with AMD(session, llm=None, stt=None, machine_silence_threshold=0) as detector:
+            microphone.speak(0.4)
+            said = lambda: [m.text_content for m in session.history.messages()]  # noqa: E731
+            await until(lambda: "Done." in said(), "the tool follow-up was said")
+            assert detector.lifecycle is AMDLifecycle.ACTIVE, "an IVR stage keeps listening"
+        # the IVR reply and its tool follow-up; never the classifier, menu or preemptive requests
+        offered = [tool_names(tools) for tools in model.tools]
+        assert sum("send_dtmf_events" in names for names in offered) == 2
+        [called] = executed[0].function_calls
+        assert called.name == "send_dtmf_events"
+        # the room-less session has no room to publish on: the body ran and raised
+        [output] = executed[0].function_call_outputs
+        assert output is not None and "unknown tool" not in output.output
+
+
 # -- replies the host shapes (§10.2, §11)
 
 
@@ -1721,10 +1757,20 @@ async def test_default_limits_are_ten_seconds_idle_and_one_minute_overall(limit:
 
 async def test_a_human_at_call_start_completes_at_once() -> None:
     """A human answering first completes AMD on that turn. ``execute()``'s result and the one
-    ``amd_completed`` event carry the same completion, with the prediction's §4.3 fields."""
+    ``amd_completed`` event carry the same completion, with the prediction's §4.3 fields. (With
+    the implementation's dev test `test_a_human_answer_completes_once_and_the_agent_replies`: the
+    prediction reaches listeners before the completion, a second AMD is refused while this one
+    runs, and every ``execute()`` returns the same object.)"""
     async with calling(["Hello, who is this?"], {"Hello, who is this?": "human"}) as call:
+        order: list[str] = []
+        call.amd.on("amd_prediction", lambda _: order.append("prediction"))
+        call.amd.on("amd_completed", lambda _: order.append("completed"))
+        with refused(RuntimeError, "already active"):
+            await AMD(call.session, llm=call.classifier, stt=None).__aenter__()
         call.speak()
         result = await call.result()
+        assert await call.amd.execute() is result
+        assert order == ["prediction", "completed"]
         [prediction] = call.predictions
         assert call.completions == [result]
         assert result.last_prediction == prediction
