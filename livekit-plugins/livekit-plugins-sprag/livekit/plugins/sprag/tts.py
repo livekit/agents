@@ -37,7 +37,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
-from ._utils import ATTRIBUTION_HEADERS, SPRAG_BASE_URL, resolve_api_key
+from ._utils import SPRAG_BASE_URL, connect_ws, resolve_api_key
 from .log import logger
 from .models import TTSModels
 
@@ -127,30 +127,13 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         url = f"{self._ws_url}/audio/speech?{urlencode({'model': self._opts.model})}"
-        # the failure is raised outside the except blocks: aiohttp's RequestInfo carries the
-        # request headers, so an exception left in the chain would expose the API key
-        rejected: tuple[str, int] | None = None
-        failure: str | None = None
-        try:
-            ws = await asyncio.wait_for(
-                self._ensure_session().ws_connect(
-                    url,
-                    headers={"Authorization": f"Bearer {self._api_key}", **ATTRIBUTION_HEADERS},
-                    timeout=aiohttp.ClientWSTimeout(ws_close=_CLOSE_TIMEOUT),
-                ),
-                timeout,
-            )
-        except asyncio.TimeoutError:
-            failure = "timed out"
-        except aiohttp.ClientResponseError as e:
-            rejected = (e.message, e.status)
-        except Exception as e:
-            failure = type(e).__name__
-        if rejected is not None:
-            message, status = rejected
-            raise APIStatusError(message=message, status_code=status, request_id=None, body=None)
-        if failure is not None:
-            raise APIConnectionError(f"failed to connect to Sprag ({failure})")
+        ws = await connect_ws(
+            self._ensure_session(),
+            url,
+            api_key=self._api_key,
+            connect_timeout=timeout,
+            timeout=aiohttp.ClientWSTimeout(ws_close=_CLOSE_TIMEOUT),
+        )
 
         try:
             await asyncio.wait_for(self._configure(ws), timeout)

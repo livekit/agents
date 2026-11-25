@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from urllib.parse import urlencode
 
 import aiohttp
@@ -23,11 +22,10 @@ from openai.types.beta.realtime.transcription_session_update_param import (
     SessionTurnDetection,
 )
 
-from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.openai import STT as OpenAISTT
 
-from ._utils import ATTRIBUTION_HEADERS, SPRAG_BASE_URL, resolve_api_key, with_attribution
+from ._utils import SPRAG_BASE_URL, connect_ws, resolve_api_key, with_attribution
 from .models import STTModels
 
 
@@ -77,21 +75,11 @@ class STT(OpenAISTT):
         # transcription on its own route
         base_url = str(self._client.base_url).rstrip("/").replace("http", "ws", 1)
         url = f"{base_url}/audio/transcriptions?{urlencode({'model': self._opts.model})}"
-        headers = {"Authorization": f"Bearer {self._client.api_key}", **ATTRIBUTION_HEADERS}
-        session = self._ensure_session()
-        # the failure is raised outside the except blocks: aiohttp's RequestInfo carries the
-        # request headers, so an exception left in the chain would expose the API key
-        rejected: tuple[str, int] | None = None
-        failure: str | None = None
-        try:
-            return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
-        except asyncio.TimeoutError:
-            failure = "timed out"
-        except aiohttp.ClientResponseError as e:
-            rejected = (e.message, e.status)
-        except Exception as e:
-            failure = type(e).__name__
-        if rejected is not None:
-            message, status = rejected
-            raise APIStatusError(message=message, status_code=status, request_id=None, body=None)
-        raise APIConnectionError(f"failed to connect to Sprag ({failure})")
+        # the stream reads through a WebSocketMonitor, which must see pongs itself
+        return await connect_ws(
+            self._ensure_session(),
+            url,
+            api_key=self._client.api_key,
+            connect_timeout=timeout,
+            autoping=False,
+        )

@@ -14,10 +14,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+from typing import Any
 
+import aiohttp
 import openai
 
+from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.types import NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -39,3 +43,35 @@ def resolve_api_key(api_key: NotGivenOr[str]) -> str:
 
 def with_attribution(client: openai.AsyncClient) -> openai.AsyncClient:
     return client.with_options(default_headers=ATTRIBUTION_HEADERS)
+
+
+async def connect_ws(
+    session: aiohttp.ClientSession,
+    url: str,
+    *,
+    api_key: str,
+    connect_timeout: float,
+    **kwargs: Any,
+) -> aiohttp.ClientWebSocketResponse:
+    """Open a Sprag WebSocket, raising its failures as API errors that never carry the key.
+
+    aiohttp's ``RequestInfo`` carries the request headers, so each failure is raised outside
+    the ``except`` block that caught it, leaving aiohttp's exception out of the chain.
+    """
+    headers = {"Authorization": f"Bearer {api_key}", **ATTRIBUTION_HEADERS}
+    rejected: tuple[str, int] | None = None
+    failure = ""
+    try:
+        return await asyncio.wait_for(
+            session.ws_connect(url, headers=headers, **kwargs), connect_timeout
+        )
+    except asyncio.TimeoutError:
+        failure = "timed out"
+    except aiohttp.ClientResponseError as e:
+        rejected = (e.message, e.status)
+    except Exception as e:
+        failure = type(e).__name__
+    if rejected is not None:
+        message, status = rejected
+        raise APIStatusError(message=message, status_code=status, request_id=None, body=None)
+    raise APIConnectionError(f"failed to connect to Sprag ({failure})")

@@ -489,6 +489,66 @@ async def speech() -> AsyncIterator[Callable[..., tuple[_SpeechServer, Any]]]:
         await session.aclose()
 
 
+class _PingableSocket(_MemorySocket):
+    """Handles a pong the way aiohttp does: receive() sees it only when autoping is off."""
+
+    autoping = True
+
+    async def ping(self, message: bytes = b"") -> None:
+        if not self.autoping:
+            self._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, message, None))
+
+    async def pong(self, message: bytes = b"") -> None:
+        pass
+
+
+class _SilentTranscription:
+    """A transcription session that hears only silence, so it never sends an event."""
+
+    def __init__(self) -> None:
+        self.autoping: list[bool] = []
+
+    async def ws_connect(self, url: str, *, autoping: bool = True, **kwargs: Any) -> _MemorySocket:
+        self.autoping.append(autoping)
+        client, _ = _PingableSocket.pair()
+        client.autoping = autoping
+        return client
+
+
+@pytest.mark.virtual_time
+@bounded
+async def test_stt_realtime_stream_outlasts_server_silence(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _SilentTranscription()
+    stt = STT()
+    monkeypatch.setattr(stt, "_ensure_session", lambda: session)
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, liveness_timeout=1.0))
+
+    async def drain() -> None:
+        async for _ in stream:
+            pass
+
+    reader = asyncio.create_task(drain())
+    try:
+        silence = b"\x00\x00" * 480
+        for _ in range(150):  # 3 s of silence, three liveness windows
+            if reader.done():
+                reader.result()  # surfaces why the stream ended
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=silence, sample_rate=24000, num_channels=1, samples_per_channel=480
+                )
+            )
+            await asyncio.sleep(0.02)
+        assert not reader.done()
+    finally:
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        await stream.aclose()
+        await stt.aclose()
+
+    assert session.autoping == [False]
+
+
 async def _speak(tts: TTS, *chunks: str, conn_options: APIConnectOptions = NO_RETRY) -> float:
     stream = tts.stream(conn_options=conn_options)
     for chunk in chunks:
