@@ -174,11 +174,11 @@ Each metric carries the same labels:
 
 | Metric | Type | Counts |
 | --- | --- | --- |
-| `lk.productstats.model.requests` | counter | Requests made to a model: one LLM completion, one TTS synthesis, one STT stream (or one recognition for a non-streaming STT) |
+| `lk.productstats.model.requests` | counter | Requests made to a model: one LLM completion or one TTS synthesis. Not counted for an STT, whose usage is `audio_duration` |
 | `lk.productstats.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
 | `lk.productstats.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
 | `lk.productstats.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
-| `lk.productstats.model.audio_duration` | counter, seconds | Audio sent to an STT. A streaming STT keeps one stream for a whole session, so this, not its request count, is its usage |
+| `lk.productstats.model.audio_duration` | counter, seconds | Audio sent to an STT. A streaming STT keeps one stream for a whole session, so its usage is the audio, not a count of streams |
 
 The transcription delay carries one more label, because it starts at the end of speech,
 which the STT does not always decide:
