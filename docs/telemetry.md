@@ -180,28 +180,36 @@ Every model metric carries the same four labels:
 | --- | --- |
 | `model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
 | `model.plugin` | the code that runs: a plugin id (`deepgram`, `openai`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
-| `model.provider` | the vendor that is called (`deepgram`, `cerebras`); `other` for a self-hosted endpoint |
-| `model.name` | the model's name as configured |
+| `model.provider` | the vendor whose model runs, from one list of names (`deepgram`, `cerebras`); `other` for a self-hosted endpoint |
+| `model.name` | the vendor's own id for the model (`nova-3`, `gpt-4o-mini`); `other` when the provider is `other` |
 
 Plugin and provider are usually the same name. Both are kept because one plugin can reach
 several vendors: the plugin says which code to maintain, the provider says which vendor
 people use.
 
-| Setup | `model.plugin` | `model.provider` |
-| --- | --- | --- |
-| The Deepgram plugin | `deepgram` | `deepgram` |
-| The OpenAI plugin pointed at Cerebras (`openai.LLM.with_cerebras()`) | `openai` | `cerebras` |
-| The OpenAI plugin pointed at a self-hosted endpoint | `openai` | `other` |
-| LiveKit Inference | `livekit-inference` | `livekit`; the vendor is in the model name (`deepgram/nova-3`) |
+| Setup | `model.plugin` | `model.provider` | `model.name` |
+| --- | --- | --- | --- |
+| The Deepgram plugin | `deepgram` | `deepgram` | `nova-3` |
+| LiveKit Inference with `deepgram/nova-3:en` | `livekit-inference` | `deepgram` | `nova-3` |
+| The OpenAI plugin pointed at Cerebras (`openai.LLM.with_cerebras()`) | `openai` | `cerebras` | `llama-3.3-70b` |
+| The OpenAI plugin pointed at a self-hosted endpoint | `openai` | `other` | `other` |
 
+- One model has one provider and one name, however it is reached and in every language.
+  Through LiveKit Inference the provider is the vendor behind it, never `livekit`, and the
+  name loses its vendor prefix and its options: `deepgram/nova-3:en` is `deepgram` and
+  `nova-3`. So one query compares a model across plugins and Inference.
+- Provider names come from one list in the framework, shared by Python and Node and
+  spelled as in your observability data. A host that list does not know is `other`, and
+  its model name is `other` too: an endpoint or model a customer named is never sent.
+- A name a customer chose is never sent either: a fine-tuned model is recorded as its base
+  model, and a deployment name, a voice id or a language is never part of the name.
 - A plugin id is the last part of the package name, the same in every language:
   `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram` in Node are
   both `deepgram`.
-- LiveKit Inference is recorded like any other model, so plugins and Inference compare in
-  one place. The Inference service keeps its own usage records, and those, not these, are
-  the ones billing uses. Only the `inference` models get the `livekit-inference` id, by
-  what they are, never by the code they share: an OpenAI-compatible plugin is always
-  recorded under its own id.
+- LiveKit Inference is recorded like any other model. The Inference service keeps its own
+  usage records, and those, not these, are the ones billing uses. Only the `inference`
+  models get the `livekit-inference` id, by what they are, never by the code they share:
+  an OpenAI-compatible plugin is always recorded under its own id.
 - The framework records these around every model; a plugin never does. A plugin written in
   Python is counted exactly like a built-in one, and cannot add, change or skip a
   statistic. A plugin that does not report its provider or model appears as `unknown`.
