@@ -6,9 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 # No executor or transport: the sans-I/O crates depend on it.
-[lib]
-doctest = false
-
 [dependencies]
 lk-agents-abi = { path = "../lk-agents-abi" }
 parking_lot.workspace = true

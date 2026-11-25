@@ -41,7 +41,7 @@ fn llm() -> ProviderLabels {
     lk_agents_telemetry::productstats::provider(Operation::Llm, "openai", "gpt-4o")
 }
 
-fn record<M: MetricDecl>(
+fn record<M: MetricDecl<Audience = decl::ProductStats>>(
     stats: &ProductStats,
     labels: &M,
     n: impl Into<lk_agents_abi::telemetry::record::Number>,

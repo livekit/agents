@@ -96,7 +96,12 @@ impl FailureType {
 }
 
 /// Provider requests, retries excluded.
-#[metric(name = "lk.productstats.provider.requests", kind = Counter, unit = "{request}")]
+#[metric(
+    name = "lk.productstats.provider.requests",
+    kind = Counter,
+    unit = "{request}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProviderRequests {
     #[attrs]
@@ -104,7 +109,12 @@ pub struct ProviderRequests {
 }
 
 /// Provider requests that failed, by the class of their last failure.
-#[metric(name = "lk.productstats.provider.failures", kind = Counter, unit = "{request}")]
+#[metric(
+    name = "lk.productstats.provider.failures",
+    kind = Counter,
+    unit = "{request}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProviderFailures {
     #[attrs]
@@ -115,7 +125,12 @@ pub struct ProviderFailures {
 }
 
 /// Provider attempts retried after a failure.
-#[metric(name = "lk.productstats.provider.retries", kind = Counter, unit = "{attempt}")]
+#[metric(
+    name = "lk.productstats.provider.retries",
+    kind = Counter,
+    unit = "{attempt}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProviderRetries {
     #[attrs]
@@ -123,7 +138,12 @@ pub struct ProviderRetries {
 }
 
 /// Fallback adapters moving off this provider to the next.
-#[metric(name = "lk.productstats.provider.fallbacks", kind = Counter, unit = "{fallback}")]
+#[metric(
+    name = "lk.productstats.provider.fallbacks",
+    kind = Counter,
+    unit = "{fallback}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProviderFallbacks {
     #[attrs]
@@ -131,7 +151,12 @@ pub struct ProviderFallbacks {
 }
 
 /// Provider sessions reconnected.
-#[metric(name = "lk.productstats.provider.reconnects", kind = Counter, unit = "{reconnect}")]
+#[metric(
+    name = "lk.productstats.provider.reconnects",
+    kind = Counter,
+    unit = "{reconnect}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProviderReconnects {
     #[attrs]
@@ -139,7 +164,13 @@ pub struct ProviderReconnects {
 }
 
 /// Time to a TTS request's first audio.
-#[metric(name = "lk.productstats.provider.ttfb", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
+#[metric(
+    name = "lk.productstats.provider.ttfb",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS,
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProviderTtfb {
     #[attrs]
@@ -147,7 +178,13 @@ pub struct ProviderTtfb {
 }
 
 /// Time to an LLM or realtime response's first token.
-#[metric(name = "lk.productstats.provider.ttft", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
+#[metric(
+    name = "lk.productstats.provider.ttft",
+    kind = Histogram,
+    unit = "s",
+    bounds = DURATION_BOUNDS,
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProviderTtft {
     #[attrs]
@@ -159,7 +196,8 @@ pub struct ProviderTtft {
     name = "lk.productstats.provider.duration",
     kind = Histogram,
     unit = "s",
-    bounds = DURATION_BOUNDS
+    bounds = DURATION_BOUNDS,
+    audience = ProductStats
 )]
 #[derive(Attrs)]
 pub struct ProviderDuration {
@@ -176,12 +214,22 @@ pub enum JobOutcome {
 }
 
 /// Jobs started.
-#[metric(name = "lk.productstats.job.starts", kind = Counter, unit = "{job}")]
+#[metric(
+    name = "lk.productstats.job.starts",
+    kind = Counter,
+    unit = "{job}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct JobStarts;
 
 /// Jobs ended, by outcome.
-#[metric(name = "lk.productstats.job.ends", kind = Counter, unit = "{job}")]
+#[metric(
+    name = "lk.productstats.job.ends",
+    kind = Counter,
+    unit = "{job}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct JobEnds {
     /// How the job ended.
@@ -201,7 +249,12 @@ pub enum CrashSignature {
 }
 
 /// Job processes that died unexpectedly.
-#[metric(name = "lk.productstats.process.crashes", kind = Counter, unit = "{process}")]
+#[metric(
+    name = "lk.productstats.process.crashes",
+    kind = Counter,
+    unit = "{process}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ProcessCrashes {
     /// How it died.
@@ -213,7 +266,12 @@ pub struct ProcessCrashes {
 pub const STALL_SIGNATURE_FRAMES: usize = 3;
 
 /// Event-loop stalls, by the function names of their innermost frames.
-#[metric(name = "lk.productstats.event_loop.stalls", kind = Counter, unit = "{stall}")]
+#[metric(
+    name = "lk.productstats.event_loop.stalls",
+    kind = Counter,
+    unit = "{stall}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct EventLoopStalls {
     /// Up to [`STALL_SIGNATURE_FRAMES`] function names, innermost first, joined by ` < `;
@@ -234,7 +292,12 @@ pub enum DropReason {
 }
 
 /// Data points this process dropped, exported on the next export.
-#[metric(name = "lk.productstats.export.dropped", kind = Counter, unit = "{point}")]
+#[metric(
+    name = "lk.productstats.export.dropped",
+    kind = Counter,
+    unit = "{point}",
+    audience = ProductStats
+)]
 #[derive(Attrs)]
 pub struct ExportDropped {
     /// Why they were dropped.

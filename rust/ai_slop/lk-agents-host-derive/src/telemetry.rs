@@ -1,9 +1,19 @@
-use lk_agents_bindgen::telemetry::{self as t, Field, InstrumentKind, Role, SpanKind, Unmeasured};
+use lk_agents_bindgen::telemetry::{
+    self as t, Audience, Field, InstrumentKind, Role, SpanKind, Unmeasured,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 
 fn decl() -> TokenStream {
     quote!(::lk_agents_abi::telemetry::decl)
+}
+
+fn audience(audience: Audience) -> TokenStream {
+    let d = decl();
+    match audience {
+        Audience::Observability => quote!(#d::Observability),
+        Audience::ProductStats => quote!(#d::ProductStats),
+    }
 }
 
 /// `#[derive(Attrs)]`: writes each `#[attr]` field under its key, flattens each `#[attrs]` group,
@@ -174,9 +184,11 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
             let parents = &span.parents;
             let events = &span.events;
             let manual = span.manual;
+            let audience = audience(span.audience);
             quote! {
                 impl #d::SpanDecl for #ident {
                     const NAME: &'static str = #name;
+                    type Audience = #audience;
                     const KIND: #d::SpanKind = #d::SpanKind::#kind;
                     type End = #end;
                     const OUTLIVES_PARENT: ::core::option::Option<&'static str> = #outlives;
@@ -204,9 +216,15 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                 #( impl #d::HasEvent<#events> for #ident {} )*
             }
         }
-        Role::Event { name } => quote! {
-            impl #d::EventDecl for #ident { const NAME: &'static str = #name; }
-        },
+        Role::Event { name, audience: a } => {
+            let a = audience(a);
+            quote! {
+                impl #d::EventDecl for #ident {
+                    const NAME: &'static str = #name;
+                    type Audience = #a;
+                }
+            }
+        }
         Role::Metric(metric) => {
             let (name, unit) = (&metric.name, &metric.unit);
             let kind = match metric.kind {
@@ -215,9 +233,11 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                 InstrumentKind::Histogram => quote!(Histogram),
             };
             let bounds = metric.bounds.as_ref().map_or_else(|| quote!(&[]), |b| quote!(#b));
+            let audience = audience(metric.audience);
             quote! {
                 impl #d::MetricDecl for #ident {
                     const NAME: &'static str = #name;
+                    type Audience = #audience;
                     const KIND: #d::InstrumentKind = #d::InstrumentKind::#kind;
                     const UNIT: &'static str = #unit;
                     const BOUNDS: &'static [f64] = #bounds;

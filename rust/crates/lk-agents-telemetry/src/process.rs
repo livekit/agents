@@ -1,4 +1,4 @@
-use lk_agents_abi::telemetry::decl::{Instrument, MetricDecl};
+use lk_agents_abi::telemetry::decl::{Instrument, MetricDecl, Observability};
 use lk_agents_abi::telemetry::record::InstrumentKind;
 use parking_lot::Mutex;
 
@@ -29,14 +29,14 @@ impl Instruments {
     }
 
     /// Sets gauge `M` to `value`.
-    pub fn set<M: MetricDecl>(&self, value: f64) {
+    pub fn set<M: MetricDecl<Audience = Observability>>(&self, value: f64) {
         const { assert!(matches!(M::KIND, InstrumentKind::Gauge), "set takes a gauge") };
         self.with::<M>(|current| *current = Value::Gauge(value));
     }
 
     /// Records one observation of histogram `M`: in the first bucket whose bound is at least
     /// `value`, else the overflow bucket.
-    pub fn observe<M: MetricDecl>(&self, value: f64) {
+    pub fn observe<M: MetricDecl<Audience = Observability>>(&self, value: f64) {
         const { assert!(matches!(M::KIND, InstrumentKind::Histogram), "observe takes a histogram") };
         self.with::<M>(|current| {
             if let Value::Histogram { buckets, sum } = current {
@@ -51,7 +51,7 @@ impl Instruments {
         self.0.lock().clone()
     }
 
-    fn with<M: MetricDecl>(&self, update: impl FnOnce(&mut Value)) {
+    fn with<M: MetricDecl<Audience = Observability>>(&self, update: impl FnOnce(&mut Value)) {
         let mut instruments = self.0.lock();
         let index = match instruments.iter().position(|(i, _)| i.name == M::NAME) {
             Some(index) => index,

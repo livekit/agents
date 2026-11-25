@@ -45,8 +45,16 @@ pub enum InstrumentKind {
     Histogram,
 }
 
+/// Who a declaration's data is for: `audience = ProductStats`, else `Observability`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Audience {
+    Observability,
+    ProductStats,
+}
+
 pub struct Span {
     pub name: syn::LitStr,
+    pub audience: Audience,
     pub parents: Vec<syn::Path>,
     pub end: Option<syn::Type>,
     pub events: Vec<syn::Path>,
@@ -58,6 +66,7 @@ pub struct Span {
 
 pub struct Metric {
     pub name: Name,
+    pub audience: Audience,
     pub kind: InstrumentKind,
     pub unit: syn::LitStr,
     /// A histogram's bucket bounds: a path to a `&[f64]` constant.
@@ -66,7 +75,7 @@ pub struct Metric {
 
 pub enum Role {
     Span(Box<Span>),
-    Event { name: syn::LitStr },
+    Event { name: syn::LitStr, audience: Audience },
     Metric(Metric),
     Record { scope: syn::LitStr, body: syn::LitStr },
 }
@@ -108,6 +117,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
         let (mut kind, mut outlives, mut unit, mut scope, mut body) =
             (None, None, None, None, None);
         let mut handle: Option<syn::Ident> = None;
+        let mut audience: Option<syn::Ident> = None;
         let mut metric_name = None;
         let mut bounds = None;
         while !input.is_empty() {
@@ -139,6 +149,9 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                 ("span" | "metric", "kind") => kind = Some(input.parse::<syn::Ident>()?),
                 ("span", "outlives_parent") => outlives = Some(input.parse::<syn::LitStr>()?),
                 ("span", "handle") => handle = Some(input.parse::<syn::Ident>()?),
+                ("span" | "event" | "metric", "audience") => {
+                    audience = Some(input.parse::<syn::Ident>()?);
+                }
                 ("metric", "unit") => unit = Some(input.parse::<syn::LitStr>()?),
                 ("metric", "bounds") => bounds = Some(input.parse::<syn::Path>()?),
                 ("record", "scope") => scope = Some(input.parse::<syn::LitStr>()?),
@@ -151,6 +164,16 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
         }
         let missing = |what: &str| {
             syn::Error::new(input.span(), format!("#[{role}] needs `{what}`; {}", usage(role)))
+        };
+        let audience = match audience.as_ref().map(|a| a.to_string()).as_deref() {
+            None | Some("Observability") => Audience::Observability,
+            Some("ProductStats") => Audience::ProductStats,
+            Some(_) => {
+                return Err(syn::Error::new_spanned(
+                    audience,
+                    "an audience is `Observability` or `ProductStats`",
+                ));
+            }
         };
         Ok(match role {
             "span" => {
@@ -180,6 +203,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                 };
                 Role::Span(Box::new(Span {
                     name: name.ok_or_else(|| missing("name"))?,
+                    audience,
                     parents,
                     end,
                     events,
@@ -188,7 +212,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                     manual,
                 }))
             }
-            "event" => Role::Event { name: name.ok_or_else(|| missing("name"))? },
+            "event" => Role::Event { name: name.ok_or_else(|| missing("name"))?, audience },
             "metric" => {
                 let kind = match kind.as_ref().map(|k| k.to_string()).as_deref() {
                     Some("Counter") => InstrumentKind::Counter,
@@ -211,6 +235,7 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
                 }
                 Role::Metric(Metric {
                     name: metric_name.ok_or_else(|| missing("name"))?,
+                    audience,
                     kind,
                     unit: unit.ok_or_else(|| missing("unit"))?,
                     bounds,
@@ -234,11 +259,11 @@ pub fn role(role: &str, args: TokenStream) -> syn::Result<Role> {
 fn usage(role: &str) -> &'static str {
     match role {
         "span" => {
-            "#[span(name = \"..\", parent = A | B, end = T, events = [E, ..], kind = Internal | Client | Server, outlives_parent = \"reason\", handle = Scoped | Manual)]"
+            "#[span(name = \"..\", parent = A | B, end = T, events = [E, ..], kind = Internal | Client | Server, outlives_parent = \"reason\", handle = Scoped | Manual, audience = Observability | ProductStats)]"
         }
-        "event" => "#[event(name = \"..\")]",
+        "event" => "#[event(name = \"..\", audience = Observability | ProductStats)]",
         "metric" => {
-            "#[metric(name = \"..\" or a semconv path, kind = Counter | Histogram, unit = \"..\", bounds = BOUNDS for a histogram)]"
+            "#[metric(name = \"..\" or a semconv path, kind = Counter | Histogram, unit = \"..\", bounds = BOUNDS for a histogram, audience = Observability | ProductStats)]"
         }
         _ => "#[record(scope = \"..\", body = \"..\")]",
     }

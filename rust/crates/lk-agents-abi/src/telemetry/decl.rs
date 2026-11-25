@@ -48,9 +48,29 @@ impl<T: Attrs> Attrs for Option<T> {
     }
 }
 
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Who a declaration's data is for. Each pipeline records only its own audience's declarations,
+/// so one recorded into the other's does not compile.
+pub trait Audience: sealed::Sealed {}
+
+/// The customer's observability: spans, events and metrics exported to the customer's project.
+pub enum Observability {}
+
+/// LiveKit's own product statistics (`abi::productstats`), never customer data.
+pub enum ProductStats {}
+
+impl sealed::Sealed for Observability {}
+impl Audience for Observability {}
+impl sealed::Sealed for ProductStats {}
+impl Audience for ProductStats {}
+
 /// A span: its start attributes are the struct, its end attributes `End`.
 pub trait SpanDecl: Attrs {
     const NAME: &'static str;
+    type Audience: Audience;
     const KIND: SpanKind;
     type End: Attrs;
     /// Why the span may end after its parent. `None`: it ends within its parent.
@@ -141,8 +161,18 @@ impl<T: SpanDecl> SpanParent for T {
     const PARENT: Parent = Parent::Span(<T as SpanDecl>::NAME);
 }
 
-/// `Self` is a declared parent of `D`.
-pub trait ParentOf<D: SpanDecl>: SpanParent {}
+/// `Self` may parent a span of audience `A`: a declared span of `A`, or [`Current`] or
+/// [`External`], which take the audience of the span opened under them.
+pub trait ParentAudience<A: Audience> {}
+
+impl<T: SpanDecl> ParentAudience<T::Audience> for T {}
+
+impl<A: Audience> ParentAudience<A> for Current {}
+
+impl<A: Audience> ParentAudience<A> for External {}
+
+/// `Self` is a declared parent of `D`, of `D`'s audience.
+pub trait ParentOf<D: SpanDecl>: SpanParent + ParentAudience<D::Audience> {}
 
 /// The span follows its caller: it nests under whatever span is current.
 pub struct Current;
@@ -183,14 +213,16 @@ impl Declared {
 /// A span event.
 pub trait EventDecl: Attrs {
     const NAME: &'static str;
+    type Audience: Audience;
 }
 
-/// `E` is declared in the span's `events = [..]`.
-pub trait HasEvent<E: EventDecl>: SpanDecl {}
+/// `E` is declared in the span's `events = [..]`, of the span's audience.
+pub trait HasEvent<E: EventDecl>: SpanDecl<Audience = E::Audience> {}
 
 /// A metric instrument; its attributes are its labels.
 pub trait MetricDecl: Attrs {
     const NAME: &'static str;
+    type Audience: Audience;
     const KIND: InstrumentKind;
     const UNIT: &'static str;
     /// A histogram's explicit bucket upper bounds; empty for a counter.
@@ -207,7 +239,8 @@ pub struct Instrument {
 }
 
 impl Instrument {
-    pub const fn of<M: MetricDecl>() -> Instrument {
+    /// A customer instrument: a span's measured field or a worker's process instrument.
+    pub const fn of<M: MetricDecl<Audience = Observability>>() -> Instrument {
         Instrument { name: M::NAME, kind: M::KIND, unit: M::UNIT, bounds: M::BOUNDS }
     }
 }

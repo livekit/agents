@@ -6,7 +6,9 @@ mod tests;
 pub use emit::{otel, semconv_py};
 
 use crate::decl::tree::{Crate, Found};
-use lk_agents_bindgen::telemetry::{self as t, InstrumentKind, Role, SpanKind, Unmeasured};
+use lk_agents_bindgen::telemetry::{
+    self as t, Audience, InstrumentKind, Role, SpanKind, Unmeasured,
+};
 use std::collections::BTreeMap;
 
 /// The ABI module the wire types and markers live in.
@@ -250,7 +252,31 @@ impl Reader<'_> {
             let here = format!("{}::{}", self.krate.display(module), st.ident);
             let brief = brief(&st.attrs);
             let attrs = self.attrs(*key)?;
-            if self.krate.modules[module].path.first().map(String::as_str) == Some(PRODUCT_STATS) {
+            let in_module =
+                self.krate.modules[module].path.first().map(String::as_str) == Some(PRODUCT_STATS);
+            let audience = match &decl.role {
+                Some(Role::Span(span)) => Some(span.audience),
+                Some(Role::Event { audience, .. }) => Some(*audience),
+                Some(Role::Metric(metric)) => Some(metric.audience),
+                Some(Role::Record { .. }) | None => None,
+            };
+            match (in_module, audience) {
+                (true, Some(Audience::Observability)) => {
+                    return Err(format!(
+                        "{here}: a `{PRODUCT_STATS}` declaration is `audience = ProductStats`"
+                    ));
+                }
+                (false, Some(Audience::ProductStats)) => {
+                    return Err(format!(
+                        "{here}: an `audience = ProductStats` declaration lives in `{PRODUCT_STATS}`"
+                    ));
+                }
+                (true, None) if decl.role.is_some() => {
+                    return Err(format!("{here}: `{PRODUCT_STATS}` holds no `#[record]`"));
+                }
+                _ => {}
+            }
+            if in_module {
                 product_stat(&attrs, &here)?;
             }
             unique(&attrs, &here)?;
@@ -275,6 +301,9 @@ impl Reader<'_> {
                             end
                         }
                     };
+                    if in_module {
+                        product_stat(&end, &format!("{here}'s end"))?;
+                    }
                     unique(&end, &format!("{here}'s end"))?;
                     note(&end, &mut r)?;
                     let mut parents = Vec::new();
@@ -283,7 +312,8 @@ impl Reader<'_> {
                     }
                     let mut events = Vec::new();
                     for e in &span.events {
-                        let Some(Role::Event { name }) = self.struct_at(module, e, &here)?.1 else {
+                        let Some(Role::Event { name, .. }) = self.struct_at(module, e, &here)?.1
+                        else {
                             return Err(format!("{here}: `{}` is not an `#[event]`", path_str(e)));
                         };
                         events.push(name.value());
@@ -299,7 +329,7 @@ impl Reader<'_> {
                         brief,
                     });
                 }
-                Some(Role::Event { name }) => {
+                Some(Role::Event { name, .. }) => {
                     r.events.push(Event { name: name.value(), attrs, brief });
                 }
                 Some(Role::Metric(metric)) => {

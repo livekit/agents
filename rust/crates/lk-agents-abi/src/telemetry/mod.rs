@@ -119,7 +119,7 @@ pub mod spans;
 
 use std::sync::Arc;
 
-use decl::SpanDecl;
+use decl::{Observability, SpanDecl};
 use record::{JobKey, Record, SpanContext};
 
 /// What records a context's spans: the process tracer (`lk_agents_telemetry::Tracer`), or
@@ -218,7 +218,7 @@ impl Cx {
 
     /// The same context under `span`, a framework span of type `P` recorded elsewhere (a voice
     /// effect's `SpanContext`).
-    pub fn under<P: SpanDecl>(mut self, span: SpanContext) -> Cx {
+    pub fn under<P: SpanDecl<Audience = Observability>>(mut self, span: SpanContext) -> Cx {
         self.current = Some(Current { span, name: Some(P::NAME) });
         self
     }

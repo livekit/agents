@@ -2,7 +2,7 @@ use crate::telemetry;
 use lk_agents_abi::productstats::{
     FailureType, Operation, ProviderFailures, ProviderLabels, ProviderRequests, ProviderRetries,
 };
-use lk_agents_abi::telemetry::decl::MetricDecl;
+use lk_agents_abi::telemetry::decl::{MetricDecl, ProductStats};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -50,7 +50,10 @@ impl Report<'_> {
     }
 
     /// Counts a product statistic of the provider; an adapter's members count their own.
-    fn stat<M: MetricDecl>(&self, labels: impl FnOnce(ProviderLabels) -> M) {
+    fn stat<M: MetricDecl<Audience = ProductStats>>(
+        &self,
+        labels: impl FnOnce(ProviderLabels) -> M,
+    ) {
         if !self.stt.retries_itself() {
             let provider = telemetry::stat_labels(Operation::Stt, &self.stt.id());
             lk_agents_telemetry::productstats::count(&labels(provider));

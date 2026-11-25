@@ -1,6 +1,7 @@
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl, SpanEnd, finish_span,
+    Attrs, Current, EventDecl, HasEvent, MetricDecl, Observability, ParentOf, SpanDecl, SpanEnd,
+    finish_span,
 };
 use lk_agents_abi::telemetry::errors::ErrorType;
 use lk_agents_abi::telemetry::record::{
@@ -136,7 +137,7 @@ impl Trace {
     /// Opens the machine's root span, under `parent` (a span outside this trace) or as a trace
     /// root, with the reservation's context and start when one was made: what
     /// [`Trace::open`] implies as parent.
-    pub fn open_root<D: SpanDecl>(
+    pub fn open_root<D: SpanDecl<Audience = Observability>>(
         &mut self,
         parent: Option<SpanContext>,
         reserved: Option<Reserved<D>>,
@@ -157,7 +158,7 @@ impl Trace {
     }
 
     /// Opens a span under the root, at the step's instant or its declaration's `#[at]`.
-    pub fn open<D: SpanDecl>(&mut self, decl: D) -> ManualSpan<D>
+    pub fn open<D: SpanDecl<Audience = Observability>>(&mut self, decl: D) -> ManualSpan<D>
     where
         AgentSession: ParentOf<D>,
     {
@@ -168,7 +169,11 @@ impl Trace {
 
     /// Opens a child of `parent`, at the step's instant or its declaration's `#[at]`, clamped to
     /// the parent's start.
-    pub fn open_in<P, D: SpanDecl>(&mut self, parent: &ManualSpan<P>, decl: D) -> ManualSpan<D>
+    pub fn open_in<P, D: SpanDecl<Audience = Observability>>(
+        &mut self,
+        parent: &ManualSpan<P>,
+        decl: D,
+    ) -> ManualSpan<D>
     where
         P: SpanDecl + ParentOf<D>,
     {
@@ -181,7 +186,7 @@ impl Trace {
 
     /// Opens a child of `parent` reserved before this trace knew of it, with the reservation's
     /// context and start, clamped to the parent's start.
-    pub fn open_in_reserved<P, D: SpanDecl>(
+    pub fn open_in_reserved<P, D: SpanDecl<Audience = Observability>>(
         &mut self,
         parent: &ManualSpan<P>,
         reserved: Reserved<D>,
@@ -305,7 +310,7 @@ impl Trace {
     }
 
     /// Records one measurement of a declared instrument, labeled by `metric`.
-    pub fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number) {
+    pub fn measure<M: MetricDecl<Audience = Observability>>(&mut self, metric: &M, value: Number) {
         let mut labels = KeyValues::new();
         metric.write(&mut labels);
         self.records.push(Record::Measurement(Measurement {
@@ -340,7 +345,7 @@ impl Trace {
         }
     }
 
-    fn start<D: SpanDecl>(
+    fn start<D: SpanDecl<Audience = Observability>>(
         &mut self,
         at: u64,
         parent: Option<SpanContext>,
