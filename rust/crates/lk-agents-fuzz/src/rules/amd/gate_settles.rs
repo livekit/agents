@@ -41,6 +41,7 @@ impl Rule for GateSettles {
             allowed_and_heard,
             denied_and_kept,
             allowed_and_the_model_spoke_late,
+            allowed_and_the_late_words_heard,
         ],
         counterexamples: &[
             never_reported,
@@ -48,6 +49,7 @@ impl Rule for GateSettles {
             allowed_with_no_reply,
             allowed_reply_never_heard,
             denied_but_answered,
+            allowed_and_the_late_words_never_heard,
         ],
         probe: Some(a_denied_turn),
     };
@@ -145,27 +147,71 @@ fn outcome(r: &Recording, turn: &GatedTurn, check: &mut Check) {
     if r.now().at_ms < due || heard.is_some_and(|h| h.at_ms <= due) {
         return;
     }
-    check.expect_with(Subject::Session, unheard_explained(r, turn, &requests, due), || {
+    let explained = unheard_explained(r, turn, &requests, due);
+    if !explained.model_owes || explained.otherwise {
+        check.expect_with(Subject::Session, explained.otherwise, || {
+            format!(
+                "turn {} was allowed ({answer:?}, applied at {} ms), asked {} times, and not \
+                 heard by {due} ms with nothing to explain it",
+                turn.turn,
+                applied.at_ms,
+                made.len()
+            )
+        });
+        return;
+    }
+    // Only the model explains the silence: the reply is owed from its first words, while
+    // nothing else (newer speech, a fault, a refusal, the close) has made the turn ineligible.
+    let Some(spoke) = first_words(r, &requests) else { return };
+    let late_due = spoke.at_ms.max(due) + HEARD_MS;
+    if r.now().at_ms < late_due || heard.is_some_and(|h| h.at_ms <= late_due) {
+        return;
+    }
+    let explained = unheard_explained(r, turn, &requests, late_due);
+    check.expect_with(Subject::Session, explained.otherwise, || {
         format!(
-            "turn {} was allowed ({answer:?}, applied at {} ms), asked {} times, and not heard \
-             by {due} ms with nothing to explain it",
-            turn.turn,
-            applied.at_ms,
-            made.len()
+            "turn {} was allowed ({answer:?}, applied at {} ms), its model first spoke at {} ms, \
+             and it was not heard by {late_due} ms with nothing to explain it",
+            turn.turn, applied.at_ms, spoke.at_ms
         )
     });
 }
 
+/// When the model first gave words for any of the turn's requests.
+fn first_words(r: &Recording, requests: &[Request<'_>]) -> Option<Observed> {
+    r.applied()
+        .iter()
+        .filter(|a| a.accepted)
+        .find(|a| {
+            matches!(&a.input, Input::LlmText { chat, text }
+                if !text.0.trim().is_empty() && requests.iter().any(|q| q.chat == chat.nth))
+        })
+        .map(|a| a.at)
+}
+
+/// Why an allowed reply could be unheard by a bound.
+struct Explained {
+    /// Anything but the model: a refusal, a fault, the person or the host acting, the close.
+    otherwise: bool,
+    /// The model had not finished giving words by the bound.
+    model_owes: bool,
+}
+
 /// Evidence, independent of the session's own report, that an allowed reply could go unheard
 /// by `due` ms: the hook stopped the turn, a refusal the session traced, a fault the search
-/// injected, the person or the host acting after the commit, the close, or a model or voice the
-/// case had not finished.
-fn unheard_explained(r: &Recording, turn: &GatedTurn, requests: &[Request<'_>], due: u64) -> bool {
+/// injected, the person or the host acting after the commit, the close, a voice the case had not
+/// finished, or a model that had not given its words.
+fn unheard_explained(
+    r: &Recording,
+    turn: &GatedTurn,
+    requests: &[Request<'_>],
+    due: u64,
+) -> Explained {
     use lk_agents_voice::trace::{SpeechStep, Step};
     let amd = r.amd_view();
     let after = |at: Observed| at > turn.committed && at.at_ms <= due;
     if amd.stopped(turn) || amd.dropped_unanswered(turn) {
-        return true;
+        return Explained { otherwise: true, model_owes: false };
     }
     let refused = r.journal().iter().any(|(at, step)| {
         after(*at) && matches!(step, Step::Speech(SpeechStep::ScheduleRejected { .. }))
@@ -221,7 +267,7 @@ fn unheard_explained(r: &Recording, turn: &GatedTurn, requests: &[Request<'_>], 
                 && !r.closed().iter().any(|(at, k, n)| *k == kind && *n == o.nth && at.at_ms <= due)
         })
     });
-    refused || faulted || acted || model_owes || voice_owes
+    Explained { otherwise: refused || faulted || acted || voice_owes, model_owes }
 }
 
 /// The first input the run applied after `at`: a report made in the commit's own transition
@@ -319,6 +365,42 @@ fn allowed_and_the_model_spoke_late() -> Recording {
         })
         .sent(Input::LlmEnd { chat: Ref::new(0) })
         .closed(Kind::Chat, 0)
+        .done()
+}
+
+/// The model's first words come after the bound, and the reply is heard soon after them.
+fn allowed_and_the_late_words_heard() -> Recording {
+    turn()
+        .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Allow })
+        .request(10, 1, "hello", &[], &[])
+        .amd(1, ended(TurnEnd::Replied))
+        .later(20_000)
+        .sent(Input::LlmText {
+            chat: Ref::new(0),
+            text: crate::input::AgentText("Hi, who is this?".into()),
+        })
+        .sent(Input::LlmEnd { chat: Ref::new(0) })
+        .closed(Kind::Chat, 0)
+        .pushed(10)
+        .later(20_000)
+        .done()
+}
+
+/// The model's first words come after the bound, and nothing is heard long after them with
+/// nothing to explain it: the late model exempts the reply only until it spoke.
+fn allowed_and_the_late_words_never_heard() -> Recording {
+    turn()
+        .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Allow })
+        .request(10, 1, "hello", &[], &[])
+        .amd(1, ended(TurnEnd::Replied))
+        .later(20_000)
+        .sent(Input::LlmText {
+            chat: Ref::new(0),
+            text: crate::input::AgentText("Hi, who is this?".into()),
+        })
+        .sent(Input::LlmEnd { chat: Ref::new(0) })
+        .closed(Kind::Chat, 0)
+        .later(20_000)
         .done()
 }
 

@@ -1,7 +1,8 @@
 use crate::{
     authored::{Authored, amd_outcome},
     check::{Check, Contract, Rule, Subject},
-    record::{Handle, Recording},
+    fakes::amd::VOICEMAIL,
+    record::{Handle, Observed, Recording},
 };
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::amd::AmdRunId;
@@ -10,7 +11,9 @@ use lk_agents_voice::trace::AmdStep;
 
 // Spec §14 invariant 6: one voicemail message at most. A run journals `VoicemailPlayed` once at
 // most, only for a speech the sink played and that ended neither interrupted nor failed, and the
-// outcome reports `voicemail_message_played` exactly when it did (spec §10.4, §12.1).
+// outcome reports `voicemail_message_played` exactly when it did (spec §10.4, §12.1). At the
+// sink: of the replies made under the voicemail stage's instructions, at most one per run is
+// heard and plays to its end, whatever the run journalled.
 
 pub struct OneVoicemailMessage;
 
@@ -19,15 +22,41 @@ impl Rule for OneVoicemailMessage {
         id: "one_voicemail_message",
         guarantee: "AMD leaves at most one voicemail message, counts it only once it played to its \
                     end, and says so when it completes.",
-        examples: &[one_message_reported],
-        counterexamples: &[two_messages, an_unheard_message, a_message_not_reported],
+        examples: &[one_message_reported, an_interrupted_attempt_then_the_message],
+        counterexamples: &[
+            two_messages,
+            an_unheard_message,
+            a_message_not_reported,
+            two_messages_heard_one_journalled,
+        ],
         probe: Some(a_voicemail_greeting),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let view = r.amd_run();
         let amd = r.amd_view();
-        for (_, run) in view.entered() {
+        let entered = view.entered();
+        for (index, (from, run)) in entered.iter().copied().enumerate() {
+            let until = entered.get(index + 1).map_or(Observed::END, |(at, _)| *at);
+            let whole_messages: Vec<u64> = (amd.requests().into_iter())
+                .filter(|q| q.opened >= from && q.opened < until && q.carries(VOICEMAIL))
+                .filter_map(|q| q.speech)
+                .filter(|speech| {
+                    let handle = r.host_view().speech(*speech);
+                    amd.first_audio(*speech).is_some()
+                        && handle.is_done()
+                        && !handle.is_interrupted()
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            check.expect_with(Subject::Session, whole_messages.len() <= 1, || {
+                format!(
+                    "run {} had {} voicemail-stage replies heard to their end: {whole_messages:?}",
+                    run.0,
+                    whole_messages.len()
+                )
+            });
             let played: Vec<_> = (view.steps().into_iter())
                 .filter_map(|(at, s)| match s {
                     AmdStep::VoicemailPlayed { run: r, speech } if r == run => Some((at, speech)),
@@ -84,7 +113,25 @@ fn completed(reported: bool) -> AmdEvent {
 }
 
 fn a_message(run: Authored, speech: u64) -> Authored {
-    run.pushed(speech).speech(speech, finished()).amd_step(played(speech))
+    voicemail_reply(run, speech).speech(speech, finished()).amd_step(played(speech))
+}
+
+/// A reply made under the voicemail stage's instructions, heard at the sink.
+fn voicemail_reply(run: Authored, speech: u64) -> Authored {
+    run.request(speech, speech, "please leave a message", &[VOICEMAIL], &[]).pushed(speech)
+}
+
+/// The first attempt is interrupted, so it is not the message; the retry is.
+fn an_interrupted_attempt_then_the_message() -> Recording {
+    let interrupted = Handle { done: true, interrupted: true, ..Handle::unknown() };
+    let run = voicemail_reply(Authored::new().amd_entered(1), 7).speech(7, interrupted);
+    a_message(run, 8).amd_event(1, completed(true)).done()
+}
+
+/// Two voicemail-stage replies are heard to their end; the run journals one.
+fn two_messages_heard_one_journalled() -> Recording {
+    let run = a_message(Authored::new().amd_entered(1), 7);
+    voicemail_reply(run, 8).speech(8, finished()).amd_event(1, completed(true)).done()
 }
 
 fn one_message_reported() -> Recording {

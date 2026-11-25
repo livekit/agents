@@ -17,6 +17,10 @@ use crate::{
 
 pub struct OnlyTheOpeningPlaysFirst;
 
+/// How long after the session's `speaking` edge for the opening its first audio may reach the
+/// sink for the edge to count as the opening playing.
+const EDGE_TO_AUDIO_MS: u64 = 500;
+
 impl Rule for OnlyTheOpeningPlaysFirst {
     const CONTRACT: Contract = Contract {
         id: "only_the_opening_plays_first",
@@ -27,8 +31,10 @@ impl Rule for OnlyTheOpeningPlaysFirst {
         counterexamples: &[
             reply_before_any_decision,
             opening_after_the_participant_spoke,
+            participant_spoke_before_the_speaking_edge,
             reply_heard_before_its_decision_applied,
             two_bypasses,
+            speaking_edge_long_before_the_audio,
         ],
         probe: Some(an_opening),
     };
@@ -131,12 +137,21 @@ impl Rule for OnlyTheOpeningPlaysFirst {
             // `_opening_played` on `agent_state_changed` to `speaking` (`detector.py:799`); speech
             // after it is an ordinary interruption, even before its first audio reaches the sink
             // (`test_participant_speech_after_the_opening_starts_is_a_normal_interruption`).
-            let played = r.journal().iter().find_map(|(at, step)| match step {
-                Step::Speech(SpeechStep::AgentStartedSpeaking { speech }) if speech.0 == opening => {
-                    Some(*at)
-                }
-                _ => None,
-            });
+            // The edge counts only when the opening's first audio follows it within
+            // `EDGE_TO_AUDIO_MS`: a speaking state with no audio behind it says nothing about
+            // what the participant heard.
+            let played = r
+                .journal()
+                .iter()
+                .find_map(|(at, step)| match step {
+                    Step::Speech(SpeechStep::AgentStartedSpeaking { speech })
+                        if speech.0 == opening =>
+                    {
+                        Some(*at)
+                    }
+                    _ => None,
+                })
+                .filter(|p| heard.is_some_and(|h| h.at_ms <= p.at_ms + EDGE_TO_AUDIO_MS));
             // Only while the run is attached: after its completion the opening still plays, and
             // speech interrupts it as any other (spec §10.6).
             let spoke_first = r.applied().iter().any(|a| {
@@ -228,6 +243,29 @@ fn speech_after_the_opening_started_playing() -> Recording {
     use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     activated()
         .journal(Step::Speech(SpeechStep::AgentStartedSpeaking { speech: SpeechId(5) }))
+        .sent(Input::VadStart { vad: Ref::new(0), speech_ms: Millis(0) })
+        .pushed(5)
+        .done()
+}
+
+/// The participant speaks before the session's speaking edge and before the first audio: the
+/// opening must not be heard.
+fn participant_spoke_before_the_speaking_edge() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+    activated()
+        .sent(Input::VadStart { vad: Ref::new(0), speech_ms: Millis(0) })
+        .journal(Step::Speech(SpeechStep::AgentStartedSpeaking { speech: SpeechId(5) }))
+        .pushed(5)
+        .done()
+}
+
+/// The session reports speaking long before any audio of the opening, the participant speaks in
+/// between, and the opening is heard: the edge proved nothing was playing.
+fn speaking_edge_long_before_the_audio() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+    activated()
+        .journal(Step::Speech(SpeechStep::AgentStartedSpeaking { speech: SpeechId(5) }))
+        .later(3_000)
         .sent(Input::VadStart { vad: Ref::new(0), speech_ms: Millis(0) })
         .pushed(5)
         .done()

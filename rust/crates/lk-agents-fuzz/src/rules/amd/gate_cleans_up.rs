@@ -23,7 +23,13 @@ impl Rule for GateCleansUp {
                     later turn with nothing in its way reaches its model, and replies are as \
                     interruptible as before the run attached.",
         examples: &[clean, preemptive_adopted],
-        counterexamples: &[observed_after, still_gated, interruptions_kept_forced, never_answered],
+        counterexamples: &[
+            observed_after,
+            still_gated,
+            interruptions_kept_forced,
+            never_answered,
+            adopted_in_the_trace_only,
+        ],
         probe: Some(a_turn_after_completion),
     };
 
@@ -175,7 +181,7 @@ fn answers_later_turns(
         let replied = events.iter().any(|(seen, e)| {
             window(*seen)
                 && matches!(e, SessionEvent::SpeechCreated { kind: SpeechKind::TurnReply, .. })
-        }) || adopted(r, *at, due);
+        }) || adopted(r, *at, due, words);
         let answered = replied
             || amd.requests().into_iter().any(|q| {
                 q.opened.at_ms <= due
@@ -194,10 +200,12 @@ fn answers_later_turns(
 }
 
 /// Whether the turn the host heard commit at `at` adopted the preemptive generation by `due`
-/// ms: that is the reply made for it, though its request may not have opened yet (proposal,
-/// "Preemptive generation may run while authorization is held"). The adoption is journalled in
-/// the commit's own transition, after its committed end of turn and before the host hears it.
-fn adopted(r: &Recording, at: Observed, due: u64) -> bool {
+/// ms: that is the reply made for it (proposal, "Preemptive generation may run while
+/// authorization is held"). The adoption is journalled in the commit's own transition, after its
+/// committed end of turn and before the host hears it. It counts only for a preemptive speech
+/// whose own request, opened before the adoption, answered the turn's `words`: a trace step alone
+/// is the session's report, not evidence.
+fn adopted(r: &Recording, at: Observed, due: u64, words: &str) -> bool {
     use lk_agents_voice::agent_session::machine::activity::scheduling::PreemptiveVerdict;
     use lk_agents_voice::trace::TurnStep;
     let committed =
@@ -206,14 +214,25 @@ fn adopted(r: &Recording, at: Observed, due: u64) -> bool {
     let Some(ended) = steps.iter().rposition(|(seen, step)| *seen < at && committed(step)) else {
         return false;
     };
+    let amd = r.amd_view();
+    let requests = amd.requests();
+    let original = |speech: u64, reused: Observed| {
+        requests.iter().any(|q| {
+            q.speech == Some(speech)
+                && q.opened <= reused
+                && amd.preemptive(q)
+                && q.last_user().is_some_and(|m| m.text == words)
+        })
+    };
     steps[ended + 1..]
         .iter()
         .take_while(|(seen, step)| seen.at_ms <= due && !committed(step))
-        .any(|(_, step)| {
-            matches!(
-                step,
-                Step::Turn(TurnStep::PreemptiveReconciled { verdict: PreemptiveVerdict::Reuse, .. })
-            )
+        .any(|(seen, step)| match step {
+            Step::Turn(TurnStep::PreemptiveReconciled {
+                speech,
+                verdict: PreemptiveVerdict::Reuse,
+            }) => original(speech.0, *seen),
+            _ => false,
         })
 }
 
@@ -265,9 +284,28 @@ fn still_gated() -> Recording {
         .done()
 }
 
-/// A turn after the detach adopts its preemptive generation, which the host interrupts before
-/// its request opens: the turn had its reply.
+/// A turn after the detach adopts its preemptive generation, made for its words: the turn had
+/// its reply.
 fn preemptive_adopted() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::{
+        PreemptiveVerdict, SpeechId,
+    };
+    use lk_agents_voice::trace::TurnStep;
+    attached()
+        .speech_created(7, SpeechKind::Preemptive)
+        .request(7, 1, "hello", &[], &[])
+        .user_turn(None, 1, "hello")
+        .journal(Step::Turn(TurnStep::PreemptiveReconciled {
+            speech: SpeechId(7),
+            verdict: PreemptiveVerdict::Reuse,
+        }))
+        .later(3_000)
+        .done()
+}
+
+/// The session reports an adoption, and no preemptive request ever answered the turn: its own
+/// report proves no reply.
+fn adopted_in_the_trace_only() -> Recording {
     use lk_agents_voice::agent_session::machine::activity::scheduling::{
         PreemptiveVerdict, SpeechId,
     };
