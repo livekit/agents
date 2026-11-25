@@ -422,10 +422,19 @@ class _VADStream(vad.VADStream):
                     self._speech_buffer[: self._prefix_padding_samples] = padding_data
                     self._speech_buffer_index = self._prefix_padding_samples
 
+                is_speech = p >= self._opts.activation_threshold or (
+                    pub_speaking and p > self._opts.deactivation_threshold
+                )
                 if pub_speaking:
                     pub_speech_duration += window_duration
                 else:
                     pub_silence_duration += window_duration
+
+                # silence after the last speech window only counts once speech resumes,
+                # so it can't push the speech duration over the interruption threshold
+                trailing_silence = (
+                    0.0 if is_speech else silence_threshold_duration + window_duration
+                )
 
                 self._event_ch.send_nowait(
                     vad.VADEvent(
@@ -433,7 +442,7 @@ class _VADStream(vad.VADStream):
                         samples_index=pub_current_sample,
                         timestamp=pub_timestamp,
                         silence_duration=pub_silence_duration,
-                        speech_duration=pub_speech_duration,
+                        speech_duration=max(0.0, pub_speech_duration - trailing_silence),
                         probability=p,
                         inference_duration=inference_duration,
                         frames=[
@@ -450,9 +459,7 @@ class _VADStream(vad.VADStream):
                     )
                 )
 
-                if p >= self._opts.activation_threshold or (
-                    pub_speaking and p > self._opts.deactivation_threshold
-                ):
+                if is_speech:
                     speech_threshold_duration += window_duration
                     silence_threshold_duration = 0.0
 
