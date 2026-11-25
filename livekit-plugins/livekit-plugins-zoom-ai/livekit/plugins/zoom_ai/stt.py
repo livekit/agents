@@ -147,14 +147,15 @@ def _zoom_reason(body: str) -> str | None:
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
-def _check_url(url: str, name: str) -> str:
-    """Return ``url``, warning if it sends the API key and audio unencrypted to a remote host."""
+def _check_url(url: str, name: str, data: str = "audio") -> str:
+    """Return ``url``, warning if it sends the API key and ``data`` unencrypted to a remote host."""
     parsed = urlparse(url)
     if parsed.scheme.lower() in ("http", "ws") and parsed.hostname not in _LOOPBACK_HOSTS:
         logger.warning(
-            "%s is not encrypted (%s://); the API key and audio are sent in plaintext",
+            "%s is not encrypted (%s://); the API key and %s are sent in plaintext",
             name,
             parsed.scheme,
+            data,
         )
     return url
 
