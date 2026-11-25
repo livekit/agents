@@ -145,6 +145,7 @@ fn answers_later_turns(
                     | Input::UpdateModels { .. }
                     | Input::VoiceTask { .. }
                     | Input::AmdAttach { .. }
+                    | Input::AmdEnter { .. }
             )
         });
         // Customer code running at any point until the bound (an agent's `on_enter`, a

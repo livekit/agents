@@ -1,5 +1,11 @@
-//! The scripted AMD answerer. Before the AMD machine exists, it plays AMD's side of the reply
-//! gate's protocol: it attaches, activates, answers each turn it observed, and completes. Like
+//! AMD on the call: the real run, or the scripted answerer.
+//!
+//! A real run (`Input::AmdEnter`) is the production executor and machine over fake models whose
+//! categories follow a callee persona; it answers on its own, and the actor only enters it,
+//! sometimes closes it, and sometimes enters a second one after it completed.
+//!
+//! The scripted answerer plays AMD's side of the reply gate's protocol where the real machine
+//! would not go: it attaches, activates, answers each turn it observed, and completes. Like
 //! every actor it acts only on what it observed: a turn it can answer exists only once the
 //! session reported its commit.
 //!
@@ -15,7 +21,7 @@ use fastrand::Rng;
 
 use super::{Halt, Talk};
 use crate::{
-    input::{AmdOpening, AmdVerdict, Input, Ref},
+    input::{AmdModel, AmdOpening, AmdPersona, AmdVerdict, Count, Input, Ref},
     record::Kind,
 };
 
@@ -61,6 +67,25 @@ const STRAY: u8 = 2;
 /// How often a completed run is followed by a second one.
 const REATTACH: u8 = 30;
 
+/// How often AMD on the call is a real run rather than the scripted answerer.
+const REAL: u8 = 50;
+
+/// How often, per beat, the host closes a real run (`aclose()`).
+const CLOSE: u8 = 1;
+
+/// A real run's draw: who answers, what classifies, and AMD's own STT.
+#[derive(Clone, Copy, Debug)]
+struct Real {
+    persona: AmdPersona,
+    model: AmdModel,
+    own_stt: bool,
+    stt_fails: bool,
+    seed: u32,
+    /// Runs entered so far.
+    entered: u32,
+    closed: bool,
+}
+
 /// The scripted answerer's plan and state, drawn once per run from its own stream.
 pub(super) struct Answerer {
     rng: Rng,
@@ -82,6 +107,8 @@ pub(super) struct Answerer {
     detached: bool,
     /// A second run attaches once this one completed.
     reattaches: bool,
+    /// A real run instead of the scripted answers.
+    real: Option<Real>,
 }
 
 impl Answerer {
@@ -102,6 +129,25 @@ impl Answerer {
         let detaches_pending = completes_after == Some(0) && rng.bool();
         let forbids = rng.u8(0..100) < 20;
         let reattaches = rng.u8(0..100) < REATTACH;
+        // Its own stream, so the scripted draws above stay as they were.
+        let mut real = Rng::with_seed(seed ^ 0x0000_5245_414c_414d);
+        let real = (real.u8(0..100) < REAL).then(|| Real {
+            persona: *[
+                AmdPersona::Human,
+                AmdPersona::Screener,
+                AmdPersona::Voicemail,
+                AmdPersona::Hold,
+                AmdPersona::Unavailable,
+            ]
+            .get(real.usize(0..5))
+            .unwrap_or(&AmdPersona::Human),
+            model: if real.u8(0..100) < 25 { AmdModel::Decision } else { AmdModel::Llm },
+            own_stt: real.bool(),
+            stt_fails: real.u8(0..100) < 10,
+            seed: real.u32(..),
+            entered: 0,
+            closed: false,
+        });
         Answerer {
             rng,
             on,
@@ -117,6 +163,7 @@ impl Answerer {
             last: AmdVerdict::Allow,
             detached: false,
             reattaches,
+            real,
         }
     }
 }
@@ -127,6 +174,9 @@ impl Talk {
     pub(super) async fn answer_amd(&mut self) -> Result<(), Halt> {
         if !self.amd.on {
             return Ok(());
+        }
+        if self.amd.real.is_some() {
+            return self.enter_amd().await;
         }
         // A second run: attached afresh, with its own turns, after the first completed.
         if self.amd.detached {
@@ -226,6 +276,42 @@ impl Talk {
             self.amd.detached = true;
             let (category, forbid) = (self.amd.last, self.amd.forbids);
             self.send(Input::AmdDetach { category, forbid }).await?;
+        }
+        Ok(())
+    }
+}
+
+impl Talk {
+    /// A real run's beat: enter it, now and then close it, and enter a second one after the
+    /// first completed.
+    async fn enter_amd(&mut self) -> Result<(), Halt> {
+        let Some(mut real) = self.amd.real else { return Ok(()) };
+        let detached = (self.run.record.amd().iter())
+            .filter(|(_, _, o)| matches!(o, lk_agents_voice::amd::AmdObservation::Detached { .. }))
+            .count();
+        let second = real.entered == 1
+            && detached >= 1
+            && self.amd.reattaches
+            && self.amd.rng.u8(0..100) < 20;
+        if real.entered == 0 || second {
+            real.entered += 1;
+            real.closed = false;
+            self.amd.real = Some(real);
+            return self
+                .send(Input::AmdEnter {
+                    persona: real.persona,
+                    model: real.model,
+                    opening: self.amd.opening,
+                    own_stt: real.own_stt,
+                    stt_fails: real.stt_fails,
+                    seed: Count(real.seed.wrapping_add(real.entered)),
+                })
+                .await;
+        }
+        if !real.closed && self.amd.rng.u8(0..100) < CLOSE {
+            real.closed = true;
+            self.amd.real = Some(real);
+            return self.send(Input::AmdClose {}).await;
         }
         Ok(())
     }

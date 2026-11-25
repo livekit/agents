@@ -192,6 +192,9 @@ fn unheard_explained(r: &Recording, turn: &GatedTurn, requests: &[Request<'_>], 
                 | Input::UpdateModels { .. }
                 | Input::AmdDetach { forbid: true, .. }
         )
+    }) || amd.answers().iter().any(|a| {
+        // A real run's completion that forbids replies.
+        matches!(a, crate::record::amd::Answer::Detach { at, forbid: true, .. } if after(*at))
     });
     // The model never asked, still answering, or answering with no words or a tool call.
     let spoke = |chat: u32| {

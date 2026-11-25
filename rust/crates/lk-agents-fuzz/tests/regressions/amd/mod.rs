@@ -4,6 +4,7 @@
 //! conversation saved. Every story also passes the run's contracts, the AMD rules included.
 
 mod detach;
+mod executor;
 mod gate;
 mod opening;
 mod payload;
