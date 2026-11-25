@@ -60,7 +60,7 @@ class AvatarSession(BaseAvatarSession):
 
     @property
     def provider(self) -> str:
-        return "d-id"
+        return "did"
 
     async def create_session(self, ctx: AvatarStart) -> str:
         async with http.http_session().post(

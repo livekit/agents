@@ -147,7 +147,7 @@ impl FallbackLlm {
             cx,
             telemetry::LlmFallbackAdapter {
                 attempt: telemetry::Attempt {
-                    provider: telemetry::provider_name(&id.provider),
+                    provider: telemetry::provider_name(&id),
                     model: id.model,
                     retry_count: 0,
                 },
@@ -356,8 +356,8 @@ fn served(chain: &FallbackChain<LlmBackend>) -> telemetry::LlmFallbackChoice {
     telemetry::LlmFallbackChoice {
         label: llm.label(),
         index: u32::try_from(index).unwrap_or(u32::MAX),
+        provider: telemetry::provider_name(&id),
         response_model: id.model,
-        provider: telemetry::provider_name(&id.provider),
     }
 }
 

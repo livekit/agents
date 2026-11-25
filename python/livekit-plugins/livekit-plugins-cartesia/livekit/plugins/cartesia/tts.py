@@ -249,7 +249,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Cartesia"
+        return "cartesia"
 
     def prewarm(self) -> None:
         self._mux.prewarm()

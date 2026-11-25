@@ -203,7 +203,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Soniox"
+        return "soniox"
 
     def update_options(
         self,

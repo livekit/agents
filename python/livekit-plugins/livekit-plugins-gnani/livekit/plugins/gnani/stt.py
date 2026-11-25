@@ -138,7 +138,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Gnani"
+        return "gnani"
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:

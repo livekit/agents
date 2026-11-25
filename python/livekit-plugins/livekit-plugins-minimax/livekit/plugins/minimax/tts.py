@@ -378,7 +378,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "MiniMax"
+        return "minimax"
 
     def update_options(
         self,

@@ -193,7 +193,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Baseten"
+        return "baseten"
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:

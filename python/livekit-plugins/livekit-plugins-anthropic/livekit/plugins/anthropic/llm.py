@@ -157,6 +157,9 @@ class LLM(llm.LLM):
                 " ANTHROPIC_API_KEY environment variable"
             )
 
+        # an endpoint the caller gave names no vendor, and its host is never reported
+        own_endpoint = is_given(base_url) or client is not None
+        self._provider = "unknown" if own_endpoint else "anthropic"
         self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
@@ -181,7 +184,7 @@ class LLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return self._client.base_url.netloc.decode("utf-8")
+        return self._provider
 
     def chat(
         self,

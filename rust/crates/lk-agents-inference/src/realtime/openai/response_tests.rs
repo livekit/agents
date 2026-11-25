@@ -83,7 +83,7 @@ fn response_status_variants_end_the_generation_safely() {
         ),
     ];
     for (response, status, error_type) in cases {
-        let mut m = machine(OPENAI).with_provider("api.openai.com".into());
+        let mut m = machine(OPENAI).with_provider("openai".into());
         m.open(at(0));
         m.command(at(1), reply("response_create_1"));
         recv(&mut m, at(1), created("r", Some("response_create_1")));

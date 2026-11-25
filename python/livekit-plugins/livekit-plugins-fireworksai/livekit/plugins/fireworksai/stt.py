@@ -158,7 +158,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "FireworksAI"
+        return "fireworksai"
 
     @property
     def session(self) -> http.HttpSession:

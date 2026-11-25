@@ -38,7 +38,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
 
 from .models import TTSModels, TTSVoices
-from .utils import AsyncAzureADTokenProvider, http_timeout
+from .utils import AsyncAzureADTokenProvider, http_timeout, vendor
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -96,6 +96,7 @@ class TTS(tts.TTS):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
         response_format: NotGivenOr[RESPONSE_FORMATS] = NOT_GIVEN,
+        _provider: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI TTS.
@@ -122,6 +123,7 @@ class TTS(tts.TTS):
                 "OpenAI API key is required, either as argument or set"
                 " OPENAI_API_KEY environment variable"
             )
+        self._provider = vendor(_provider, own_endpoint=is_given(base_url) or client is not None)
         self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             max_retries=0,
@@ -145,7 +147,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return self._client.base_url.netloc.decode("utf-8")
+        return self._provider
 
     def update_options(
         self,
@@ -222,6 +224,7 @@ class TTS(tts.TTS):
             instructions=instructions,
             client=azure_client,
             response_format=response_format,
+            _provider="azure",
         )
         tts._owns_client = True
         return tts

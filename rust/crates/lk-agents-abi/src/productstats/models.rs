@@ -64,7 +64,7 @@ impl ModelLabels {
             let plugin = plugin.filter(|p| !p.is_empty()).map(|p| p.replace('_', "-"));
             (
                 plugin.unwrap_or_else(|| CUSTOM_PLUGIN.to_owned()),
-                declared(&id.provider),
+                id.vendor().unwrap_or(UNKNOWN).to_owned(),
                 declared(&id.model),
             )
         };

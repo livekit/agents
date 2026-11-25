@@ -335,6 +335,7 @@ async fn azure_gets_its_url_and_header_for_every_credential() {
         let ws = Arc::new(FakeWs::new(vec![]).keep_open());
         let connect = Connect {
             base_url: "https://res.openai.azure.com/openai".into(),
+            vendor: None,
             azure: Some(Azure { deployment: Some("gpt-rt".into()) }),
             auth: Auth::Azure {
                 api_key: api_key.map(str::to_owned),
@@ -376,6 +377,7 @@ async fn voice_live_connects_through_azure_and_sends_the_beta_session() {
     let connect = Connect {
         base_url: "https://res.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10"
             .into(),
+        vendor: None,
         azure: Some(Azure { deployment: Some("gpt-realtime".into()) }),
         auth: Auth::Azure { api_key: Some("az-key".into()), entra_token: None },
         conn: Default::default(),
@@ -418,6 +420,7 @@ async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
     let connect = Connect {
         base_url: "https://agent-gateway.livekit.cloud/v1".into(),
+        vendor: None,
         azure: None,
         auth: Auth::Inference {
             api_key: "APIkey".into(),

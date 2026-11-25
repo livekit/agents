@@ -228,7 +228,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Microsoft AI"
+        return "microsoft_ai"
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

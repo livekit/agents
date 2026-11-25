@@ -35,8 +35,8 @@ have no `update_options` of their own. Their typed forms:
 
 `inference.LLM(model, provider=, inference_class=, endpoint=)` takes the provider the
 gateway routes to (the gateway picks by default), the `InferenceClass` of its requests, and a
-`ProviderEndpoint(base_url=, api_key=)`: an OpenAI-compatible provider called directly with
-its own key in place of the gateway. Its stream is a `GatewayLLMStream`.
+`ProviderEndpoint(base_url=, api_key=, provider=)`: an OpenAI-compatible provider called directly
+with its own key in place of the gateway, reported under the vendor name `provider=` gives. Its stream is a `GatewayLLMStream`.
 `inference.STT(model=, vad=)` takes an optional model: left out or `"auto"`
 (`AutoModels`), the gateway picks. `vad=` is a VAD whose end of speech finalizes the transcript,
 for Speechmatics and OpenAI. Its stream is a `SpeechStream`.
@@ -193,6 +193,15 @@ the core's client with the provider's own key and no LiveKit header, not on the
 `openai` SDK. Its instance options are the request's kwargs; a call's
 `tool_choice`, `parallel_tool_calls` and `response_format` override them, so the
 framework can forbid tools on a turn.
+
+A model's `provider` is its vendor: one lowercase id per vendor (letters, digits and
+underscores), declared by its class or constructor. It is never a service, product or model
+name, and never the endpoint's host: every AWS service is `aws`, every Google one `google`,
+every Azure one `azure`, LiveKit Inference and the local models `livekit`, and
+`openai.LLM.with_x_ai()` and `livekit.plugins.xai` both report `xai`. An OpenAI or Anthropic
+model given a `base_url` or a client without a vendor reports `"unknown"`. Telemetry carries
+that id as declared: `gen_ai.provider.name` and the `model_provider` label are the model's
+`provider`, with no translation.
 
 An STT or TTS declares every fact fixed at construction in its `STTCapabilities` or
 `TTSCapabilities`, passed to the base constructor (`super().__init__(capabilities=...)`);

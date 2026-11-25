@@ -139,7 +139,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Camb.ai"
+        return "cambai"
 
     def update_options(
         self,

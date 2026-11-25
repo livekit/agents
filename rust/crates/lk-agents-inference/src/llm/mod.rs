@@ -85,7 +85,8 @@ pub enum Auth {
     /// carry the job's identification and the provider pin.
     Gateway { api_key: String, api_secret: String },
     /// A provider's own API key, sent as the bearer straight to `base_url`; no LiveKit header.
-    ProviderKey(String),
+    /// `vendor` is the name telemetry gives the endpoint, never read from its URL.
+    ProviderKey { key: String, vendor: Option<String> },
 }
 
 impl Auth {
@@ -95,7 +96,7 @@ impl Auth {
             Auth::Gateway { api_key, api_secret } => {
                 lk_agents_net::token::inference_bearer(api_key, api_secret)
             }
-            Auth::ProviderKey(key) => Ok(key.clone()),
+            Auth::ProviderKey { key, .. } => Ok(key.clone()),
         }
     }
 }

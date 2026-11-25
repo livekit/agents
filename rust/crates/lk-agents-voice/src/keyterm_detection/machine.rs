@@ -876,9 +876,7 @@ impl VoiceDriver {
         let model = self.session.llm.as_ref().filter(|l| l.id == llm).map(|l| &l.provider);
         let decl = telemetry::KeytermDetection {
             model: model.map(|l| l.model.clone()).unwrap_or_default(),
-            provider: model
-                .and_then(|l| lk_agents_core::telemetry::gen_ai::provider_name(&l.provider))
-                .unwrap_or_default(),
+            provider: model.and_then(|l| l.vendor()).unwrap_or_default().to_owned(),
         };
         // A pass still open (its answer never came) ends first.
         self.keyterm_span_ended(None);

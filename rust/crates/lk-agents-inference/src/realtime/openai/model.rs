@@ -14,7 +14,7 @@ use lk_agents_net::task::TokioSpawner;
 
 use super::session::{Auth, Connect, OpenAIRealtime};
 use super::wire::Azure;
-use crate::realtime::dialect::{Dialect, OPENAI};
+use crate::realtime::dialect::{AZURE_VENDOR, Dialect, OPENAI, UNKNOWN_VENDOR};
 use crate::realtime::machine::{OptionsPatch, SessionOptions, transcription};
 use lk_agents_net::env::ProcessEnv;
 
@@ -87,6 +87,20 @@ fn endpoint(
     Ok((api_key, base_url))
 }
 
+/// The vendor when it is not the dialect's own. A provider's class names its dialect, so its
+/// vendor; on OpenAI's class Azure is Azure OpenAI, and a base URL given alone names nobody.
+fn vendor(config: &Config, named: Option<&Dialect>) -> Option<&'static str> {
+    if named.is_some() {
+        None
+    } else if config.azure_deployment.is_some() || config.entra_token.is_some() {
+        Some(AZURE_VENDOR)
+    } else if config.base_url.as_deref().is_some_and(|url| !url.is_empty()) {
+        Some(UNKNOWN_VENDOR)
+    } else {
+        None
+    }
+}
+
 fn build(env: &ProcessEnv, config: Config) -> Result<OpenAIRealtime, RealtimeConfigurationError> {
     let named = config.dialect.map(Dialect::of);
     // the gateway's caller resolved its own credentials and URL
@@ -99,6 +113,7 @@ fn build(env: &ProcessEnv, config: Config) -> Result<OpenAIRealtime, RealtimeCon
     };
     let is_azure = config.azure_deployment.is_some() || config.entra_token.is_some();
     let azure_openai = is_azure && named.is_none();
+    let vendor = vendor(&config, named.as_ref());
     let dialect = named.unwrap_or_else(|| Dialect::for_base_url(&base_url));
     let is_inference = dialect.provider == RealtimeProvider::Inference;
     let mut opts = SessionOptions::from_dialect(&dialect, false);
@@ -157,6 +172,7 @@ fn build(env: &ProcessEnv, config: Config) -> Result<OpenAIRealtime, RealtimeCon
     };
     let connect = Connect {
         base_url,
+        vendor,
         azure: is_azure.then_some(Azure { deployment: config.azure_deployment }),
         auth,
         conn: config.conn_options,
@@ -322,6 +338,18 @@ mod tests {
         );
         let missing = endpoint(&config(None, None), None, vars(&[])).unwrap_err();
         assert!(missing.contains("OPENAI_API_KEY"));
+    }
+
+    // Catches: an endpoint's host reported as the provider, or a caller's own endpoint reported
+    // as OpenAI.
+    #[test]
+    fn the_vendor_is_declared_never_read_from_the_url() {
+        assert_eq!(vendor(&config(None, None), None), None);
+        assert_eq!(vendor(&config(None, Some("https://llm.internal/v1")), None), Some("unknown"));
+        assert_eq!(vendor(&config(None, Some("https://llm.internal/v1")), Some(&XAI)), None);
+        let mut azure = config(None, Some("https://gateway.internal/openai"));
+        azure.azure_deployment = Some("d".into());
+        assert_eq!(vendor(&azure, None), Some("azure"));
     }
 
     // Catches: a named dialect reading OpenAI's key or URL instead of its own.
