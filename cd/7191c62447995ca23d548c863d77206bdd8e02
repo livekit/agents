@@ -1,0 +1,19 @@
+docs/proposals/amd.md
+  s_e2a5685ba2d5d4::t_b4925a4995f184 61,63-65,121-122,124-126,131,142-145,153-154,162-163,203-205,218-224,227-230,232-238,247-253,261-267,270-275,278-279,294-296,335-350,424-427,430-431,437-443,448-449,462-463,490-500,563-564,567-569,573-582,600,606,608,619-625
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cd7191c62447995ca23d548c863d77206bdd8e02",
+  "prompts": {},
+  "sessions": {
+    "s_e2a5685ba2d5d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_e2a5685ba2d5d4",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
