@@ -101,8 +101,12 @@ pub enum AmdObservation {
     TurnCommitted {
         turn: TurnId,
         transcript: String,
+        /// With no speech boundary since the previous commit, the silence starts at
+        /// `at` minus this delay.
         eot_delay: Option<Duration>,
         skip_reply: bool,
+        /// The gate was active at commit. AMD gives an unbound turn row 1.
+        bound: bool,
         /// The participant was still speaking at commit (spec §7.1 speech duration).
         speaking: bool,
         agent: AgentId,
@@ -121,8 +125,8 @@ pub enum AmdObservation {
     /// playback, thinking, a pending false interruption, a running user-turn task or
     /// a parked turn (Python's `_is_agent_busy`). Sent at attach, then on change.
     AgentBusy { busy: bool, at: Ts },
-    /// The session entered or left `Hold::Silence` for a turn. AMD's inference-timeout
-    /// and idle rules count a reply as held while it is (Python's `_reply_held_at`).
+    /// The session entered or left `Hold::Silence` for a turn. `held: false` ends the
+    /// reply's hold for AMD's inference-timeout and idle rules.
     SilenceHold { turn: TurnId, held: bool, at: Ts },
     /// Participant speech boundaries and session STT finals.
     UserSpeech(UserSpeechObservation),
@@ -245,7 +249,9 @@ enum Hold {
   the decision asks for silence, else `Hold::Open`. The commit records whether the gate
   was `active`. A turn committed before `Activated` is not bound, so its allow keeps
   `Hold::Entry`, even when its hook returns after activation. Python never resumes
-  authorization for a turn it did not bind (`detector.py:1047`).
+  authorization for a turn it did not bind (`detector.py:1047`). `TurnCommitted`
+  carries `bound`. AMD can be active before the gate applies `Activated`, so AMD
+  cannot tell from its own state.
 - **Decision for an ended turn.** A decision for a turn that ended without one
   (`skip_reply`, `StopResponse`, a drop) is dropped as `TurnEnded`. A second decision
   for a turn is dropped as `Duplicate`.
@@ -410,9 +416,10 @@ its own STT and realtime input during AEC warmup and uninterruptible speech, but
 VAD and the interruption detector keep the real frame (`agent_activity.push_audio`).
 The removed tap fan-out provided this, so the port needs one participant-audio feed
 for the AMD leg, taken before the discard; its mechanism is an open question. If the
-AMD stream fails or will not open, the leg reports `SttFailed`: AMD closes it, stops
-late-final waits, and uses session transcripts from then on (spec §6.3). A blank
-final does not consume a turn's late-final wait.
+AMD stream fails or will not open, the leg reports `SttFailed`: AMD closes it, ends
+every late-final wait at once, and uses session transcripts from then on (spec §6.3).
+This differs from Python on purpose. Python lets each wait run out, but no final can
+come. A blank final does not consume a turn's late-final wait.
 
 ### Machine
 
@@ -434,8 +441,9 @@ pub struct Amd {
     voicemail: VoicemailRecord,
     uncertain: u8,
     timeouts: u8,
-    speech: SpeechClock,                      // speaking, started_at, duration, since_commit
+    speech: SpeechClock,                      // speaking, started_at, duration, ended_at
     agent_busy: bool,
+    held: Option<TurnId>,                     // the turn whose reply waits for silence
 }
 
 enum In {
@@ -445,11 +453,14 @@ enum In {
 
 enum AmdEffect {
     Answer(AmdAnswer), Classify(ClassifyRequest), CancelClassify, ExtractMenu(..),
-    SetDeadline(AmdTimer, Ts), ClearDeadline(AmdTimer), Emit(AmdEvent),
+    CancelMenu, SetDeadline(AmdTimer, Ts), ClearDeadline(AmdTimer), Emit(AmdEvent),
 }
 
 enum AmdTimer { Inference(ReqId), LateFinal(TurnId), Idle, Overall, Menu(ReqId) }
 ```
+
+`In::Classified` carries the model time the leg measured around the model call.
+Python times `classify` alone, after the late-final wait.
 
 - `stage::next` is a line-for-line port of `_fsm.py`. The rules around it live in
   `detector.py` and are ported as machine logic: the likely-human downgrade and when
@@ -462,9 +473,10 @@ enum AmdTimer { Inference(ReqId), LateFinal(TurnId), Idle, Overall, Menu(ReqId) 
   turn's prediction exists, without waiting for the customer hook. A prediction that
   completes AMD sends no `ReplyDecided`; `Detach.pending` decides its turn.
   `_authorize_reply` checks `wait` first and `FINISHED` second (`detector.py:1060`),
-  and `pending` follows the same order. A turn committed while
-  AMD is `Pending` or past its overall timeout gets row 1 at once. The
-  `agent_changed` row reads the agent from `TurnCommitted`.
+  and `pending` follows the same order. A turn committed while AMD is `Pending`, an
+  unbound turn (`bound: false`) and a turn past the overall timeout get row 1 at once.
+  AMD keeps no record of an unbound turn. The `agent_changed` row reads the agent from
+  `TurnCommitted`.
 - An allowed decision in `machine-ivr` while active sets `dtmf`. Stage changes send
   nothing else to the session.
 - `human_instructions` apply only to the reply of the turn whose `human` prediction
@@ -472,21 +484,33 @@ enum AmdTimer { Inference(ReqId), LateFinal(TurnId), Idle, Overall, Menu(ReqId) 
   answer replies under the agent's own instructions.
 - In a machine stage, an allowed decision carries `silence =
   machine_silence_threshold`. AMD does not time it.
-- **Held reply.** The idle and inference-timeout rules count a reply as held from
-  sending an allowed decision with `silence` until the session reports `SilenceHold
-  { held: false }` for that turn, or `TurnEnded`. This matches Python's
-  `_reply_held_at` (`detector.py:1126`), which is true from the prediction until the
-  silence ends, whether or not a speech exists yet. Counting from `ReplyCreated`
-  instead would let the third inference timeout complete AMD before the reply
-  exists, and `Detach` would then replace its silence and stage instructions.
+- **Held reply.** The idle and inference-timeout rules count a reply as held from an
+  allowed decision with `silence` until the session reports `SilenceHold { held: false }`
+  for that turn, or until a turn end that prevents the reply. Every end except
+  `Replied` prevents it. `TurnEnded { Replied }` does not release the reply: the gate
+  sends `ReplyCreated`, then `TurnEnded { Replied }`, and only then enters the hold.
+  A turn that asked for no reply (`skip_reply`), or that ended before its prediction,
+  is never held. This matches Python's `_reply_held_at` (`detector.py:1126`), which
+  is true from the prediction until the silence ends, whether or not a speech exists
+  yet. Counting from `ReplyCreated` instead would let the third inference timeout
+  complete AMD before the reply exists, and `Detach` would then replace its silence
+  and stage instructions.
 - **Idle** (`_update_idle`). The run is busy while a request is pending, the category
-  is `wait`, a reply is held, the participant speaks, a watched speech is live, or
-  `AgentBusy` is set. When not busy, the deadline is armed once, with
-  `voicemail_idle_timeout` in `machine-vm` and `idle_timeout` otherwise. A stage
-  change clears it, and a played voicemail message restarts it while the stage is
-  `machine-vm` (`detector.py:1217`). The
-  `max_inference_timeouts` completion waits while a request is pending or a reply is
-  held.
+  is `wait`, a reply is held, the participant speaks, or `AgentBusy` is set.
+  `AgentBusy` covers every queued or playing speech except the preemptive generation.
+  When not busy, the deadline is armed once, with `voicemail_idle_timeout` in
+  `machine-vm` and `idle_timeout` otherwise. A stage change clears it, and a played
+  voicemail message restarts it while the stage is `machine-vm` (`detector.py:1217`).
+- **Inference timeout limit** (`detector.py:1288`). Once `max_inference_timeouts` is
+  reached and no request is pending, AMD completes with `inference_timeout` unless a
+  reply is held. A prediction checks this before the turn's decision, as Python's
+  `_record_prediction` runs `_update_idle` first. AMD counts the latest turn's reply as
+  held there only if it would wait for silence: the stage is a machine stage, the
+  category is not `wait`, `machine_silence_threshold` is not zero, and the participant
+  speaks or has been silent for less than the threshold. Otherwise `Detach.pending`
+  settles the turn with the "AMD completed" row, without stage instructions. AMD's
+  speech clock measures that silence as the gate does: from the latest speech end, or
+  from the commit minus `eot_delay` when no boundary came since the previous commit.
 - **Voicemail** (spec §10.4). The reservation belongs to the turn that was allowed
   the message and is released when a newer turn commits. A reply is denied while an
   attempt is in flight. The message counts as played only if its speech finished not
@@ -496,13 +520,22 @@ enum AmdTimer { Inference(ReqId), LateFinal(TurnId), Idle, Overall, Menu(ReqId) 
   played" sentence.
 - **Classifier history** (spec §8.2). Each watched speech records, when it is allowed
   or first seen, whether the classifier sees its words or `(the agent spoke)`.
-  Speeches with `add_to_chat_ctx` false are left out; speeches queued before attach
-  are watched, and a speech playing at attach is recorded; items and tool calls
-  created before AMD's entry (`_started_at`) are filtered out.
+  Speeches with `add_to_chat_ctx` false are left out. Speeches queued before attach
+  are watched, and their words count when they play. A speech playing at attach is
+  watched, but its words stay out of the history: they started before AMD's entry
+  (Python's `_started_at` filter). Tool calls created before AMD's entry are filtered
+  out the same way.
   DTMF entries need a successful, non-empty output and are de-duplicated by call id.
   At most 20 items go into a request.
-- **Speech clock.** Speech duration starts at activation if the participant is
-  already speaking; boundaries before activation are ignored.
+- **Speech clock.** The gate reports speech boundaries and finals only once it is
+  active, which is after AMD activates. Speech duration counts from activation.
+- **Menus** (spec §11.2). A menu result at or after its 5 s deadline is dropped, as a
+  late classifier result is. A menu with more than 20 options is not observed: it
+  fails Python's validation (`_inference.py:112`). `CancelMenu` stops the menu leg
+  wherever Python cancels `_menu_atask` (a newer turn with text, `detector.py:749`),
+  when a new extraction replaces it, at its deadline and at completion.
+- **Turn registry.** An ended turn older than the newest turn with a prediction is
+  dropped, unless a late final or the request still waits on it.
 - Speech boundaries use the VAD boundary time carried in the observation, not event
   creation or arrival time (spec §16.2).
 
