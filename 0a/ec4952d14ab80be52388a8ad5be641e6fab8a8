@@ -1,0 +1,61 @@
+rust/crates/lk-agents-fuzz/src/drive/apply/wait.rs
+  s_1d5d36eac205ce::t_fe0826f43e930f 210-216
+rust/crates/lk-agents-fuzz/src/drive/start.rs
+  s_1d5d36eac205ce::t_968fab291ca539 418,522-527,614-615
+rust/crates/lk-agents-fuzz/src/search/setup.rs
+  s_1d5d36eac205ce::t_5890920ade2c4e 93
+rust/crates/lk-agents-fuzz/src/authored.rs
+  s_1d5d36eac205ce::t_a2cd5078fb533b 449-535,636-705
+rust/crates/lk-agents-fuzz/src/drive/apply/call.rs
+  s_1d5d36eac205ce::t_d488ce40011a36 90,553-606
+rust/crates/lk-agents-fuzz/src/drive/apply/mod.rs
+  s_1d5d36eac205ce::t_733403719aa4c9 629,650-660
+rust/crates/lk-agents-fuzz/src/drive/collect.rs
+  s_1d5d36eac205ce::t_860e0392891bb8 59,359-390
+rust/crates/lk-agents-fuzz/src/drive/mod.rs
+  s_1d5d36eac205ce::t_15b982034427b1 222-224,509,701-715,756-757,875-884
+rust/crates/lk-agents-fuzz/src/fakes/amd.rs
+  s_1d5d36eac205ce::t_5fbe5e7b80f0c5 146-533
+rust/crates/lk-agents-fuzz/src/fakes/mod.rs
+  s_1d5d36eac205ce::t_300cfc15cfd80e 135-136,319,325,340,792-798
+rust/crates/lk-agents-fuzz/src/fakes/stt.rs
+  s_1d5d36eac205ce::t_83aec915dfb92e 52-57
+rust/crates/lk-agents-fuzz/src/input.rs
+  s_1d5d36eac205ce::t_3c7083fa7e82b3 128-129,463-470,495,697-702,712-713
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_1d5d36eac205ce::t_f475f1cafa63bb 171-248,344-345
+rust/crates/lk-agents-fuzz/src/record/amd_run.rs
+  s_1d5d36eac205ce::t_e3090d0d2c0720 1-281
+rust/crates/lk-agents-fuzz/src/record/mod.rs
+  s_1d5d36eac205ce::t_01266e320fe7db 34,165-167,216-219,591-592,744-746
+rust/crates/lk-agents-fuzz/src/rules/amd/amd_completes_once.rs
+  s_1d5d36eac205ce::t_0efceacb735c57 1-141
+rust/crates/lk-agents-fuzz/src/rules/amd/decision_model_extracts_no_menu.rs
+  s_1d5d36eac205ce::t_930d5be2d8186c 1-83
+rust/crates/lk-agents-fuzz/src/rules/amd/likely_human_is_held_once.rs
+  s_1d5d36eac205ce::t_b8db7fbb98f196 1-119
+rust/crates/lk-agents-fuzz/src/rules/amd/one_prediction_per_turn.rs
+  s_1d5d36eac205ce::t_a68bc5435da222 1-98
+rust/crates/lk-agents-fuzz/src/rules/amd/one_voicemail_message.rs
+  s_1d5d36eac205ce::t_d18e5a48b7e796 1-123
+rust/crates/lk-agents-fuzz/src/rules/amd/stale_request_never_decides.rs
+  s_1d5d36eac205ce::t_ea585f4d64452d 1-192
+rust/crates/lk-agents-fuzz/src/rules/amd/uncertain_and_wait_keep_the_stage.rs
+  s_1d5d36eac205ce::t_8e6b2759bab16c 1-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0aec4952d14ab80be52388a8ad5be641e6fab8a8",
+  "prompts": {},
+  "sessions": {
+    "s_1d5d36eac205ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3101aab-cdcc-4f0b-a4f5-be4f92e4e4f7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
