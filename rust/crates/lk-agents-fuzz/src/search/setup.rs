@@ -234,8 +234,14 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     }
     // AMD through its executor on a call in ten, drawn after everything else. The answerer then
     // answers the executor's model requests instead of the gate (`search::conversation::answerer`).
-    if setup.realtime.is_none() && rng.u8(0..100) < 10 {
-        setup.amd = Some(amd(rng, setup.stt));
+    // A realtime call mostly detects turns on the client, as AMD requires; the rest are refused.
+    if rng.u8(0..100) < 10 {
+        let realtime = setup.realtime.is_some();
+        if let Some(server) = setup.realtime.as_mut().filter(|_| rng.u8(0..100) < 75) {
+            server.turn_detection = false;
+            server.duplex = false;
+        }
+        setup.amd = Some(amd(rng, setup.stt, realtime));
         // Mostly a caller in the room to listen to; otherwise AMD finds no participant.
         if setup.room_legs.is_none() && !setup.console && rng.u8(0..100) < 80 {
             setup.room_legs = Some(RoomLegs { pre_connect: None });
@@ -245,8 +251,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
 }
 
 /// AMD's models and options for a run of the executor: a decision model or an LLM, AMD's own
-/// recogniser or not, an opening, and a stage the application handles.
-fn amd(rng: &mut Rng, stt: bool) -> crate::fakes::amd::AmdSetup {
+/// recogniser or not, an opening, and a stage the application handles. A realtime model hears the
+/// caller itself, so AMD may bring its own recogniser without session STT.
+fn amd(rng: &mut Rng, stt: bool, realtime: bool) -> crate::fakes::amd::AmdSetup {
     let mut options = crate::fakes::amd::options();
     match rng.u8(0..6) {
         0 => options.opening_text = Some(crate::fakes::amd::OPENING_TEXT.into()),
@@ -261,7 +268,7 @@ fn amd(rng: &mut Rng, stt: bool) -> crate::fakes::amd::AmdSetup {
     }
     crate::fakes::amd::AmdSetup {
         decision: rng.u8(0..100) < 25,
-        own_stt: stt && rng.bool(),
+        own_stt: (stt || realtime) && rng.bool(),
         inference: rng.bool(),
         options,
         ..Default::default()

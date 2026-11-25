@@ -135,8 +135,8 @@ impl<'a> AmdView<'a> {
             match &applied.input {
                 Input::AmdAttach {} => {
                     run += 1;
-                    // A refused attach (a handoff in flight, a task running, a realtime model,
-                    // the close) installs no gate (spec §5.1 entry checks).
+                    // A refused attach (a handoff in flight, a task running, a realtime model the
+                    // gate cannot hold, the close) installs no gate (spec §5.1 entry checks).
                     if applied.accepted && !self.attach_refused(run) {
                         let detached = self.0.amd().iter().find_map(|(at, _, o)| match o {
                             AmdObservation::Detached { run: r } if r.0 == run => Some(*at),
@@ -463,6 +463,26 @@ impl<'a> AmdView<'a> {
             }) if *t == TurnId(turn) => Some(*hook),
             _ => None,
         }
+    }
+
+    /// Whether the session committed the realtime server's audio buffer for `turn` at its commit:
+    /// the server's transcript of that audio is the turn's item, not one the session saves.
+    pub fn audio_committed(&self, turn: &GatedTurn) -> bool {
+        use lk_agents_abi::RealtimeCommandKind;
+        use lk_agents_voice::trace::RealtimeStep;
+        let until = turn.superseded.unwrap_or(Observed::END);
+        self.0.journal().iter().any(|(at, step)| {
+            *at >= turn.committed
+                && at.at_ms == turn.committed.at_ms
+                && *at < until
+                && matches!(
+                    step,
+                    Step::Realtime(RealtimeStep::Sent {
+                        kind: RealtimeCommandKind::CommitAudio,
+                        ..
+                    })
+                )
+        })
     }
 
     /// Whether the host answered `turn`'s customer hook with `StopResponse` or an error. Python

@@ -160,18 +160,27 @@ impl Rule for ForwardedWhileEnabled {
             // past the discard. A frame pushed in the instant the run started listening may cross
             // the enable in the pump. Only a stream fed frame by frame is judged after the window:
             // the turn and interruption detectors read audio they buffered before it.
+            // A chunk's tag repeats once its counter wraps: the frame heard may be any push of it
+            // before the hearing, so it got past the discard only if every one was inside a
+            // window. A stream that connects late hears what was pushed before the attach.
             for tag in heard.tags {
                 let Tag::Mic { mic, chunk } = *tag else { continue };
                 let Some(pushes) = pushed_at.get(&(mic, chunk)) else { continue };
-                let Some(pushed) = pushes.iter().rfind(|pushed| **pushed < heard.at) else {
-                    continue;
-                };
                 let fed = matches!(heard.kind, Kind::Stt | Kind::Vad);
-                let window = amd_discards.iter().find(|(from, to)| {
-                    from <= pushed
-                        && pushed < to
-                        && (heard.at < *to || (fed && pushed.at_ms < to.at_ms))
-                });
+                let window_of = |pushed: &Observed| {
+                    amd_discards.iter().find(|(from, to)| {
+                        from <= pushed
+                            && pushed < to
+                            && (heard.at < *to || (fed && pushed.at_ms < to.at_ms))
+                    })
+                };
+                let mut before = pushes.iter().filter(|pushed| **pushed < heard.at).peekable();
+                if before.peek().is_none() || before.clone().any(|pushed| window_of(pushed).is_none())
+                {
+                    continue;
+                }
+                let Some(pushed) = before.last() else { continue };
+                let window = window_of(pushed);
                 check.expect_with(
                     Subject::Resource(Kind::Mic, mic),
                     window.is_none(),

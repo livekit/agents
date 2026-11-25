@@ -12,8 +12,8 @@ use crate::{
 // applied, nothing but the opening is heard; and an opening is never heard once the participant
 // started speaking after activation, before it played (spec §10.6): before the session's
 // `speaking` edge for it. A run lets at most one speech
-// bypass its hold, and that speech is a `say` or a `generate_reply`. A speech already authorized
-// when the run attached is left as it was.
+// bypass its hold, and that speech is a `say` or a `generate_reply`, or a realtime model's own
+// speech. A speech already authorized when the run attached is left as it was.
 
 pub struct OnlyTheOpeningPlaysFirst;
 
@@ -86,7 +86,10 @@ impl Rule for OnlyTheOpeningPlaysFirst {
                 let kind = r.host_view().speech(*speech).kind();
                 check.expect_with(
                     Subject::Speech(*speech),
-                    matches!(kind, Some(SpeechKind::Say | SpeechKind::GenerateReply)),
+                    matches!(
+                        kind,
+                        Some(SpeechKind::Say | SpeechKind::GenerateReply | SpeechKind::Realtime)
+                    ),
                     || format!("the opening {speech} of run {} is a {kind:?}", attachment.run),
                 );
             }

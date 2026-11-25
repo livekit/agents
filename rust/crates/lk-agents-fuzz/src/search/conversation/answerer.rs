@@ -104,9 +104,9 @@ pub(super) struct Answerer {
 }
 
 impl Answerer {
-    pub(super) fn draw(seed: u64, realtime: bool) -> Self {
+    pub(super) fn draw(seed: u64) -> Self {
         let mut rng = Rng::with_seed(seed ^ 0x0000_0041_4d44_6765);
-        let on = !realtime && rng.u8(0..100) < ATTACHES;
+        let on = rng.u8(0..100) < ATTACHES;
         let callee = *[Callee::Human, Callee::Screener, Callee::Voicemail, Callee::Hold]
             .get(rng.usize(0..4))
             .unwrap_or(&Callee::Human);

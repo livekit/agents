@@ -426,8 +426,6 @@ async fn converse_in(
 ) -> Outcome {
     // A provider delay strays from the measured ones as often as the run makes a uniform move.
     setup.stray = dials.randomness / (1.0 + dials.randomness);
-    // Realtime sessions stay ungated in the gate's first step (the AMD proposal).
-    let realtime = setup.realtime.is_some();
     let mut talk = Talk {
         run: Run::start(&setup, seed, policy).await,
         outcome: Outcome {
@@ -455,7 +453,7 @@ async fn converse_in(
         call_length_ms: dials.call_length_ms,
         ending: false,
         tasks: Rng::with_seed(seed ^ 0x0000_0056_5461_736b),
-        amd: answerer::Answerer::draw(seed, realtime),
+        amd: answerer::Answerer::draw(seed),
     };
     talk.speaker = talk.draw::<Option<Speaker>>();
     match talk.converse().await {

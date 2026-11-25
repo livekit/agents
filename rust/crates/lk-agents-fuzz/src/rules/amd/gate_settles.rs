@@ -113,9 +113,11 @@ fn outcome(r: &Recording, turn: &GatedTurn, check: &mut Check) {
     let requests = amd.requests_answering(turn);
     let made: Vec<_> = requests.iter().filter(|q| !amd.preemptive(q)).collect();
     let heard = requests.iter().filter_map(|q| amd.first_audio(q.speech?)).min();
-    // A turn with no words has none to keep; `StopResponse` ignores the turn, as Python does
+    // A turn with no words has none to keep, and a realtime turn's are the server's transcript of
+    // the audio committed for it; `StopResponse` ignores the turn, as Python does
     // (`agent_activity.py`); a turn dropped behind a speech it could not interrupt keeps none.
     let kept = turn.item_id.is_some()
+        || amd.audio_committed(turn)
         || turn.words.trim().is_empty()
         || amd.stopped(turn)
         || amd.dropped_unanswered(turn);
@@ -207,14 +209,20 @@ fn unheard_explained(
     requests: &[Request<'_>],
     due: u64,
 ) -> Explained {
-    use lk_agents_voice::trace::{SpeechStep, Step};
+    use lk_agents_voice::trace::{GateStep, SpeechStep, Step};
     let amd = r.amd_view();
     let after = |at: Observed| at > turn.committed && at.at_ms <= due;
     if amd.stopped(turn) || amd.dropped_unanswered(turn) {
         return Explained { otherwise: true, model_owes: false };
     }
+    // A newer turn's commit cancelled the reply while the gate still held it.
     let refused = r.journal().iter().any(|(at, step)| {
-        after(*at) && matches!(step, Step::Speech(SpeechStep::ScheduleRejected { .. }))
+        after(*at)
+            && match step {
+                Step::Speech(SpeechStep::ScheduleRejected { .. }) => true,
+                Step::Gate(GateStep::Superseded { turn: t, speech: Some(_) }) => t.0 == turn.turn,
+                _ => false,
+            }
     });
     let faulted = r.faults().iter().any(|(at, _, _)| after(*at));
     let acted = r.applied().iter().filter(|a| a.accepted && after(a.at)).any(|a| {
