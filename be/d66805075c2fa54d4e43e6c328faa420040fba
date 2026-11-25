@@ -1,0 +1,21 @@
+rust/crates/lk-agents-fuzz/tests/regressions/amd/executor.rs
+  s_3bbeb97773f2db::t_a71965f0a6e9b0 421-422,427-433,439-441
+rust/crates/lk-agents-fuzz/tests/regressions/amd/mod.rs
+  s_3bbeb97773f2db::t_60b2ab3fb16362 72-73,75,77-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bed66805075c2fa54d4e43e6c328faa420040fba",
+  "prompts": {},
+  "sessions": {
+    "s_3bbeb97773f2db": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_3bbeb97773f2db",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
