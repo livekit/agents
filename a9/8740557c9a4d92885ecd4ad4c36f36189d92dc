@@ -1,0 +1,21 @@
+tests/host/test_amd.py
+  s_342953b2c18827::t_7e037c784070bd 1-1738
+tests/smoke/test_amd_console.py
+  s_342953b2c18827::t_b5b968eedd2184 1-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a98740557c9a4d92885ecd4ad4c36f36189d92dc",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
