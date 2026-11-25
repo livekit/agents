@@ -16,3 +16,12 @@ fn reserved_marker_values_are_unknown_audio_without_a_producer() {
     assert_eq!(Tag::decode(Tag::fed(0, 0)), Tag::Fed { stream: 0, chunk: 0 });
     assert_eq!(Tag::decode(Tag::mic(0, 0)), Tag::Mic { mic: 0, chunk: 0 });
 }
+
+#[test]
+fn a_microphone_frame_number_survives_its_tag_up_to_its_wrap() {
+    for mic in [0, 1, 30] {
+        for chunk in [0, 63, 64, 300, Tag::MAX_MIC_CHUNK] {
+            assert_eq!(Tag::decode(Tag::mic(mic, chunk)), Tag::Mic { mic, chunk });
+        }
+    }
+}

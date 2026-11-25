@@ -454,7 +454,7 @@ impl Run {
             burst.1 += chunks;
         }
         for _ in 0..chunks {
-            let sample = Tag::mic(mic, *count % (Tag::MAX_CHUNK + 1));
+            let sample = Tag::mic(mic, *count % (Tag::MAX_MIC_CHUNK + 1));
             let data = sample.to_le_bytes().repeat(SAMPLES_PER_CHUNK);
             let frame = AudioFrame::new(data, SAMPLE_RATE, 1, SAMPLES_PER_CHUNK as u32);
             // A track nobody reads yet (the room io has not subscribed) carries the words nowhere.

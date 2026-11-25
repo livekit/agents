@@ -24,7 +24,12 @@ impl Rule for ForwardedWhileEnabled {
         id: "forwarded_while_enabled",
         guarantee: "Every microphone frame pushed while audio input was enabled reached every open STT and VAD stream; none reached a stream while input was disabled.",
         examples: &[reaches_both_legs, late_delivery_after_disable, crossed_a_recogniser_swap],
-        counterexamples: &[stt_never_heard, forwarded_while_disabled, discarded_then_delivered],
+        counterexamples: &[
+            stt_never_heard,
+            forwarded_while_disabled,
+            discarded_then_delivered,
+            discarded_after_64_allowed_pushes,
+        ],
         probe: None,
     };
 
@@ -114,7 +119,7 @@ impl Rule for ForwardedWhileEnabled {
             let ignored = idle_within(&unheard, sent.at, ends.unwrap_or(sent.at));
             let counter = next_chunk.entry(mic.nth).or_default();
             for _ in 0..*chunks {
-                let chunk = *counter % (Tag::MAX_CHUNK + 1);
+                let chunk = *counter % (Tag::MAX_MIC_CHUNK + 1);
                 *counter = counter.wrapping_add(1);
                 pushed_at.entry((mic.nth, chunk)).or_default().push(sent.at);
                 // Nothing pushed while input was disabled or the microphone detached is owed to
@@ -160,27 +165,20 @@ impl Rule for ForwardedWhileEnabled {
             // past the discard. A frame pushed in the instant the run started listening may cross
             // the enable in the pump. Only a stream fed frame by frame is judged after the window:
             // the turn and interruption detectors read audio they buffered before it.
-            // A chunk's tag repeats once its counter wraps: the frame heard may be any push of it
-            // before the hearing, so it got past the discard only if every one was inside a
-            // window. A stream that connects late hears what was pushed before the attach.
+            // A frame's number wraps only after 5.12 s of pushes (`Tag::MAX_MIC_CHUNK`): the frame
+            // heard is the latest push of its number before the hearing.
             for tag in heard.tags {
                 let Tag::Mic { mic, chunk } = *tag else { continue };
                 let Some(pushes) = pushed_at.get(&(mic, chunk)) else { continue };
                 let fed = matches!(heard.kind, Kind::Stt | Kind::Vad);
-                let window_of = |pushed: &Observed| {
-                    amd_discards.iter().find(|(from, to)| {
-                        from <= pushed
-                            && pushed < to
-                            && (heard.at < *to || (fed && pushed.at_ms < to.at_ms))
-                    })
-                };
-                let mut before = pushes.iter().filter(|pushed| **pushed < heard.at).peekable();
-                if before.peek().is_none() || before.clone().any(|pushed| window_of(pushed).is_none())
-                {
+                let Some(pushed) = pushes.iter().rfind(|pushed| **pushed < heard.at) else {
                     continue;
-                }
-                let Some(pushed) = before.last() else { continue };
-                let window = window_of(pushed);
+                };
+                let window = amd_discards.iter().find(|(from, to)| {
+                    from <= pushed
+                        && pushed < to
+                        && (heard.at < *to || (fed && pushed.at_ms < to.at_ms))
+                });
                 check.expect_with(
                     Subject::Resource(Kind::Mic, mic),
                     window.is_none(),
@@ -234,7 +232,7 @@ fn on_its_way(inference: &InferenceView, (mic, chunk): (u32, u16), pushed: Obser
     let arrived = streams().filter_map(|s| after(s.heard_at(mic, chunk))).min();
     let forwarding = || {
         streams()
-            .flat_map(|s| (0..=Tag::MAX_CHUNK).filter_map(move |c| after(s.heard_at(mic, c))))
+            .flat_map(|s| (0..=Tag::MAX_MIC_CHUNK).filter_map(move |c| after(s.heard_at(mic, c))))
             .min()
     };
     arrived.or_else(forwarding).unwrap_or(Observed::END)
@@ -472,4 +470,25 @@ fn amd_discard_windows(r: &Recording) -> Vec<(Observed, Observed)> {
     }
     windows.extend(open.map(|from| (from, Observed::END)));
     windows
+}
+
+/// 64 frames pushed and heard before the attach, then the 65th pushed inside the discard and
+/// heard: a counter that wrapped at 64 would read it as an allowed push of the first.
+fn discarded_after_64_allowed_pushes() -> Recording {
+    use lk_agents_voice::amd::AmdRunId;
+    use lk_agents_voice::trace::GateStep;
+    let allowed: Vec<Tag> = (0..64).map(|chunk| Tag::Mic { mic: 0, chunk }).collect();
+    mic_stt_vad()
+        .sent(frames(64))
+        .then_act()
+        .forwarded(Kind::Stt, 0, allowed.clone())
+        .forwarded(Kind::Vad, 0, allowed)
+        .journal(Step::Gate(GateStep::Attached { run: AmdRunId(1) }))
+        .then_act()
+        .sent(frames(1))
+        .then_act()
+        .journal(Step::Gate(GateStep::Activated { run: AmdRunId(1) }))
+        .then_act()
+        .forwarded(Kind::Stt, 0, heard(64))
+        .done()
 }

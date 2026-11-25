@@ -437,6 +437,11 @@ pub enum Tag {
 
 impl Tag {
     pub const MAX_CHUNK: u16 = 63;
+    /// A microphone frame's number wraps after 512 frames (5.12 s): long enough that the frame a
+    /// stream hears is the latest push of its number. Its tag gives 9 bits to the number and 5
+    /// to the microphone, so a run's 32nd microphone shares the first one's tags.
+    pub const MAX_MIC_CHUNK: u16 = 511;
+    const MIC_CHUNK_BITS: u32 = 9;
     /// Set on user-side samples that came from the microphone rather than a fed stream.
     const MIC: i16 = 0x4000;
 
@@ -455,7 +460,8 @@ impl Tag {
     }
 
     pub fn mic(mic: u32, chunk: u16) -> i16 {
-        -(Self::synthesized(mic, chunk) | Self::MIC)
+        let producer = (mic % 31 + 1) << Self::MIC_CHUNK_BITS;
+        -((producer as i16) | (chunk.min(Self::MAX_MIC_CHUNK) as i16) | Self::MIC)
     }
 
     pub fn decode(sample: i16) -> Self {
@@ -471,6 +477,14 @@ impl Tag {
             return Tag::Unknown(sample);
         }
         let (id, chunk) = (u32::from(producer - 1), value & 0x3f);
+        if user_side && from_mic {
+            let producer = value >> Self::MIC_CHUNK_BITS;
+            if producer == 0 {
+                return Tag::Unknown(sample);
+            }
+            let chunk = value & Self::MAX_MIC_CHUNK;
+            return Tag::Mic { mic: u32::from(producer - 1), chunk };
+        }
         match (user_side, from_mic) {
             (false, true) => Tag::Generated { generation: id, chunk },
             (false, false) => Tag::Synthesized { tts: id, chunk },
@@ -762,7 +776,7 @@ struct Index {
     /// When each listening stream last heard each microphone chunk number, by `(stream kind,
     /// stream, microphone)` and then chunk. A run forwards tens of thousands of frames, and the
     /// rules ask about each one whether it was heard after it was pushed.
-    heard: BTreeMap<(Kind, u32, u32), [Option<Observed>; Tag::MAX_CHUNK as usize + 1]>,
+    heard: BTreeMap<(Kind, u32, u32), Box<[Option<Observed>; Tag::MAX_MIC_CHUNK as usize + 1]>>,
 }
 
 impl Recording {
@@ -1001,7 +1015,7 @@ impl Recording {
                     .index
                     .heard
                     .entry((kind, nth, mic))
-                    .or_insert_with(|| [None; Tag::MAX_CHUNK as usize + 1]);
+                    .or_insert_with(|| Box::new([None; Tag::MAX_MIC_CHUNK as usize + 1]));
                 if let Some(last) = chunks.get_mut(usize::from(chunk)) {
                     *last = (*last).max(Some(at));
                 }
