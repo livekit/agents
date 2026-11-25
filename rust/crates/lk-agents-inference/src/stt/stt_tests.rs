@@ -22,6 +22,7 @@ fn opts() -> SttOptions {
         api_secret: "s".into(),
         extra_kwargs: Default::default(),
         fallback: Vec::new(),
+        extra_headers: Default::default(),
         conn_options: lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
     }
 }
@@ -1117,6 +1118,7 @@ mod live_gateway {
                 api_key,
                 api_secret,
                 extra_kwargs: Default::default(),
+                extra_headers: Default::default(),
                 fallback: Vec::new(),
                 conn_options: lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
             },

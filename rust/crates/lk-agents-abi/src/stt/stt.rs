@@ -189,6 +189,16 @@ pub trait Stt: Send + Sync {
         None
     }
 
+    // Native only: a view of this provider whose streams send `headers` on every connection,
+    // reconnects included (`stream(extra_headers=...)`): how AMD tags LiveKit Inference with its
+    // client feature. `None`: the provider takes no extra headers, and the caller uses it as it is.
+    fn with_extra_headers(
+        &self,
+        _headers: &std::collections::BTreeMap<String, String>,
+    ) -> Option<std::sync::Arc<dyn Stt>> {
+        None
+    }
+
     // The connection policy this provider was given at construction, which applies to the
     // calls of a session or run that supplies none (models.md); a bound view's is its binding;
     // `None`: the defaults.

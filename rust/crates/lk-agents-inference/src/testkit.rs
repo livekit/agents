@@ -149,6 +149,11 @@ impl FakeWs {
     pub fn last_connect(&self) -> Option<ConnectRecord> {
         self.connects.lock().last().cloned()
     }
+
+    /// Every `connect` call, in order.
+    pub fn connects(&self) -> Vec<ConnectRecord> {
+        self.connects.lock().clone()
+    }
 }
 
 #[async_trait]
