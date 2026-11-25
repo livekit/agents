@@ -10,7 +10,8 @@ use crate::{
 
 // Spec §14 invariant 15: while AMD is attached and before a decision that allows a reply is
 // applied, nothing but the opening is heard; and an opening is never heard once the participant
-// started speaking after activation, before it played (spec §10.6). A run lets at most one speech
+// started speaking after activation, before it played (spec §10.6): before the session's
+// `speaking` edge for it. A run lets at most one speech
 // bypass its hold, and that speech is a `say` or a `generate_reply`. A speech already authorized
 // when the run attached is left as it was.
 
@@ -22,7 +23,7 @@ impl Rule for OnlyTheOpeningPlaysFirst {
         guarantee: "Under AMD, nothing but the opening is heard before an allowing decision is \
                     applied, a run lets at most one say or generate_reply bypass its hold, and \
                     the opening is not heard once the participant spoke first.",
-        examples: &[opening_then_allowed_reply],
+        examples: &[opening_then_allowed_reply, speech_after_the_opening_started_playing],
         counterexamples: &[
             reply_before_any_decision,
             opening_after_the_participant_spoke,
@@ -126,12 +127,23 @@ impl Rule for OnlyTheOpeningPlaysFirst {
             }
             let Some((activated, opening)) = opening else { continue };
             let heard = amd.first_audio(opening);
+            // The opening plays from the session's `speaking` edge for it, as Python sets
+            // `_opening_played` on `agent_state_changed` to `speaking` (`detector.py:799`); speech
+            // after it is an ordinary interruption, even before its first audio reaches the sink
+            // (`test_participant_speech_after_the_opening_starts_is_a_normal_interruption`).
+            let played = r.journal().iter().find_map(|(at, step)| match step {
+                Step::Speech(SpeechStep::AgentStartedSpeaking { speech }) if speech.0 == opening => {
+                    Some(*at)
+                }
+                _ => None,
+            });
             // Only while the run is attached: after its completion the opening still plays, and
             // speech interrupts it as any other (spec §10.6).
             let spoke_first = r.applied().iter().any(|a| {
                 a.accepted
                     && a.at > activated
                     && a.at < attachment.until()
+                    && played.is_none_or(|p| a.at < p)
                     && heard.is_none_or(|h| a.at < h)
                     && matches!(a.input, Input::VadStart { .. })
             });
@@ -207,6 +219,17 @@ fn two_bypasses() -> Recording {
     activated()
         .speech_created(6, SpeechKind::Say)
         .journal(Step::Gate(GateStep::OpeningBypass { speech: SpeechId(6) }))
+        .done()
+}
+
+/// The session started speaking the opening before the participant spoke; its first audio
+/// reached the sink after. Speech then interrupts it as any other, so it may be heard.
+fn speech_after_the_opening_started_playing() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+    activated()
+        .journal(Step::Speech(SpeechStep::AgentStartedSpeaking { speech: SpeechId(5) }))
+        .sent(Input::VadStart { vad: Ref::new(0), speech_ms: Millis(0) })
+        .pushed(5)
         .done()
 }
 
