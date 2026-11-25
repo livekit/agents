@@ -58,9 +58,11 @@ already had: which turn is latest, and whether the participant is speaking.
 | The pending reply decision is not surfaced in telemetry for now. | agreed |
 | Realtime per-response instructions are passed through unchanged. Whether a provider appends them to or replaces its session instructions is plugin-dependent; the core does not assume either. | agreed |
 | The session times the silence hold from its own speech boundaries. AMD decides only which replies need it and for how long. | proposed |
-| AMD's final message settles every turn committed under the gate, including one still in its customer hook. The session acknowledges it before `execute()` returns. | proposed |
+| AMD's final message settles every turn committed under the gate, including one still in its customer hook. The session removes the gate and acknowledges at once; a turn still in its hook carries its settled decision, so completion never waits for customer code. | proposed |
 | The AMD machine runs in its own executor. The protocol depends only on per-direction FIFO delivery, so the DST explores when AMD answers. | proposed |
-| Preemptive generation may run while authorization is held. An allowed reply adopts it when the reply's request is unchanged: no stage instructions, the same DTMF tool state, and the session's usual adoption check. A stage change or completion does not cancel it by itself, unlike Python (spec §3, §12.3), so a direct human answer keeps its head start. | proposed |
+| Preemptive generation may run while authorization is held, never with AMD's DTMF tool. An allowed reply adopts it only when the decision adds no instructions and no DTMF, and the session's adoption check passes. A stage change or completion does not cancel it by itself, unlike Python (spec §3, §12.3), so a direct human answer keeps its head start. | proposed |
+| When AMD completes on a turn the session has already superseded, `Detach.pending` applies to the newer turn, `human_instructions` included. Python cannot reach this state, because its completion is synchronous; the newer turn is the same person's next words, so the instructions still fit. | proposed |
+| The commit interrupt does not wait for an older turn's customer hook, unlike Python (`agent_activity.py:3017`). | proposed |
 | `amd_prediction` and `amd_completed` are informational. Applications do not change the agent's instructions or tools while AMD is attached; the proposal documents this and does not enforce it. | proposed |
 | A speech held at the head of the queue counts as current for the commit interrupt, preemptive refusal and detach cancellation, as Python's paused current speech does. | proposed |
 
@@ -106,9 +108,6 @@ pub enum AmdObservation {
         agent: AgentId,
         at: Ts,
     },
-    /// The customer hook returned and the turn waits for its decision. AMD needs it
-    /// only for idle tracking; decisions do not wait for it.
-    TurnParked { turn: TurnId },
     /// The turn left the activity by any path, including local supersession.
     TurnEnded { turn: TurnId, how: TurnEnd },
     /// A reply exists for the turn: created, adopted from a preemptive generation, or
@@ -119,15 +118,17 @@ pub enum AmdObservation {
     /// attach the session also reports each speech already queued or playing.
     Speech { speech: SpeechId, event: SpeechObservation, at: Ts },
     /// Whether the agent is busy for the idle timer: a paused speech, pending
-    /// playback, thinking, a pending false interruption, or a running user-turn task
-    /// (Python's `_is_agent_busy`).
+    /// playback, thinking, a pending false interruption, a running user-turn task or
+    /// a parked turn (Python's `_is_agent_busy`). Sent at attach, then on change.
     AgentBusy { busy: bool, at: Ts },
+    /// The session entered or left `Hold::Silence` for a turn. AMD's inference-timeout
+    /// and idle rules count a reply as held while it is (Python's `_reply_held_at`).
+    SilenceHold { turn: TurnId, held: bool, at: Ts },
     /// Participant speech boundaries and session STT finals.
     UserSpeech(UserSpeechObservation),
     /// Executed tool calls, for DTMF in classifier history (spec §11.1).
     ToolsExecuted { calls: Vec<ToolCallRecord> },
-    /// The session applied `Detach`: no turn committed under the gate is left
-    /// undecided.
+    /// The session applied `Detach` and removed the gate.
     Detached { run: AmdRunId },
 }
 ```
@@ -138,21 +139,19 @@ Inputs the session accepts from AMD.
 
 ```rust
 pub enum AmdAnswer {
-    /// Listening started (spec §5.2): the session stops discarding participant audio.
-    /// The opening, if any, comes with it, so its eligibility is checked at the same
-    /// point.
+    /// Listening starts (spec §5.2). The session applying it is the activation
+    /// instant: it stops discarding participant audio there, for its own paths and
+    /// AMD's feed alike, so no participant speech exists before it on either side.
+    /// The opening, if any, comes with it and is checked at the same point.
     Activated { run: AmdRunId, opening: Option<Opening> },
     /// The decision for a committed turn. It may arrive before or after the customer
     /// hook returns.
     ReplyDecided { run: AmdRunId, turn: TurnId, decision: ReplyDecision },
-    /// Whether generations started from now on, preemptive ones included, get
-    /// `send_dtmf_events`. Sent on entering and leaving `machine-ivr` (spec §11.1).
-    Dtmf { run: AmdRunId, enabled: bool },
     /// The transcript for a realtime model without user transcription (spec §7.2),
     /// also for an older turn's late final and a turn whose prediction was reused.
     InsertUserItem { run: AmdRunId, turn: TurnId, text: String },
-    /// AMD completed. `pending` settles every turn committed under the gate that has no
-    /// decision: the "AMD completed" row of spec §10.1.
+    /// AMD completed. `pending` settles every turn committed under the gate whose
+    /// decision is not applied yet: the `wait` and "AMD completed" rows of spec §10.1.
     Detach { run: AmdRunId, pending: ReplyDecision, cancel: DetachCancel },
 }
 
@@ -160,8 +159,8 @@ pub struct ReplyDecision {
     allow: bool,
     /// Stage instructions for this reply and its tool follow-ups.
     instructions: Option<String>,
-    /// Whether the reply's tools include `send_dtmf_events`. FIFO delivery puts the
-    /// matching `Dtmf` before this decision.
+    /// AMD may add the built-in `send_dtmf_events` to this reply (`machine-ivr`,
+    /// spec §11.1). An agent tool with the same id is kept instead.
     dtmf: bool,
     /// Silence the participant must keep before the reply plays (spec §10.3). The
     /// session times it.
@@ -189,11 +188,6 @@ struct Gate {
     latest: Option<(TurnId, Option<ReplyDecision>)>,
     parked: Option<ParkedTurn>,        // at most one
     hold: Hold,
-    dtmf: bool,                        // the last `Dtmf`
-    /// Participant speech since activation, for the opening.
-    spoke_since_active: bool,
-    /// Set by `Detach`: the gate stays only until the turns committed under it exit.
-    detached: Option<ReplyDecision>,
 }
 struct ParkedTurn { info: EndOfTurnInfo, edits: TurnEdits }
 
@@ -206,8 +200,9 @@ enum Hold {
     /// `StopResponse`). It stays held until the next commit, as in Python.
     Denied { turn: TurnId },
     /// An allowed reply waits until the participant has been silent for `needed`,
-    /// measured from the session's latest speech boundary.
-    Silence { turn: TurnId, needed: Duration },
+    /// measured from the session's latest speech boundary. `deadline` is the armed
+    /// expiry; a timer for any other deadline is stale.
+    Silence { turn: TurnId, needed: Duration, deadline: Option<Ts> },
     /// Authorization is free.
     Open,
 }
@@ -220,19 +215,27 @@ enum Hold {
   it and cancel the reply (rule 3). The `Dropped` verdict and the `in_window` hold
   return earlier and are not gated, as in Python.
 - **Decision** (`ReplyDecided`): if it names `latest`, store it; otherwise drop it and
-  trace `GateStep::AnswerDropped`. If the turn is parked, apply it now.
-- **Customer hook returns** (`finish_turn`): emit `TurnParked`. If `latest` has a
-  decision, apply it; otherwise park the turn. `waiting_turns` is empty whenever a
-  turn parks, so at most one turn is parked.
+  trace `GateStep::AnswerDropped`. If the turn is parked, apply it now. The existing
+  `waiting_turns` check runs first, so a decision for a turn behind another turn's
+  hook is never applied to the older turn.
+- **Customer hook returns** (`finish_turn`): if the turn carries a decision settled by
+  `Detach`, apply it without a gate. Otherwise, if `latest` has a decision, apply it;
+  otherwise park the turn. `waiting_turns` is empty whenever a turn parks, so at most
+  one turn is parked.
 - **Apply a decision.** A denied turn commits only its user item, discards the
   preemptive generation and sets `Hold::Denied`. An allowed turn calls `reply_to_turn`
-  with the decision's instructions and DTMF state, and sets `Hold::Silence` if the
-  decision asks for silence, else `Hold::Open`.
+  with the decision's instructions and DTMF permission, and sets `Hold::Silence` if
+  the decision asks for silence, else `Hold::Open`. An allow while the gate is not
+  `active` (row 1 while `Pending`) keeps `Hold::Entry`, as Python never resumes
+  authorization for a turn it did not bind (`detector.py:1047`).
 - **Silence.** Under `Hold::Silence`, a `Timer::AmdSilence` is armed for the latest
-  speech boundary plus `needed`. If there was no boundary since the commit, the
-  boundary is the speech end estimated from `eot_delay`, else the commit, as in
-  Python. Start of speech disarms it; end of speech re-arms it. When it fires while
-  the participant is silent, the hold becomes `Open`.
+  speech boundary plus `needed`. Boundaries use the VAD boundary time, backdated as
+  Python's are (`detector.py:668`), not event time, or every reply waits an extra VAD
+  `min_silence`. If no boundary came since the previous commit, the boundary is the
+  speech end estimated from `eot_delay`, else the commit (`detector.py:708`). Start of
+  speech disarms it; end of speech re-arms it with a new deadline. A firing opens the
+  hold only if its deadline is the one armed, the turn is still `latest` and the
+  participant is silent. Entering and leaving the hold emit `SilenceHold`.
 - **Turn exits without a decision applied** (`skip_reply`, `StopResponse`, the
   uninterruptible drop): emit `TurnEnded`, set `Hold::Denied`.
 - **Authorization.** The scheduler authorizes the head speech only under `Hold::Open`,
@@ -241,11 +244,13 @@ enum Hold {
 
 ### Activation and the opening
 
-`Activated` ends the `Pending` audio discard. If it carries an opening, the session
-creates it with the hold bypass only if the participant is not speaking and has not
-spoken since activation started; otherwise it drops it (spec §10.6). Start of speech
-before the opening's first playout cancels it. All of these are local facts, so a
-late `Activated` cannot let a stale opening play. The opening is the only speech that
+`Activated` ends the `Pending` audio discard, and applying it is the activation
+instant for both sides. AMD starts its overall deadline and speech clock when it sends
+`Activated`, but receives no frames before the session applies it. If it carries an
+opening, the session creates it with the hold bypass only if the participant is not
+speaking; otherwise it drops it (spec §10.6). Start of speech before the opening's
+first playout cancels it. Both are local facts, so a late `Activated` cannot let a
+stale opening play. The opening is the only speech that
 bypasses the hold, and it is created through an internal origin, since `say()` and
 `generate_reply()` are refused while the gate is attached.
 
@@ -253,22 +258,25 @@ bypasses the hold, and it is created through an internal origin, since `say()` a
 
 `Detach` is applied in this order (spec §12.3):
 
-1. When `cancel` forbids replies, cancel queued speeches, an unplayed opening and the
-   preemptive generation, but keep a speech that is playing or paused, as
-   `_cancel_pending_speeches` does: a voicemail message keeps playing when the box
-   hangs up. Otherwise keep the preemptive generation; adoption decides whether it
-   still matches (spec §12.3 cancels it).
-2. Restore interruption settings, set `dtmf` to false, and clear the rules of
+1. When `cancel` forbids replies (`machine-unavailable` or a stage the application
+   handles), cancel every speech with no playout yet, including an authorized reply
+   still generating, an unplayed opening and the preemptive generation. Keep a speech
+   that is playing or paused, as `_cancel_pending_speeches` does: a voicemail message
+   keeps playing when the box hangs up. Otherwise keep the preemptive generation;
+   adoption decides whether it still matches (spec §12.3 cancels it).
+2. Restore interruption settings and clear the rules of
    [Session rules while attached](#session-rules-while-attached).
 3. Settle turns: `pending` replaces any decision the session has not applied yet,
-   stored for a turn in its customer hook or for a parked turn, because Python
-   decides when the reply is about to be made and a finished run answers with the
-   "AMD completed" row. A parked turn has it applied now; a turn still in its
-   customer hook keeps it for `finish_turn`. `pending` never asks for silence or DTMF.
+   stored for a turn in its customer hook or for a parked turn. Python decides when
+   the reply is about to be made: a `wait` category denies first, then a finished run
+   answers with the "AMD completed" row (`detector.py:1060`). AMD builds `pending` the
+   same way: `allow` is false when replies are forbidden or the category is `wait`,
+   and it never asks for silence or DTMF. A parked turn has it applied now; a turn
+   still in its customer hook carries it to `finish_turn`.
 4. Free authorization. A reply already held for silence plays at once, for every
    completion reason (spec §10.3); only a `cancel` that forbids replies removes it.
-5. Once no turn committed under the gate remains, remove the gate and emit
-   `Detached`. Later commits are not gated (spec §9.5).
+5. Remove the gate and emit `Detached`. Later commits are not gated (spec §9.5), and
+   a new AMD run can attach while an old turn is still in its hook.
 
 ### Local rules
 
@@ -283,7 +291,9 @@ These need no answer from AMD:
   replies to the corrected words. While the reply's turn is `latest` and its hold is
   `Silence` or `Open`, `reply_again_unheard` applies the same decision to the
   replacement and emits `ReplyCreated` for it. `reply_again_unheard` currently picks
-  the newest reply regardless of turn, so it gains that guard.
+  the newest reply regardless of turn, so it gains that guard. AMD moves voicemail
+  tracking to the replacement and ignores the first speech's interrupted end, as
+  `_track_voicemail` does (`detector.py:1191`).
 - **Turn exits.** `TurnEnded` fires on every exit: reply, `StopResponse`,
   `skip_reply`, `hold_user_turn`, `supersede_turn`, the uninterruptible drop, local
   supersession, and the close and handoff paths that abandon turns without
@@ -322,18 +332,22 @@ returns early when session STT is disabled. With the gate attached and `!skip_re
   keeps stage instructions for them, so a gated reply keeps it. It is not
   `TurnEdits.instructions` or `instructions_override`, which replace the agent's
   prompt.
-- **Tools.** The only tool AMD adds is `send_dtmf_events`, in `machine-ivr` (spec
-  §11.1). This replaces Python's `on_reply_generation` hook, which the session called
-  on every generation. A generation gets the tool when the gate's last `Dtmf` enabled
-  it; an allowed reply gets it when `decision.dtmf` is set.
-- **Preemptive generation.** An allowed reply adopts the preemptive generation when
-  the decision has no instructions and the session's usual check passes: same
-  transcript, chat context, tools and tool choice. A DTMF change fails the tools
-  comparison, so no version is needed. Stage instructions change the request, so a
-  reply that carries them generates again (spec §10.2). On a direct human answer the
-  request is the one a new generation would send, so the head start is kept. Python
-  cancels the preemptive generation on every stage change and at completion; this
-  port relies on the request comparison instead.
+- **Tools.** The only tool AMD adds is the built-in `send_dtmf_events`, to a reply
+  whose decision sets `dtmf` (spec §11.1), unless the agent already has a tool with
+  that id. This replaces Python's `on_reply_generation` hook. Preemptive generations
+  never get it: every allowed `machine-ivr` reply carries stage instructions and
+  generates again anyway, except a likely-human reply, which waits for silence and
+  gains nothing from a head start.
+- **Preemptive generation.** v2.0's adoption check compares the turn, hook edits, the
+  chat-history version and the words (`activity/speech.rs:306`), not the request's
+  tools or per-reply instructions. So the gate adds its own condition: an allowed
+  reply adopts the preemptive generation only if the decision has no instructions and
+  no `dtmf`; otherwise it discards it and generates again. On a direct human answer
+  the request is the one a new generation would send, so the head start is kept.
+  Speeches fix `allow_interruptions` at creation (`recognition.rs:939`), and AMD
+  forces it on while attached, so a generation adopted after `Detach` takes the
+  restored value. Python cancels the preemptive generation on every stage change and
+  at completion; this port relies on these conditions instead.
 
 ### Session rules while attached
 
@@ -407,25 +421,32 @@ enum AmdTimer { Inference(ReqId), LateFinal(TurnId), Idle, Overall, Menu(ReqId) 
   an inference error or timeout, and a customer-handled stage completing instead of
   applying its effect.
 - The spec §10.1 table is one `match` that produces `ReplyDecided` as soon as the
-  turn's prediction exists, without waiting for `TurnParked`. A prediction that
-  completes AMD sends no `ReplyDecided`; `Detach.pending` decides its turn with the
-  "AMD completed" row, as Python's `_authorize_reply` checks `FINISHED` first. A turn committed while
+  turn's prediction exists, without waiting for the customer hook. A prediction that
+  completes AMD sends no `ReplyDecided`; `Detach.pending` decides its turn.
+  `_authorize_reply` checks `wait` first and `FINISHED` second (`detector.py:1060`),
+  and `pending` follows the same order. A turn committed while
   AMD is `Pending` or past its overall timeout gets row 1 at once. The
   `agent_changed` row reads the agent from `TurnCommitted`.
-- Entering or leaving `machine-ivr` while active sends `Dtmf` before any decision
-  under the new stage. Other stage changes send nothing.
+- An allowed decision in `machine-ivr` while active sets `dtmf`. Stage changes send
+  nothing else to the session.
 - `human_instructions` apply only to the reply of the turn whose `human` prediction
   completes AMD, and only if `had_machine_stage` is set (spec §10.2). A direct human
   answer replies under the agent's own instructions.
 - In a machine stage, an allowed decision carries `silence =
   machine_silence_threshold`. AMD does not time it.
-- The idle and inference-timeout rules count a reply as held from `ReplyCreated` until
-  its first playout or its end, from `Speech` observations.
+- **Held reply.** The idle and inference-timeout rules count a reply as held from
+  sending an allowed decision with `silence` until the session reports `SilenceHold
+  { held: false }` for that turn, or `TurnEnded`. This matches Python's
+  `_reply_held_at` (`detector.py:1126`), which is true from the prediction until the
+  silence ends, whether or not a speech exists yet. Counting from `ReplyCreated`
+  instead would let the third inference timeout complete AMD before the reply
+  exists, and `Detach` would then replace its silence and stage instructions.
 - **Idle** (`_update_idle`). The run is busy while a request is pending, the category
   is `wait`, a reply is held, the participant speaks, a watched speech is live, or
   `AgentBusy` is set. When not busy, the deadline is armed once, with
   `voicemail_idle_timeout` in `machine-vm` and `idle_timeout` otherwise. A stage
-  change clears it, and a played voicemail message restarts it. The
+  change clears it, and a played voicemail message restarts it while the stage is
+  `machine-vm` (`detector.py:1217`). The
   `max_inference_timeouts` completion waits while a request is pending or a reply is
   held.
 - **Voicemail** (spec §10.4). The reservation belongs to the turn that was allowed
@@ -438,7 +459,8 @@ enum AmdTimer { Inference(ReqId), LateFinal(TurnId), Idle, Overall, Menu(ReqId) 
 - **Classifier history** (spec §8.2). Each watched speech records, when it is allowed
   or first seen, whether the classifier sees its words or `(the agent spoke)`.
   Speeches with `add_to_chat_ctx` false are left out; speeches queued before attach
-  are watched; items and tool calls from before listening started are filtered out.
+  are watched, and a speech playing at attach is recorded; items and tool calls
+  created before AMD's entry (`_started_at`) are filtered out.
   DTMF entries need a successful, non-empty output and are de-duplicated by call id.
   At most 20 items go into a request.
 - **Speech clock.** Speech duration starts at activation if the participant is
@@ -465,9 +487,17 @@ late-final wait, and when the AMD final arrives for a turn committed without tex
 ### Completion
 
 AMD completes inside its own transition: the lifecycle becomes `Finished` and the
-request is cancelled, then AMD sends `Detach` with the decision for any turn still
-undecided. `amd_completed` is emitted, and `execute()` returns, after the session
-reports `Detached` and the runtime reports the legs closed (`In::LegsClosed`).
+request is cancelled, then AMD sends `Detach` with the decision for any turn whose
+decision is not applied. `amd_completed` is emitted, and `execute()` returns, after
+the session reports `Detached` and the runtime reports the legs closed
+(`In::LegsClosed`). The session sends `Detached` when it applies `Detach`, so neither
+waits for a customer hook.
+
+AMD's view lags the session's. It can complete on turn N's result after the session
+has committed N+1; `pending` then settles N+1 (see Decisions). A held reply can exist
+at completion only for `timeout`, `cancelled`, `participant_disconnected` and
+`internal_error`: a completion caused by a prediction needs a newer commit, which has
+already cancelled the older reply.
 
 The completed category is the stage, except that after a played voicemail message a
 `machine-unavailable` stage reports `previous_stage` (spec §12.2). `LegFailed`, or a
@@ -530,14 +560,26 @@ protocol must hold under all of them.
   - completion while a turn is in its customer hook, for `human` and for a stage
     without instructions
   - a decision that arrives before the customer hook returns
-  - `Activated` with an opening delivered after participant speech
+  - participant speech starting right after `Activated`, before the opening's first
+    playout
   - a direct human answer adopting its preemptive generation, and a screening or
     human-after-machine reply discarding it
-  - completion during a silence hold for each reason, releasing the held reply
-    except for `machine-unavailable`
+  - completion during a silence hold for each reachable reason, releasing the held
+    reply, and completion into a stage the application handles while a reply is
+    generating but not yet playing, which cancels it
   - completion after a decision is stored but before it is applied, replacing it
     with the "AMD completed" row
   - a voicemail box hanging up while the message plays, which keeps playing
+  - the third inference timeout in `machine-vm`, with the hook returning before and
+    after it
+  - a `wait` turn in its hook at `timeout` and at `aclose()`
+  - a `machine-ivr` stage followed by a direct `human` completion, with an agent that
+    sets `allow_interruptions=False`
+  - a hook that awaits `execute()`, and a second attach while the old turn is in its
+    hook
+  - a correction while the voicemail reply is held
+  - silence that expires, speech that restarts and ends, then the stale expiry
+  - an agent that defines its own `send_dtmf_events`, across IVR entry and exit
   - AEC warmup at the start of the opening, with AMD's STT still transcribing
 
   Authored stories are the only check against a rule and an implementation that share
@@ -555,15 +597,15 @@ Each spec §14 invariant has one owner:
 | 6 | One voicemail message at most | DST rule on `VoicemailPlayed`, confirmed at the sink |
 | 7 | Silence hold | DST sink rule, with silence computed from the fake VAD's ground truth, not from the session's or AMD's view |
 | 8 | Stage instructions never saved | DST rule: no stage-instruction item in recorded items or storage |
-| 9 | DTMF only in `machine-ivr` | DST rule: the tool appears only in requests generated while the gate's `Dtmf` was enabled, and runs only for a reply whose decision set `dtmf` |
+| 9 | DTMF only in `machine-ivr` | DST rule: AMD's built-in tool appears only in a reply whose decision set `dtmf`, never in a preemptive generation |
 | 10 | Cleanup on every path | DST rule after `Detached`: no gate, no hold, interruption settings equal their values at attach; host test for listener removal |
 | 11 | AMD closes only models it created | Runtime leg unit test |
 | 12 | `execute()` returns once | Python host test; DST driver asserts one `Completed`, after `Detached` |
 | 13 | A customer-handled stage never replies | DST rule `reply_follows_decision` plus the `Completed` reason, including turns settled by `Detach` |
 | 14 | Decision model: one `choice`, no menu | Leg unit test; DST decision-model fake sees no menu request |
-| 15 | Only the opening plays before a prediction | DST sink rule with `OpeningBypass`; no opening plays after participant speech since activation |
+| 15 | Only the opening plays before a prediction | DST sink rule with `OpeningBypass`; no opening plays after participant speech that started after activation |
 
-Three rules cover the protocol itself. They check outcomes, not only that the session
+Six rules cover the protocol itself. They check outcomes, not only that the session
 followed its own rules:
 
 - `reply_follows_decision`: a turn committed under the gate replies only after an
@@ -574,6 +616,13 @@ followed its own rules:
   supersession or an exit within a bound, while AMD and the classifier make progress.
 - `gate_answers_are_keyed`: the session applies a decision only to the latest
   committed turn of the current run; every other answer appears as `AnswerDropped`.
+- `adopted_request_matches`: an adopted preemptive generation's recorded request
+  (messages, instructions, tools) and interruptibility equal those a new generation
+  would have at adoption.
+- `completion_respects_wait`: no turn whose AMD category at `Completed` is `wait` gets
+  a reply from `Detach`.
+- `detached_is_prompt`: `Detached` follows `Detach` within a bound that does not
+  depend on a customer hook.
 
 `speech_is_heard` treats a speech as waiting legitimately while the gate holds it, and
 under `Hold::Silence` only until the fake VAD's ground truth shows the required
