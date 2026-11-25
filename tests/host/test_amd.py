@@ -12,7 +12,6 @@ and the DST; what is here only a host can show.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import traceback
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -23,6 +22,7 @@ from typing import Any
 
 import pytest
 from aiohttp import web
+from multidict import CIMultiDict
 from pydantic import TypeAdapter
 
 from livekit.agents import (
@@ -50,6 +50,7 @@ from livekit.agents import (
 from livekit.agents.beta.workflows import DtmfEvent
 from livekit.agents.types import NotGivenOr
 from livekit.agents.voice.agent_session import SessionConnectOptions
+from livekit.agents.voice.amd import AMDOptions
 from livekit.agents.voice.io import SpeechHandle
 from tests.fakes import (
     AgentRoom,
@@ -332,6 +333,14 @@ def refused(kind: type[Exception], match: str | None = None) -> Iterator[None]:
     assert not isinstance(caught.value, NotImplementedError), "AMD is not implemented"
 
 
+def handed_to(session: VoiceSession, agent: Agent) -> bool:
+    """The session's history records a landed handoff to ``agent``."""
+    return any(
+        item.type == "agent_handoff" and item.new_agent_id == agent.name
+        for item in session.history.items
+    )
+
+
 def dump(event: object) -> dict[str, Any]:
     """An event as JSON, the way an application serializes it."""
     dumped: dict[str, Any] = TypeAdapter(type(event)).dump_python(event, mode="json")
@@ -347,7 +356,9 @@ async def test_machine_silence_default_and_validation() -> None:
     with refused(ValueError, "machine_silence_threshold must be non-negative"):
         AMD(session, llm=None, stt=None, machine_silence_threshold=-0.1)
     AMD(session, llm=None, stt=None, machine_silence_threshold=0)
-    assert inspect.signature(AMD).parameters["machine_silence_threshold"].default == 1.5
+    # v2.0 declares each default once, on the options record `AMD(**options)` takes, so the
+    # signature has no per-keyword default; `main` reads its keyword's default
+    assert AMDOptions().machine_silence_threshold == 1.5
 
 
 @pytest.mark.parametrize("limit", [0, -1])
@@ -614,8 +625,11 @@ async def test_amd_cannot_enter_during_an_agent_handoff(draining: bool) -> None:
             assert detector.lifecycle is AMDLifecycle.INITIALIZED
         finally:
             release.set()
-        await until(lambda: session.current_agent is replacement, "the handoff never landed")
+        # `main` awaits the handoff's task; v2.0's `current_agent` names the arriving agent at once,
+        # so the landed handoff is its record in the history
+        await until(lambda: handed_to(session, replacement), "the handoff never landed")
         async with detector:
+            assert session.current_agent is replacement
             assert session.amd is detector
 
 
@@ -1247,7 +1261,10 @@ async def test_llm_calls_use_session_connection_options() -> None:
     ) as call:
         call.speak()
         await until(lambda: call.menus, "the menu was never observed")
-        assert classifier.conn_options and all(o == options for o in classifier.conn_options)
+        # v2.0's framework runs the retries and hands the provider one attempt at a time,
+        # with `max_retry=0`; every other limit is the session's
+        attempt = replace(options, max_retry=0)
+        assert classifier.conn_options and all(o == attempt for o in classifier.conn_options)
 
 
 # -- LiveKit Inference tagging (§4.1)
@@ -1270,17 +1287,18 @@ SAID_OKAY = (
 
 
 @pytest.fixture
-async def gateway() -> AsyncIterator[tuple[str, list[tuple[bool, dict[str, str]]]]]:
+async def gateway() -> AsyncIterator[tuple[str, list[tuple[bool, CIMultiDict[str]]]]]:
     """A LiveKit Inference gateway: classifies every AMD request as ``human`` and answers every
     other with ``Okay.``; yields its base URL and, per request, whether it was AMD's and its
     headers."""
-    received: list[tuple[bool, dict[str, str]]] = []
+    received: list[tuple[bool, CIMultiDict[str]]] = []
 
     async def complete(request: web.Request) -> web.Response:
         body = await request.json()
         tools = [t.get("function", {}).get("name") for t in body.get("tools") or []]
         amd = "record_result" in tools
-        received.append((amd, dict(request.headers)))
+        # header names are case-insensitive (RFC 9110 §5.1); v2.0's client sends them lowercase
+        received.append((amd, CIMultiDict(request.headers)))
         return web.Response(
             body=CLASSIFIED_HUMAN if amd else SAID_OKAY, content_type="text/event-stream"
         )
@@ -1295,7 +1313,7 @@ async def gateway() -> AsyncIterator[tuple[str, list[tuple[bool, dict[str, str]]
 
 
 async def test_classifier_tags_only_its_own_request(
-    gateway: tuple[str, list[tuple[bool, dict[str, str]]]],
+    gateway: tuple[str, list[tuple[bool, CIMultiDict[str]]]],
 ) -> None:
     """An Inference model shared by the agent and AMD sends AMD's feature header on AMD's
     requests only; the agent's reply on the same model is ordinary traffic."""
@@ -1319,7 +1337,7 @@ async def test_classifier_tags_only_its_own_request(
     ids=["other_header", "feature_header"],
 )
 async def test_classifier_tag_beats_a_model_level_feature_header(
-    gateway: tuple[str, list[tuple[bool, dict[str, str]]]], model_headers: dict[str, str]
+    gateway: tuple[str, list[tuple[bool, CIMultiDict[str]]]], model_headers: dict[str, str]
 ) -> None:
     """A model's own ``extra_headers`` stay on every request, and AMD's tag wins over a feature
     header of the model's on AMD's requests only. (At ffc0741b22 the model's ``extra_headers``
@@ -1351,7 +1369,7 @@ async def test_classifier_tag_beats_a_model_level_feature_header(
 
 @pytest.mark.parametrize("every_member", [True, False])
 async def test_fallback_adapter_is_tagged_only_when_every_llm_is_inference(
-    gateway: tuple[str, list[tuple[bool, dict[str, str]]]], every_member: bool
+    gateway: tuple[str, list[tuple[bool, CIMultiDict[str]]]], every_member: bool
 ) -> None:
     """A fallback adapter is an Inference model only when each of its models is one."""
     base_url, received = gateway
@@ -1413,7 +1431,9 @@ async def test_agent_handoff_is_rejected_until_amd_finishes() -> None:
         call.speak()
         await call.result()
         call.session.update_agent(replacement)
-        await until(lambda: call.session.current_agent is replacement, "the handoff never happened")
+        # `current_agent` names the arriving agent at once: the history records the landed handoff
+        await until(lambda: handed_to(call.session, replacement), "the handoff never happened")
+        assert call.session.current_agent is replacement
 
 
 @pytest.mark.parametrize("session_enabled", [False, True])
