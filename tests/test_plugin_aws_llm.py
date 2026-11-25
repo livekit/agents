@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import pytest
 from botocore.exceptions import ClientError
 
-from livekit.agents import APIConnectOptions, APIError, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError
 from livekit.agents.llm import ChatContext, ToolChoice, function_tool
 from livekit.plugins.aws import LLM as BedrockLLM
 from livekit.plugins.aws.llm import LLMStream
@@ -202,3 +204,102 @@ async def test_bedrock_400_fails_fast_throttling_and_5xx_retried(
     if attempts == 1:
         assert isinstance(exc_info.value, APIStatusError)
         assert exc_info.value.status_code == 400
+
+
+def _streaming_client(attempts: list[list[dict]]) -> object:
+    class _Client:
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def converse_stream(self, **kwargs: object) -> dict:
+            chunks = attempts.pop(0)
+
+            async def stream() -> AsyncIterator[dict]:
+                for chunk in chunks:
+                    yield chunk
+
+            return {
+                "ResponseMetadata": {"RequestId": "req", "HTTPStatusCode": 200},
+                "stream": stream(),
+            }
+
+    return _Client()
+
+
+_TEXT_DELTA = {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Hello"}}}
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("chunks", "attempts", "text"),
+    [([], 3, ""), ([_TEXT_DELTA], 1, "Hello")],
+    ids=["no-output", "after-text"],
+)
+async def test_stream_ending_before_message_stop_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, chunks: list[dict], attempts: int, text: str
+) -> None:
+    # the event stream ends quietly when the body is cut short, so a missing messageStop is
+    # the only sign the reply is incomplete; it is retried only while nothing was sent
+    pending = [list(chunks) for _ in range(3)]
+    instance = BedrockLLM(model="us.anthropic.claude-sonnet-4-6")
+    monkeypatch.setattr(
+        instance._session, "create_client", lambda *a, **kw: _streaming_client(pending)
+    )
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = instance.chat(
+        chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
+    )
+
+    received = ""
+    with pytest.raises(APIConnectionError):
+        async for chunk in stream:
+            if chunk.delta and chunk.delta.content:
+                received += chunk.delta.content
+
+    assert 3 - len(pending) == attempts
+    assert received == text
+
+
+@pytest.mark.virtual_time
+async def test_retry_after_a_cut_tool_call_drops_its_partial_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = [
+        [
+            {
+                "contentBlockStart": {
+                    "contentBlockIndex": 0,
+                    "start": {"toolUse": {"toolUseId": "call_1", "name": "f"}},
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 0,
+                    "delta": {"toolUse": {"input": '{"a":'}},
+                }
+            },
+        ],
+        [
+            _TEXT_DELTA,
+            {"contentBlockStop": {"contentBlockIndex": 0}},
+            {"messageStop": {"stopReason": "end_turn"}},
+        ],
+    ]
+    instance = BedrockLLM(model="us.anthropic.claude-sonnet-4-6")
+    monkeypatch.setattr(
+        instance._session, "create_client", lambda *a, **kw: _streaming_client(pending)
+    )
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = instance.chat(
+        chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+
+    response = await stream.collect()
+
+    assert response.text == "Hello"
+    assert response.tool_calls == []

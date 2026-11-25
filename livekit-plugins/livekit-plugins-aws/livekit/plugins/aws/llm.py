@@ -361,13 +361,24 @@ class LLMStream(llm.LLMStream):
                         request_id=request_id,
                     )
 
+                # a retried attempt must not inherit the tool call of one that was cut short
+                self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
+                message_stopped = False
                 async for chunk in response["stream"]:
+                    if "messageStop" in chunk:
+                        message_stopped = True
                     chat_chunk = self._parse_chunk(request_id, chunk)
                     if chat_chunk is not None:
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
 
-        except APIStatusError:
+                if not message_stopped:
+                    # the event stream ends quietly when the body is cut short
+                    raise APIConnectionError(
+                        "aws bedrock llm: stream ended before messageStop", retryable=retryable
+                    )
+
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError(
