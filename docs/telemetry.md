@@ -168,8 +168,8 @@ Each metric carries the same labels:
 | Label | Values |
 | --- | --- |
 | `lk.productstats.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
-| `lk.productstats.model.plugin` | the plugin's id (`deepgram`, `boson-avatar`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
-| `lk.productstats.model.provider` | the provider's name (`deepgram`, `openai`); a self-hosted endpoint is `other` |
+| `lk.productstats.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
+| `lk.productstats.model.provider` | the vendor that is called (`deepgram`, `cerebras`); a self-hosted endpoint is `other` |
 | `lk.productstats.model.name` | the model's name as configured |
 
 | Metric | Type | Counts |
@@ -190,6 +190,18 @@ the speech, `stt` when the STT detects the end of speech itself.
 - Delays are compared only within one `endpointing` value, as medians and percentiles per
   provider and model. A `vad` delay includes the VAD's silence window; an `stt` delay
   includes the STT's own silence window.
+
+Plugin and provider are usually the same name, and both are kept because they differ when
+one plugin reaches several vendors:
+
+| Setup | `plugin` | `provider` |
+| --- | --- | --- |
+| The Deepgram plugin | `deepgram` | `deepgram` |
+| The OpenAI plugin pointed at Cerebras (`openai.LLM.with_cerebras()`) | `openai` | `cerebras` |
+| The OpenAI plugin pointed at a self-hosted endpoint | `openai` | `other` |
+| LiveKit Inference | `livekit-inference` | `livekit`; the vendor is in the model name (`deepgram/nova-3`) |
+
+The plugin says which code to maintain; the provider says which vendor people use.
 
 The plugin id is the last part of the package name, lowercase with hyphens, the same in
 every language: `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram`
