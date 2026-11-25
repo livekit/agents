@@ -684,8 +684,14 @@ bounded by their producers. The host's events queue holds `EVENTS_CAPACITY` (128
 events; past that the newest is dropped and logged, and `execute()` still returns the
 outcome.
 
-**Host.** The Python host enters a run with `VoiceSession.enter_amd(AmdEntry)` and
-reads it through `_core.AmdRun` (`lifecycle`, `next_event`, `execute`, `aclose`,
+**Host.** The Python host first asks `VoiceSession.check_amd(amd_stt)`, which sends
+`AmdCommand::Check`: the session answers with the attach's refusals, in the same order,
+and installs nothing. The host then checks the classifier and the opening, creates the
+models named by strings, and enters the run with `VoiceSession.enter_amd(AmdEntry)`, so a
+refused instance creates no model and stays `initialized`. The check and the attach each
+take the session's handoff turn before they are sent, so an `update_agent()` called
+before them reaches the loop first and refuses them. The host reads the run through
+`_core.AmdRun` (`lifecycle`, `next_event`, `execute`, `aclose`,
 `listener_failed`). The host creates the models named by strings and closes them after
 the run's completion arrives and before `execute()` returns and `amd_completed` fires,
 so the entry it sends marks every model as supplied. The executor forwards each
@@ -698,6 +704,48 @@ carries the input (request state and transcript), the decision's name and prompt
 options in order without descriptions, the connection options and the extra headers.
 It returns the chosen option, or `None` when the response holds no choice. A decision
 model never extracts menus.
+
+### Python host API
+
+`AMD`, its events and its errors follow `main`'s `voice/amd`. The differences that
+remain, and why:
+
+- **Options.** `AMD(session, *, llm=, stt=, participant_identity=, **options)` takes the
+  same keywords with the same defaults, typed by `AMDOptionsKwargs`. v2.0 declares every
+  default once, on the `AMDOptions` record in ABI, and a public constructor takes
+  `**options: Unpack[...]` ([bindings](../internals/bindings.md#boundary-values)). So
+  `inspect.signature(AMD)` shows `**options`, and the defaults are read from
+  `AMDOptions()`.
+- **Enums.** `AMDLifecycle`, `AMDCategory` and `AMDReason` are generated `StrEnum`s.
+  `AMDLifecycle`'s members have the string values `"initialized"`, `"pending"`,
+  `"active"` and `"finished"` instead of `auto()` numbers, and `str()` of a member is its
+  value. Identity comparisons are unchanged.
+- **Decision models.** `llm.DecisionModel`, `llm.Choice` and their result types are a
+  thin host type (`llm/decisions.py`), and AMD accepts only an `llm.DecisionModel`, as
+  `main` does. `evaluate()` validates the decisions and the response as `main` does, but
+  makes one attempt: it does not retry, and it does not bound the attempt with
+  `conn_options`. It emits no `metrics_collected` events and records no span. `main`'s
+  decision plugins, `inference.DecisionModel` and `DecisionFallbackAdapter` are not
+  ported.
+- **Entry checks.** There is no session-level `ivr_detection` in v2.0, so its check
+  does not exist.
+- **Speech under AMD.** `say()`, `generate_reply()` and `update_agent()` raise
+  `RuntimeError` while `session.amd` is set, with `main`'s messages. The core also
+  refuses a reply or a handoff that reaches it while the gate is attached, such as one a
+  tool asks for: the speech handle's `exception()` holds the refusal, or the handoff is
+  dropped (`HandoffRefused::AmdAttached`).
+- **DTMF tool.** `beta.send_dtmf_events` returns `ToolResult(..., reply_required=False)`
+  and raises `ToolError("Failed to send DTMF events.")` with no cause, as `main` does.
+  The core raises `SendDtmfError`, one fixed message, so the room's own error never
+  reaches the model or a log.
+- **Listeners.** `AMD.emit` passes a listener's error up, so any error of a prediction
+  or menu listener completes the run with `internal_error`, as spec §12.1 says. `main`'s
+  code does so only for a `TypeError`: its `rtc.EventEmitter.emit` logs any other error
+  and detection goes on. An `amd_completed` listener's error is logged on both.
+
+An Inference model's own `extra_headers` merge with a call's (`compose_extra`), the
+call's header winning on a shared name, as in `main`'s `inference.LLM.chat`, so AMD's
+feature header survives a model-level header map.
 
 ### Ported unchanged
 
@@ -855,3 +903,5 @@ or the SIP answer path. Live simulations and room tests own those.
 3. The AMD executor with the classifier, STT and callee legs.
 4. Realtime commit paths, per-response instructions and tools.
 5. The Python host API and the authored stories from `tests/test_amd.py`.
+   [AMD test coverage](amd-test-coverage.md) maps each of `main`'s 228 AMD tests to the
+   v2.0 test, Rust unit test or DST story that covers it.
