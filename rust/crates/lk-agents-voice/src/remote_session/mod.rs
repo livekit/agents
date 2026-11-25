@@ -5,6 +5,7 @@ pub mod console;
 
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::usage::{ModelUsage, Usage};
+use lk_agents_abi::voice::amd::{AmdCategory, AmdPredictionEvent};
 use lk_agents_abi::voice::events::{AgentState, ToolEndStatus, ToolReplyStatus};
 pub use lk_agents_abi::worker::remote_session::{
     AgentInfo, FrameworkInfo, IoUpdate, RemoteSessionState, RtcStats, SessionPort,
@@ -126,7 +127,42 @@ pub fn encode_wire(
         WireEvent::AgentFalseInterruption(v) => {
             Event::AgentFalseInterruption(pb::AgentFalseInterruption { resumed: v.resumed })
         }
+        WireEvent::AmdPrediction(v) => Event::AmdPrediction(encode_amd_prediction(&v)),
+        WireEvent::AmdCompleted(v) => Event::AmdCompleted(pb::AmdCompleted {
+            category: encode_amd_category(v.category) as i32,
+            reason: v.reason.as_str().to_owned(),
+            voicemail_message_played: v.voicemail_message_played,
+            prediction: v.last_prediction.as_ref().map(encode_amd_prediction),
+        }),
     }))
+}
+
+/// Each AMD category maps to its own protocol category.
+fn encode_amd_category(category: AmdCategory) -> proto::AmdCategory {
+    match category {
+        AmdCategory::Human => proto::AmdCategory::AmdHuman,
+        AmdCategory::MachineIvr => proto::AmdCategory::AmdMachineIvr,
+        AmdCategory::MachineScreening => proto::AmdCategory::AmdMachineScreening,
+        AmdCategory::MachineVm => proto::AmdCategory::AmdMachineVm,
+        AmdCategory::MachineUnavailable => proto::AmdCategory::AmdMachineUnavailable,
+        AmdCategory::Wait => proto::AmdCategory::AmdWait,
+        AmdCategory::Uncertain => proto::AmdCategory::AmdUncertain,
+    }
+}
+
+/// A prediction carries its turn id, stage and inference duration; the duration is unset when
+/// the turn ran no inference.
+fn encode_amd_prediction(v: &AmdPredictionEvent) -> proto::agent_session_event::AmdPrediction {
+    proto::agent_session_event::AmdPrediction {
+        speech_duration: Some(encode_duration_secs(v.speech_duration)),
+        category: encode_amd_category(v.category) as i32,
+        reason: v.reason.as_str().to_owned(),
+        transcript: v.transcript.clone(),
+        delay: Some(encode_duration_secs(v.delay)),
+        turn_id: u32::try_from(v.turn_id).unwrap_or(u32::MAX),
+        stage: encode_amd_category(v.stage) as i32,
+        inference_duration: v.inference_duration.map(encode_duration_secs),
+    }
 }
 
 /// One tool-lifecycle update in its proto shape.

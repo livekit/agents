@@ -122,6 +122,10 @@ pub enum WireEvent {
     SessionUsageUpdated(SessionUsageUpdatedWire),
     ToolExecutionUpdated(ToolExecutionUpdatedWire),
     AgentFalseInterruption(AgentFalseInterruption),
+    /// An AMD run's `amd_prediction`.
+    AmdPrediction(crate::voice::amd::AmdPredictionEvent),
+    /// An AMD run's `amd_completed`.
+    AmdCompleted(crate::voice::amd::AmdCompletedEvent),
 }
 
 /// What `SessionHost` asks of the `VoiceSession` it hosts through `RemoteSessionAccess`.
@@ -256,6 +260,9 @@ pub trait SessionHosting: Send + Sync {
     fn forward_usage(&self, usage: &crate::usage::Usage);
     fn forward_error(&self, message: String);
     fn forward_tools_executed(&self, event: &crate::voice::events::ToolsExecutedEvent);
+    /// An AMD run's prediction or completion, sent before the run's host hears it. A menu is
+    /// not forwarded.
+    fn forward_amd(&self, event: &crate::voice::amd::AmdEvent);
     /// Start once; a host already closing cannot reopen its transport.
     fn start(&self) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
     /// Drain and close once. Repeated or cancelled callers join the same cleanup.

@@ -583,6 +583,9 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     /// What `start_user_turn()` answers.
     #[host(class(name = "UserTurn"))]
     type UserTurn: Send + Sync + 'static;
+    /// What `enter_amd()` answers.
+    #[host(class(name = "AmdRun"))]
+    type AmdRun: Send + Sync + 'static;
 
     /// Assemble a session; the loop begins at `start()`. `room` supplies runtime room I/O, or no
     /// RTC attachment; `options` is the session layer `SessionOptions(kwargs)` built (none is an
@@ -666,6 +669,15 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = false)] opens_with_reply: bool,
         #[host(default = None)] dtmf: Option<DtmfTaskOptions>,
     ) -> Result<BoxFuture<'static, Result<VoiceTaskValue, VoiceTaskEnded>>, CommandRefused>;
+
+    /// `async with AMD(session, ...)`: attach a new answering-machine detection run to the
+    /// session. Resolves once the session accepted the attach; the run then listens as its callee
+    /// allows. A refused run raises the error `AMD.__aenter__` raises.
+    #[host(await)]
+    async fn enter_amd(
+        &self,
+        entry: crate::voice::amd::AmdEntry,
+    ) -> Result<Self::AmdRun, crate::voice::amd::AmdEnterRefused>;
 
     /// `GetDtmfTask`'s keypad half: the keys the linked participant presses, collected until
     /// `num_digits` arrived and a `timeout` (seconds) passed without a key, or `stop_event` was

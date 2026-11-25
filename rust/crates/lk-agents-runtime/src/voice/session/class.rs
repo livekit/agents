@@ -27,6 +27,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     type Options = SessionOptions;
     type Speech = SpeechHandle;
     type UserTurn = UserTurn;
+    type AmdRun = crate::voice::amd::AmdRun;
     type MicLeg = crate::room_io::RoomAudioInput;
     type CameraLeg = crate::room_io::RoomVideoInput;
 
@@ -375,6 +376,13 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             awaiting.0 = None;
             answer.unwrap_or(Err(VoiceTaskEnded::Closing))
         }))
+    }
+
+    async fn enter_amd(
+        &self,
+        entry: lk_agents_abi::voice::amd::AmdEntry,
+    ) -> Result<crate::voice::amd::AmdRun, lk_agents_abi::voice::amd::AmdEnterRefused> {
+        crate::voice::amd::host::enter(self, entry).await
     }
 
     fn collect_dtmf(

@@ -27,6 +27,8 @@ use crate::voice::legs::OpeningLeg;
 use crate::voice::resources::Resources;
 use crate::voice::session::{AmdTap, Journal, Timebase, Tx};
 use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::voice::amd::AmdLifecycle;
+use lk_agents_abi::worker::remote_session::SessionHosting;
 use lk_agents_abi::{ApiConnectOptions, Spawner, Stt, TimerSet};
 use lk_agents_net::owned::Background;
 use lk_agents_net::task::{ScopedTasks, TaskSet};
@@ -74,6 +76,9 @@ pub(crate) struct AmdPeer {
     pub resources: Resources,
     pub cx: telemetry::Cx,
     pub route: AmdTap,
+    /// The session's remote session host, told each prediction and the completion before the
+    /// run's host hears them (spec §13).
+    pub remote: Option<Arc<dyn SessionHosting>>,
 }
 
 /// The models and the callee a run uses.
@@ -133,6 +138,8 @@ pub(crate) struct Executor {
     teardown: Teardown,
     outcome: Option<Outcome>,
     events: Sender<AmdEvent>,
+    /// Where the run is, as the host reads it; set once the run starts.
+    phase: Option<Arc<parking_lot::Mutex<AmdLifecycle>>>,
 }
 
 /// The ends the executor's loop reads.
@@ -141,6 +148,10 @@ pub(crate) struct Inputs {
     pub reports: UnboundedReceiver<LegReport>,
     /// `aclose()`, or a caller that left before the attach was answered.
     pub close: CancellationToken,
+    /// A prediction or menu listener in the host raised: `internal_error`.
+    pub host_failed: CancellationToken,
+    /// Where the run is, as the host reads it.
+    pub phase: Arc<parking_lot::Mutex<AmdLifecycle>>,
 }
 
 impl Executor {
@@ -170,6 +181,7 @@ impl Executor {
             teardown: Teardown::Running,
             outcome: None,
             events,
+            phase: None,
         }
     }
 
@@ -181,8 +193,11 @@ impl Executor {
     /// Runs the run to its outcome. A session that went away first completes it as its close
     /// would.
     pub(crate) async fn run(mut self, mut inputs: Inputs) -> Outcome {
+        self.phase = Some(Arc::clone(&inputs.phase));
+        self.after_step();
         self.start_callee();
         let mut host_open = true;
+        let mut host_sound = true;
         let mut session_open = true;
         loop {
             if let Some(outcome) = self.outcome.take() {
@@ -216,6 +231,10 @@ impl Executor {
                 () = inputs.close.cancelled(), if host_open => {
                     host_open = false;
                     self.step(In::Close);
+                }
+                () = inputs.host_failed.cancelled(), if host_sound => {
+                    host_sound = false;
+                    self.step(In::LegFailed);
                 }
                 _ = leg_tasks.wait_empty(clock.as_ref(), None), if joining => {
                     self.legs_closed().await;
@@ -306,6 +325,11 @@ impl Executor {
                         });
                         self.outcome = Some(outcome.clone());
                     }
+                    // The remote session host hears a prediction and the completion before the
+                    // run's host does.
+                    if let Some(remote) = &self.peer.remote {
+                        remote.forward_amd(&super::host::event(&event));
+                    }
                     // The host may have stopped reading its events; `execute()` still returns
                     // the outcome.
                     if let Err(error) = self.events.try_send(event) {
@@ -335,6 +359,13 @@ impl Executor {
 
     /// Opens AMD's STT once listening starts, and stops every leg once the run completed.
     fn after_step(&mut self) {
+        if let Some(phase) = &self.phase {
+            *phase.lock() = match self.machine.lifecycle() {
+                Lifecycle::Pending => AmdLifecycle::Pending,
+                Lifecycle::Active => AmdLifecycle::Active,
+                Lifecycle::Finished(_) => AmdLifecycle::Finished,
+            };
+        }
         match self.machine.lifecycle() {
             Lifecycle::Active => {
                 if matches!(self.stt, SttLeg::Held)

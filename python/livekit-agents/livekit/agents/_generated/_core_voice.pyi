@@ -35,6 +35,7 @@ from .._core import (
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
 from .agent_run import SayOutcome
+from .amd import AMDCompletedEvent, AmdEntry, AmdEvent, AMDLifecycle, AMDOptions, AMDPredictionEvent
 from .avatar import AudioReceiverObservation, MediaFrame
 from .avatar_options import AvatarOptions
 from .avatar_queue import QueueEffects
@@ -79,6 +80,44 @@ from .voice_session import (
     VoiceTaskValue,
 )
 from .workflows import CapturePlan, DtmfEvent, InstructionsArg, TwilioDial
+
+class AmdRun:
+    """One AMD run, from its attach to its outcome. Dropping it does not cancel the run."""
+    @property
+    def lifecycle(self) -> AMDLifecycle:
+        """Where the run is: `pending` until it listens, then `active`, then `finished`."""
+    async def next_event(self) -> AmdEvent | None:
+        """The run's next event, in order; `None` once the run's events ended. One reader."""
+    async def execute(self) -> AMDCompletedEvent:
+        """`execute()`: the completion, once the session detached and the legs closed. Every caller
+        gets the same one; a caller that stops waiting does not cancel the run.
+        """
+    async def aclose(self) -> AMDCompletedEvent:
+        """`aclose()`: completes the run with `cancelled` if it is still running, and returns its
+        completion.
+        """
+    def listener_failed(self) -> None:
+        """A prediction or menu listener in the host raised: the run completes with
+        `internal_error`.
+        """
+
+def _core_amd_check_options(options: AMDOptions) -> None:
+    """`AMD(...)`'s option checks, in its order: the `ValueError` it raises."""
+
+def _core_amd_prediction_is_human(event: AMDPredictionEvent) -> bool:
+    """`AMDPredictionEvent.is_human`."""
+
+def _core_amd_prediction_is_machine(event: AMDPredictionEvent) -> bool:
+    """`AMDPredictionEvent.is_machine`."""
+
+def _core_amd_completed_is_error(event: AMDCompletedEvent) -> bool:
+    """`AMDCompletedEvent.is_error`."""
+
+def _core_amd_auto_models() -> bool:
+    """Whether AMD may pick its own Inference models: `LIVEKIT_URL` names LiveKit Cloud and an
+    Inference key pair resolves (`LIVEKIT_INFERENCE_API_KEY`/`_SECRET`, else the server's
+    `LIVEKIT_API_KEY`/`_SECRET`).
+    """
 
 class HostAudioReceiver:
     """The avatar runner's receiver over a host `AudioReceiver`: its audio read from `audio` when
@@ -638,6 +677,11 @@ class VoiceSession:
         captured tool identity). The agent holds the floor until one of its tools completes with a
         value the host validated, which this resolves to; the parent comes back without its hooks.
         A cancelled await ends the task, and every task it started, and puts the parent back.
+        """
+    async def enter_amd(self, entry: AmdEntry) -> AmdRun:
+        """`async with AMD(session, ...)`: attach a new answering-machine detection run to the
+        session. Resolves once the session accepted the attach; the run then listens as its callee
+        allows. A refused run raises the error `AMD.__aenter__` raises.
         """
     async def collect_dtmf(
         self,

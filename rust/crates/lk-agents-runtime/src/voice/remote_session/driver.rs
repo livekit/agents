@@ -246,6 +246,17 @@ impl RemoteSessionLink {
         self.send(super::tools_executed(ev), None);
     }
 
+    /// `amd_prediction` and `amd_completed`; a menu is not part of the protocol.
+    pub fn forward_amd(&self, event: &lk_agents_abi::voice::amd::AmdEvent) {
+        use lk_agents_abi::voice::amd::AmdEvent;
+        let wire = match event {
+            AmdEvent::Prediction(prediction) => WireEvent::AmdPrediction(prediction.clone()),
+            AmdEvent::Completed(completed) => WireEvent::AmdCompleted(completed.clone()),
+            AmdEvent::MenuObserved(_) => return,
+        };
+        self.send(wire, None);
+    }
+
     fn send(&self, event: WireEvent, at: Option<f64>) {
         self.host.send_wire(event, at);
     }
@@ -362,6 +373,10 @@ impl lk_agents_abi::worker::remote_session::SessionHosting for RemoteSessionLink
 
     fn forward_tools_executed(&self, event: &lk_agents_abi::voice::events::ToolsExecutedEvent) {
         RemoteSessionLink::forward_tools_executed(self, event);
+    }
+
+    fn forward_amd(&self, event: &lk_agents_abi::voice::amd::AmdEvent) {
+        RemoteSessionLink::forward_amd(self, event);
     }
 
     fn start(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {

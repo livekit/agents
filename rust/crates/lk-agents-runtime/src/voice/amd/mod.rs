@@ -21,6 +21,7 @@
 pub mod callee;
 pub mod classifier;
 mod executor;
+pub mod host;
 pub mod prompts;
 mod stt;
 
@@ -172,9 +173,13 @@ pub const EVENTS_CAPACITY: usize = 128;
 pub struct AmdRun {
     run: AmdRunId,
     close: CancellationToken,
+    /// A host listener failed: the run completes with `internal_error`.
+    host_failed: CancellationToken,
     /// Ends without a value if the run's task ended without an outcome.
     outcome: signal::Cell<Option<Outcome>>,
-    events: parking_lot::Mutex<Option<Receiver<AmdEvent>>>,
+    /// Shared with the host's reader, which polls it without holding the lock across a wait.
+    events: Arc<parking_lot::Mutex<Option<Receiver<AmdEvent>>>>,
+    phase: Arc<parking_lot::Mutex<lk_agents_abi::voice::amd::AmdLifecycle>>,
 }
 
 impl AmdRun {
@@ -204,6 +209,27 @@ impl AmdRun {
         // A run that already ended has nothing to close.
         self.close.cancel();
         self.execute()
+    }
+
+    /// A prediction or menu listener in the host raised: the run completes with
+    /// `internal_error`, unless it already completed.
+    pub fn fail(&self) {
+        self.host_failed.cancel();
+    }
+
+    /// The run's next event, in order; `None` once the run's events ended, or when
+    /// [`AmdRun::events`] took them.
+    pub fn next_event(&self) -> BoxFuture<'static, Option<AmdEvent>> {
+        let events = Arc::clone(&self.events);
+        Box::pin(std::future::poll_fn(move |cx| match events.lock().as_mut() {
+            Some(events) => events.poll_recv(cx),
+            None => std::task::Poll::Ready(None),
+        }))
+    }
+
+    /// Where the run is: `pending` until it listens, then `active`, then `finished`.
+    pub fn lifecycle(&self) -> lk_agents_abi::voice::amd::AmdLifecycle {
+        *self.phase.lock()
     }
 }
 
@@ -296,6 +322,8 @@ async fn enter_with(
     let (reports_tx, reports) = unbounded_channel();
     let (events_tx, events) = tokio::sync::mpsc::channel(EVENTS_CAPACITY);
     let close = CancellationToken::new();
+    let host_failed = CancellationToken::new();
+    let phase = Arc::new(parking_lot::Mutex::new(lk_agents_abi::voice::amd::AmdLifecycle::Pending));
     let (producer, outcome) = signal::once();
     let (entered_tx, entered) = tokio::sync::oneshot::channel();
     let executor =
@@ -309,7 +337,13 @@ async fn enter_with(
         call,
         attached,
         executor,
-        inputs: Inputs { observations, reports, close: close.clone() },
+        inputs: Inputs {
+            observations,
+            reports,
+            close: close.clone(),
+            host_failed: host_failed.clone(),
+            phase: Arc::clone(&phase),
+        },
         entered: entered_tx,
         outcome: producer,
     };
@@ -323,8 +357,8 @@ async fn enter_with(
     match entered.await {
         Ok(Ok(())) => {
             abandoned.disarm();
-            let events = parking_lot::Mutex::new(Some(events));
-            Ok(AmdRun { run, close, outcome, events })
+            let events = Arc::new(parking_lot::Mutex::new(Some(events)));
+            Ok(AmdRun { run, close, host_failed, outcome, events, phase })
         }
         Ok(Err(refused)) => Err(refused),
         // The run's task ended before the session answered: the session is gone.

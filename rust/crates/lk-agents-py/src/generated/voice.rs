@@ -9,6 +9,147 @@
 
 use pyo3::prelude::*;
 
+// Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+type AmdRunImpl = <crate::generated::implementations::Selected as super::Implementations>::AmdRun;
+
+/// One AMD run, from its attach to its outcome. Dropping it does not cancel the run.
+#[pyclass(frozen, name = "AmdRun", module = "livekit.agents._core")]
+pub struct AmdRun(pub(crate) ::std::sync::Arc<AmdRunImpl>);
+
+#[pymethods]
+impl AmdRun {
+    /// Where the run is: `pending` until it listens, then `active`, then `finished`.
+    #[getter]
+    fn lifecycle<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out =
+            py.detach(|| <AmdRunImpl as ::lk_agents_abi::voice::amd::AmdRun>::lifecycle(&self.0));
+        crate::generated::records::amd::amd_lifecycle_to_py(py, out)
+    }
+
+    /// The run's next event, in order; `None` once the run's events ended. One reader.
+    fn next_event<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call =
+            py.detach(|| <AmdRunImpl as ::lk_agents_abi::voice::amd::AmdRun>::next_event(&self.0));
+        crate::py_calls::future_into_py(py, async move {
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    out.map(|value| crate::generated::records::amd::amd_event_to_py(py, value))
+                        .transpose()?,
+                    py,
+                )
+            })
+        })
+    }
+
+    /// `execute()`: the completion, once the session detached and the legs closed. Every caller
+    /// gets the same one; a caller that stops waiting does not cancel the run.
+    fn execute<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call =
+            py.detach(|| <AmdRunImpl as ::lk_agents_abi::voice::amd::AmdRun>::execute(&self.0));
+        crate::py_calls::future_into_py(py, async move {
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::amd::amd_completed_event_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
+    }
+
+    /// `aclose()`: completes the run with `cancelled` if it is still running, and returns its
+    /// completion.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let call =
+            py.detach(|| <AmdRunImpl as ::lk_agents_abi::voice::amd::AmdRun>::aclose(&self.0));
+        crate::py_calls::future_into_py(py, async move {
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::amd::amd_completed_event_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
+    }
+
+    /// A prediction or menu listener in the host raised: the run completes with
+    /// `internal_error`.
+    fn listener_failed(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| <AmdRunImpl as ::lk_agents_abi::voice::amd::AmdRun>::listener_failed(&self.0));
+        Ok(())
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+type AmdRulesImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::AmdRules;
+
+/// `AMD(...)`'s option checks, in its order: the `ValueError` it raises.
+#[pyfunction]
+#[pyo3(signature = (options))]
+pub fn _core_amd_check_options(py: Python<'_>, options: Bound<'_, PyAny>) -> PyResult<()> {
+    crate::py_calls::check_pid()?;
+    let options = crate::generated::records::amd::amd_options_from_py(options.as_any())?;
+    py.detach(|| <AmdRulesImpl as ::lk_agents_abi::voice::amd::AmdRules>::check_options(options))
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+        <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+    })?;
+    Ok(())
+}
+
+/// `AMDPredictionEvent.is_human`.
+#[pyfunction]
+#[pyo3(signature = (event))]
+pub fn _core_amd_prediction_is_human(py: Python<'_>, event: Bound<'_, PyAny>) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let event = crate::generated::records::amd::amd_prediction_event_from_py(event.as_any())?;
+    let out = py.detach(|| {
+        <AmdRulesImpl as ::lk_agents_abi::voice::amd::AmdRules>::prediction_is_human(event)
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `AMDPredictionEvent.is_machine`.
+#[pyfunction]
+#[pyo3(signature = (event))]
+pub fn _core_amd_prediction_is_machine(py: Python<'_>, event: Bound<'_, PyAny>) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let event = crate::generated::records::amd::amd_prediction_event_from_py(event.as_any())?;
+    let out = py.detach(|| {
+        <AmdRulesImpl as ::lk_agents_abi::voice::amd::AmdRules>::prediction_is_machine(event)
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `AMDCompletedEvent.is_error`.
+#[pyfunction]
+#[pyo3(signature = (event))]
+pub fn _core_amd_completed_is_error(py: Python<'_>, event: Bound<'_, PyAny>) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let event = crate::generated::records::amd::amd_completed_event_from_py(event.as_any())?;
+    let out = py.detach(|| {
+        <AmdRulesImpl as ::lk_agents_abi::voice::amd::AmdRules>::completed_is_error(event)
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// Whether AMD may pick its own Inference models: `LIVEKIT_URL` names LiveKit Cloud and an
+/// Inference key pair resolves (`LIVEKIT_INFERENCE_API_KEY`/`_SECRET`, else the server's
+/// `LIVEKIT_API_KEY`/`_SECRET`).
+#[pyfunction]
+pub fn _core_amd_auto_models(py: Python<'_>) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let out = py.detach(<AmdRulesImpl as ::lk_agents_abi::voice::amd::AmdRules>::auto_models);
+    ::pyo3::PyResult::Ok(out)
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 type HostAudioReceiverImpl =
     <crate::generated::implementations::Selected as super::Implementations>::HostAudioReceiver;
@@ -3378,6 +3519,30 @@ impl VoiceSession {
         })
     }
 
+    /// `async with AMD(session, ...)`: attach a new answering-machine detection run to the
+    /// session. Resolves once the session accepted the attach; the run then listens as its callee
+    /// allows. A refused run raises the error `AMD.__aenter__` raises.
+    #[pyo3(signature = (entry))]
+    fn enter_amd<'py>(
+        &self,
+        py: Python<'py>,
+        entry: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let entry = crate::generated::records::amd::amd_entry_from_py(entry.as_any())?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::enter_amd(&this, entry)
+                .await.map_err(|e: ::lk_agents_abi::voice::amd::AmdEnterRefused| <::lk_agents_abi::voice::amd::AmdEnterRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    super::voice::AmdRun(::std::sync::Arc::new(out)),
+                    py,
+                )
+            })
+        })
+    }
+
     /// `GetDtmfTask`'s keypad half: the keys the linked participant presses, collected until
     /// `num_digits` arrived and a `timeout` (seconds) passed without a key, or `stop_event` was
     /// pressed. Resolves to the digits, space-separated; raises `VoiceTaskFailed` when the
@@ -6145,6 +6310,155 @@ pub fn wait_for_track_publication<'py>(
             )
         })
     })
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
+
+/// [`::lk_agents_abi::voice::amd::AmdDecisionModel`] over a host `livekit.agents.voice.amd._DecisionModel`.
+#[derive(Clone)]
+pub struct AmdDecisionModelProxy {
+    host: crate::py_objects::HostObject,
+    /// The host's running loop and a copy of its context, captured when it was taken;
+    /// none when taken with no running loop: each call then runs in its driving operation's.
+    context: ::std::option::Option<::lk_agents_abi::utils::host_ref::HostRef>,
+}
+
+impl AmdDecisionModelProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::amd::AmdDecisionModel>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::amd::AmdDecisionModel>(obj)?
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None, true)?))
+    }
+
+    /// A host object a call returned, owned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::amd::AmdDecisionModel>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::amd::AmdDecisionModel>(obj)?
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context), true)?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::amd::AmdDecisionModel>> {
+        if crate::py_objects::native::<dyn ::lk_agents_abi::voice::amd::AmdDecisionModel>(obj)?
+            .is_some()
+        {
+            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `AmdDecisionModel` is shared, never handed over to be owned",
+            ));
+        }
+        Ok(::std::boxed::Box::new(Self::take(obj, None, true)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+        owned: bool,
+    ) -> PyResult<Self> {
+        let host = match owned {
+            true => crate::py_objects::HostObject::owned(obj),
+            false => crate::py_objects::HostObject::weak(obj)?,
+        };
+        let context = match context {
+            Some(context) => Some(::std::clone::Clone::clone(context)),
+            None => crate::py_calls::proxy_context(obj.py()),
+        };
+        Ok(AmdDecisionModelProxy { host, context })
+    }
+}
+
+impl ::lk_agents_abi::voice::amd::AmdDecisionModel for AmdDecisionModelProxy {
+    fn choose<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        request: &::lk_agents_abi::voice::amd::AmdChoiceRequest,
+    ) -> ::lk_agents_abi::BoxFuture<
+        'a,
+        ::std::result::Result<
+            ::std::option::Option<::std::string::String>,
+            ::lk_agents_abi::errors::ProviderError,
+        >,
+    > {
+        let host = ::std::clone::Clone::clone(&self.host);
+        let request_arg = ::std::clone::Clone::clone(request);
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "AmdDecisionModel.livekit.agents.voice.amd._choose",
+            &crate::py_calls::calling_context(&self.context),
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py)?,
+                    crate::generated::records::amd::amd_choice_request_to_py(py, request_arg)?,
+                ];
+                Ok((
+                    py.import("livekit.agents.voice.amd")?.getattr("_choose")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (if o.is_none() { Ok(None) } else { (o.extract::<::std::string::String>()).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
+
+    fn label(
+        &self,
+    ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::clone::Clone::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [host.bind(py)?];
+                Ok((
+                    py.import("livekit.agents.voice.amd")?.getattr("_decision_label")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.extract::<::std::string::String>()).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
@@ -13609,6 +13923,20 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
 pub fn video_queue_frames(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     crate::py_calls::check_pid()?;
     ::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES, py)
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::amd::AmdEnterRefused {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        match self {
+            Self::Invalid(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+            Self::Session(inner) => crate::py_errors::HostException::to_py_err(inner),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
 }
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::AvatarOutputError {

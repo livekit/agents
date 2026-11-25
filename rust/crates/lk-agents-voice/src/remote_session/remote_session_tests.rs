@@ -149,3 +149,57 @@ fn tool_starts_and_debug_messages_reach_the_console() {
         Ok(Some(Event::DebugMessage(proto::DebugMessage { payload: None })))
     ));
 }
+
+// Catches: an AMD category mapped onto another protocol category, a reason sent as anything but
+// its wire string, or an inference duration sent for a turn that ran no inference. Python:
+// `remote_session.py` `_encode_amd_prediction` and `_on_amd_completed`.
+#[test]
+fn amd_predictions_and_completions_encode_as_mains() {
+    use lk_agents_abi::voice::amd::{AmdCompletedEvent, AmdReason};
+    use proto::agent_session_event::Event;
+    let prediction = AmdPredictionEvent {
+        speech_duration: 1.5,
+        category: AmdCategory::Wait,
+        reason: AmdReason::Reused,
+        transcript: "please hold".into(),
+        delay: 0.25,
+        turn_id: 4,
+        stage: AmdCategory::MachineScreening,
+        inference_duration: None,
+    };
+    let Ok(Some(Event::AmdPrediction(p))) =
+        encode_wire(WireEvent::AmdPrediction(prediction.clone()))
+    else {
+        panic!("a prediction")
+    };
+    assert_eq!(p.category, proto::AmdCategory::AmdWait as i32);
+    assert_eq!(p.stage, proto::AmdCategory::AmdMachineScreening as i32);
+    assert_eq!((p.reason.as_str(), p.turn_id, p.transcript.as_str()), ("reused", 4, "please hold"));
+    assert_eq!(p.speech_duration, Some(proto::Duration { seconds: 1, nanos: 500_000_000 }));
+    assert_eq!(p.inference_duration, None, "unset when the turn ran no inference");
+
+    let completed = AmdCompletedEvent {
+        category: AmdCategory::MachineVm,
+        reason: AmdReason::IdleTimeout,
+        voicemail_message_played: true,
+        last_prediction: Some(AmdPredictionEvent { inference_duration: Some(0.5), ..prediction }),
+    };
+    let Ok(Some(Event::AmdCompleted(c))) = encode_wire(WireEvent::AmdCompleted(completed)) else {
+        panic!("a completion")
+    };
+    assert_eq!(c.category, proto::AmdCategory::AmdMachineVm as i32);
+    assert_eq!(c.reason, "idle_timeout");
+    assert!(c.voicemail_message_played);
+    let last = c.prediction.expect("the last prediction");
+    assert_eq!(last.inference_duration, Some(proto::Duration { seconds: 0, nanos: 500_000_000 }));
+    let none = AmdCompletedEvent {
+        category: AmdCategory::Uncertain,
+        reason: AmdReason::Cancelled,
+        voicemail_message_played: false,
+        last_prediction: None,
+    };
+    let Ok(Some(Event::AmdCompleted(c))) = encode_wire(WireEvent::AmdCompleted(none)) else {
+        panic!("a completion")
+    };
+    assert_eq!(c.prediction, None, "unset when the run ended before a prediction");
+}

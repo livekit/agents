@@ -589,6 +589,7 @@ impl VoiceSession {
                 resources: self.resources.clone(),
                 cx: r.peer.session.clone(),
                 route: r.peer.amd.clone(),
+                remote: r.remote.clone(),
             };
             Ok((peer, agent))
         })
