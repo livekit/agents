@@ -1,0 +1,29 @@
+rust/crates/lk-agents-abi/src/stt/stt.rs
+  s_f16b3797f0fa4d::t_ed1d1b1ff0c1ac 192-201
+rust/crates/lk-agents-inference/src/stt/executor.rs
+  s_f16b3797f0fa4d::t_2077189b78f021 316-319
+rust/crates/lk-agents-inference/src/stt/headers_tests.rs
+  s_f16b3797f0fa4d::t_3e7cd548499ade 1-69
+rust/crates/lk-agents-inference/src/stt/mod.rs
+  s_f16b3797f0fa4d::t_55d1eab96254d8 5-6,80-82,99,117-118,172,317,482,548-556
+rust/crates/lk-agents-inference/src/stt/stt_tests.rs
+  s_f16b3797f0fa4d::t_08ce87917598d2 25,1121
+rust/crates/lk-agents-inference/src/testkit.rs
+  s_f16b3797f0fa4d::t_87303a8e57b616 152-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0d89ec297950bbddb4d03e1732d192af6861e1ff",
+  "prompts": {},
+  "sessions": {
+    "s_f16b3797f0fa4d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_f16b3797f0fa4d",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
