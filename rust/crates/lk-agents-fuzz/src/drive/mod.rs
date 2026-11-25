@@ -706,8 +706,7 @@ pub(crate) struct Entered {
     /// The recording has its entry.
     pub recorded: bool,
     pub run: Option<lk_agents_runtime::voice::amd::AmdRun>,
-    pub events:
-        Option<tokio::sync::mpsc::UnboundedReceiver<lk_agents_voice::amd::events::AmdEvent>>,
+    pub events: Option<tokio::sync::mpsc::Receiver<lk_agents_voice::amd::events::AmdEvent>>,
     pub execute: Option<BoxFuture<'static, lk_agents_voice::amd::events::Outcome>>,
     /// `aclose()`, until it returns.
     pub close: Option<BoxFuture<'static, lk_agents_voice::amd::events::Outcome>>,

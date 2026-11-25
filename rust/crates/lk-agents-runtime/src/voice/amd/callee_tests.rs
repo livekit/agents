@@ -12,8 +12,9 @@ async fn without_a_room_the_run_listens_at_once() {
             true
         })
     };
-    let setup = CalleeSetup { room: None, participant: None, wait_until_answered: true };
+    let setup =
+        CalleeSetup { room: None, participant: None, linked: None, wait_until_answered: true };
     let time = Timebase::from_virtual(Arc::new(lk_agents_abi::VirtualClock::new()));
-    watch(setup, time, report).await;
+    watch(setup, time, CancellationToken::new(), report).await;
     assert_eq!(*heard.lock(), [Callee::Answered]);
 }

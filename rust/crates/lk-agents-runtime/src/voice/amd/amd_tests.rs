@@ -22,3 +22,17 @@ fn a_run_hears_only_its_own_observations_until_it_detaches() {
     tap.deliver(AmdRunId(1), &busy());
     assert!(rx.try_recv().is_err());
 }
+
+// Catches: a run's route displaced by another run's attach, which ends the first run's
+// observations and cancels it.
+#[test]
+fn another_runs_attach_leaves_a_runs_route_alone() {
+    let tap = AmdTap::default();
+    let (first, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    tap.attach(AmdRunId(1), first);
+    let (second, _) = tokio::sync::mpsc::unbounded_channel();
+    tap.attach(AmdRunId(2), second);
+    tap.detach(AmdRunId(2));
+    tap.deliver(AmdRunId(1), &busy());
+    assert_eq!(heard.try_recv().ok(), Some(busy()), "run 1 is still routed");
+}

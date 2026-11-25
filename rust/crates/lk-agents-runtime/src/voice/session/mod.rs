@@ -564,13 +564,12 @@ impl VoiceSession {
         self.running(|r| Ok(r.api.clone()))
     }
 
-    /// The room AMD waits in for its callee, and the participant the session's room I/O links
-    /// now. `None` without a room: AMD listens at once (`_setup_listening`).
+    /// The room AMD waits in for its callee, and the room I/O whose linked participant it
+    /// listens to. `None` without a room: AMD listens at once (`_setup_listening`).
     pub(crate) fn amd_room(
         &self,
-    ) -> Option<(Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>, Option<String>)> {
-        let room = self.rtc.clone()?;
-        Some((room, self.room_io.linked_participant().map(|identity| identity.0)))
+    ) -> Option<(Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>, Arc<dyn RoomIo>)> {
+        Some((self.rtc.clone()?, Arc::clone(&self.room_io)))
     }
 
     /// What an AMD run executes against, and the agent running now. Refused unless running.
@@ -582,7 +581,6 @@ impl VoiceSession {
                 journal: r.peer.journal.clone(),
                 time: self.time.clone(),
                 spawner: Arc::clone(&self.spawner),
-                tasks: Arc::clone(&self.tasks),
                 resources: self.resources.clone(),
                 cx: r.peer.session.clone(),
                 route: r.peer.amd.clone(),
@@ -689,6 +687,7 @@ impl VoiceSession {
                         running.drained.take(),
                         running.remote.clone(),
                         running.peer.session.clone(),
+                        running.peer.amd.clone(),
                     )),
                     None,
                 ),
@@ -708,7 +707,7 @@ impl VoiceSession {
         let stage = Arc::clone(&self.stage);
         let time = self.time.clone();
         async move {
-            let Some((api, drained, remote, session)) = running else {
+            let Some((api, drained, remote, session, amd)) = running else {
                 return;
             };
             // A stopped receiver has already closed the session.
@@ -718,6 +717,13 @@ impl VoiceSession {
                 let overrun =
                     telemetry::TeardownOverrun { stage: telemetry::TeardownStage::SessionClose };
                 telemetry::measure(&session, &overrun, 1u64);
+            }
+            // The loop ended: its close detached any AMD run, which now joins its legs and closes
+            // its models (`_teardown_activity` awaits `amd.aclose()`).
+            let deadline = time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+            let late = amd.join(time.clock().as_ref(), deadline).await;
+            if !late.is_empty() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, tasks:? = late; "AMD run did not settle within the session's teardown bound");
             }
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on
             // the host stream, and the drain only ends when every sender is gone.

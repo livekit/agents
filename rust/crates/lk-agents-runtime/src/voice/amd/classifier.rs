@@ -40,7 +40,7 @@ enum Called {
     Failed(ProviderError),
 }
 
-fn feature_headers(inference: bool) -> BTreeMap<String, String> {
+pub(super) fn feature_headers(inference: bool) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
     if inference {
         headers.insert(HEADER_CLIENT_FEATURE.to_owned(), CLIENT_FEATURE.to_owned());
@@ -220,6 +220,12 @@ pub fn decision_choice(
 
 /// `APIError`, its timeout and invalid output give an `inference_error` prediction; any other
 /// failure (a host exception outside the API taxonomy) ends the run.
+///
+/// Gap: Python also maps a model's `ValueError` and `asyncio.TimeoutError` to `inference_error`
+/// (`detector.py` `_classify`). A host error outside the taxonomy carries only its class name,
+/// which is diagnostics and never a decision (`HostError::class`), so the core cannot tell those
+/// kinds apart: here they end the run with `internal_error`. An adapter that raises them as
+/// `APIError` (or `APITimeoutError`) gets Python's result.
 fn classify_error(error: &ProviderError) -> Option<ClassifyError> {
     let timeout = match error {
         ProviderError::Local(error) => {

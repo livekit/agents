@@ -9,6 +9,10 @@ use crate::voice::Executor;
 use crate::voice::session::{CloseOptions, SessionRunner, Timebase};
 use lk_agents_abi::utils::stream::{Closed, ProviderStream, StreamInput, StreamOutput};
 use lk_agents_abi::voice::events::CloseReason;
+use lk_agents_abi::voice::rtc::{
+    ByteStreamIngress, ConnectionState, LocalParticipant, ParticipantIdentity, RemoteParticipant,
+    RoomEventSink, RtcError, TextStreamIngress,
+};
 use lk_agents_abi::{AudioFrame, ChatRequest, LlmStream, SpeechEvent, Ts};
 use lk_agents_voice::agent_session::Command;
 use lk_agents_voice::agent_session::VoiceHostEvent;
@@ -149,13 +153,20 @@ struct Closes {
     count: AtomicUsize,
     after_outcome: Mutex<Vec<bool>>,
     outcome_seen: std::sync::atomic::AtomicBool,
+    /// How long each close takes.
+    takes: Duration,
 }
 
 impl Closes {
+    fn slow(takes: Duration) -> Arc<Self> {
+        Arc::new(Closes { takes, ..Closes::default() })
+    }
+
     fn closer(self: &Arc<Self>) -> ModelCloser {
         let closes = Arc::clone(self);
         Box::new(move || {
             Box::pin(async move {
+                tokio::time::sleep(closes.takes).await;
                 closes.count.fetch_add(1, Ordering::SeqCst);
                 let seen = closes.outcome_seen.load(Ordering::SeqCst);
                 closes.after_outcome.lock().push(seen);
@@ -198,7 +209,7 @@ async fn within<T>(what: &str, future: impl std::future::Future<Output = T>) -> 
 }
 
 /// Every event the run has sent so far.
-fn drain(events: &mut tokio::sync::mpsc::UnboundedReceiver<AmdEvent>) -> Vec<AmdEvent> {
+fn drain(events: &mut tokio::sync::mpsc::Receiver<AmdEvent>) -> Vec<AmdEvent> {
     let mut out = Vec::new();
     while let Ok(event) = events.try_recv() {
         out.push(event);
@@ -301,23 +312,225 @@ async fn the_models_amd_created_are_closed_once_before_the_outcome() {
     assert_eq!((llm_closes.count(), stt_closes.count()), (1, 1), "never closed again");
 }
 
-// Catches: a second run attached beside the first. Spec §5.1: one run at a time; Python raises
-// "amd is already active".
+// Catches: a second run attached beside the first, or a refused second run that cancels the
+// first (its route replaced, the first run's executor reading the end of its observations).
+// Spec §5.1: one run at a time; Python raises "amd is already active" and leaves the first run
+// alone (`detector.py` `__aenter__`).
 #[tokio::test(start_paused = true)]
 async fn a_second_run_is_refused_while_one_is_attached() {
     let api = session().await;
-    let first = enter(&api, config(AmdOptions::default())).await.expect("the first run attaches");
+    let options = AmdOptions { timeout: Duration::from_secs(5), ..AmdOptions::default() };
+    let first = enter(&api, config(options.clone())).await.expect("the first run attaches");
+    let mut events = first.events().expect("the first run's events");
     let second = enter(&api, config(AmdOptions::default())).await;
     assert!(
         matches!(second, Err(AmdEnterError::Refused(AmdAttachRefused::AlreadyAttached))),
         "{:?}",
         second.err()
     );
-    // The refused run changed nothing: the first still completes on its own close.
-    assert_eq!(within("the first close", first.close()).await, cancelled());
+    // The refused run changed nothing: the first runs on, and ends on its own deadline.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(drain(&mut events), vec![], "the first run is still running");
+    let outcome = within("the first run's overall limit", first.execute()).await;
+    assert_eq!(outcome.reason, AmdReason::Timeout, "the first run was not cancelled");
     let third = enter(&api, config(AmdOptions::default())).await;
     assert!(third.is_ok(), "a new run attaches once the first detached: {:?}", third.err());
     assert_ne!(third.as_ref().map(AmdRun::id).ok(), Some(first.id()), "a new run id");
+}
+
+// Catches: a caller that stops waiting for `enter()` after the session accepted the attach,
+// leaving the gate attached with no executor (replies held for good) and the models AMD created
+// open. Python cleans up a failed `__aenter__`, cancellation included (`detector.py`: `await
+// self.aclose(); raise`).
+#[tokio::test(start_paused = true)]
+async fn a_caller_that_stops_waiting_leaves_no_run_behind() {
+    // The entry is polled once, so the run's task exists; each count of yields then drops it at
+    // another point: before the session took the attach, after it accepted, and after the answer
+    // reached `enter`, unread. (A future never polled started nothing.)
+    for yields in 0..8 {
+        let api = session().await;
+        let closes = Arc::new(Closes::default());
+        let mut config = config(AmdOptions::default());
+        config.classifier = Classifier::Llm(AmdModel {
+            model: Arc::new(Silent) as Arc<dyn Llm>,
+            inference: true,
+            close: Some(closes.closer()),
+        });
+        let mut entering = Box::pin(enter(&api, config));
+        let first = std::future::poll_fn(|cx| std::task::Poll::Ready(entering.as_mut().poll(cx)));
+        assert!(first.await.is_pending(), "the entry waits for the session's answer");
+        for _ in 0..yields {
+            tokio::task::yield_now().await;
+        }
+        drop(entering);
+        let closed = async {
+            while closes.count() == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        // Promptly, not at the run's own 60 s limit.
+        tokio::time::timeout(Duration::from_secs(5), closed)
+            .await
+            .unwrap_or_else(|_| panic!("after {yields} yields: the abandoned run lingers"));
+        // The gate is free: a new run attaches.
+        let next = within("a new run", enter(&api, config_plain())).await;
+        assert!(next.is_ok(), "after {yields} yields: {:?}", next.err());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(closes.count(), 1, "after {yields} yields: each owned model closes once");
+    }
+}
+
+fn config_plain() -> AmdConfig {
+    config(AmdOptions::default())
+}
+
+// Catches: an entry the session's AMD task set refuses after the models were handed over, which
+// dropped the models AMD created without closing them. Spec §14 invariant 11.
+#[tokio::test(start_paused = true)]
+async fn a_refused_run_task_still_closes_the_models_amd_created() {
+    let api = session().await;
+    let (peer, _) = api.amd_peer().expect("running");
+    peer.route.tasks().close();
+    let (llm_closes, stt_closes) = (Arc::new(Closes::default()), Arc::new(Closes::default()));
+    let mut config = config(AmdOptions::default());
+    config.classifier = Classifier::Llm(AmdModel {
+        model: Arc::new(Silent) as Arc<dyn Llm>,
+        inference: true,
+        close: Some(llm_closes.closer()),
+    });
+    config.stt = Some(AmdModel {
+        model: Arc::new(QuietStt { streaming: true }) as Arc<dyn Stt>,
+        inference: true,
+        close: Some(stt_closes.closer()),
+    });
+    let refused = enter(&api, config).await;
+    assert!(
+        matches!(refused, Err(AmdEnterError::Session(SessionRefused::Closed))),
+        "{:?}",
+        refused.err()
+    );
+    let deadline = api.time().now().saturating_add(Duration::from_secs(30));
+    within("the cleanup", peer.route.join(api.time().clock().as_ref(), deadline)).await;
+    assert_eq!((llm_closes.count(), stt_closes.count()), (1, 1), "each owned model closed once");
+}
+
+// Catches: a session close that returns while its AMD run is still joining its legs and closing
+// its models. Python: `_teardown_activity` awaits `self._amd.aclose()`.
+#[tokio::test(start_paused = true)]
+async fn the_session_close_waits_for_the_run_to_settle() {
+    let api = session().await;
+    let closes = Closes::slow(Duration::from_secs(2));
+    let mut config = config(AmdOptions::default());
+    config.classifier = Classifier::Llm(AmdModel {
+        model: Arc::new(Silent) as Arc<dyn Llm>,
+        inference: true,
+        close: Some(closes.closer()),
+    });
+    let run = enter(&api, config).await.expect("the run attaches");
+    within(
+        "the session close",
+        api.close(CloseReason::UserInitiated, CloseOptions::default(), None),
+    )
+    .await;
+    assert_eq!(closes.count(), 1, "the model closed before the session's close returned");
+    assert_eq!(within("execute()", run.execute()).await, cancelled());
+}
+
+// Catches: a model close that never returns holding the run's outcome forever.
+#[tokio::test(start_paused = true)]
+async fn a_model_close_is_bounded_by_the_teardown_bound() {
+    let api = session().await;
+    let closes = Closes::slow(Duration::from_secs(3600));
+    let mut config = config(AmdOptions::default());
+    config.classifier = Classifier::Llm(AmdModel {
+        model: Arc::new(Silent) as Arc<dyn Llm>,
+        inference: true,
+        close: Some(closes.closer()),
+    });
+    let run = enter(&api, config).await.expect("the run attaches");
+    let started = tokio::time::Instant::now();
+    assert_eq!(within("the close", run.close()).await, cancelled());
+    assert!(started.elapsed() <= lk_agents_abi::HOST_TEARDOWN_TIMEOUT + Duration::from_secs(1));
+}
+
+/// A room whose events cannot be read: the callee leg dies on its first read.
+struct BrokenRoom;
+
+impl lk_agents_abi::voice::rtc::RtcRoom for BrokenRoom {
+    fn events(
+        &self,
+    ) -> lk_agents_abi::voice::rtc::ports::Receiver<lk_agents_abi::voice::rtc::RoomEvent> {
+        panic!("injected callee leg bug")
+    }
+    fn attachments(&self) -> &Arc<dyn lk_agents_abi::voice::room_owner::RoomAttachmentsPort> {
+        unreachable!()
+    }
+    fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
+        unreachable!()
+    }
+    fn name(&self) -> Result<String, RtcError> {
+        unreachable!()
+    }
+    fn connection_state(&self) -> Result<ConnectionState, RtcError> {
+        unreachable!()
+    }
+    fn local(&self) -> &Arc<dyn LocalParticipant> {
+        unreachable!()
+    }
+    fn participant(
+        &self,
+        _: &ParticipantIdentity,
+    ) -> Result<Option<Arc<dyn RemoteParticipant>>, RtcError> {
+        unreachable!()
+    }
+    fn remote_participants(&self) -> Result<Vec<Arc<dyn RemoteParticipant>>, RtcError> {
+        unreachable!()
+    }
+    fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
+        unreachable!()
+    }
+    fn register_byte_stream_handler(
+        &self,
+        _: &str,
+        _: Arc<dyn ByteStreamIngress>,
+    ) -> Result<(), RtcError> {
+        unreachable!()
+    }
+    fn unregister_byte_stream_handler(&self, _: &str) -> Result<(), RtcError> {
+        unreachable!()
+    }
+    fn register_text_stream_handler(
+        &self,
+        _: &str,
+        _: Arc<dyn TextStreamIngress>,
+    ) -> Result<(), RtcError> {
+        unreachable!()
+    }
+    fn unregister_text_stream_handler(&self, _: &str) -> Result<(), RtcError> {
+        unreachable!()
+    }
+}
+
+// Catches: a leg that dies leaving the run waiting on it for good: a callee leg that panics
+// while the run is pending (no overall deadline yet). Python: `_on_task_done` ends the run with
+// `internal_error`; runtime.md "Task deaths".
+#[tokio::test(start_paused = true)]
+async fn a_leg_that_dies_ends_the_run_with_internal_error() {
+    let api = session().await;
+    let callee = CalleeSetup {
+        room: Some(Arc::new(BrokenRoom)),
+        participant: Some("caller".into()),
+        linked: None,
+        wait_until_answered: true,
+    };
+    let run = enter_with(&api, config(AmdOptions::default()), Some(callee))
+        .await
+        .expect("the run attaches");
+    let mut events = run.events().expect("the events");
+    let outcome = within("the run's end", run.execute()).await;
+    assert_eq!((outcome.category, outcome.reason), (Stage::Uncertain, AmdReason::InternalError));
+    assert!(outcome.is_error());
+    assert_eq!(drain(&mut events), vec![AmdEvent::Completed(outcome)]);
 }
 
 // Catches: options or an STT that `AMD.__init__` rejects accepted at entry. Python:

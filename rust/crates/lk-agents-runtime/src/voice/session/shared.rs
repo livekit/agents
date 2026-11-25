@@ -46,26 +46,30 @@ impl Journal {
 type AmdObserver =
     dyn FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation) + Send;
 
-/// Where the gate's AMD observations go: to the attached run's executor, routed by run, and to
-/// the observer a test or the simulation installed. A run's observations reach only that run;
-/// with no run routed they go nowhere, and nothing in the session waits on one.
+/// One run's executor input. The gate answers one run at a time, but routes are keyed by run, so
+/// a run being refused never displaces the one attached.
+type AmdRoutes = std::collections::BTreeMap<
+    lk_agents_voice::amd::AmdRunId,
+    tokio::sync::mpsc::UnboundedSender<lk_agents_voice::amd::AmdObservation>,
+>;
+
+/// Where the gate's AMD observations go: to each run's executor, routed by run, and to the
+/// observer a test or the simulation installed. A run's observations reach only that run; with
+/// no route they go nowhere, and nothing in the session waits on one. It also owns every run's
+/// task, from its entry to its outcome, so the session's close joins them.
 #[derive(Clone, Default)]
 pub struct AmdTap {
     observer: Option<Arc<Mutex<AmdObserver>>>,
-    route: Arc<Mutex<Option<AmdRoute>>>,
+    routes: Arc<Mutex<AmdRoutes>>,
     /// The last run id handed out: runs are numbered per session, from 1.
     runs: Arc<std::sync::atomic::AtomicU64>,
-}
-
-/// The attached run's executor input.
-struct AmdRoute {
-    run: lk_agents_voice::amd::AmdRunId,
-    observations: tokio::sync::mpsc::UnboundedSender<lk_agents_voice::amd::AmdObservation>,
+    /// Each run's task: its attach, its executor, its legs' join and its models' close.
+    tasks: Arc<lk_agents_net::task::TaskSet>,
 }
 
 impl std::fmt::Debug for AmdTap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let routed = self.route.lock().as_ref().map(|route| route.run);
+        let routed: Vec<_> = self.routes.lock().keys().copied().collect();
         f.debug_struct("AmdTap")
             .field("observer", &self.observer.is_some())
             .field("routed", &routed)
@@ -79,11 +83,7 @@ impl AmdTap {
         + Send
         + 'static,
     ) -> Self {
-        AmdTap {
-            observer: Some(Arc::new(Mutex::new(observer))),
-            route: Arc::default(),
-            runs: Arc::default(),
-        }
+        AmdTap { observer: Some(Arc::new(Mutex::new(observer))), ..AmdTap::default() }
     }
 
     /// A new run's id, unique on the session.
@@ -93,19 +93,19 @@ impl AmdTap {
     }
 
     /// From here, `run`'s observations go to `observations`, in the order the gate sent them.
-    /// Replaces any earlier run's route.
+    /// Another run's route is left as it is.
     pub fn attach(
         &self,
         run: lk_agents_voice::amd::AmdRunId,
         observations: tokio::sync::mpsc::UnboundedSender<lk_agents_voice::amd::AmdObservation>,
     ) {
-        let previous = self.route.lock().replace(AmdRoute { run, observations });
+        let previous = self.routes.lock().insert(run, observations);
         drop(previous);
     }
 
-    /// `run`'s observations go nowhere any more, if it is the one routed.
+    /// `run`'s observations go nowhere any more.
     pub fn detach(&self, run: lk_agents_voice::amd::AmdRunId) {
-        let previous = self.route.lock().take_if(|route| route.run == run);
+        let previous = self.routes.lock().remove(&run);
         drop(previous);
     }
 
@@ -117,13 +117,26 @@ impl AmdTap {
         if let Some(observer) = &self.observer {
             (observer.lock())(run, observation);
         }
-        let mut route = self.route.lock();
+        let mut routes = self.routes.lock();
         // A run whose executor is gone stops being routed.
-        if route.as_ref().is_some_and(|r| r.run == run)
-            && route.as_ref().is_some_and(|r| r.observations.send(observation.clone()).is_err())
-        {
-            *route = None;
+        if routes.get(&run).is_some_and(|route| route.send(observation.clone()).is_err()) {
+            routes.remove(&run);
         }
+    }
+
+    /// The set every run's task lives in, from its entry to its outcome.
+    pub(crate) fn tasks(&self) -> &Arc<lk_agents_net::task::TaskSet> {
+        &self.tasks
+    }
+
+    /// Waits until every run settled (legs joined, models closed), or `deadline`; then cancels
+    /// what is left and names it.
+    pub async fn join(
+        &self,
+        clock: &dyn lk_agents_abi::Clock,
+        deadline: lk_agents_abi::Ts,
+    ) -> Vec<String> {
+        self.tasks.drain(clock, deadline).await
     }
 }
 

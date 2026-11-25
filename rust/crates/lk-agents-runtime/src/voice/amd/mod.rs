@@ -28,22 +28,28 @@ pub use callee::CalleeSetup;
 pub(crate) use executor::AmdPeer;
 
 use crate::voice::VoiceSession;
+use crate::voice::session::{Awaited, Call, Timebase, send_command};
 use executor::{Executor, Inputs, Legs};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::voice::session::SessionRefused;
-use lk_agents_abi::{ApiConnectOptions, BoxFuture, Llm, Stt, ToolSpec};
+use lk_agents_abi::{
+    ApiConnectOptions, BoxFuture, HOST_TEARDOWN_TIMEOUT, Llm, Spawner, Stt, ToolSpec,
+};
 use lk_agents_net::signal;
+use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{Answer, Command, VoiceCommandOrigin};
 use lk_agents_voice::amd::events::{AmdEvent, Outcome};
 use lk_agents_voice::amd::machine::{Amd, AmdSetup};
 use lk_agents_voice::amd::options::{AmdOptions, AmdOptionsError};
-use lk_agents_voice::amd::{AmdAttachRefused, AmdCommand, AmdRunId};
+use lk_agents_voice::amd::{AmdAttachRefused, AmdCommand, AmdObservation, AmdRunId};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{Receiver, UnboundedSender, unbounded_channel};
+use tokio_util::sync::CancellationToken;
 
-/// Closes a model AMD created; run once, when the run's legs close.
+/// Closes a model AMD created; run once, when the run's legs close, bounded by the teardown
+/// bound.
 pub type ModelCloser = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// One model a run uses, and what AMD knows of it beyond the model itself.
@@ -157,13 +163,18 @@ pub enum AmdEnterError {
     Session(#[from] SessionRefused),
 }
 
+/// The run's events the host has not read yet. Beyond this the newest is dropped and logged:
+/// a run emits one prediction per turn, a menu at most per turn and one completion, so only a
+/// host that never reads them fills it. `execute()` still returns the outcome.
+pub const EVENTS_CAPACITY: usize = 128;
+
 /// One run, from its attach to its outcome. Dropping it does not cancel the run.
 pub struct AmdRun {
     run: AmdRunId,
-    close: UnboundedSender<()>,
+    close: CancellationToken,
     /// Ends without a value if the run's task ended without an outcome.
     outcome: signal::Cell<Option<Outcome>>,
-    events: parking_lot::Mutex<Option<UnboundedReceiver<AmdEvent>>>,
+    events: parking_lot::Mutex<Option<Receiver<AmdEvent>>>,
 }
 
 impl AmdRun {
@@ -174,7 +185,7 @@ impl AmdRun {
 
     /// The run's events from its attach, in order: each `amd_prediction` and
     /// `amd_menu_observed`, then `amd_completed` once. Taken once; `None` after.
-    pub fn events(&self) -> Option<UnboundedReceiver<AmdEvent>> {
+    pub fn events(&self) -> Option<Receiver<AmdEvent>> {
         self.events.lock().take()
     }
 
@@ -191,7 +202,7 @@ impl AmdRun {
     /// outcome once completed.
     pub fn close(&self) -> BoxFuture<'static, Outcome> {
         // A run that already ended has nothing to close.
-        let _ = self.close.send(());
+        self.close.cancel();
         self.execute()
     }
 }
@@ -202,28 +213,138 @@ impl std::fmt::Debug for AmdRun {
     }
 }
 
-/// `async with AMD(session, ...)`: attaches a new run to `session` and starts its executor on the
-/// session's scheduler. Returns once the session accepted the attach; the run then listens as its
-/// callee leg allows. A refused run closes the models AMD created, as `__aenter__` does.
-pub async fn enter(session: &VoiceSession, mut config: AmdConfig) -> Result<AmdRun, AmdEnterError> {
-    let mut closers: Vec<ModelCloser> = config.classifier.take_closer().into_iter().collect();
-    closers.extend(config.stt.as_mut().and_then(|stt| stt.close.take()));
-    match attach(session, config, &mut closers).await {
-        Ok(run) => Ok(run),
-        Err(refused) => {
-            for close in closers {
-                close().await;
-            }
-            Err(refused)
+/// The models AMD created, closed once: by the run after its legs closed, by a refused entry
+/// before it reports the refusal, or, if dropped first (an entry the session would not run),
+/// as a cleanup on the session's AMD task set, which the session's close joins.
+pub(crate) struct OwnedModels {
+    closers: Vec<ModelCloser>,
+    time: Timebase,
+    cleanup: Option<(Arc<TaskSet>, Arc<dyn Spawner>)>,
+}
+
+impl OwnedModels {
+    /// Closes every model now, each bounded by the teardown bound.
+    pub(crate) async fn close(&mut self) {
+        close_models(std::mem::take(&mut self.closers), &self.time).await;
+    }
+}
+
+impl Drop for OwnedModels {
+    fn drop(&mut self) {
+        let closers = std::mem::take(&mut self.closers);
+        if closers.is_empty() {
+            return;
+        }
+        let Some((tasks, spawner)) = &self.cleanup else { return };
+        let time = self.time.clone();
+        let close = async move { close_models(closers, &time).await };
+        tasks.cleanup(spawner.as_ref(), "amd models close", close);
+    }
+}
+
+/// Each close is bounded by [`HOST_TEARDOWN_TIMEOUT`]; one that overruns is logged and dropped.
+async fn close_models(closers: Vec<ModelCloser>, time: &Timebase) {
+    for close in closers {
+        if time.timeout(HOST_TEARDOWN_TIMEOUT, close()).await.is_err() {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = HOST_TEARDOWN_TIMEOUT.as_millis() as u64; "AMD model close timed out");
         }
     }
 }
 
-async fn attach(
+/// `async with AMD(session, ...)`: attaches a new run to `session` and starts its executor.
+/// Returns once the session accepted the attach; the run then listens as its callee leg allows.
+/// A refused run closes the models AMD created before this returns, as `__aenter__` does.
+///
+/// One task on the session's AMD task set owns the run from here: it routes the run, sends the
+/// attach, reads the answer and runs the executor. A caller that stops waiting therefore leaves
+/// nothing behind: an attach the session accepts after that is closed with `cancelled`, as
+/// `__aenter__` closes a run it could not finish entering.
+pub async fn enter(session: &VoiceSession, config: AmdConfig) -> Result<AmdRun, AmdEnterError> {
+    enter_with(session, config, None).await
+}
+
+/// [`enter`], with `callee` in place of the session's callee setup when given.
+async fn enter_with(
+    session: &VoiceSession,
+    mut config: AmdConfig,
+    callee: Option<CalleeSetup>,
+) -> Result<AmdRun, AmdEnterError> {
+    let mut closers: Vec<ModelCloser> = config.classifier.take_closer().into_iter().collect();
+    closers.extend(config.stt.as_mut().and_then(|stt| stt.close.take()));
+    let prepared = match prepare(session, config, callee) {
+        Ok(prepared) => prepared,
+        Err(refused) => {
+            close_models(closers, session.time()).await;
+            return Err(refused);
+        }
+    };
+    let Prepared { peer, run, machine, legs, dtmf_tool } = prepared;
+    let tasks = Arc::clone(peer.route.tasks());
+    let mut models = OwnedModels {
+        closers,
+        time: peer.time.clone(),
+        cleanup: Some((Arc::clone(&tasks), Arc::clone(&peer.spawner))),
+    };
+    let (call, attached) = match session.call(pick_attach) {
+        Ok(call) => call,
+        Err(refused) => {
+            models.close().await;
+            return Err(refused.into());
+        }
+    };
+    let (observed, observations) = unbounded_channel();
+    let (reports_tx, reports) = unbounded_channel();
+    let (events_tx, events) = tokio::sync::mpsc::channel(EVENTS_CAPACITY);
+    let close = CancellationToken::new();
+    let (producer, outcome) = signal::once();
+    let (entered_tx, entered) = tokio::sync::oneshot::channel();
+    let executor =
+        Executor::new(machine, peer.clone(), Legs { models, ..legs }, reports_tx, events_tx);
+    let entry = Entry {
+        run,
+        peer: peer.clone(),
+        observed,
+        dtmf_tool,
+        call,
+        attached,
+        executor,
+        inputs: Inputs { observations, reports, close: close.clone() },
+        entered: entered_tx,
+        outcome: producer,
+    };
+    if !tasks.try_spawn(peer.spawner.as_ref(), "amd", entry.run()) {
+        // Refused: the entry was dropped unsent, and its models close on the task set.
+        return Err(SessionRefused::Closed.into());
+    }
+    // A caller that stops waiting from here closes the run: before the answer, the run's task
+    // closes it once the session accepts; after, nobody would hold it.
+    let abandoned = close.clone().drop_guard();
+    match entered.await {
+        Ok(Ok(())) => {
+            abandoned.disarm();
+            let events = parking_lot::Mutex::new(Some(events));
+            Ok(AmdRun { run, close, outcome, events })
+        }
+        Ok(Err(refused)) => Err(refused),
+        // The run's task ended before the session answered: the session is gone.
+        Err(_) => Err(SessionRefused::Closed.into()),
+    }
+}
+
+/// What `enter` checked and built before the run's task owns it.
+struct Prepared {
+    peer: AmdPeer,
+    run: AmdRunId,
+    machine: Amd,
+    legs: Legs,
+    dtmf_tool: ToolSpec,
+}
+
+fn prepare(
     session: &VoiceSession,
     config: AmdConfig,
-    closers: &mut Vec<ModelCloser>,
-) -> Result<AmdRun, AmdEnterError> {
+    callee: Option<CalleeSetup>,
+) -> Result<Prepared, AmdEnterError> {
     let AmdConfig {
         options,
         classifier,
@@ -250,57 +371,98 @@ async fn attach(
         // Realtime models are refused at attach.
         insert_user_items: false,
     };
-    let room = session.amd_room();
-    let callee = CalleeSetup {
-        participant: participant.or_else(|| room.as_ref().and_then(|(_, linked)| linked.clone())),
-        room: room.map(|(room, _)| room),
-        wait_until_answered: options.wait_until_answered,
-    };
-    let machine = Amd::new(run, options, setup)?;
-    // Routed before the attach, so the observations the gate sends at attach are heard.
-    let (observed, observations) = unbounded_channel();
-    peer.route.attach(run, observed);
-    let attached = session.ask(VoiceCommandOrigin::Host, pick_attach, |call| {
-        Command::Amd(AmdCommand::Attach { run, dtmf_tool, call: Some(call) })
+    let callee = callee.unwrap_or_else(|| {
+        let room = session.amd_room();
+        // The participant the session's room I/O links, waited for when none is given
+        // (`_wait_for_linked_participant`).
+        let linked = room.as_ref().map(|(_, room_io)| {
+            let room_io = Arc::clone(room_io);
+            Arc::new(move || {
+                let room_io = Arc::clone(&room_io);
+                Box::pin(async move { room_io.wait_linked_participant().await.map(|id| id.0) })
+                    as BoxFuture<'static, Option<String>>
+            }) as callee::LinkedWait
+        });
+        CalleeSetup {
+            room: room.map(|(room, _)| room),
+            participant,
+            linked,
+            wait_until_answered: options.wait_until_answered,
+        }
     });
-    let answer = match attached {
-        Ok(attached) => attached.await,
-        Err(refused) => {
-            peer.route.detach(run);
-            return Err(refused.into());
+    let machine = Amd::new(run, options, setup)?;
+    // AMD's client feature header reaches an Inference STT's every connection (`_stt.py` passes
+    // `client_feature_kwargs`); another STT takes none.
+    let stt = stt.map(|stt| match stt.inference {
+        true => {
+            stt.model.with_extra_headers(&classifier::feature_headers(true)).unwrap_or(stt.model)
         }
-    };
-    match answer {
-        Ok(Ok(())) => {}
-        Ok(Err(why)) => {
-            peer.route.detach(run);
-            return Err(why.into());
-        }
-        Err(_) => {
-            peer.route.detach(run);
-            return Err(SessionRefused::Closed.into());
-        }
-    }
-    let (reports_tx, reports) = unbounded_channel();
-    let (events_tx, events) = unbounded_channel();
-    let (close, close_rx) = unbounded_channel();
-    let (producer, outcome) = signal::once();
+        false => stt.model,
+    });
     let legs = Legs {
         classifier: Arc::new(classifier),
         llm_conn_options,
-        stt: stt.map(|stt| stt.model),
+        stt,
         stt_conn_options,
         callee,
-        closers: std::mem::take(closers),
+        models: OwnedModels { closers: Vec::new(), time: peer.time.clone(), cleanup: None },
     };
-    let executor = Executor::new(machine, peer.clone(), legs, reports_tx, events_tx);
-    let inputs = Inputs { observations, reports, close: close_rx };
-    if !peer.tasks.spawn_settling(peer.spawner.as_ref(), "amd", producer, executor.run(inputs)) {
-        // The session is closing: its close detaches the run it just attached.
-        peer.route.detach(run);
-        return Err(SessionRefused::Closed.into());
+    Ok(Prepared { peer, run, machine, legs, dtmf_tool })
+}
+
+/// The run's task: everything one run owns, from its attach to its outcome.
+struct Entry {
+    run: AmdRunId,
+    peer: AmdPeer,
+    observed: UnboundedSender<AmdObservation>,
+    dtmf_tool: ToolSpec,
+    call: Call,
+    attached: Awaited<Result<(), AmdAttachRefused>>,
+    executor: Executor,
+    inputs: Inputs,
+    entered: tokio::sync::oneshot::Sender<Result<(), AmdEnterError>>,
+    outcome: signal::Producer<Option<Outcome>>,
+}
+
+impl Entry {
+    async fn run(self) {
+        let Entry {
+            run,
+            peer,
+            observed,
+            dtmf_tool,
+            call,
+            attached,
+            executor,
+            inputs,
+            entered,
+            outcome,
+        } = self;
+        // Routed before the attach, so the observations the gate sends at attach are heard.
+        // Routes are keyed by run: a refused run never displaces the one attached.
+        peer.route.attach(run, observed);
+        let attach = Command::Amd(AmdCommand::Attach { run, dtmf_tool, call: Some(call.id) });
+        let answer = match send_command(&peer.api, VoiceCommandOrigin::Host, attach, Some(call)) {
+            Ok(()) => attached.await.ok(),
+            Err(_) => None,
+        };
+        let refused = match answer {
+            Some(Ok(())) => None,
+            Some(Err(why)) => Some(AmdEnterError::from(why)),
+            None => Some(SessionRefused::Closed.into()),
+        };
+        if let Some(refused) = refused {
+            peer.route.detach(run);
+            // `__aenter__` closes the models it created before it raises.
+            executor.close_models().await;
+            let _ = entered.send(Err(refused));
+            return;
+        }
+        // A caller that stopped waiting has cancelled `inputs.close`: the run then completes
+        // with `cancelled`, as `__aenter__` closes a run it could not finish entering.
+        let _ = entered.send(Ok(()));
+        outcome.resolve(executor.run(inputs).await);
     }
-    Ok(AmdRun { run, close, outcome, events: parking_lot::Mutex::new(Some(events)) })
 }
 
 fn pick_attach(answer: Answer) -> Option<Result<(), AmdAttachRefused>> {

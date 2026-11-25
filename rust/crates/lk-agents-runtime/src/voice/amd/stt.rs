@@ -6,10 +6,12 @@
 //! before the substitution. The router drops every frame at its source until the gate applies
 //! `Activated`, so AMD hears nothing before the activation instant, as the session does not.
 //!
-//! The stream opens when the run starts listening, as Python's opens on the first frame, and its
-//! sink is installed once it opened; frames before that are not heard. Each non-blank final is
-//! reported. A stream that will not open, fails or ends is reported once as failed: AMD then
-//! uses the session's transcripts alone.
+//! The stream opens when the run starts listening, as Python's opens on the first frame. From
+//! the activation until its sink is installed, the router holds the channel's frames
+//! (`HoldAmd`, bounded by `AMD_BACKLOG`) and delivers them first, so AMD hears every frame from
+//! activation on, in order. An Inference STT's connections carry AMD's client feature header.
+//! Each non-blank final is reported. A stream that will not open, fails or ends is reported once
+//! as failed: AMD then uses the session's transcripts alone.
 
 use super::executor::LegReport;
 use crate::telemetry;

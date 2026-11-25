@@ -2,16 +2,23 @@
 //! track within [`TRACK_WAIT`], then, for a SIP participant with `wait_until_answered`, the
 //! call answered, with no timeout. Then it watches for the participant to leave.
 //!
-//! Without a room the run listens at once, as Python does without room I/O.
+//! The participant is the one given, else the one the session's room I/O links, waited for
+//! within the same [`TRACK_WAIT`] (`_wait_for_linked_participant`): never another audio
+//! publisher. Without a room the run listens at once, as Python does without room I/O.
+//!
+//! The leg stops when its `stop` token is cancelled, and always closes its room events within
+//! the teardown bound before it ends.
 
 use crate::rtc::wait;
 use crate::voice::session::Timebase;
+use lk_agents_abi::BoxFuture;
 use lk_agents_abi::voice::rtc::{
     ConnectionState, ParticipantIdentity, ParticipantKind, RoomEvent, RtcRoom, TRACK_KIND_AUDIO,
 };
 use lk_agents_voice::amd::machine::Callee;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 /// The setup's wait for the participant's audio track (`_TRACK_PUBLICATION_TIMEOUT`).
 pub const TRACK_WAIT: Duration = Duration::from_secs(5);
@@ -23,12 +30,19 @@ pub const SIP_CALL_ACTIVE: &str = "active";
 /// Where the callee leg's progress goes. A `false` return means nobody listens any more.
 pub type Report = Box<dyn Fn(Callee) -> bool + Send + Sync>;
 
+/// The participant the session's room I/O links now, or the next one it links; `None` once no
+/// link can come.
+pub type LinkedWait = Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>;
+
 /// Whom the leg waits for.
 #[derive(Clone)]
 pub struct CalleeSetup {
     pub room: Option<Arc<dyn RtcRoom>>,
-    /// The participant to wait for; any audio publisher when `None`.
+    /// The participant to wait for; the linked one when `None`.
     pub participant: Option<String>,
+    /// The room I/O's link, waited for when no participant is given. `None` (no room I/O)
+    /// waits for any audio publisher.
+    pub linked: Option<LinkedWait>,
     pub wait_until_answered: bool,
 }
 
@@ -37,14 +51,16 @@ impl std::fmt::Debug for CalleeSetup {
         f.debug_struct("CalleeSetup")
             .field("room", &self.room.is_some())
             .field("participant", &self.participant)
+            .field("linked", &self.linked.is_some())
             .field("wait_until_answered", &self.wait_until_answered)
             .finish()
     }
 }
 
 /// Reports `Answered`, `Missing` or `Disconnected` once for the setup, and `Disconnected` once
-/// more if the participant leaves after it.
-pub async fn watch(setup: CalleeSetup, time: Timebase, report: Report) {
+/// more if the participant leaves after it, until `stop` is cancelled. Either way it closes the
+/// room events it subscribed to before it returns.
+pub async fn watch(setup: CalleeSetup, time: Timebase, stop: CancellationToken, report: Report) {
     let Some(room) = setup.room.clone() else {
         report(Callee::Answered);
         return;
@@ -58,32 +74,39 @@ pub async fn watch(setup: CalleeSetup, time: Timebase, report: Report) {
         loop {
             tokio::select! {
                 biased;
+                () = stop.cancelled() => break None,
                 event = events.next() => match event {
                     Ok(Some(event)) => {
                         if departs(&event, identity.as_deref()) {
-                            break Err(Callee::Disconnected);
+                            break Some(Err(Callee::Disconnected));
                         }
                     }
                     // The room's events ended: it is gone.
-                    Ok(None) | Err(_) => break Err(Callee::Disconnected),
+                    Ok(None) | Err(_) => break Some(Err(Callee::Disconnected)),
                 },
-                outcome = &mut listen => break outcome,
+                outcome = &mut listen => break Some(outcome),
             }
         }
     };
     let answered = match outcome {
-        Ok(publisher) => {
+        None => false,
+        Some(Ok(publisher)) => {
             identity = Some(publisher);
             report(Callee::Answered)
         }
-        Err(callee) => {
+        Some(Err(callee)) => {
             report(callee);
             false
         }
     };
     if answered {
         loop {
-            match events.next().await {
+            let event = tokio::select! {
+                biased;
+                () = stop.cancelled() => break,
+                event = events.next() => event,
+            };
+            match event {
                 Ok(Some(event)) if !departs(&event, identity.as_deref()) => {}
                 Ok(Some(_)) | Ok(None) | Err(_) => {
                     report(Callee::Disconnected);
@@ -121,15 +144,25 @@ async fn listen(
         Ok(ConnectionState::Connected | ConnectionState::Reconnecting) => Callee::Missing,
         Ok(ConnectionState::Disconnected) | Err(_) => Callee::Disconnected,
     };
-    let track = wait::track_publication(
-        room.as_ref(),
-        setup.participant.clone(),
-        Some(vec![TRACK_KIND_AUDIO]),
-        wait::TrackOptions { subscribed: true, ..Default::default() },
-    );
-    let publisher = match time.timeout(TRACK_WAIT, track).await {
+    // The participant AgentSession hears, not any other audio publisher; the link and the track
+    // share one limit, as `asyncio.wait_for(_wait_for_audio(), ...)` does.
+    let audio = async {
+        let identity = match (setup.participant.clone(), &setup.linked) {
+            (Some(identity), _) => Some(identity),
+            (None, Some(linked)) => Some(linked().await.ok_or(())?),
+            (None, None) => None,
+        };
+        let track = wait::track_publication(
+            room.as_ref(),
+            identity,
+            Some(vec![TRACK_KIND_AUDIO]),
+            wait::TrackOptions { subscribed: true, ..Default::default() },
+        );
+        track.await.map_err(drop)
+    };
+    let publisher = match time.timeout(TRACK_WAIT, audio).await {
         Ok(Ok((Some(publisher), _))) => publisher,
-        Ok(Ok((None, _))) | Ok(Err(_)) | Err(_) => return Err(missing(room.as_ref())),
+        Ok(Ok((None, _))) | Ok(Err(())) | Err(_) => return Err(missing(room.as_ref())),
     };
     let participant = match room.participant(&publisher) {
         Ok(Some(participant)) => participant,
