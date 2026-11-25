@@ -236,7 +236,8 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     // answers the executor's model requests instead of the gate (`search::conversation::answerer`).
     // AMD enters only a realtime model with client-side turn detection, per-response tools and
     // client tool replies, and some STT (spec §5.1). A realtime call mostly detects turns on the
-    // client, and AMD brings its own recogniser when the session has none; the rest are refused.
+    // client, and AMD mostly brings its own recogniser when the session has none; the rest are
+    // refused.
     // A model without its own transcription leaves the turn's words to the session's recogniser,
     // or, half the time with none, to AMD's `InsertUserItem` (spec §7.2).
     if rng.u8(0..100) < 10 {
@@ -254,7 +255,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
             }
         }
         let mut amd = amd(rng, setup.stt, realtime);
-        amd.own_stt |= client_side && !setup.stt;
+        // Without session STT AMD mostly brings its own; one call in ten has none, which the
+        // session refuses (`RealtimeNoStt`).
+        amd.own_stt |= client_side && !setup.stt && rng.u8(0..10) != 0;
         setup.amd = Some(amd);
         // Mostly a caller in the room to listen to; otherwise AMD finds no participant.
         if setup.room_legs.is_none() && !setup.console && rng.u8(0..100) < 80 {
