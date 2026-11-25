@@ -128,10 +128,14 @@ pub enum AmdObservation {
     UserSpeech(UserSpeechObservation),
     /// Executed tool calls, for DTMF in classifier history (spec §11.1).
     ToolsExecuted { calls: Vec<ToolCallRecord> },
-    /// The session applied `Detach` and removed the gate.
+    /// The session applied `Detach`, or closed, and removed the gate.
     Detached { run: AmdRunId },
 }
 ```
+
+Observations that name a turn (`TurnEnded`, `ReplyCreated`, `SilenceHold`) go only to the
+run that gated the turn, and to none once that run is detached. A turn that `Detach` settled
+and that leaves its hook after a second run attached reports nothing to the second run.
 
 ### AMD to session
 
@@ -171,6 +175,8 @@ pub struct ReplyDecision {
 Attaching AMD is a session command, as entering any other mode is. It installs the
 gate for the run, sets the rules in
 [Session rules while attached](#session-rules-while-attached) and starts the hold.
+`AmdCommand::Attach` carries the `ToolSpec` of AMD's built-in `send_dtmf_events`, as the
+host declares it. The core does not keep its own copy of the schema.
 
 ## The session side
 
@@ -183,11 +189,22 @@ gate: Option<Gate>,
 struct Gate {
     run: AmdRunId,
     active: bool,                      // set by `Activated`
-    /// The latest committed turn and its decision, once known. A decision can arrive
-    /// while the turn is still in its customer hook; `finish_turn` consumes it.
-    latest: Option<(TurnId, Option<ReplyDecision>)>,
-    parked: Option<ParkedTurn>,        // at most one
+    latest: Option<Latest>,
     hold: Hold,
+    dtmf_tool: ToolSpec,               // from `AmdCommand::Attach`
+}
+struct Latest {
+    turn: TurnId,
+    /// The gate was active at commit. Only a bound turn's decision moves the hold.
+    bound: bool,
+    reply: TurnReply,
+}
+enum TurnReply {
+    Waiting,                           // in its customer hook, no decision
+    Parked(ParkedTurn),                // back from its hook, no decision; at most one
+    Decided(ReplyDecision),            // decided while still in its hook
+    Applied,
+    Ended,                             // left without a decision applied
 }
 struct ParkedTurn { info: EndOfTurnInfo, edits: TurnEdits }
 
@@ -225,9 +242,13 @@ enum Hold {
 - **Apply a decision.** A denied turn commits only its user item, discards the
   preemptive generation and sets `Hold::Denied`. An allowed turn calls `reply_to_turn`
   with the decision's instructions and DTMF permission, and sets `Hold::Silence` if
-  the decision asks for silence, else `Hold::Open`. An allow while the gate is not
-  `active` (row 1 while `Pending`) keeps `Hold::Entry`, as Python never resumes
+  the decision asks for silence, else `Hold::Open`. The commit records whether the gate
+  was `active`. A turn committed before `Activated` is not bound, so its allow keeps
+  `Hold::Entry`, even when its hook returns after activation. Python never resumes
   authorization for a turn it did not bind (`detector.py:1047`).
+- **Decision for an ended turn.** A decision for a turn that ended without one
+  (`skip_reply`, `StopResponse`, a drop) is dropped as `TurnEnded`. A second decision
+  for a turn is dropped as `Duplicate`.
 - **Silence.** Under `Hold::Silence`, a `Timer::AmdSilence` is armed for the latest
   speech boundary plus `needed`. Boundaries use the VAD boundary time, backdated as
   Python's are (`detector.py:668`), not event time, or every reply waits an extra VAD
@@ -240,7 +261,8 @@ enum Hold {
   uninterruptible drop): emit `TurnEnded`, set `Hold::Denied`.
 - **Authorization.** The scheduler authorizes the head speech only under `Hold::Open`,
   or when the head is the opening. A held head stays chosen in a held scheduling step,
-  distinct from `Current`.
+  distinct from `Current`. A speech queued before attach and held at the head keeps the
+  opening behind it, as in Python (spec §10.6).
 
 ### Activation and the opening
 
@@ -278,6 +300,16 @@ bypasses the hold, and it is created through an internal origin, since `say()` a
 5. Remove the gate and emit `Detached`. Later commits are not gated (spec §9.5), and
    a new AMD run can attach while an old turn is still in its hook.
 
+A correction after `Detach` remakes an unheard gated reply with the same stage
+instructions and tools. The session keeps the reply's request payload until the reply
+ends.
+
+The close ends an attached run as its completion would. When closing begins, the session
+releases the gate locally with `Keep` semantics: a parked turn keeps its words with no
+reply, a turn in its hook is settled to no reply, the hold opens so a draining close plays
+what the gate held, and the session emits `Detached`. Spec §12.3 resumes authorization on
+every completion, the close included.
+
 ### Local rules
 
 These need no answer from AMD:
@@ -295,10 +327,9 @@ These need no answer from AMD:
   tracking to the replacement and ignores the first speech's interrupted end, as
   `_track_voicemail` does (`detector.py:1191`).
 - **Turn exits.** `TurnEnded` fires on every exit: reply, `StopResponse`,
-  `skip_reply`, `hold_user_turn`, `supersede_turn`, the uninterruptible drop, local
-  supersession, and the close and handoff paths that abandon turns without
-  `finish_turn`. The close drains `parked` with `Dropped { append_user_message }`
-  semantics.
+  `skip_reply`, `supersede_turn`, the uninterruptible drop, local supersession, and the
+  close. No run is attached inside a handoff's window, so `hold_user_turn` never ends a
+  gated turn. The close ends a parked turn as abandoned, with its words kept.
 - **Inspection.** The idle check and the re-decide check in `decide_user_turn` also
   inspect `parked`.
 
@@ -352,10 +383,17 @@ returns early when session STT is disabled. With the gate attached and `!skip_re
 ### Session rules while attached
 
 The gate's presence gates these, so DST rules read the same flag (spec §5.3): skip
-`min_words` at end of turn, force interruptions and restore them at detach, refuse
-`say()` and `generate_reply()` except the opening, cancel handoffs, skip
-`on_user_turn_exceeded`, drop deferred tool replies, do not regenerate after a realtime
-fallback swap, and discard participant audio until `Activated`.
+`min_words` at end of turn, force interruptions, refuse `say()` and `generate_reply()`
+except the opening, cancel handoffs, skip `on_user_turn_exceeded`, drop deferred tool
+replies, do not regenerate after a realtime fallback swap, and discard participant audio
+until `Activated`.
+
+- **Interruptions.** AMD's requirement is laid over every option layer while the run is
+  attached, so a host `override_options` entered during AMD does not turn interruptions
+  off. At detach the remaining layers decide again.
+- **Deferred tool replies.** A tool update that arrives while a run is attached keeps
+  its output on the record and owes no reply, before or after detach. A reply whose
+  instructions were rendering when the run attached is not scheduled.
 
 ## The AMD side
 
@@ -595,7 +633,7 @@ Each spec §14 invariant has one owner:
 | 4 | `uncertain` and `wait` keep the stage | DST rule on the `Predicted` sequence |
 | 5 | Likely-human mark | DST rule on `raw`, `category` and `likely_human` |
 | 6 | One voicemail message at most | DST rule on `VoicemailPlayed`, confirmed at the sink |
-| 7 | Silence hold | DST sink rule, with silence computed from the fake VAD's ground truth, not from the session's or AMD's view |
+| 7 | Silence hold | DST rule judged at the instant the gate lets the reply go, with silence computed from the fake VAD's ground truth, not from the session's or AMD's view. After the release, new speech follows ordinary interruption, as in Python, so a later first frame says nothing about the hold. A detach exempts only a reply it let go. |
 | 8 | Stage instructions never saved | DST rule: no stage-instruction item in recorded items or storage |
 | 9 | DTMF only in `machine-ivr` | DST rule: AMD's built-in tool appears only in a reply whose decision set `dtmf`, never in a preemptive generation |
 | 10 | Cleanup on every path | DST rule after `Detached`: no gate, no hold, interruption settings equal their values at attach; host test for listener removal |
@@ -624,8 +662,11 @@ followed its own rules:
 - `detached_is_prompt`: `Detached` follows `Detach` within a bound that does not
   depend on a customer hook.
 
-`speech_is_heard` treats a speech as waiting legitimately while the gate holds it, and
-under `Hold::Silence` only until the fake VAD's ground truth shows the required
+`speech_is_heard` treats a speech as waiting legitimately while the gate holds it. The
+opening never waits on the hold. A reply to a bound turn with an applied allow waits only
+under `Hold::Silence`, until the fake VAD's ground truth shows the required silence.
+`observations_pair` checks that `AgentBusy` is reported only on change and that
+`SilenceHold` enters and leaves once per turn, only for a decision that asked for
 silence. The DST does not measure classifier accuracy, prompt quality, real STT lag
 or the SIP answer path. Live simulations and room tests own those.
 
