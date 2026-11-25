@@ -38,7 +38,7 @@ from livekit.agents.voice.generation import (
     _TTSGenerationData,
 )
 
-from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
 from .fake_tts import FakeTTS
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
@@ -253,6 +253,52 @@ def test_collector_aggregates_reasoning_tokens() -> None:
     assert usage.output_reasoning_tokens == 72
     # reasoning is a subset of the output tokens, never added on top of them
     assert usage.output_tokens == 150
+
+
+class _UsageLLM(FakeLLM):
+    """Streams one content chunk, then a usage chunk carrying the given service tier."""
+
+    def __init__(self, service_tier: str | None) -> None:
+        super().__init__()
+        self.service_tier = service_tier
+
+    def chat(self, *, chat_ctx: ChatContext, **kwargs: Any) -> Any:
+        return _UsageLLMStream(
+            self, chat_ctx=chat_ctx, tools=[], conn_options=APIConnectOptions(max_retry=0)
+        )
+
+
+class _UsageLLMStream(FakeLLMStream):
+    _llm: _UsageLLM
+
+    async def _run(self) -> None:
+        self._send_chunk(delta="hello")
+        self._event_ch.send_nowait(
+            ChatChunk(
+                id="c",
+                usage=CompletionUsage(
+                    completion_tokens=1,
+                    prompt_tokens=5,
+                    total_tokens=6,
+                    service_tier=self._llm.service_tier,
+                ),
+            )
+        )
+
+
+@pytest.mark.parametrize("service_tier", ["priority", None])
+async def test_llm_metrics_carry_the_usage_service_tier(service_tier: str | None) -> None:
+    model = _UsageLLM(service_tier)
+    metrics = _record_metrics(model)
+
+    # aclose() awaits the metrics monitor, so metrics are settled once the block exits
+    async with model.chat(chat_ctx=ChatContext.empty()) as stream:
+        async for _ in stream:
+            pass
+
+    [m] = metrics
+    assert isinstance(m, LLMMetrics)
+    assert m.service_tier == service_tier
 
 
 def _stt_metrics(**overrides: object) -> STTMetrics:

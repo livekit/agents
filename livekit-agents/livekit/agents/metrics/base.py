@@ -43,6 +43,12 @@ class LLMMetrics(_BaseMetrics):
     """
     total_tokens: int
     tokens_per_second: float
+    service_tier: str | None = None
+    """The service tier the provider processed the request with (e.g. 'default', 'flex',
+    'priority'), taken from the response's ``CompletionUsage``.
+
+    None when the provider doesn't report one.
+    """
     speech_id: str | None = None
     metadata: Metadata | None = None
 
