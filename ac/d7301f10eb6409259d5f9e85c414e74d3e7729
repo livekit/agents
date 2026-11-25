@@ -1,0 +1,23 @@
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_reply_tests.rs
+  s_817d82b370cc5a::t_1cd03e383222a2 6,105,107,173,187,200,251,349,415,471,555
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_rule_tests.rs
+  s_817d82b370cc5a::t_7761d2089f1848 2,455,457,472,501,520,577,618,638,679,715,797
+rust/crates/lk-agents-voice/src/trace.rs
+  s_817d82b370cc5a::t_e267f972c6ad09 323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "acd7301f10eb6409259d5f9e85c414e74d3e7729",
+  "prompts": {},
+  "sessions": {
+    "s_817d82b370cc5a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_817d82b370cc5a",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
