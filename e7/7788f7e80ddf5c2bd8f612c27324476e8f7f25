@@ -1,0 +1,27 @@
+rust/crates/lk-agents-fuzz/src/rules/amd/amd_completes_once.rs
+  s_fd6e892385460d::t_23a031568108a4 4,14-15,22-32,86-92,98-120,166-186
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
+  s_fd6e892385460d::t_dfd89fbe021230 26-32,184,203-208,217-226,230-235,287-288,290-308
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_fd6e892385460d::t_61f298a2abcb84 44,52,150-171,173-175,180-199,202-209,214,270,371-406
+rust/crates/lk-agents-fuzz/src/rules/amd/one_voicemail_message.rs
+  s_fd6e892385460d::t_7c2d707ea13d89 4-5,14-16,25-31,38-59,116-134
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_fd6e892385460d::t_572420ca06537b 20-23,34,37,140-154,251-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e77788f7e80ddf5c2bd8f612c27324476e8f7f25",
+  "prompts": {},
+  "sessions": {
+    "s_fd6e892385460d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_fd6e892385460d",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
