@@ -725,6 +725,12 @@ pub enum RealtimeStep {
         speech: SpeechId,
         status: String,
     },
+    /// A response request leaves for the socket. `speech` is the speech its answer plays into: a
+    /// tool follow-up's is the speech it continues. `None` when no speech was announced for it.
+    Requested {
+        req_id: String,
+        speech: Option<SpeechId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -1093,7 +1099,9 @@ impl Step {
             Step::Input(_) => None,
             Step::Realtime(step) => match step {
                 RealtimeStep::GenerationStatus { speech, .. } => Some(*speech),
-                RealtimeStep::Opened { .. } | RealtimeStep::Sent { .. } => None,
+                RealtimeStep::Opened { .. }
+                | RealtimeStep::Sent { .. }
+                | RealtimeStep::Requested { .. } => None,
             },
             Step::Handoff(step) => match step {
                 HandoffStep::HookIssued { speech, .. } => *speech,

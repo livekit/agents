@@ -112,7 +112,7 @@ impl VoiceDriver {
     }
 
     /// A request goes on the wire. The server first gets the tools of the speech it answers: a
-    /// gated reply's, or the agent's again.
+    /// gated reply's, or the agent's again. The journal names the speech the request is for.
     pub(super) fn rt_send_request(&mut self, cmd: RealtimeCommand) {
         let Some(rt) = self.activity.realtime_activity() else { return };
         let t = &rt.state;
@@ -124,6 +124,10 @@ impl VoiceDriver {
         let wanted = speech.filter(|s| t.gated.get(s).is_some_and(|g| g.toolset.is_some()));
         if wanted != t.tools_for {
             self.set_server_tools(wanted);
+        }
+        if let Some(req_id) = cmd.req_id() {
+            let req_id = req_id.to_owned();
+            self.record_trace(crate::trace::RealtimeStep::Requested { req_id, speech });
         }
         self.rt_send(cmd);
     }
