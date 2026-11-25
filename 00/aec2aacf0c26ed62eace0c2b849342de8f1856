@@ -1,0 +1,19 @@
+docs/proposals/amd.md
+  s_33c47ffdd74b45::t_1347cfa67ff661 417-434,589-633,644,647
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "00aec2aacf0c26ed62eace0c2b849342de8f1856",
+  "prompts": {},
+  "sessions": {
+    "s_33c47ffdd74b45": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_33c47ffdd74b45",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
