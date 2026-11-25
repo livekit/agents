@@ -227,13 +227,19 @@ impl Gate {
 
     /// The generation that answers the user words `text`: its request ends with them, or with
     /// stage instructions after them.
+    // The newest user message, not the last two items: a superseded or denied turn's words are
+    // committed just before the next turn's ("Apply a decision": a denied turn commits its user
+    // item), so they sit second to last in the newer turn's request.
     fn reply_to(&self, text: &str) -> Option<(SpeechId, &ReplyContext)> {
         self.generations().into_iter().find(|(_, ctx)| {
-            ctx.request.chat_ctx.items.iter().rev().take(2).any(|item| {
-                item.as_message().is_some_and(|m| {
-                    m.role == Role::User && m.raw_text_content().as_deref() == Some(text)
-                })
-            })
+            let last_user = ctx
+                .request
+                .chat_ctx
+                .items
+                .iter()
+                .rev()
+                .find_map(|item| item.as_message().filter(|m| m.role == Role::User));
+            last_user.is_some_and(|m| m.raw_text_content().as_deref() == Some(text))
         })
     }
 
@@ -668,7 +674,9 @@ fn a_newer_commit_cancels_a_reply_held_for_silence() {
     assert!(g.cancelled(speech), "the held reply is cancelled at the newer commit");
     g.advance_to(5_000);
     assert!(!g.authorized(speech), "the cancelled reply never plays");
-    assert!(g.gate_steps().iter().any(|s| matches!(s, GateStep::Superseded { turn: TurnId(1), .. })));
+    assert!(
+        g.gate_steps().iter().any(|s| matches!(s, GateStep::Superseded { turn: TurnId(1), .. }))
+    );
 }
 
 /// Python: `test_newer_turn_without_a_reply_cancels_a_held_reply`.

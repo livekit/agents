@@ -40,7 +40,13 @@ fn the_opening_plays_while_turns_stay_held() {
 /// `test_opening_instructions_generate_a_reply_without_tools`.
 #[test]
 fn opening_instructions_generate_without_tools() {
-    let mut g = Gate::new();
+    // Opening instructions need an LLM on the session (spec §5.1); the bare harness has none.
+    let mut g = Gate::with(|d| {
+        d.session.llm = Some(lk_agents_abi::resources::LlmRef {
+            id: lk_agents_abi::resources::ResourceId(1),
+            provider: lk_agents_abi::ProviderId::of_label("llm"),
+        })
+    });
     g.attach(RUN);
     let from = g.activate(Some(Opening::Instructions("Greet the callee.".into())));
     let generated = g.generations_since(from);
@@ -191,25 +197,36 @@ fn detach_forbidding_replies_removes_a_held_reply() {
     assert!(!g.authorized(speech));
 }
 
-/// Step 1: forbidding replies cancels an authorized reply still generating and an unplayed
-/// opening, and keeps a speech that is playing. Python:
-/// `test_cancel_pending_speech_includes_preemptive_and_queued_speech`.
+/// Step 1: forbidding replies cancels every speech with no playout yet and keeps a speech that is
+/// playing. Python: `test_cancel_pending_speech_includes_preemptive_and_queued_speech`.
+// Both speeches predate the attach: any commit under the gate interrupts the current speech
+// ("Local rules": commit interrupt), so a playing opening cannot outlive a gated turn's reply.
 #[test]
 fn detach_forbidding_replies_keeps_only_what_is_playing() {
+    use crate::agent_session::machine::activity::scheduling::SpeechKind;
+    use crate::agent_session::{SayText, SpeechCommand};
+    let say = |text: &str| {
+        Command::Speech(SpeechCommand::Say {
+            text: SayText::Text(text.into()),
+            allow_interruptions: None,
+            add_to_chat_ctx: true,
+            call: None,
+        })
+    };
     let mut g = Gate::new();
+    g.send(say("Hi, this is Ada from the clinic."));
+    g.send(say("I am calling about your appointment."));
+    let said = g.created(SpeechKind::Say);
+    let (playing, queued) = (said[0], said[1]);
+    g.first_frame(playing);
     g.attach(RUN);
-    g.activate(Some(Opening::Text("Hi, this is Ada.".into())));
-    let opening = g.one_opening();
-    g.first_frame(opening);
-    g.commit(1, "hello");
-    g.decide(1, allow());
-    let reply = g.only_reply_to("hello");
-    assert!(!g.cancelled(opening));
+    g.activate(None);
+    assert!(!g.authorized(queued), "held by the gate");
     g.detach(deny(), DetachCancel::ForbidReplies);
-    assert!(g.cancelled(reply), "an unplayed reply is cancelled");
+    assert!(g.cancelled(queued), "an unplayed speech is cancelled");
     assert!(
-        !g.out.iter().any(|e| matches!(e, VoiceEffect::CancelSpeech(id) if *id == opening))
-            && !g.out.iter().any(|e| matches!(e, VoiceEffect::Speech(id, SpeechUpdate::View(v)) if *id == opening && v.interrupted())),
+        !g.out.iter().any(|e| matches!(e, VoiceEffect::CancelSpeech(id) if *id == playing))
+            && !g.out.iter().any(|e| matches!(e, VoiceEffect::Speech(id, SpeechUpdate::View(v)) if *id == playing && v.interrupted())),
         "a playing speech keeps playing, as `_cancel_pending_speeches` does"
     );
 }
@@ -535,5 +552,6 @@ fn a_turn_dropped_behind_an_uninterruptible_speech_ends_as_dropped() {
     g.commit(1, "hello");
     assert_eq!(g.ended(1), [TurnEnd::Dropped]);
     g.decide(1, allow());
-    assert!(g.generations().is_empty(), "a dropped turn is not answered");
+    // The `say` above is a generation too; only a reply to the dropped turn's words counts.
+    assert!(g.reply_to("hello").is_none(), "a dropped turn is not answered");
 }
