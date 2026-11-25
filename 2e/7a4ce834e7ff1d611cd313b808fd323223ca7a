@@ -1,0 +1,55 @@
+rust/crates/lk-agents-fuzz/src/authored.rs
+  s_561a9a57c682be::t_a9887242098b53 383-397,471-477
+rust/crates/lk-agents-fuzz/src/drive/collect.rs
+  s_561a9a57c682be::t_12dae18b50b2dd 228-230
+rust/crates/lk-agents-fuzz/src/drive/mod.rs
+  s_561a9a57c682be::t_f30fe13957f137 429-432,448
+rust/crates/lk-agents-fuzz/src/drive/start.rs
+  s_561a9a57c682be::t_8a4d5e5be5acbf 205
+rust/crates/lk-agents-fuzz/src/fakes/amd.rs
+  s_561a9a57c682be::t_56f8d0a460a504 99-112
+rust/crates/lk-agents-fuzz/src/fakes/mod.rs
+  s_561a9a57c682be::t_eff121917dc179 224-229,732-736
+rust/crates/lk-agents-fuzz/src/fakes/realtime/client_tests.rs
+  s_561a9a57c682be::t_1127fa67382d1b 31,34
+rust/crates/lk-agents-fuzz/src/fakes/realtime/mod.rs
+  s_561a9a57c682be::t_6e96394af623b6 93-94,153-158,162,184,199-204,248-252,368
+rust/crates/lk-agents-fuzz/src/fakes/realtime/server.rs
+  s_561a9a57c682be::t_f10c53e93a9889 249-250,282,755-757
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_561a9a57c682be::t_ab47281b66429d 121-139,271-385
+rust/crates/lk-agents-fuzz/src/record/mod.rs
+  s_561a9a57c682be::t_d7cc27cda5d5dd 23,25,681-682
+rust/crates/lk-agents-fuzz/src/record/realtime.rs
+  s_561a9a57c682be::t_a6b4e5fadd106a 1-70
+rust/crates/lk-agents-fuzz/src/rules/amd/amd_user_item_added_once.rs
+  s_561a9a57c682be::t_8906a5d6a6662f 1-161
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_561a9a57c682be::t_9b397af44da588 14-17,26-33,58-95,125-163
+rust/crates/lk-agents-fuzz/src/rules/amd/machine_reply_waits_for_silence.rs
+  s_561a9a57c682be::t_f51af074f100e5 16-18,27-33,52-80,121-140,163-181
+rust/crates/lk-agents-fuzz/src/rules/amd/realtime_turn_audio_committed.rs
+  s_561a9a57c682be::t_747e292e29262f 1-140
+rust/crates/lk-agents-fuzz/src/rules/amd/reply_follows_decision.rs
+  s_561a9a57c682be::t_e60980eedef1b5 14-18,27-39,77-90,93-99,178-190
+rust/crates/lk-agents-fuzz/src/rules/amd/stage_instructions_never_saved.rs
+  s_561a9a57c682be::t_7a338b89beec96 13-17,26-34,42-56,71-77,111-139
+rust/crates/lk-agents-fuzz/src/search/setup.rs
+  s_561a9a57c682be::t_30c5b033989437 244-262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e7a4ce834e7ff1d611cd313b808fd323223ca7a",
+  "prompts": {},
+  "sessions": {
+    "s_561a9a57c682be": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_561a9a57c682be",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
