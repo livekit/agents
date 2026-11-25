@@ -507,3 +507,43 @@ async def test_degraded_drain_reports_an_interrupted_segment_once(
         assert events == [True]
     finally:
         await session.aclose()
+
+
+async def test_degraded_drain_reports_a_segment_cleared_before_it_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A captured segment cleared unread still counts; without a report playout never ends."""
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        drain_output = fake_session.output.tails[0]
+        events: list[bool] = []
+        drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+
+        await drain_output.capture_frame(tts_chunk())
+        drain_output.clear_buffer()  # before the drain task has run
+        drain_output.flush()
+        ev = await asyncio.wait_for(drain_output.wait_for_playout(), 2)
+
+        assert ev.interrupted is True
+        assert events == [True]
+    finally:
+        await session.aclose()
+
+
+async def test_degrade_without_an_agent_session_starts_no_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Degrading before start() attached the session must not drain the old output."""
+    session = _avatar_session(monkeypatch)
+    previous = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    session._audio_output = previous
+
+    await session._degrade()
+
+    assert session._null_drain_task is None
+    assert session._audio_output is previous

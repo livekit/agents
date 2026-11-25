@@ -974,6 +974,13 @@ class AvatarSession(BaseAvatarSession):
         if previous_output is None:
             return
 
+        if agent_session is None:
+            # start() had not attached the session yet, so the agent session
+            # holds no reference to our output and nothing can wait on it.
+            # Draining the old output would only share it with the closed
+            # runner's clear_buffer handler.
+            return
+
         if owed:
             # The runner had already taken this segment's audio and its
             # AudioSegmentEnd off the queue, so the drain below - which only ever
@@ -990,12 +997,7 @@ class AvatarSession(BaseAvatarSession):
         audio_output = QueueAudioOutput(
             sample_rate=self._audio_sample_rate, wait_playback_start=True
         )
-        if agent_session is not None:
-            agent_session.output.replace_audio_tail(audio_output)
-        else:
-            # Defensive fallback for teardown paths before the output chain was
-            # installed; normal runtime degradation always has an agent session.
-            audio_output = previous_output
+        agent_session.output.replace_audio_tail(audio_output)
         self._audio_output = audio_output
 
         if self._null_drain_task is None:
@@ -1004,31 +1006,41 @@ class AvatarSession(BaseAvatarSession):
     async def _null_drain(self, audio_output: QueueAudioOutput) -> None:
         position = 0.0
         started = False
+        cleared_reported = False
 
         def on_clear(*_: object) -> None:
             # Core may emit clear_buffer more than once for one interruption.
             # Report only if this drain has actually started a segment.
-            nonlocal position, started
+            nonlocal position, started, cleared_reported
             if not started:
                 return
             audio_output.notify_playback_finished(playback_position=position, interrupted=True)
-            position, started = 0.0, False
+            position, started, cleared_reported = 0.0, False, True
 
         receiver: AudioReceiver = audio_output
         receiver.on("clear_buffer", on_clear)
         try:
             async for frame in audio_output:
                 if isinstance(frame, AudioSegmentEnd):
-                    if not frame.interrupted:
-                        # An interrupted segment was already reported by on_clear.
+                    if frame.interrupted:
+                        # A clear discarded this segment. on_clear reports it if
+                        # the drain had started it; a segment cleared before the
+                        # drain read any of it still counts as captured and
+                        # would otherwise leave wait_for_playout() blocked.
+                        if not cleared_reported:
+                            audio_output.notify_playback_finished(
+                                playback_position=0.0, interrupted=True
+                            )
+                    else:
                         audio_output.notify_playback_finished(
                             playback_position=position, interrupted=False
                         )
-                    position, started = 0.0, False
+                    position, started, cleared_reported = 0.0, False, False
                     continue
 
                 if not started:
                     started = True
+                    cleared_reported = False
                     audio_output.notify_playback_started()
                 position += frame.duration
         finally:
