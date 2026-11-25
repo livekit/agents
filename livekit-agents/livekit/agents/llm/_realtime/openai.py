@@ -933,6 +933,8 @@ class RealtimeSession(
         self.send_event(self._create_session_update_event())
 
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        # set to close the current connection at a quiet point and reconnect with a replay
+        self._recycle_requested = asyncio.Event()
         self._item_delete_future: dict[str, asyncio.Future] = {}
         self._item_create_future: dict[str, asyncio.Future] = {}
 
@@ -1294,7 +1296,7 @@ class RealtimeSession(
                         event["delta"] = event["delta"][:10] + "..."
                     logger.exception("failed to handle event", extra={"lk.pii.event": event})
 
-        tasks = [
+        tasks: list[asyncio.Task[Any]] = [
             asyncio.create_task(_recv_task(), name="_recv_task"),
             asyncio.create_task(_send_task(), name="_send_task"),
         ]
@@ -1305,26 +1307,42 @@ class RealtimeSession(
                 name="_timeout_task",
             )
             tasks.append(wait_reconnect_task)
+        self._recycle_requested.clear()
+        recycle_task: asyncio.Task[bool] | None = None
         try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            while True:
+                recycle_task = asyncio.create_task(
+                    self._recycle_requested.wait(), name="_recycle_task"
+                )
+                done, _ = await asyncio.wait(
+                    [*tasks, recycle_task], return_when=asyncio.FIRST_COMPLETED
+                )
 
-            # propagate exceptions from completed tasks
-            for task in done:
-                if task != wait_reconnect_task:
-                    task.result()
+                for task in done:
+                    if task not in (wait_reconnect_task, recycle_task):
+                        task.result()
+                if done.intersection(tasks):
+                    if wait_reconnect_task in done and isinstance(
+                        self._current_generation, _ResponseGeneration
+                    ):
+                        await self._current_generation._done_fut
+                        closing = True
+                    break
 
-            if (
-                wait_reconnect_task
-                and wait_reconnect_task in done
-                and isinstance(self._current_generation, _ResponseGeneration)
-            ):
-                # wait for the current generation to complete before reconnecting
-                await self._current_generation._done_fut
-                closing = True
-
+                self._recycle_requested.clear()
+                if await self._before_recycle(ws_conn):
+                    closing = True
+                    break
         finally:
+            # Cancel the reader before yielding after the final quiet check.
+            if recycle_task is not None:
+                tasks.append(recycle_task)
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
+
+    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> bool:
+        """Return whether to close the old connection or wait for another request to recycle."""
+        return True
 
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest
@@ -2319,17 +2337,10 @@ class RealtimeSession(
 
         self._current_generation._close()
 
+        # _done_fut only tells the reconnect branch of _run_ws that the generation ended.
+        # _handle_response_done_but_not_complete reports a failed response.
         with contextlib.suppress(asyncio.InvalidStateError):
-            if event.response.status in ("failed", "incomplete"):
-                details = event.response.status_details
-                msg = f"response {event.response.status}"
-                if details and details.error:
-                    msg = f"{msg}: [{details.error.type}] {details.error.code}"
-                elif details and details.reason:
-                    msg = f"{msg}: {details.reason}"
-                self._current_generation._done_fut.set_exception(llm.RealtimeError(msg))
-            else:
-                self._current_generation._done_fut.set_result(None)
+            self._current_generation._done_fut.set_result(None)
 
         self._current_generation = None
 
@@ -2485,7 +2496,7 @@ class RealtimeSession(
             raise error
         self._emit_error(error, recoverable=True)
 
-        # response errors are handled by _handle_response_done via _done_fut.
+        # a failed response is reported by _handle_response_done_but_not_complete.
         # error events here are for non-response errors (e.g. invalid request).
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:

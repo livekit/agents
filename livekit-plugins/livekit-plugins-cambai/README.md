@@ -128,6 +128,7 @@ async def entrypoint(ctx: agents.JobContext):
 - **model** (SpeechModel): MARS model variant (default: "mars-flash")
 - **output_format** (OutputFormat): Audio format (default: "pcm_s16le")
 - **enhance_named_entities** (bool): Enhanced pronunciation (default: False)
+- **speaking_rate** (float | None): Speech speed multiplier, 1.0 is normal (default: API default)
 - **sample_rate** (int | None): Audio sample rate (auto-detected from model if None)
 - **base_url** (str): API base URL
 - **http_session** (aiohttp.ClientSession | None): Reusable HTTP session
@@ -200,6 +201,9 @@ tts.update_options(voice_id=12345)
 
 # Change model
 tts.update_options(model="mars-pro")
+
+# Speak faster
+tts.update_options(speaking_rate=1.2)
 ```
 
 ## Error Handling

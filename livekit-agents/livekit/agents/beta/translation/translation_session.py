@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from livekit import rtc
 
 from ...job import get_job_context
+from ...llm import AudioGate, FixedGate
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import aio, is_given, log_exceptions
@@ -46,6 +47,14 @@ EventTypes = Literal[
 # a provider that never reports where its speech ends still has to end a playout segment,
 # or the translation plays on with nothing ever marking it finished
 DEFAULT_OUTPUT_SEGMENT_TIMEOUT = 0.5
+# how long a segment whose speech has gone quiet waits for its transcript to end with it. A
+# provider's transcript can trail its audio, and the synchronizer only releases text paired
+# with an audio segment, so ending the audio first strands the text
+TEXT_WAIT_TIMEOUT = 3.0
+
+
+# marks, in the transcript stream, where the audio segment the text belongs to ended
+_END_OF_SEGMENT = object()
 
 
 class TranslationTranscribedEvent(BaseModel):
@@ -53,6 +62,8 @@ class TranslationTranscribedEvent(BaseModel):
 
     type: Literal["translation_transcribed"] = "translation_transcribed"
     transcript: str
+    """The translation so far, as a user transcript is: each interim carries all of it, and
+    the final one the whole of it."""
     is_final: bool
     language: str | None = None
     created_at: float = Field(default_factory=time.time)
@@ -119,9 +130,17 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._forward_input_atask: asyncio.Task[None] | None = None
         self._forward_output_atask: asyncio.Task[None] | None = None
-        self._output_transcript_ch: aio.Chan[OutputTranscript] | None = None
+        self._output_transcript_ch: aio.Chan[OutputTranscript | object] | None = None
+        # the translation transcribed so far, for the event; the model sends it in pieces
+        self._output_transcript_text = ""
         self._output_transcript_atask: asyncio.Task[None] | None = None
         self._segment_timer: asyncio.TimerHandle | None = None
+        # tells the model's speech from its silence, which a provider can stream without pause
+        self._gate: AudioGate | None = None
+        self._gate_open = False
+        # set while a quiet segment waits for its transcript to go final before it ends
+        self._awaiting_text = False
+        self._text_wait_timeout = TEXT_WAIT_TIMEOUT
         self._segment_tasks: set[asyncio.Task[None]] = set()
         # serialises capturing a frame against ending a segment, so a tail the resampler
         # holds cannot be flushed out from under a frame being captured
@@ -129,6 +148,21 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._resampler: rtc.AudioResampler | None = None
         self._resampler_key: tuple[int, int, int | None] | None = None
         self._resampler_sink: io.AudioOutput | None = None
+        # the language the room labels the translation with. It follows the language stamped
+        # on the speech itself, which trails a retarget until the provider applies it, and
+        # follows the request only for a provider that stamps nothing
+        self._output_language: str | None = None
+        self._output_language_stamped = False
+        # whether the open segment has any audio in it; an empty one is not worth ending
+        self._segment_has_audio = False
+        # whether translation text has arrived since the last segment ended, which the
+        # synchronizer holds for audio still to come
+        self._segment_has_text = False
+        # whether that text is still going: some has arrived, and its final has not
+        self._text_open = False
+        # a label to apply once the open segment ends: requested while it held text waiting for
+        # audio that has not come, which is still in the old language
+        self._relabel_at_segment_end: str | None = None
 
     @property
     def model(self) -> TranslationModel:
@@ -184,6 +218,15 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._model_session.update_options(target_language=language)
 
         self._model.update_options(target_language=language)
+        if self._model_session is None:
+            self._relabel_output(language)
+        elif not self._output_language_stamped:
+            # nothing stamps the speech with its language, so the label follows the request.
+            # The open segment ends first: speech that never pauses would otherwise keep it
+            # open, and the old label with it
+            task = asyncio.create_task(self._close_segment_and_relabel(language))
+            self._segment_tasks.add(task)
+            task.add_done_callback(self._segment_tasks.discard)
 
     async def start(
         self,
@@ -232,13 +275,22 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._job_context_cb_registered = True
 
             self._model_session = self._model.session()
+            self._output_language = self._model.target_language
+            self._output_language_stamped = False
+            self._reset_segment_state()
+            # digital silence unless the model knows its own; its quiet period is the segment's
+            self._gate = self._model.audio_gate() or FixedGate(
+                0.0, min_silence_duration=self._output_segment_timeout
+            )
+            self._gate_open = False
             self._model_session.on("input_speech_started", self._on_input_speech_started)
             self._model_session.on("input_speech_stopped", self._on_input_speech_stopped)
             self._model_session.on("input_transcript", self._on_input_transcript)
             self._model_session.on("output_transcript", self._on_output_transcript)
             self._model_session.on("error", self._on_model_error)
 
-            self._output_transcript_ch = aio.Chan[OutputTranscript]()
+            self._output_transcript_ch = aio.Chan[OutputTranscript | object]()
+            self._output_transcript_text = ""
             self._output_transcript_atask = asyncio.create_task(
                 self._forward_output_transcript_task(self._output_transcript_ch),
                 name="_forward_output_transcript_task",
@@ -282,6 +334,8 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._segment_tasks:
                 await aio.cancel_and_wait(*self._segment_tasks)
                 self._segment_tasks.clear()
+            # a label deferred for this run's segments must not outlive them
+            self._reset_segment_state()
 
             await aio.cancel_and_wait(
                 *[
@@ -348,32 +402,86 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     await self._close_output_segment()
                     continue
 
+                if ev.language is not None:
+                    self._output_language_stamped = True
+                    # the speech says what language it is in, so that drives the label
+                    self._relabel_at_segment_end = None
+                    if ev.language != self._output_language:
+                        # the old language's segment ends before speech in the new one, so
+                        # neither is labelled with the other's language
+                        await self._close_output_segment()
+                        self._relabel_output(ev.language)
+
                 if self.output.audio is None or not self.output.audio_enabled:
+                    continue
+
+                was_open = self._gate_open
+                self._gate_open = self._gate.update(ev.frame) if self._gate else True
+                if not self._gate_open and not self._segment_has_audio:
+                    # silence between translations, from a provider that streams it: there
+                    # is nothing to play, and played it would hold the next segment open
                     continue
 
                 async with self._output_lock:
                     if (audio_output := self.output.audio) is None:
                         continue
 
+                    if not self._segment_has_audio:
+                        # a segment starts once the one before has played, as the sink
+                        # requires; the model's speech waits in its stream meanwhile
+                        await audio_output.wait_for_playout()
+
                     await self._capture_output_frame(ev.frame, audio_output)
 
                 if not marks_segments:
-                    self._arm_segment_timer()
+                    if self._gate_open:
+                        # the pauses inside a translation still play, and the timer still
+                        # ends it for a provider that stops sending rather than go quiet
+                        self._arm_segment_timer()
+                    elif was_open:
+                        # the gate has heard the speech stay quiet long enough
+                        self._cancel_segment_timer()
+                        self._on_output_silence()
         finally:
             self._cancel_segment_timer()
             async with self._output_lock:
                 await self._drain_resampler()
 
     @log_exceptions(logger=logger)
-    async def _forward_output_transcript_task(self, event_ch: aio.Chan[OutputTranscript]) -> None:
+    async def _forward_output_transcript_task(
+        self, event_ch: aio.Chan[OutputTranscript | object]
+    ) -> None:
         async for ev in event_ch:
             transcription_output = self.output.transcription
             if transcription_output is None or not self.output.transcription_enabled:
                 continue
 
-            await transcription_output.capture_text(ev.text)
-            if ev.is_final:
+            if ev is _END_OF_SEGMENT:
                 transcription_output.flush()
+                continue
+
+            assert isinstance(ev, OutputTranscript)
+            if ev.text:
+                await transcription_output.capture_text(ev.text)
+            if ev.is_final and not self._text_follows_audio():
+                transcription_output.flush()
+
+    def _text_follows_audio(self) -> bool:
+        """Whether the translation's text segments end with its audio segments.
+
+        A synchronizer pairs each audio segment with one text segment, and releases the text
+        only once both have ended. Ended on its own schedule, the text would close after its
+        audio had played, and the words not yet released would be lost. So while audio is
+        going out, the text ends where the audio does, marked in the transcript stream so it
+        stays behind the text that came before it.
+        """
+        return self.output.audio is not None and self.output.audio_enabled
+
+    def _relabel_output(self, language: str) -> None:
+        """Label the translation in the room with the language it is now spoken in."""
+        self._output_language = language
+        if self._room_io is not None:
+            self._room_io._on_output_language_changed(language)
 
     def _on_input_speech_started(self, _: InputSpeechStarted) -> None:
         self._update_user_state("speaking")
@@ -393,13 +501,30 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def _on_output_transcript(self, ev: OutputTranscript) -> None:
+        if ev.text:
+            self._segment_has_text = True
+            self._text_open = True
+        if ev.is_final:
+            self._text_open = False
         if self._output_transcript_ch is not None:
             self._output_transcript_ch.send_nowait(ev)
+
+        if ev.is_final and self._awaiting_text:
+            # the quiet segment was only waiting for this; it ends behind it
+            self._cancel_segment_timer()
+            self._close_output_segment_soon()
+
+        # the model sends pieces; the event carries all of it, so a final is never empty
+        self._output_transcript_text += ev.text
+        # the model's pieces carry their leading spaces, which open the transcript too
+        transcript = self._output_transcript_text.lstrip()
+        if ev.is_final:
+            self._output_transcript_text = ""
 
         self.emit(
             "translation_transcribed",
             TranslationTranscribedEvent(
-                transcript=ev.text,
+                transcript=transcript,
                 is_final=ev.is_final,
                 language=ev.language if ev.language is not None else self._model.target_language,
             ),
@@ -441,6 +566,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if target_rate is None or frame.sample_rate == target_rate:
             await audio_output.capture_frame(frame)
+            self._segment_has_audio = True
             return
 
         if self._resampler is None:
@@ -454,6 +580,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         for resampled in self._resampler.push(frame):
             await audio_output.capture_frame(resampled)
+            self._segment_has_audio = True
 
     async def _drain_resampler(self) -> None:
         """Push what the resampler still holds to the sink it was built for, then drop it.
@@ -468,6 +595,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         for frame in resampler.flush():
             await sink.capture_frame(frame)
+            self._segment_has_audio = True
 
     def _discard_resampler(self) -> None:
         """Forget the resampler and the pair it was built for, dropping anything it holds.
@@ -497,6 +625,21 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if sink is not None:
             sink.flush()
 
+        had_audio, self._segment_has_audio = self._segment_has_audio, False
+        self._segment_has_text = False
+        self._text_open = False
+        if self._gate is not None:
+            # the next speech opens a segment of its own, however the last one ended
+            self._gate.deactivate()
+        self._gate_open = False
+        if had_audio and self._output_transcript_ch is not None:
+            # the text segment ends with its audio, behind the text already sent
+            self._output_transcript_ch.send_nowait(_END_OF_SEGMENT)
+        if had_audio and (language := self._relabel_at_segment_end) is not None:
+            # the text that was waiting on this segment's audio has gone out with it
+            self._relabel_at_segment_end = None
+            self._relabel_output(language)
+
     def _arm_segment_timer(self) -> None:
         """Restart the silence that ends a segment, for a model that marks none itself.
 
@@ -505,14 +648,71 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """
         self._cancel_segment_timer()
         self._segment_timer = self._loop.call_later(
-            self._output_segment_timeout, self._close_output_segment_soon
+            self._output_segment_timeout, self._on_output_silence
         )
 
     def _cancel_segment_timer(self) -> None:
-        """Disarm the silence timer, leaving the current segment open."""
+        """Disarm the silence timer, or the wait for text, leaving the current segment open."""
+        self._awaiting_text = False
         if self._segment_timer is not None:
             self._segment_timer.cancel()
             self._segment_timer = None
+
+    def _on_output_silence(self) -> None:
+        """End the segment the model went quiet in, once its transcript has ended too.
+
+        Text still arriving, or not arrived yet, belongs to this segment's audio; ended now,
+        the segment would leave it to the next one, or to none. So it waits for the final,
+        up to ``TEXT_WAIT_TIMEOUT``, and speech resuming meanwhile carries the segment on.
+        """
+        self._segment_timer = None
+        if self._waits_for_text() and (self._text_open or not self._segment_has_text):
+            self._awaiting_text = True
+            self._segment_timer = self._loop.call_later(
+                self._text_wait_timeout, self._close_output_segment_soon
+            )
+            return
+
+        self._close_output_segment_soon()
+
+    def _waits_for_text(self) -> bool:
+        """Whether a segment's end waits on its transcript: the model sends one, and it is
+        published paired with the audio."""
+        return (
+            self._model.capabilities.output_transcription
+            and self._text_follows_audio()
+            and self.output.transcription is not None
+            and self.output.transcription_enabled
+        )
+
+    async def _close_segment_and_relabel(self, language: str) -> None:
+        """End the open segment, then label the translation with ``language``.
+
+        For a provider that does not stamp its speech: the segment the old label covers has
+        to end, or its playout never finishes and the new label never lands. A segment with
+        text but no audio yet is left open, since ending it would discard that text, and the
+        label changes once it ends. With neither, the label changes now.
+        """
+        async with self._output_lock:
+            # speech the resampler still holds is the old language's too
+            await self._drain_resampler()
+            if self._segment_has_audio:
+                self._cancel_segment_timer()
+                await self._close_segment_locked()
+            elif self._segment_has_text:
+                # the old-language text waits for its audio; the label waits for both
+                self._relabel_at_segment_end = language
+                return
+
+        self._relabel_at_segment_end = None
+        self._relabel_output(language)
+
+    def _reset_segment_state(self) -> None:
+        """Forget what the open segment held, and any label deferred until it ends."""
+        self._segment_has_audio = False
+        self._segment_has_text = False
+        self._text_open = False
+        self._relabel_at_segment_end = None
 
     def _close_output_segment_soon(self) -> None:
         """Close the segment from the timer, which cannot await the drain itself.
@@ -520,6 +720,7 @@ class TranslationSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         The work runs as a task, tracked so closing the session can wait on it.
         """
         self._segment_timer = None
+        self._awaiting_text = False
         task = asyncio.create_task(self._close_output_segment())
         self._segment_tasks.add(task)
         task.add_done_callback(self._segment_tasks.discard)

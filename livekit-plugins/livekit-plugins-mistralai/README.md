@@ -204,6 +204,7 @@ llm = mistralai.LLM(
     random_seed=42,
     tool_choice="auto",
     store=False,
+    reasoning_effort="none",
 )
 
 # With provider tools

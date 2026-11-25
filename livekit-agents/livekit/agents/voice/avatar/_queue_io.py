@@ -38,6 +38,7 @@ class QueueAudioOutput(
         self._wait_playback_start = wait_playback_start
         self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()
         self._capturing = False
+        self._segment_cleared = False
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         """Capture and queue audio frame"""
@@ -55,7 +56,8 @@ class QueueAudioOutput(
         if not self._capturing:
             return
         self._capturing = False
-        self._data_ch.send_nowait(AudioSegmentEnd())
+        interrupted, self._segment_cleared = self._segment_cleared, False
+        self._data_ch.send_nowait(AudioSegmentEnd(interrupted=interrupted))
 
     # as AudioReceiver for AvatarRunner
 
@@ -66,6 +68,8 @@ class QueueAudioOutput(
                 self._data_ch.recv_nowait()
             except utils.aio.channel.ChanEmpty:
                 break
+        if self._capturing:
+            self._segment_cleared = True
         self.emit("clear_buffer")  # type: ignore
 
     def notify_playback_finished(self, playback_position: float, interrupted: bool) -> None:

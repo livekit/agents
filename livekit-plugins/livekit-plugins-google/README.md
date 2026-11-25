@@ -1,6 +1,6 @@
 # Google AI plugin for LiveKit Agents
 
-Support for Gemini, Gemini Live, Cloud Speech-to-Text, and Cloud Text-to-Speech.
+Support for Gemini, Gemini Live, Gemini decisions, Cloud Speech-to-Text, and Cloud Text-to-Speech.
 
 See [https://docs.livekit.io/agents/integrations/google/](https://docs.livekit.io/agents/integrations/google/) for more information.
 

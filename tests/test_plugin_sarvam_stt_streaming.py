@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from types import SimpleNamespace
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -58,12 +59,14 @@ def _make_stream(
     stream._utterance_start_audio_pos = 0.0
     stream._utterance_speech_end_audio_pos = None
     stream._utterance_speech_end_wall = None
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._manual_speech_started = False
     stream._flush_observed = False
     stream._stream_started_at = stt_streaming.time.time()
     stream._audio_position = 0.0
+    stream._last_audio_sent_at = stt_streaming.time.monotonic()
     stream._audio_duration_collector = stt_streaming.PeriodicCollector(
         callback=stt_streaming.RealtimeSpeechStream._on_audio_duration_report.__get__(
             stream, stt_streaming.RealtimeSpeechStream
@@ -152,6 +155,38 @@ def test_streaming_disables_connection_retries(
     assert stream_conn_options.max_retry == 0
     assert stream_conn_options.retry_interval == 1.5
     assert stream_conn_options.timeout == 12.0
+
+
+def test_streaming_selects_saaras_v4(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        model="saaras:v4",
+        http_session=object(),  # type: ignore[arg-type]
+    )
+    stt.update_options(language="hi-IN")
+    stt.stream()
+
+    assert stt.model == "saaras:v4"
+    opts = captured["opts"]
+    assert isinstance(opts, stt_streaming.RealtimeSTTOptions)
+    assert opts.model == "saaras:v4"
+    params = _parse_ws_url(
+        stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    )
+    assert params["model"] == "saaras:v4"
+
+
+def test_streaming_defaults_to_v3_realtime_and_rejects_unknown_models() -> None:
+    assert stt_streaming.STTRealtime(api_key="sk_test").model == "saaras:v3-realtime"
+    with pytest.raises(ValueError, match="model must be one of"):
+        stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v3")
 
 
 def test_realtime_ws_url_includes_core_and_vad_params() -> None:
@@ -482,6 +517,32 @@ async def test_instance_update_preserves_per_stream_language_override(
 
     await stream.aclose()
     await stt_impl.aclose()
+
+
+def test_update_options_switches_model_for_new_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[stt_streaming.RealtimeSTTOptions] = []
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: object) -> None:
+            opts = kwargs["opts"]
+            assert isinstance(opts, stt_streaming.RealtimeSTTOptions)
+            captured.append(opts)
+
+        def update_options(self, **kwargs: object) -> None:
+            assert "model" not in kwargs  # open streams keep their connection's model
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    stt = stt_streaming.STTRealtime(api_key="sk_test", http_session=object())  # type: ignore[arg-type]
+    stt.stream()
+
+    stt.update_options(model="saaras:v4")
+    stt.stream()
+
+    assert stt.model == "saaras:v4"
+    assert [opts.model for opts in captured] == ["saaras:v3-realtime", "saaras:v4"]
+    with pytest.raises(ValueError, match="model must be one of"):
+        stt.update_options(model="saaras:v3")
+    assert stt.model == "saaras:v4"
 
 
 def test_stream_update_options_without_arguments_is_a_no_op() -> None:
@@ -1426,7 +1487,7 @@ async def test_streaming_connect_logs_handshake_failure(
     ]
     assert len(records) == 1
     assert records[0].status_code == 403
-    assert "API-SUBSCRIPTION-KEY" not in records[0].url
+    assert "API-SUBSCRIPTION-KEY" not in getattr(records[0], "lk.pii.url")
 
 
 @pytest.mark.asyncio
@@ -1687,6 +1748,69 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("switch_to_vad", [False, True], ids=["manual", "manual_to_vad"])
+async def test_manual_eos_precedes_final_received_during_send(switch_to_vad: bool) -> None:
+    stream = _make_stream(endpointing="manual")
+    stream._input_ch = stt_streaming.stt.RecognizeStream._InputChan()
+    stream._input_ch.send_nowait(stt_streaming.rtc.AudioFrame.create(16000, 1, 8000))
+    stream._input_ch.send_nowait(stream._FlushSentinel())
+    stream._input_ch.close()
+    switch_requested = False
+
+    async def send_bytes(payload: bytes) -> None:
+        nonlocal switch_requested
+        if not switch_to_vad or switch_requested:
+            return
+        switch_requested = True
+        stream.update_options(endpointing="vad")
+        await stream._send_pending_config_update(ws)
+        await stream._handle_message(
+            {
+                "event": "config.updated",
+                "applied": ["endpointing=vad (pending: applies next boundary)"],
+            }
+        )
+        assert stream._active_endpointing == "manual"
+
+    async def send_str(payload: str) -> None:
+        if json.loads(payload)["event"] == "speech_end":
+            assert stream._active_endpointing == ("vad" if switch_to_vad else "manual")
+            assert stream._utterance_speech_end_audio_pos == pytest.approx(0.5)
+            # A socket send can yield to the receive task before it returns.
+            await stream._handle_message(
+                {
+                    "event": "transcript.final",
+                    "utterance_idx": 0,
+                    "text": "hello",
+                    "start_s": 0.1,
+                    "end_s": 0.4,
+                }
+            )
+            assert stream._pending_final_data is None
+
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=send_str,
+        send_bytes=send_bytes,
+    )
+    await stream._process_audio(ws)
+
+    events = [
+        event
+        for event in stream._event_ch.events
+        if event.type != stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.type for event in events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert events[1].alternatives == []
+    assert events[1].speech_end_time is None
+    assert events[2].alternatives[0].end_time == pytest.approx(0.4)
+
+
+@pytest.mark.asyncio
 async def test_manual_final_uses_current_turn_timings_after_first_turn() -> None:
     stream = _make_stream(endpointing="manual")
     stream._audio_position = 4.0
@@ -1741,6 +1865,22 @@ async def test_end_of_speech_is_emitted_as_a_bare_pipeline_sentinel(endpointing:
     assert len(eos_events) == 1
     assert eos_events[0].alternatives == []
     assert eos_events[0].request_id == stream._request_id
+
+
+@pytest.mark.parametrize("endpointing", ["vad", "manual"])
+@pytest.mark.parametrize("end_s", [0.4, 0.0, None])
+async def test_final_transcript_timing_includes_session_offset(endpointing, end_s):
+    stream = _make_stream(endpointing=endpointing)
+    stream.start_time_offset = 7.0
+    await stream._handle_message({"event": "vad.speech_start"})
+    await stream._handle_message({"event": "transcript.final", "text": "hello", "end_s": end_s})
+    await stream._handle_message({"event": "vad.speech_end"})
+    final = next(
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT
+    )
+    assert final.alternatives[0].end_time == pytest.approx(7.4 if end_s else 0.0)
 
 
 @pytest.mark.asyncio
@@ -1877,3 +2017,179 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     assert stt_streaming.AUDIO_CHUNK_MS <= 100
     assert len(sent) == 1000 // stt_streaming.AUDIO_CHUNK_MS
     assert {len(payload) for payload in sent} == {expected_bytes}
+
+
+# ---------------------------------------------------------------------------
+# Keyterms (saaras:v4)
+# ---------------------------------------------------------------------------
+
+
+KEYTERMS = ["Sarvam", "New Delhi", "Vistaar"]
+
+
+def _url_query(url: str) -> dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+
+
+def _capture_realtime_streams(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    captured: list[Any] = []
+
+    class _CapturedStream:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs["opts"])
+
+    monkeypatch.setattr(stt_streaming, "RealtimeSpeechStream", _CapturedStream)
+    return captured
+
+
+def test_realtime_sends_keyterms_on_the_connection_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = _capture_realtime_streams(monkeypatch)
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        model="saaras:v4",
+        keyterms=KEYTERMS,
+        http_session=object(),  # type: ignore[arg-type]
+    )
+    assert stt.capabilities.keyterms
+
+    stt.stream()
+
+    url = stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, captured[0])
+    assert json.loads(_url_query(url)["keyterms"]) == KEYTERMS
+
+
+def test_realtime_omits_keyterms_when_unset() -> None:
+    opts = stt_streaming.RealtimeSTTOptions(language="hi-IN", api_key="sk_test")
+    url = stt_streaming._build_realtime_ws_url(stt_streaming.SARVAM_STT_REALTIME_URL, opts)
+    assert "keyterms" not in _url_query(url)
+
+
+def test_realtime_rejects_keyterms_on_v3_realtime() -> None:
+    with pytest.raises(ValueError, match="only supported by saaras:v4"):
+        stt_streaming.STTRealtime(api_key="sk_test", keyterms=KEYTERMS)
+
+
+def test_realtime_merges_session_keyterms_into_new_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_realtime_streams(monkeypatch)
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test",
+        model="saaras:v4",
+        keyterms=["Sarvam"],
+        http_session=object(),  # type: ignore[arg-type]
+    )
+
+    stt._update_session_keyterms(["Vistaar", "Sarvam"])
+    stt.stream()
+    stt.update_options(keyterms=["Bulbul"])
+    stt.stream()
+
+    assert captured[0].keyterms == ["Sarvam", "Vistaar"]
+    assert captured[1].keyterms == ["Bulbul", "Vistaar", "Sarvam"]
+    assert stt._opts.keyterms == ["Bulbul"]  # session terms never leak into user terms
+
+
+def test_realtime_on_v3_warns_that_session_keyterms_are_unsupported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stt = stt_streaming.STTRealtime(api_key="sk_test")
+    with caplog.at_level(logging.WARNING):
+        stt._update_session_keyterms(["Vistaar"])
+    assert "keyterms are not supported by this STT" in caplog.text
+    assert stt._session_keyterms == []
+
+
+def test_realtime_keyterms_capability_follows_the_model() -> None:
+    assert not stt_streaming.STTRealtime(api_key="sk_test").capabilities.keyterms
+    stt = stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v4")
+    assert stt.capabilities.keyterms
+    stt.update_options(model="saaras:v3-realtime")
+    assert not stt.capabilities.keyterms
+    with pytest.raises(ValueError, match="only supported by saaras:v4"):
+        stt_streaming.STTRealtime(
+            api_key="sk_test", model="saaras:v4", keyterms=["Sarvam"]
+        ).update_options(model="saaras:v3-realtime")
+
+
+def _keepalive_ws() -> tuple[SimpleNamespace, list[bytes], list[str]]:
+    audio: list[bytes] = []
+    events: list[str] = []
+
+    async def _send_bytes(payload: bytes) -> None:
+        audio.append(payload)
+
+    async def _send_str(payload: str) -> None:
+        events.append(json.loads(payload)["event"])
+
+    return SimpleNamespace(closed=False, send_bytes=_send_bytes, send_str=_send_str), audio, events
+
+
+def _keepalive_stream(endpointing: str = "vad") -> stt_streaming.RealtimeSpeechStream:
+    stream = _make_stream(endpointing=endpointing)
+    stream._input_ch = stt_streaming.utils.aio.Chan()
+    stream._FlushSentinel = stt_streaming.stt.RecognizeStream._FlushSentinel
+    return stream
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("endpointing", ["vad", "manual"])
+async def test_keepalive_sends_silence_when_input_goes_idle(endpointing: str) -> None:
+    stream = _keepalive_stream(endpointing)
+    ws, audio, events = _keepalive_ws()
+    task = asyncio.create_task(stream._process_audio(ws))
+
+    await asyncio.sleep(stt_streaming.KEEPALIVE_INTERVAL_S - 1)
+    assert audio == []  # not idle long enough yet
+
+    await asyncio.sleep(2)
+    chunk_samples = int(16000 * stt_streaming.AUDIO_CHUNK_MS / 1000)
+    assert audio == [bytes(chunk_samples * 2)]
+    assert stream._audio_position == pytest.approx(chunk_samples / 16000)
+    # between utterances the silence opens no manual utterance
+    assert "speech_start" not in events
+
+    stream._input_ch.close()
+    await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.virtual_time
+async def test_keepalive_sends_pending_config_and_buffered_audio_first() -> None:
+    stream = _keepalive_stream()
+    ws, audio, events = _keepalive_ws()
+    order: list[str] = []
+    ws.send_bytes = lambda payload: asyncio.sleep(0, result=order.append(f"audio:{len(payload)}"))
+    ws.send_str = lambda payload: asyncio.sleep(
+        0, result=order.append(json.loads(payload)["event"])
+    )
+    task = asyncio.create_task(stream._process_audio(ws))
+
+    tail = stt_streaming.rtc.AudioFrame(
+        data=bytes(960), sample_rate=16000, num_channels=1, samples_per_channel=480
+    )  # 30 ms, short of a 50 ms chunk, so it waits in the buffer
+    stream._input_ch.send_nowait(tail)
+    await asyncio.sleep(0)
+    stream._pending_config_update = {"event": "config.update", "prompt": "LiveKit"}
+    await asyncio.sleep(stt_streaming.KEEPALIVE_INTERVAL_S + 1)
+
+    chunk_bytes = int(16000 * stt_streaming.AUDIO_CHUNK_MS / 1000) * 2
+    assert order == ["config.update", "audio:960", f"audio:{chunk_bytes}"]
+    stream._input_ch.close()
+    await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.virtual_time
+async def test_keepalive_stays_quiet_while_audio_flows() -> None:
+    stream = _keepalive_stream()
+    ws, audio, _ = _keepalive_ws()
+    task = asyncio.create_task(stream._process_audio(ws))
+    frame = stt_streaming.rtc.AudioFrame(
+        data=bytes(1600), sample_rate=16000, num_channels=1, samples_per_channel=800
+    )
+    for _ in range(6):
+        stream._input_ch.send_nowait(frame)
+        await asyncio.sleep(stt_streaming.KEEPALIVE_INTERVAL_S / 2)
+
+    assert bytes(1600) * 6 == b"".join(audio)  # only the pushed audio, no extra silence
+    stream._input_ch.close()
+    await asyncio.wait_for(task, timeout=1.0)

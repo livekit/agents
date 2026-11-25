@@ -397,6 +397,7 @@ class STT(stt.STT):
                 context_bias=self._opts.context_bias if self._opts.context_bias else None,
                 diarize=self._opts.diarize,
                 timestamp_granularities=["segment"],
+                timeout_ms=int(conn_options.timeout * 1000),
             )
 
             return stt.SpeechEvent(
@@ -549,12 +550,24 @@ class SpeechStream(stt.RecognizeStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                     )
             elif ev.type == vad.VADEventType.END_OF_SPEECH:
+                speech_end_time = None
+                if (input_started_at := self._input_ch.input_started_at) is not None:
+                    # VAD time counts input audio, including audio queued during setup.
+                    speech_end_time = (
+                        input_started_at
+                        + self.start_time_offset
+                        + ev.timestamp
+                        - ev.silence_duration
+                    )
                 # force Mistral to finalize the current speech segment
                 await self._flush_audio(connection)
                 if self._speaking:
                     self._speaking = False
                     self._event_ch.send_nowait(
-                        stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        stt.SpeechEvent(
+                            type=stt.SpeechEventType.END_OF_SPEECH,
+                            speech_end_time=speech_end_time,
+                        )
                     )
 
     async def _recv_task(self, connection: RealtimeConnection) -> None:
@@ -729,6 +742,7 @@ class SpeechStream(stt.RecognizeStream):
         try:
             while True:
                 async with self._pool.connection(timeout=self._conn_options.timeout) as connection:
+                    self._input_ch.restart_provider_clock()
                     self._audio_pending = False
                     await self._apply_stream_language(connection)
                     vad_stream = self._vad.stream() if self._vad else None
