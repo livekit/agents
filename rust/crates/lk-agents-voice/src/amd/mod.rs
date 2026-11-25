@@ -12,6 +12,13 @@
 //!   changes.
 //!
 //! Attaching a run is a session command, [`AmdCommand::Attach`].
+//!
+//! A run's effects are declared in [`effects`], its public notifications in [`events`], its
+//! options in [`options`].
+
+pub mod effects;
+pub mod events;
+pub mod options;
 
 use crate::agent_session::RequestId;
 pub use crate::agent_session::machine::activity::amd_gate::Hold;

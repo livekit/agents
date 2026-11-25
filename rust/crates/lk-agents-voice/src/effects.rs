@@ -1,3 +1,4 @@
+pub use crate::amd::effects::AmdEffect;
 pub use crate::audio_recognition::effects::AudioRecognitionEffect;
 pub use crate::avatar::effects::AvatarEffect;
 pub use crate::generation::effects::{
