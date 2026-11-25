@@ -1,0 +1,33 @@
+rust/crates/lk-agents-fuzz/src/fakes/realtime/mod.rs
+  s_fe0b584e74cb4c::t_cba2dd8ae7835d 228-229
+rust/crates/lk-agents-fuzz/src/record/realtime.rs
+  s_fe0b584e74cb4c::t_6809c6220861a3 6-7,10-14,19-23,38
+rust/crates/lk-agents-fuzz/src/authored.rs
+  s_fe0b584e74cb4c::t_a7d3ce23cd033b 398-418,581-602,633
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_fe0b584e74cb4c::t_9cce32dd0936cb 127-129,345-360,363,375,385-467,470-474,477
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_fe0b584e74cb4c::t_f0b8f9d319d24d 33,61,67-68,83,115-159,183,185,188,191-192,198-201,207,209,211,214-228
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_fe0b584e74cb4c::t_69611d1fa8a7e0 45,54,116-120,122,124-133,421-444
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_fe0b584e74cb4c::t_ede670f02a529d 30-34,42,100-116,136-139,258-281
+rust/crates/lk-agents-fuzz/src/rules/amd/realtime_turn_audio_committed.rs
+  s_fe0b584e74cb4c::t_c66f5dbf74aa10 1-2,27-31,57-61,71-90,150,155-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dabb9c02ffdf8a61b59516f96f5347c7fa2cdc09",
+  "prompts": {},
+  "sessions": {
+    "s_fe0b584e74cb4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da1f6a87-9ec4-476b-ba24-265326562452",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
