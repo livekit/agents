@@ -831,6 +831,13 @@ impl room_owner::RoomIo for RoomIo {
         self.state.lock().state().linked
     }
 
+    fn wait_linked_participant<'a>(
+        &'a self,
+    ) -> lk_agents_abi::BoxFuture<'a, Option<ParticipantIdentity>> {
+        let view = self.view.cell();
+        Box::pin(async move { view.wait_map(|state| state.linked.clone()).await.ok() })
+    }
+
     fn start(self: Arc<Self>, startup: telemetry::Cx) {
         if !self.transition(RoomIoState::start) {
             return;
