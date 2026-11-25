@@ -731,14 +731,19 @@ class _OpenAtEndVADStream(vad.VADStream):
             )
 
 
+@pytest.mark.parametrize("queued", [False, True])
 @pytest.mark.parametrize("ms,commits", [(90, 0), (100, 1)])
 async def test_input_ending_in_speech_commits_only_what_openai_accepts(
-    ms: int, commits: int
+    ms: int, commits: int, queued: bool
 ) -> None:
     # OpenAI rejects a commit of less than 100ms of audio, which would fail the stream
     instance = _offline_stt(model="gpt-live-transcribe", vad=_OpenAtEndVAD())
+    ws = instance._session.ws  # type: ignore[union-attr]
+    # what a pooled socket carries: the float sum of earlier frames, not exactly 2s
+    instance._audio_duration_by_ws[ws] = sum([0.05] * 40)
     stream = instance.stream()
-    ws = await _connected(stream)
+    if not queued:
+        await _connected(stream)
     ends = 0
 
     async def collect() -> None:
