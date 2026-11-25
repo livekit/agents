@@ -4,12 +4,13 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterable
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent
+from livekit.agents import AMD, Agent, AgentSession, AMDLifecycle
 from livekit.agents.utils import aio
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.agent import ModelSettings
@@ -195,7 +196,6 @@ def test_push_audio_routes_frame_to_every_consumer(
     # only the STT path sees the substitute frame
     ar._stt_pipeline.audio_ch.send_nowait.assert_called_once_with(silence if substitute else real)
     ar._vad_ch.send_nowait.assert_called_once_with(real)
-    ar._session.amd.push_audio.assert_called_once_with(real)
     ar._interruption_ch.send_nowait.assert_called_once_with(real)
 
 
@@ -204,7 +204,6 @@ def test_push_audio_skips_optional_consumers_when_unset(push_recognition: AudioR
     ar._stt_pipeline = None
     ar._vad_ch = None
     ar._interruption_ch = None
-    ar._session.amd = None
 
     ar._push_audio(_frame())
 
@@ -216,6 +215,66 @@ def test_push_audio_records_sample_rate_and_input_start(
 
     assert push_recognition._sample_rate == 24000
     assert push_recognition._input_started_at is not None
+
+
+def _amd_activity() -> AgentActivity:
+    activity = object.__new__(AgentActivity)
+    activity._started = True
+    activity._session = AgentSession(vad=None)
+    activity._session._agent_state = "listening"
+    activity._session._amd = MagicMock(_blocks_session_audio=False)
+    activity._session._turn_hooks = activity._session._amd._turn_hooks
+    activity._current_speech = None
+    activity._rt_session = MagicMock()
+    activity._audio_recognition = MagicMock()
+    return activity
+
+
+@pytest.mark.parametrize(
+    "lifecycle", [AMDLifecycle.INITIALIZED, AMDLifecycle.PENDING, AMDLifecycle.ACTIVE]
+)
+def test_amd_pre_answer_gate_discards_audio_for_all_consumers(lifecycle: AMDLifecycle) -> None:
+    activity = _amd_activity()
+    amd = AMD(activity._session, llm=None, stt=None)
+    amd._lifecycle = lifecycle
+    amd._run = resources = MagicMock()
+    activity._session._amd = amd
+    activity._session._turn_hooks = amd._turn_hooks
+    frame = _frame()
+    activity.push_audio(frame)
+
+    if lifecycle is AMDLifecycle.ACTIVE:
+        resources.stt.push_audio.assert_called_once_with(frame)
+    else:
+        resources.stt.push_audio.assert_not_called()
+
+    if lifecycle in {AMDLifecycle.INITIALIZED, AMDLifecycle.PENDING}:
+        activity._audio_recognition._push_audio.assert_not_called()
+        activity._rt_session.push_audio.assert_not_called()
+    else:
+        activity._audio_recognition._push_audio.assert_called_once_with(frame, stt_frame=None)
+        activity._rt_session.push_audio.assert_called_once_with(frame)
+
+
+@pytest.mark.parametrize("guard", ["aec_warmup", "uninterruptible"])
+def test_activity_preserves_amd_audio_when_session_stt_is_muted(guard: str) -> None:
+    activity = _amd_activity()
+    if guard == "aec_warmup":
+        activity._session._agent_state = "speaking"
+        activity._session._aec_warmup_remaining = 1
+        activity._session._aec_warmup_timer = object()
+    else:
+        activity._current_speech = SimpleNamespace(
+            done=lambda: False, interrupted=False, allow_interruptions=False
+        )
+        activity._session.options.interruption["discard_audio_if_uninterruptible"] = True
+    frame = _frame()
+    activity.push_audio(frame)
+    activity._session.amd.push_audio.assert_called_once_with(frame)
+    muted = activity._audio_recognition._push_audio.call_args.kwargs["stt_frame"]
+    assert bytes(muted.data) == bytes(len(frame.data) * frame.data.itemsize)
+    activity._audio_recognition._push_audio.assert_called_once_with(frame, stt_frame=muted)
+    activity._rt_session.push_audio.assert_called_once_with(muted)
 
 
 def _activity(agent: Agent, stt: object, turn_detection: object = None) -> MagicMock:
@@ -359,8 +418,8 @@ def _vad_event(type_: VADEventType, *, speech_duration: float = 0.0) -> VADEvent
     )
 
 
-async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
-    """The turn starts at its first burst; only the per-burst speech start moves."""
+def _vad_recognition() -> AudioRecognition:
+    """An ``AudioRecognition`` with only the state its VAD events touch."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._speech_start_time = None
     ar._vad_speech_started = False
@@ -394,9 +453,14 @@ async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
     ar._hooks = MagicMock()
     ar._session = MagicMock()
     ar._session._root_span_context = None
-    ar._session.amd = None
     ar._session._room_io = None
     ar._session.options.transcription_timeout = None
+    return ar
+
+
+async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
+    """The turn starts at its first burst; only the per-burst speech start moves."""
+    ar = _vad_recognition()
 
     first_sos_at = time.time()
     await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=5.0))
@@ -411,3 +475,31 @@ async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
     assert ar._user_turn_start == turn_start
     assert first_burst_start is not None and ar._speech_start_time is not None
     assert ar._speech_start_time > first_burst_start
+
+
+async def test_turn_detector_hears_the_user_turn_start_once() -> None:
+    """The audio turn detector counts the turn length from ``_user_turn_start``, so it gets
+    that value on the first start of speech and nothing on later bursts of the same turn."""
+    ar = _vad_recognition()
+    stream = MagicMock()
+    ar._turn_detector_stream = stream
+
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=5.0))
+    await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH, speech_duration=5.0))
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH))
+
+    stream.on_start_of_turn.assert_called_once_with(ar._user_turn_start)
+
+
+async def test_turn_without_a_known_start_keeps_the_detector_count() -> None:
+    """A turn opened by end of speech (its start of speech fell in the previous turn) has no
+    known start: the turn detector keeps counting from its last flush instead of hearing a
+    start of now."""
+    ar = _vad_recognition()
+    stream = MagicMock()
+    ar._turn_detector_stream = stream
+
+    await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH, speech_duration=3.0))
+
+    assert ar._user_turn_start is not None
+    stream.on_start_of_turn.assert_not_called()

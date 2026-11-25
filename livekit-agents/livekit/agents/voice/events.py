@@ -26,6 +26,7 @@ from ..llm import (
     RealtimeModel,
     RealtimeModelError,
     ToolChoice,
+    ToolsetError,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -329,10 +330,21 @@ AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"
 
 
 class UserStateChangedEvent(BaseModel):
+    """A user state transition.
+
+    Migration: older releases used the speech-boundary time for ``created_at``
+    when available. ``created_at`` now records event creation time, including
+    sessions without AMD. For speech timing or latency measurements, use
+    ``speech_timestamp`` when it is not None, otherwise ``created_at``.
+    """
+
     type: Literal["user_state_changed"] = "user_state_changed"
     old_state: UserState
     new_state: UserState
+    speech_timestamp: float | None = None
+    """Unix time of user speech start or end, often backdated, when known."""
     created_at: float = Field(default_factory=time.time)
+    """Unix time when this event was created, not the speech-boundary time."""
 
 
 class AgentStateChangedEvent(BaseModel):
@@ -566,7 +578,15 @@ class UserTurnExceededEvent(BaseModel):
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
-    error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
+    error: (
+        LLMError
+        | STTError
+        | TTSError
+        | RealtimeModelError
+        | InterruptionDetectionError
+        | ToolsetError
+        | Any
+    )
     source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
 

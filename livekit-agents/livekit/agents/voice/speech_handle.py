@@ -51,6 +51,8 @@ class SpeechHandle:
         self._done_fut = asyncio.Future[None]()
         self._scheduled_fut = asyncio.Future[None]()
         self._authorize_event = asyncio.Event()
+        # set for a speech that AMD starts itself, which plays while AMD holds other replies
+        self._bypass_authorization_pause = False
 
         self._generations: list[asyncio.Future[None]] = []
 
