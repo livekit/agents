@@ -107,11 +107,15 @@ fn every_late_final_corrects(r: &Recording, check: &mut Check) {
             Input::SttFinal { utterance: u, .. } if u == utterance => Some(a.at.seq),
             _ => None,
         });
-        // The session made the utterance's interim final before the provider did.
+        // The session made the utterance's interim final before the provider did. The
+        // session numbers a stream's utterances from 1, in the order they started on it; an
+        // utterance with no start in the case keeps its index.
+        let number =
+            session_utterance(r, utterance.nth).unwrap_or_else(|| u64::from(utterance.nth));
         let Some(promoted) = journal.iter().find_map(|(o, s)| match s {
             Step::Emitted(SessionEvent::UserInputTranscribed(t))
                 if t.is_final
-                    && t.ev.utterance == Some(u64::from(utterance.nth))
+                    && t.ev.utterance == Some(number)
                     && since.is_none_or(|since| o.seq > since)
                     && o.seq < late.at.seq =>
             {
@@ -159,6 +163,19 @@ fn every_late_final_corrects(r: &Recording, check: &mut Check) {
             format!("the final {text:?} of words a turn took never corrected them"),
         );
     }
+}
+
+/// The number the session's speech rules gave the case's `nth` utterance: its place among the
+/// utterances started on its recognition stream, from 1 (`stt::normalizer`).
+fn session_utterance(r: &Recording, nth: u32) -> Option<u64> {
+    let opened = r.resource(Kind::Utterance, nth)?.opened_by()?;
+    let Input::SttStart { stt } = &opened.input else { return None };
+    let started = r.applied().iter().filter(|a| {
+        a.accepted
+            && a.at <= opened.at
+            && matches!(&a.input, Input::SttStart { stt: s } if s == stt)
+    });
+    Some(started.count() as u64)
 }
 
 /// Whether a turn's save was asked after `at` and answered.
