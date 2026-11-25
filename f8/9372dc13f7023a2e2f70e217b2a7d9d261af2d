@@ -1,0 +1,21 @@
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
+  s_9e597167adcefc::t_663128750552fb 25,178,196-211,260-276
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_9e597167adcefc::t_db04b60c61885b 38-44,205-207,211,308-324
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f89372dc13f7023a2e2f70e217b2a7d9d261af2d",
+  "prompts": {},
+  "sessions": {
+    "s_9e597167adcefc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_9e597167adcefc",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
