@@ -301,6 +301,7 @@ SAFE_KEYS = frozenset(
         "lk.agent_label",
         "lk.retry_count",
         "lk.provider_request_ids",
+        "lk.delegation_id",
         "lk.participant_id",
         "lk.participant_kind",
         "lk.job_id",
@@ -346,6 +347,7 @@ SAFE_KEYS = frozenset(
         "lk.llm_metrics",
         "lk.tts_metrics",
         "lk.realtime_model_metrics",
+        "lk.session_usage",
         "lk.e2e_latency",
         # OTEL GenAI semconv (message content rides on event attributes
         # `content`/`tool_calls`, which the collector strips by name)
