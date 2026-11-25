@@ -19,6 +19,35 @@ if TYPE_CHECKING:
 
 CARD_ISSUERS_LOOKUP = {"3": "American Express", "4": "Visa", "5": "Mastercard", "6": "Discover"}
 
+# (first, last, issuer) over the leading digits of the number, most specific first. The
+# first digit alone isn't enough: 3 also starts JCB and Diners Club, and Mastercard has
+# issued 2221-2720 since 2017.
+_CARD_ISSUER_RANGES = (
+    ("34", "34", "American Express"),
+    ("37", "37", "American Express"),
+    ("3528", "3589", "JCB"),
+    ("300", "305", "Diners Club"),
+    ("3095", "3095", "Diners Club"),
+    ("36", "36", "Diners Club"),
+    ("38", "39", "Diners Club"),
+    ("4", "4", "Visa"),
+    ("51", "55", "Mastercard"),
+    ("2221", "2720", "Mastercard"),
+    ("6011", "6011", "Discover"),
+    ("622126", "622925", "Discover"),
+    ("644", "649", "Discover"),
+    ("65", "65", "Discover"),
+    ("62", "62", "UnionPay"),
+)
+
+
+def _card_issuer(card_number: str) -> str:
+    for first, last, issuer in _CARD_ISSUER_RANGES:
+        if first <= card_number[: len(first)] <= last:
+            return issuer
+    return "Other"
+
+
 _CARD_NUMBER_BASE_INSTRUCTIONS = """
 You are a single step in a broader process of collecting credit card information.
 You are solely responsible for collecting the credit card number.
@@ -239,7 +268,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                         "ask the user if they made a mistake or to provide another card."
                     )
 
-                issuer = CARD_ISSUERS_LOOKUP.get(self._card_number[0], "Other")
+                issuer = _card_issuer(self._card_number)
                 if not self.done():
                     self.complete(GetCardNumberResult(issuer=issuer, card_number=self._card_number))
                 return None
@@ -272,7 +301,7 @@ class GetCardNumberTask(AgentTask[GetCardNumberResult]):
                     "ask the user if they made a mistake or to provide another card."
                 )
 
-            issuer = CARD_ISSUERS_LOOKUP.get(card_number[0], "Other")
+            issuer = _card_issuer(card_number)
             if not self.done():
                 self.complete(GetCardNumberResult(issuer=issuer, card_number=card_number))
             return None
