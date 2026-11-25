@@ -300,6 +300,14 @@ LINK_CASES = [
     # a backslash-escaped paren opens no group
     (r"read [guide](https://example.com/a\(b) now", "read guide now"),
     (r"![logo](img\(1.png) here", "logo here"),
+    # nor does a paren in a quoted title or an angle-bracket destination
+    ('(See [the guide](https://example.com "Syntax: open(") for it.)', "(See the guide for it.)"),
+    ("(See [the guide](https://example.com 'open(') for it.)", "(See the guide for it.)"),
+    ("(See ![the logo](<img (1.png>) for it.)", "(See the logo for it.)"),
+    ('see [this](https://example.com "open(") now', "see this now"),
+    ('see [this](https://example.com "a) b") now', "see this now"),
+    ("see [O'Brien](https://example.com/o'brien) now", "see O'Brien now"),
+    ('see [this](https://example.com "open) now', "see this now"),
 ]
 
 
