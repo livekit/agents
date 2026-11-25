@@ -11,8 +11,6 @@ from livekit.agents import utils
 from livekit.agents.beta import Block, DecisionEvaluated, DecisionGuardrail, Steer
 from livekit.agents.beta.guardrail import (
     _combine,
-    gate_agent_sentences,
-    run_user_turn_checks,
 )
 from livekit.agents.llm import ChatContext, ChatMessage, decisions
 from livekit.agents.llm.decisions import DecisionResponse, ProbabilityResult
@@ -90,8 +88,8 @@ async def _check_turn(
     assert guardrail is not None
     eager = guardrail._take_turn()
     try:
-        return await run_user_turn_checks(
-            guardrail, chat_ctx=chat_ctx, user_message=user_message, eager=eager
+        return await guardrail._run_user_turn_checks(
+            chat_ctx=chat_ctx, user_message=user_message, eager=eager
         )
     finally:
         for evaluation in eager.values():
@@ -265,8 +263,8 @@ async def test_user_turn_ignores_results_its_hook_does_not_support() -> None:
 
     out = [
         c
-        async for c in gate_agent_sentences(
-            session._guardrail, text(), chat_ctx=ChatContext(), speech_id="s", on_block=_no_block
+        async for c in session._guardrail._gate_agent_sentences(
+            text(), chat_ctx=ChatContext(), speech_id="s", on_block=_no_block
         )
     ]
     assert out == ["This is the first sentence of the reply."]
@@ -392,8 +390,7 @@ async def test_sentence_gate_releases_the_reply_unchanged() -> None:
     chunks = [reply[i : i + 7] for i in range(0, len(reply), 7)]
     out = [
         c
-        async for c in gate_agent_sentences(
-            session._guardrail,
+        async for c in session._guardrail._gate_agent_sentences(
             _stream(*chunks),
             chat_ctx=ChatContext(),
             speech_id="speech_1",
@@ -424,8 +421,7 @@ async def test_sentence_gate_blocks_from_the_failing_sentence() -> None:
 
     out = [
         c
-        async for c in gate_agent_sentences(
-            session._guardrail,
+        async for c in session._guardrail._gate_agent_sentences(
             _stream(
                 "Thanks for waiting on the line. ",
                 FlushSentinel(),
@@ -459,8 +455,7 @@ async def test_sentence_gate_on_error_block() -> None:
 
     out = [
         c
-        async for c in gate_agent_sentences(
-            session._guardrail,
+        async for c in session._guardrail._gate_agent_sentences(
             _stream("Nothing gets through when the check fails."),
             chat_ctx=ChatContext(),
             speech_id="s",

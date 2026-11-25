@@ -528,6 +528,101 @@ class DecisionGuardrail:
         )
         return None
 
+    async def _run_user_turn_checks(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        user_message: llm.ChatMessage,
+        eager: dict[int, _EagerEvaluation],
+    ) -> Block | Steer | None:
+        """Run every ``on_user_turn`` check and combine their results.
+
+        ``eager`` is the turn's state from :meth:`_take_turn`. Evaluations
+        reused here are removed from it; the caller cancels the rest.
+        """
+        if not self._checks_for("user_turn"):
+            return None
+        verdicts = await self._user_turn_verdicts(
+            chat_ctx=chat_ctx, user_message=user_message, eager=eager
+        )
+        return _combine(verdicts)
+
+    async def _gate_agent_sentences(
+        self,
+        text: AsyncIterable[str | FlushSentinel],
+        *,
+        chat_ctx: llm.ChatContext,
+        speech_id: str,
+        on_block: Callable[[Block], Awaitable[None]],
+    ) -> AsyncGenerator[str | FlushSentinel, None]:
+        """Release the reply text one checked sentence at a time.
+
+        Every sentence is checked as soon as it is complete, so later sentences are checked
+        while earlier ones are spoken. Sentences are released in order. When one is blocked,
+        nothing from it onwards is released and ``on_block`` is awaited.
+        """
+        tokenizer = SentenceTokenizer(retain_format=True)
+        queue = aio.Chan[_SentenceItem]()
+        checks: set[asyncio.Task[Block | None]] = set()
+        reply = ""
+
+        async def _check(reply_so_far: str) -> Block | None:
+            verdicts = await self._sentence_verdicts(
+                reply=reply_so_far, chat_ctx=chat_ctx, speech_id=speech_id
+            )
+            verdict = _combine(verdicts)
+            return verdict if isinstance(verdict, Block) else None
+
+        def _submit(text: str) -> None:
+            nonlocal reply
+            reply += text
+            if not text.strip():
+                queue.send_nowait((text, None))
+                return
+            task = asyncio.create_task(_check(reply))
+            checks.add(task)
+            queue.send_nowait((text, task))
+
+        async def _split() -> None:
+            pending = ""
+            try:
+                async for chunk in text:
+                    if isinstance(chunk, FlushSentinel):
+                        if pending:
+                            _submit(pending)
+                        pending = ""
+                        queue.send_nowait(chunk)
+                        continue
+                    pending += chunk
+                    sentences = tokenizer.tokenize(pending)
+                    # every sentence but the last is complete; the last may still grow
+                    if len(sentences) > 1 and "".join(sentences) == pending:
+                        for sentence in sentences[:-1]:
+                            _submit(sentence)
+                        pending = sentences[-1]
+                if pending:
+                    _submit(pending)
+            finally:
+                queue.close()
+
+        split_task = asyncio.create_task(_split())
+        try:
+            async for item in queue:
+                if isinstance(item, FlushSentinel):
+                    yield item
+                    continue
+                sentence, task = item
+                if task is not None and (block := await task) is not None:
+                    logger.debug(
+                        "guardrail blocked the agent's reply",
+                        extra={"speech_id": speech_id, "lk.pii.text": sentence},
+                    )
+                    await on_block(block)
+                    return
+                yield sentence
+        finally:
+            await aio.cancel_and_wait(split_task, *checks)
+
     # endregion
 
 
@@ -540,106 +635,9 @@ def _combine(verdicts: list[_Verdict]) -> Block | Steer | None:
     return Steer(instructions="\n".join(steers)) if steers else None
 
 
-async def run_user_turn_checks(
-    guardrail: DecisionGuardrail,
-    *,
-    chat_ctx: llm.ChatContext,
-    user_message: llm.ChatMessage,
-    eager: dict[int, _EagerEvaluation],
-) -> Block | Steer | None:
-    """Run every ``on_user_turn`` check and combine their results.
-
-    ``eager`` is the turn's state from :meth:`DecisionGuardrail._take_turn`. Evaluations
-    reused here are removed from it; the caller cancels the rest.
-    """
-    if not guardrail._checks_for("user_turn"):
-        return None
-    verdicts = await guardrail._user_turn_verdicts(
-        chat_ctx=chat_ctx, user_message=user_message, eager=eager
-    )
-    return _combine(verdicts)
-
-
 # a sentence with its pending check (None for whitespace, which isn't checked), or a
 # segment boundary passed through unchanged
 _SentenceItem = tuple[str, "asyncio.Task[Block | None] | None"] | FlushSentinel
-
-
-async def gate_agent_sentences(
-    guardrail: DecisionGuardrail,
-    text: AsyncIterable[str | FlushSentinel],
-    *,
-    chat_ctx: llm.ChatContext,
-    speech_id: str,
-    on_block: Callable[[Block], Awaitable[None]],
-) -> AsyncGenerator[str | FlushSentinel, None]:
-    """Release the reply text one checked sentence at a time.
-
-    Every sentence is checked as soon as it is complete, so later sentences are checked
-    while earlier ones are spoken. Sentences are released in order. When one is blocked,
-    nothing from it onwards is released and ``on_block`` is awaited.
-    """
-    tokenizer = SentenceTokenizer(retain_format=True)
-    queue = aio.Chan[_SentenceItem]()
-    checks: set[asyncio.Task[Block | None]] = set()
-    reply = ""
-
-    async def _check(reply_so_far: str) -> Block | None:
-        verdicts = await guardrail._sentence_verdicts(
-            reply=reply_so_far, chat_ctx=chat_ctx, speech_id=speech_id
-        )
-        verdict = _combine(verdicts)
-        return verdict if isinstance(verdict, Block) else None
-
-    def _submit(text: str) -> None:
-        nonlocal reply
-        reply += text
-        if not text.strip():
-            queue.send_nowait((text, None))
-            return
-        task = asyncio.create_task(_check(reply))
-        checks.add(task)
-        queue.send_nowait((text, task))
-
-    async def _split() -> None:
-        pending = ""
-        try:
-            async for chunk in text:
-                if isinstance(chunk, FlushSentinel):
-                    if pending:
-                        _submit(pending)
-                    pending = ""
-                    queue.send_nowait(chunk)
-                    continue
-                pending += chunk
-                sentences = tokenizer.tokenize(pending)
-                # every sentence but the last is complete; the last may still grow
-                if len(sentences) > 1 and "".join(sentences) == pending:
-                    for sentence in sentences[:-1]:
-                        _submit(sentence)
-                    pending = sentences[-1]
-            if pending:
-                _submit(pending)
-        finally:
-            queue.close()
-
-    split_task = asyncio.create_task(_split())
-    try:
-        async for item in queue:
-            if isinstance(item, FlushSentinel):
-                yield item
-                continue
-            sentence, task = item
-            if task is not None and (block := await task) is not None:
-                logger.debug(
-                    "guardrail blocked the agent's reply",
-                    extra={"speech_id": speech_id, "lk.pii.text": sentence},
-                )
-                await on_block(block)
-                return
-            yield sentence
-    finally:
-        await aio.cancel_and_wait(split_task, *checks)
 
 
 def _normalize(text: str) -> str:

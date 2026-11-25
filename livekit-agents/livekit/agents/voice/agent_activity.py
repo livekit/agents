@@ -3160,10 +3160,9 @@ class AgentActivity(RecognitionHooks):
         reply_instructions: NotGivenOr[str] = NOT_GIVEN
         if (guardrail := self._session._guardrail) is not None:
             # imported here: livekit.agents.beta imports the voice package
-            from ..beta.guardrail import Block, Steer, run_user_turn_checks
+            from ..beta.guardrail import Block, Steer
 
-            verdict = await run_user_turn_checks(
-                guardrail,
+            verdict = await guardrail._run_user_turn_checks(
                 chat_ctx=temp_mutable_chat_ctx,
                 user_message=user_message,
                 eager=guardrail_eager if guardrail_eager is not None else {},
@@ -4033,11 +4032,8 @@ class AgentActivity(RecognitionHooks):
             sentence_gate: AsyncGenerator[str | FlushSentinel, None] | None = None
             guardrail = self._session._guardrail
             if guardrail is not None and guardrail._checks_for("agent_sentence"):
-                from ..beta.guardrail import gate_agent_sentences
-
                 # sentences reach the TTS and the transcript only once the guardrail allows them
-                text_source = sentence_gate = gate_agent_sentences(
-                    guardrail,
+                text_source = sentence_gate = guardrail._gate_agent_sentences(
                     llm_gen_data.text_ch,
                     chat_ctx=chat_ctx,
                     speech_id=speech_handle.id,
