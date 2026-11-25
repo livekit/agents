@@ -249,27 +249,37 @@ One count per voice session, recorded when it starts, with the configuration it 
 
 **Feature usage**
 
-A feature is counted once per conversation that used it at least once, however many times
-it was used.
+`lk.product.agents.feature.sessions` counts, for each feature, the conversations that used
+it. A conversation can use several features, or none:
+
+- When a conversation ends, it adds 1 for each feature it used, whether it used that
+  feature once or a hundred times.
+- A call that used MCP and `override_options` adds 1 under `mcp` and 1 under
+  `override_options`. A call that used no listed feature adds nothing.
+- Dividing a feature's count by `lk.product.agents.sessions` gives the share of
+  conversations that use it.
+
+The feature is the label `lk.product.agents.feature`, one of:
+
+| Value | The conversation |
+| --- | --- |
+| `mcp` | ran an agent that has an MCP toolset |
+| `update_options` | called `session.update_options(...)` |
+| `override_options` | entered `session.override_options(...)` |
+| `realtime_model_switch` | changed its realtime model while running |
+| `background_audio` | played background audio |
+
+A feature that needs more than its name gets its own metric, counted by the same rule.
+There is one so far:
 
 | Metric | Label | Counts |
 | --- | --- | --- |
-| `lk.product.agents.feature.sessions` | `lk.product.agents.feature` | Conversations that used the feature |
-| `lk.product.agents.voice_task.sessions` | `lk.product.agents.voice_task` | Conversations that ran the task |
-
-`lk.product.agents.feature` is one of: `mcp`, `update_options`, `override_options`,
-`realtime_model_switch`, `background_audio`.
+| `lk.product.agents.voice_task.sessions` | `lk.product.agents.voice_task` | Conversations that ran the task, 1 for each different task |
 
 `lk.product.agents.voice_task` is the name of a prebuilt task (`GetEmailTask`,
-`GetDtmfTask`, `WarmTransfer`), or `custom` for any task an application defines. A feature
-that needs more than its name, like this one, gets its own metric and labels instead of a
-value of `lk.product.agents.feature`.
-
-**Channels**
-
-| Metric | Label | Counts |
-| --- | --- | --- |
-| `lk.product.agents.channel.messages` | `lk.product.agents.channel`: `sms`, `whatsapp`, `email`; `lk.product.agents.channel.attachments`: `yes`, `no` | Messages received on a channel |
+`GetDtmfTask`, `WarmTransfer`), or `custom` for any task an application defines. A call
+that ran `GetEmailTask` twice and two of its own tasks adds 1 under `GetEmailTask` and 1
+under `custom`.
 
 **Never collected**
 
