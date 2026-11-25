@@ -232,6 +232,9 @@ pub enum Record {
     Span(SpanRecord),
     Log(LogRecord),
     Measurement(Measurement),
+    /// One of LiveKit's product statistics, which a sans-I/O machine measured: the tracer hands
+    /// it to the process's product statistics, never to a customer's exporter.
+    ProductStat(crate::productstats::ProductStat),
 }
 
 /// Where producers send records. Recording never blocks or fails: a full queue drops the

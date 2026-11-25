@@ -999,6 +999,7 @@ impl VoiceDriver {
                     self.flush_turn_detector(reason)
                 }
                 AudioRecognitionEffect::EndOfTurn(info) => {
+                    self.count_transcription_delay(&info);
                     self.record_trace(Step::Decided(RecognitionObservation::EndOfTurn(
                         info.clone(),
                     )));

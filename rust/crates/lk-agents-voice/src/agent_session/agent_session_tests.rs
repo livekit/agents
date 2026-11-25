@@ -554,9 +554,17 @@ pub(crate) fn driver_with(
 }
 
 pub(crate) fn realtime_driver() -> VoiceDriver {
+    realtime_driver_on(|_| {})
+}
+
+/// [`realtime_driver`] on a model whose capabilities `model` adjusts.
+pub(crate) fn realtime_driver_on(
+    model: impl FnOnce(&mut lk_agents_abi::llm::realtime::RealtimeCapabilities),
+) -> VoiceDriver {
     let parts = SessionParts { agent: "agent".into(), ..Default::default() };
     let now = Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH };
     let mut initial = initial_session(parts, None, now);
+    model(&mut initial.rt_caps);
     initial.rt_session = Some(lk_agents_abi::resources::RealtimeRef {
         id: lk_agents_abi::resources::ResourceId(1),
         provider: lk_agents_abi::ProviderId::of_label("realtime"),

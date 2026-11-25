@@ -720,6 +720,7 @@ impl AudioRecognition {
         let run = Run {
             snapshot: TurnSnapshot {
                 last_speaking_time: self.last_speaking_time,
+                speech_ended_by: self.speech_ended_by,
                 last_final_transcript_time: self.last_final_transcript_time,
                 // The turn's earliest onset, not the latest speech start.
                 speech_start_time: snapshot_turn_start,

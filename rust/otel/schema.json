@@ -5577,6 +5577,384 @@
         5.0,
         10.0
       ]
+    },
+    {
+      "name": "lk.product.agents.model.audio_duration",
+      "brief": "Audio a model heard (an STT) or spoke (a TTS).",
+      "kind": "counter",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.product.agents.model.characters",
+      "brief": "Characters of text a model was given to speak.",
+      "kind": "counter",
+      "unit": "{character}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.product.agents.model.input_tokens",
+      "brief": "Tokens a model consumed, as its provider reports them.",
+      "kind": "counter",
+      "unit": "{token}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.product.agents.model.output_tokens",
+      "brief": "Tokens a model produced, as its provider reports them.",
+      "kind": "counter",
+      "unit": "{token}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.product.agents.model.requests",
+      "brief": "Requests made to a model: one LLM completion, one TTS synthesis, one STT stream or recognition, one realtime response.",
+      "kind": "counter",
+      "unit": "{request}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.product.agents.model.transcription_delay",
+      "brief": "Time from the end of the person's speech to the STT's final transcript, once per turn; a turn whose final came first, or whose end of speech was not detected, records nothing.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.transcription_delay.endpointing",
+          "type": "string",
+          "required": true,
+          "members": [
+            "vad",
+            "stt"
+          ],
+          "label": true
+        }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
+      ]
+    },
+    {
+      "name": "lk.product.agents.model.ttfb",
+      "brief": "Time to the first audio of a TTS request.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
+      ]
+    },
+    {
+      "name": "lk.product.agents.model.ttft",
+      "brief": "Time to the first token of an LLM, realtime or duplex response.",
+      "kind": "histogram",
+      "unit": "s",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.model.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.plugin",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.provider",
+          "type": "string",
+          "required": true,
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.model.name",
+          "type": "string",
+          "required": true,
+          "label": true
+        }
+      ],
+      "bounds": [
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92
+      ]
     }
   ],
   "records": [

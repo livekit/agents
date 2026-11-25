@@ -183,6 +183,7 @@ impl VoiceDriver {
         if ev.kind == SpeechEventType::RecognitionUsage {
             let usage = ev.recognition_usage.unwrap_or_default();
             let id = self.stt_identity().unwrap_or_default();
+            self.count_stt_usage(&usage);
             let record = lk_agents_abi::metrics::base::SttMetrics {
                 label: id.label.clone(),
                 request_id: ev.request_id.clone(),

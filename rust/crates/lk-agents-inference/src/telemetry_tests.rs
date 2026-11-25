@@ -454,3 +454,102 @@ fn all_supported_usage_fields_reach_spans() {
         assert_eq!(attr(request, key), Some(&Value::Int(want)), "{key}: {request:?}");
     }
 }
+
+/// An LLM that declares its own identity, as a plugin's does.
+struct Declared(lk_agents_abi::ProviderId);
+
+impl Llm for Declared {
+    fn label(&self) -> String {
+        self.0.label.clone()
+    }
+    fn id(&self) -> lk_agents_abi::ProviderId {
+        self.0.clone()
+    }
+    fn chat<'a>(
+        &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        Box::pin(async move { Err(boom("unused")) })
+    }
+}
+
+/// One statistic, with the four model labels every model metric carries.
+fn model_stat(
+    metric: &'static str,
+    [kind, plugin, provider, name]: [&str; 4],
+    value: f64,
+) -> lk_agents_telemetry::productstats::testkit::Stat {
+    let labels = [
+        ("lk.product.agents.model.kind", kind),
+        ("lk.product.agents.model.plugin", plugin),
+        ("lk.product.agents.model.provider", provider),
+        ("lk.product.agents.model.name", name),
+    ];
+    (metric, labels.map(|(k, v)| (k.to_owned(), v.to_owned())).to_vec(), value)
+}
+
+// Catches: an LLM completion, TTS synthesis or STT stream not counted once under its model's
+// labels, a unit it was not measured in recorded as a zero, its tokens, characters or audio
+// lost, or its first token or first audio not timed.
+#[tokio::test]
+async fn a_model_request_is_counted_once_with_what_it_was_measured_in() {
+    use lk_agents_abi::usage::TokenUsage;
+    let stats = lk_agents_telemetry::productstats::testkit::Capture::start();
+    // To the millisecond: a span's clock is the wall's, in nanoseconds.
+    let taken = || {
+        let rounded = stats.take().into_iter().map(|(m, l, v)| (m, l, (v * 1e3).round() / 1e3));
+        rounded.collect::<Vec<_>>()
+    };
+    let clock = Arc::new(VirtualClock::new());
+    let tracer = Tracer::new(Arc::new(Records::default()), clock.clone(), 11);
+    let cx = tracer.root().continuing(Some(PARENT));
+
+    let llm = Declared(lk_agents_abi::ProviderId {
+        label: "livekit.plugins.openai.llm.LLM".into(),
+        model: "llama-3.3-70b".into(),
+        provider: "cerebras".into(),
+    });
+    let mut trace = LlmTrace::start(&cx, &llm, &request());
+    clock.advance(std::time::Duration::from_millis(250));
+    let usage = TokenUsage { input_tokens: 12, output_tokens: 5, ..TokenUsage::default() };
+    trace.observe(&LlmChunk { usage: Some(Box::new(usage)), ..chunk("hi") });
+    trace.end(Default::default());
+    let model = ["llm", "openai", "cerebras", "llama-3.3-70b"];
+    assert_eq!(
+        taken(),
+        [
+            model_stat("lk.product.agents.model.requests", model, 1.0),
+            model_stat("lk.product.agents.model.input_tokens", model, 12.0),
+            model_stat("lk.product.agents.model.output_tokens", model, 5.0),
+            model_stat("lk.product.agents.model.ttft", model, 0.25),
+        ]
+    );
+
+    let tts = Speaker { label: "livekit.plugins.cartesia.tts.TTS", serves: true };
+    let spoken = lk_agents_abi::metrics::base::TtsMetrics {
+        characters_count: 5,
+        audio_duration: 1.5,
+        ttfb: Some(0.2),
+        ..lk_agents_abi::metrics::testkit::tts()
+    };
+    super::TtsTrace::start(&cx, &tts, true).end("hello".into(), Some(&spoken));
+    let model = ["tts", "cartesia", "unknown", "unknown"];
+    assert_eq!(
+        taken(),
+        [
+            model_stat("lk.product.agents.model.requests", model, 1.0),
+            model_stat("lk.product.agents.model.characters", model, 5.0),
+            model_stat("lk.product.agents.model.audio_duration", model, 1.5),
+            model_stat("lk.product.agents.model.ttfb", model, 0.2),
+        ]
+    );
+
+    let (calls, _log) = tokio::sync::mpsc::channel(4);
+    let conn = lk_agents_abi::ApiConnectOptions::default();
+    let stt = Arc::new(crate::testkit::fallback::PolicyProvider { conn, calls, streaming: true });
+    let stream = crate::stt::retrying::stream(stt, conn, clock, &cx, None, None).await;
+    assert!(stream.is_ok_and(|stream| stream.is_some()));
+    let model = ["stt", "custom", "unknown", "unknown"];
+    assert_eq!(taken(), [model_stat("lk.product.agents.model.requests", model, 1.0)]);
+}

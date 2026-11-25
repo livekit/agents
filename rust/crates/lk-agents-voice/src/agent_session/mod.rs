@@ -16,6 +16,7 @@ pub mod host_events;
 pub mod lifecycle;
 pub mod machine;
 pub mod options;
+mod product_stats;
 mod report;
 pub mod room;
 mod spans;

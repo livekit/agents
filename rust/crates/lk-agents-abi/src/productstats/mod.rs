@@ -1,4 +1,5 @@
-use crate::telemetry::decl::{Attrs, Label, SpanValue};
+use crate::telemetry::decl::{Attrs, Label, MetricDecl, Number, ProductStats, SpanValue};
+use crate::telemetry::record::{KeyValues, Measurement};
 use crate::telemetry::semconv::otel;
 use runner::Runner;
 
@@ -8,9 +9,38 @@ use runner::Runner;
 // declaration uses. `lk-agents-codegen --check` refuses a declaration of this module that breaks
 // either rule.
 
+pub mod models;
 pub mod runner;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
+
+/// One measurement of a declared product statistic. A sans-I/O machine makes it where the fact is
+/// known; the process's product statistics record it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProductStat(Measurement);
+
+impl ProductStat {
+    pub fn of<M: MetricDecl<Audience = ProductStats>>(
+        labels: &M,
+        value: impl Into<Number>,
+    ) -> Self {
+        let mut out = KeyValues::new();
+        labels.write(&mut out);
+        ProductStat(Measurement {
+            instrument: M::NAME,
+            kind: M::KIND,
+            unit: M::UNIT,
+            bounds: M::BOUNDS,
+            value: value.into(),
+            labels: out,
+            job: None,
+        })
+    }
+
+    pub fn into_measurement(self) -> Measurement {
+        self.0
+    }
+}
 
 /// The runtime an agent runs on, which its host binding names.
 #[crate::host(native_enum(name = "Runtime"))]

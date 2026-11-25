@@ -10,6 +10,7 @@ use crate::audio_recognition::effects::AudioRecognitionEffect;
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;
 use crate::events::{AgentBackchannelOpportunityEvent, SessionEvent, UserTranscriptEvent};
+use lk_agents_abi::productstats::models::EndpointedBy;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::tokenize::language::{LanguageCode, ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::detector::ReqId;
@@ -56,6 +57,8 @@ pub struct AudioRecognition {
 
     last_final_transcript_time: Option<Ts>,
     last_speaking_time: Option<Ts>,
+    /// What detected `last_speaking_time`: the VAD, the STT, or neither.
+    speech_ended_by: Option<EndpointedBy>,
     speech_start_time: Option<Ts>,
     /// Also stands for "the `user_turn` span is open".
     user_turn_start: Option<Ts>,
@@ -138,6 +141,7 @@ impl AudioRecognition {
             last_language: None,
             last_final_transcript_time: None,
             last_speaking_time: None,
+            speech_ended_by: None,
             speech_start_time: None,
             user_turn_start: None,
             vad_speech_started: false,

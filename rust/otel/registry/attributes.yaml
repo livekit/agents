@@ -88,6 +88,91 @@
       ]
     },
     {
+      "id": "registry.livekit.agents.models",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats::models`.",
+      "attributes": [
+        {
+          "id": "lk.product.agents.model.kind",
+          "type": {
+            "members": [
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "tts",
+                "value": "tts",
+                "brief": "tts",
+                "stability": "development"
+              },
+              {
+                "id": "llm",
+                "value": "llm",
+                "brief": "llm",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "STT, TTS, LLM, realtime or duplex."
+        },
+        {
+          "id": "lk.product.agents.model.name",
+          "type": "string",
+          "stability": "development",
+          "brief": "The vendor's own id for the model."
+        },
+        {
+          "id": "lk.product.agents.model.plugin",
+          "type": "string",
+          "stability": "development",
+          "brief": "The code that runs: a plugin id, `livekit-inference`, or `custom`."
+        },
+        {
+          "id": "lk.product.agents.model.provider",
+          "type": "string",
+          "stability": "development",
+          "brief": "The vendor whose model runs, as the model declares it."
+        },
+        {
+          "id": "lk.product.agents.model.transcription_delay.endpointing",
+          "type": {
+            "members": [
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              },
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "What ended the speech."
+        }
+      ]
+    },
+    {
       "id": "registry.livekit.agents.runner",
       "type": "attribute_group",
       "brief": "Attributes declared in `lk_agents_abi::productstats::runner`.",

@@ -127,6 +127,10 @@ impl Tracer {
 
 impl Recorder for Inner {
     fn record(&self, record: Record) {
+        let record = match record {
+            Record::ProductStat(stat) => return crate::productstats::record(stat),
+            record => record,
+        };
         match &self.sink {
             Sink::To(sink) => sink.record(record),
             Sink::Discard => {}

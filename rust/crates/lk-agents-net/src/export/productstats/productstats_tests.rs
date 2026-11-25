@@ -72,7 +72,7 @@ fn decode(request: &Received) -> ExportMetricsServiceRequest {
     request.decode()
 }
 
-/// One data point: its instrument, its labels, and its value (a histogram's count).
+/// One data point: its instrument, its labels, and its value (whole; a histogram's count).
 type Point = (String, Vec<(String, String)>, i64);
 
 /// Every data point of the request.
@@ -86,8 +86,10 @@ fn values(request: &ExportMetricsServiceRequest) -> Vec<Point> {
                 sum.data_points
                     .iter()
                     .map(|p| {
+                        use super::super::otlp::proto::metrics::v1::number_data_point::Value;
                         let v = match p.value {
-                            Some(super::super::otlp::proto::metrics::v1::number_data_point::Value::AsInt(v)) => v,
+                            Some(Value::AsInt(v)) => v,
+                            Some(Value::AsDouble(v)) if v.fract() == 0.0 => v as i64,
                             other => panic!("{other:?}"),
                         };
                         (p.attributes.clone(), v)
@@ -166,6 +168,67 @@ async fn an_export_carries_only_declared_product_statistics_keys() {
     );
     assert!(stats.flush(LIMIT).await);
     assert!(received(&mut rx).is_empty(), "a delta window is sent once");
+}
+
+// Catches: a model statistic exported under another name, without one of its labels, as the
+// wrong instrument (a latency summed, a count bucketed) or with its unit lost.
+#[tokio::test]
+async fn model_statistics_reach_the_collector_as_declared() {
+    use lk_agents_abi::productstats::models::{
+        EndpointedBy, ModelKind, ModelLabels, ModelRequests, ModelTranscriptionDelay, ModelUsage,
+    };
+    let (url, mut rx) = endpoint(ok).await;
+    let stats = stats();
+    stats.configure(Some(destination(&url)));
+    let id = lk_agents_abi::ProviderId {
+        label: "livekit.plugins.deepgram.stt.STT".into(),
+        model: "nova-3".into(),
+        provider: "deepgram".into(),
+    };
+    let model = ModelLabels::of(ModelKind::Stt, &id);
+    measure(&stats, &ModelRequests { model: model.clone() }, 1u64);
+    for heard in (ModelUsage { audio_duration: 2.0, ..Default::default() }).stats(&model) {
+        stats.record(heard.into_measurement());
+    }
+    let delay = ModelTranscriptionDelay { model, endpointing: EndpointedBy::Vad };
+    measure(&stats, &delay, 0.3);
+    assert!(stats.flush(LIMIT).await);
+    let request = decode(&received(&mut rx)[0]);
+    let metrics = &request.resource_metrics[0].scope_metrics[0].metrics;
+    let mut shapes: Vec<(&str, &str, bool)> = metrics
+        .iter()
+        .map(|m| (m.name.as_str(), m.unit.as_str(), matches!(m.data, Some(Data::Histogram(_)))))
+        .collect();
+    shapes.sort();
+    assert_eq!(
+        shapes,
+        [
+            ("lk.product.agents.model.audio_duration", "s", false),
+            ("lk.product.agents.model.requests", "{request}", false),
+            ("lk.product.agents.model.transcription_delay", "s", true),
+        ]
+    );
+    let labels = |more: &[(&str, &str)]| {
+        let model = [
+            ("lk.product.agents.model.kind", "stt"),
+            ("lk.product.agents.model.plugin", "deepgram"),
+            ("lk.product.agents.model.provider", "deepgram"),
+            ("lk.product.agents.model.name", "nova-3"),
+        ];
+        let all = model.iter().chain(more).map(|(k, v)| ((*k).to_owned(), (*v).to_owned()));
+        all.collect::<Vec<_>>()
+    };
+    let endpointing = [("lk.product.agents.model.transcription_delay.endpointing", "vad")];
+    let mut sorted = values(&request);
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        [
+            ("lk.product.agents.model.audio_duration".to_owned(), labels(&[]), 2),
+            ("lk.product.agents.model.requests".to_owned(), labels(&[]), 1),
+            ("lk.product.agents.model.transcription_delay".to_owned(), labels(&endpointing), 1),
+        ]
+    );
 }
 
 // Catches: product statistics sent to a self-hosted server, an `.example.com` host taken for

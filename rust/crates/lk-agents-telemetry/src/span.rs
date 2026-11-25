@@ -1,4 +1,5 @@
 use lk_agents_abi::Ts;
+use lk_agents_abi::productstats::ProductStat;
 use lk_agents_abi::telemetry::decl::{
     Attrs, Current, EventDecl, HasEvent, MetricDecl, Observability, ParentOf, SpanDecl, SpanEnd,
     finish_span,
@@ -322,6 +323,12 @@ impl Trace {
             labels,
             job: self.job.clone(),
         }));
+    }
+
+    /// Records product statistics: they leave with the session's records and reach the process's
+    /// product statistics, under no job.
+    pub fn product_stats(&mut self, stats: impl IntoIterator<Item = ProductStat>) {
+        self.records.extend(stats.into_iter().map(Record::ProductStat));
     }
 
     /// Unix nanoseconds of a session instant.

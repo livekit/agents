@@ -245,6 +245,7 @@ impl State {
             Record::Span(s) => s.job.as_ref(),
             Record::Log(l) => l.job.as_ref(),
             Record::Measurement(m) => m.job.as_ref(),
+            Record::ProductStat(_) => return false,
         };
         let cloud = self.cloud_action(job, &record);
         let identity = job.and_then(|k| self.jobs.get(k)).map(|j| j.identity.clone());
@@ -308,6 +309,7 @@ impl State {
             (Decision::Recording(r), Record::Span(_)) => (true, r.traces),
             (Decision::Recording(r), Record::Log(_)) => (true, r.logs),
             (Decision::Recording(r), Record::Measurement(_)) => (true, r.metrics),
+            (Decision::Recording(_), Record::ProductStat(_)) => return None,
             (Decision::Disabled, _) => return Some(Action::Disabled),
         };
         let held = if matches!(record, Record::Span(_)) { job.held.len() } else { 0 };
