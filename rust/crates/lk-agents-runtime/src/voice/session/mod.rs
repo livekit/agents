@@ -70,6 +70,8 @@ pub struct VoiceSession {
     /// Every speech's live handle, from its host call or creation to the session's end.
     speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
+    /// The room the session runs in, if any: AMD waits there for its callee.
+    rtc: Option<Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>>,
     /// The transcript synchroniser, held only so `close_io` can close it.
     outputs: crate::voice::io::SessionOutputs,
     spawner: Arc<dyn Spawner>,
@@ -560,6 +562,15 @@ impl VoiceSession {
 
     pub fn api(&self) -> Result<Tx, SessionRefused> {
         self.running(|r| Ok(r.api.clone()))
+    }
+
+    /// The room AMD waits in for its callee, and the participant the session's room I/O links
+    /// now. `None` without a room: AMD listens at once (`_setup_listening`).
+    pub(crate) fn amd_room(
+        &self,
+    ) -> Option<(Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>, Option<String>)> {
+        let room = self.rtc.clone()?;
+        Some((room, self.room_io.linked_participant().map(|identity| identity.0)))
     }
 
     /// What an AMD run executes against, and the agent running now. Refused unless running.

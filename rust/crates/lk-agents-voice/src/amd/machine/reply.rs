@@ -142,6 +142,7 @@ impl Amd {
             return;
         }
         let words = self.turns.get(&turn).map(|t| t.reply_words);
+        self.trace.push(crate::trace::AmdStep::ReplyBound { run: self.run, turn, speech });
         let watched = self.watch(speech);
         if let Some(words) = words {
             watched.words = words;
@@ -217,7 +218,7 @@ impl Amd {
             return;
         }
         self.voicemail.played = true;
-        self.trace.push(crate::trace::AmdStep::VoicemailPlayed);
+        self.trace.push(crate::trace::AmdStep::VoicemailPlayed { run: self.run, speech });
         if self.stage == Stage::MachineVm {
             // The idle timer restarts, so a menu after the message can still arrive.
             self.clear_idle();

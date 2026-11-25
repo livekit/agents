@@ -53,6 +53,8 @@ type AmdObserver =
 pub struct AmdTap {
     observer: Option<Arc<Mutex<AmdObserver>>>,
     route: Arc<Mutex<Option<AmdRoute>>>,
+    /// The last run id handed out: runs are numbered per session, from 1.
+    runs: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The attached run's executor input.
@@ -77,7 +79,17 @@ impl AmdTap {
         + Send
         + 'static,
     ) -> Self {
-        AmdTap { observer: Some(Arc::new(Mutex::new(observer))), route: Arc::default() }
+        AmdTap {
+            observer: Some(Arc::new(Mutex::new(observer))),
+            route: Arc::default(),
+            runs: Arc::default(),
+        }
+    }
+
+    /// A new run's id, unique on the session.
+    pub fn next_run(&self) -> lk_agents_voice::amd::AmdRunId {
+        let last = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        lk_agents_voice::amd::AmdRunId(last + 1)
     }
 
     /// From here, `run`'s observations go to `observations`, in the order the gate sent them.

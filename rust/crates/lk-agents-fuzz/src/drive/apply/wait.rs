@@ -207,6 +207,13 @@ impl Run {
             let ready = gate.as_ref().map(|gate| gate.ready()).unwrap_or_default();
             match self.queue.next(tasks_runnable(), &ready) {
                 Some(Next::Event(event)) => {
+                    // AMD's answers as the session applies them, in the order it applies them.
+                    if let lk_agents_runtime::voice::VoiceRuntimeEvent::Input(
+                        lk_agents_voice::agent_session::VoiceEvent::Amd(answer),
+                    ) = &*event
+                    {
+                        self.record.record_amd_answer(self.stamps.next(), answer.clone());
+                    }
                     session.deliver(*event);
                     self.poll_session();
                     continue;

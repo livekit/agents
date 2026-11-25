@@ -230,6 +230,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             view,
             speeches,
             room_io,
+            rtc: rtc_room,
             outputs,
             tasks: Arc::default(),
             executor,

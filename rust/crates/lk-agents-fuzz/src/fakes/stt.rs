@@ -49,6 +49,12 @@ impl FakeStt {
     ) -> Arc<Self> {
         Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: true, reports })
     }
+
+    /// AMD's own recogniser: its streams open as `Detail::AmdStt`, apart from the session's.
+    pub fn for_amd(registry: Arc<Registry>, reports: SttSpeech) -> Arc<Self> {
+        let connect = std::time::Duration::ZERO;
+        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt, keyterms: false, reports })
+    }
 }
 
 struct Recognition {

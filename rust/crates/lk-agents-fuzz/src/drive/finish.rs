@@ -16,21 +16,13 @@ impl Run {
     /// closed". Empty means the run is quiet and the settle can begin.
     /// AMD's owed answers: a decision for the attached run's latest turn it never answered, and
     /// its completion. The scripted answerer is the progress the gate's liveness assumes.
-    /// A real run owes only its close: it answers on its own.
     fn amd_releases(&self) -> Vec<Input> {
         let applied = self.record.applied();
-        let Some(attached) = applied
-            .iter()
-            .rposition(|a| matches!(a.input, Input::AmdAttach {} | Input::AmdEnter { .. }))
+        let Some(attached) = applied.iter().rposition(|a| matches!(a.input, Input::AmdAttach {}))
         else {
             return Vec::new();
         };
         let since = &applied[attached..];
-        if matches!(since[0].input, Input::AmdEnter { .. }) {
-            let closed = since.iter().any(|a| matches!(a.input, Input::AmdClose {}));
-            let ended = self.amd_real.as_ref().is_none_or(|run| run.outcome_now().is_some());
-            return if closed || ended { Vec::new() } else { vec![Input::AmdClose {}] };
-        }
         if since.iter().any(|a| matches!(a.input, Input::AmdDetach { .. })) {
             return Vec::new();
         }

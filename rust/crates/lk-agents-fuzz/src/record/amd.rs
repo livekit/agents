@@ -10,9 +10,9 @@
 
 use lk_agents_abi::Role;
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
-use lk_agents_voice::amd::{AmdAnswer, AmdObservation, AmdRunId, DetachCancel, Opening};
+use lk_agents_voice::amd::{AmdObservation, AmdRunId};
 use lk_agents_voice::events::SessionEvent;
-use lk_agents_voice::trace::{AmdStep, GateStep, Step, TurnStep};
+use lk_agents_voice::trace::{Step, TurnStep};
 
 use super::{Detail, Kind, Observed, Recording};
 use crate::input::{AmdOpening, AmdVerdict, Input};
@@ -28,31 +28,14 @@ pub struct RequestMessage {
 /// One observation, stamped, and the run it was for.
 pub type Seen = (Observed, AmdRunId, AmdObservation);
 
-/// What the attached AMD runs observed, in the order the session emitted it, and every call a
-/// real run's fake models answered, stamped as it was absorbed.
-#[derive(Clone, Debug, Default)]
-pub struct AmdLog {
-    seen: Vec<Seen>,
-    models: Vec<(Observed, crate::fakes::amd_models::AmdModelCall)>,
-}
-
 impl Recording {
     pub fn record_amd(&mut self, at: Observed, run: AmdRunId, observation: AmdObservation) {
-        self.amd.seen.push((at, run, observation));
+        self.amd.push((at, run, observation));
     }
 
     /// What the attached AMD runs observed, in order.
     pub fn amd(&self) -> &[Seen] {
-        &self.amd.seen
-    }
-
-    pub fn record_amd_model(&mut self, at: Observed, call: crate::fakes::amd_models::AmdModelCall) {
-        self.amd.models.push((at, call));
-    }
-
-    /// Every call a real AMD run's fake models answered, in order.
-    pub fn amd_models(&self) -> &[(Observed, crate::fakes::amd_models::AmdModelCall)] {
-        &self.amd.models
+        &self.amd
     }
 }
 
@@ -137,26 +120,6 @@ impl Request<'_> {
 
 pub struct AmdView<'a>(&'a Recording);
 
-fn answer_run(answer: &AmdAnswer) -> u64 {
-    match answer {
-        AmdAnswer::Activated { run, .. }
-        | AmdAnswer::ReplyDecided { run, .. }
-        | AmdAnswer::InsertUserItem { run, .. }
-        | AmdAnswer::Detach { run, .. } => run.0,
-    }
-}
-
-/// The scripted verdict a real decision stands for: its spec §10.1 row.
-fn verdict_of(decision: &lk_agents_voice::amd::ReplyDecision) -> AmdVerdict {
-    match decision {
-        d if !d.allow => AmdVerdict::Deny,
-        d if d.dtmf => AmdVerdict::Ivr,
-        d if d.silence.is_some() => AmdVerdict::Silence,
-        d if d.instructions.is_some() => AmdVerdict::Stage,
-        _ => AmdVerdict::Allow,
-    }
-}
-
 impl Recording {
     pub fn amd_view(&self) -> AmdView<'_> {
         AmdView(self)
@@ -188,31 +151,6 @@ impl<'a> AmdView<'a> {
                         });
                     }
                 }
-                // A real run attaches from its executor: when the gate installed it.
-                Input::AmdEnter { .. } => {
-                    run += 1;
-                    if let Some(attached) = self.gate_attached(run) {
-                        let detached = self.detached(run);
-                        let detach_asked = self
-                            .answered(run, |a| matches!(a, AmdAnswer::Detach { .. }).then_some(()));
-                        let activated = self.answered(run, |a| match a {
-                            AmdAnswer::Activated { opening, .. } => {
-                                Some(opening.as_ref().map(|o| match o {
-                                    Opening::Text(_) => AmdOpening::Text,
-                                    Opening::Instructions(_) => AmdOpening::Instructions,
-                                }))
-                            }
-                            _ => None,
-                        });
-                        out.push(Attachment {
-                            run,
-                            attached,
-                            detached,
-                            detach_asked: detach_asked.map(|(at, ())| at),
-                            activated,
-                        });
-                    }
-                }
                 Input::AmdDetach { .. } if applied.accepted => {
                     if let Some(a) = out.iter_mut().rev().find(|a| a.run == run)
                         && a.detach_asked.is_none()
@@ -230,53 +168,85 @@ impl<'a> AmdView<'a> {
                 _ => {}
             }
         }
+        out.extend(self.executor_attachments());
         out
     }
 
-    /// When the gate installed run `run`.
-    fn gate_attached(&self, run: u64) -> Option<Observed> {
-        self.0.journal().iter().find_map(|(at, step)| match step {
-            Step::Gate(GateStep::Attached { run: r }) if r.0 == run => Some(*at),
-            _ => None,
-        })
-    }
-
-    /// The session's `Detached` for run `run`.
-    fn detached(&self, run: u64) -> Option<Observed> {
-        self.0.amd().iter().find_map(|(at, _, o)| match o {
-            AmdObservation::Detached { run: r } if r.0 == run => Some(*at),
-            _ => None,
-        })
-    }
-
-    /// The first answer a real run `run` sent that `pick` takes, and when it sent it.
-    fn answered<T>(
-        &self,
-        run: u64,
-        pick: impl Fn(&AmdAnswer) -> Option<T>,
-    ) -> Option<(Observed, T)> {
-        self.real_answers().into_iter().find_map(|(at, answer)| {
-            (answer_run(&answer) == run).then(|| pick(&answer)).flatten().map(|t| (at, t))
-        })
-    }
-
-    /// Every answer a real AMD run sent, in sending order.
-    pub fn real_answers(&self) -> Vec<(Observed, AmdAnswer)> {
-        (self.0.journal().iter())
-            .filter_map(|(at, step)| match step {
-                Step::Amd(AmdStep::Answered { answer }) => Some((*at, answer.clone())),
+    /// The runs AMD's executor attached (`Input::AmdEnter`), from the gate's attach, with the
+    /// first `Detach` and `Activated` the session took from each.
+    fn executor_attachments(&self) -> Vec<Attachment> {
+        use lk_agents_voice::amd::{AmdAnswer, Opening};
+        use lk_agents_voice::trace::GateStep;
+        let view = self.0.amd_run();
+        let mut out = Vec::new();
+        for (_, run) in view.entered() {
+            // The gate's window opens where it attached: a run it never attached gates nothing.
+            let attached = self.0.journal().iter().find_map(|(at, step)| {
+                matches!(step, Step::Gate(GateStep::Attached { run: r }) if *r == run)
+                    .then_some(*at)
+            });
+            let Some(attached) = attached else { continue };
+            let answers = view.answers(run);
+            let detach_asked = answers
+                .iter()
+                .find_map(|(at, a)| matches!(a, AmdAnswer::Detach { .. }).then_some(*at));
+            let activated = answers.iter().find_map(|(at, a)| match a {
+                AmdAnswer::Activated { opening, .. } => Some((
+                    *at,
+                    opening.as_ref().map(|o| match o {
+                        Opening::Text(_) => AmdOpening::Text,
+                        Opening::Instructions(_) => AmdOpening::Instructions,
+                    }),
+                )),
                 _ => None,
-            })
-            .collect()
+            });
+            let detached = self.0.amd().iter().find_map(|(at, _, o)| match o {
+                AmdObservation::Detached { run: r } if *r == run => Some(*at),
+                _ => None,
+            });
+            out.push(Attachment { run: run.0, attached, detached, detach_asked, activated });
+        }
+        out
     }
 
-    /// When the gate reported `run`'s turn committed: a real run can answer it in that instant,
-    /// before the host hears the commit.
-    fn committed_at(&self, run: u64, turn: u64) -> Option<Observed> {
-        self.0.amd().iter().find_map(|(at, r, o)| match o {
-            AmdObservation::TurnCommitted { turn: t, .. } if r.0 == run && t.0 == turn => Some(*at),
-            _ => None,
-        })
+    /// The answers AMD's executor sent, as the scripted answerer's verdicts would have said them:
+    /// a decision by what it asks of the reply, `Detach` by its category (`wait` when it denies
+    /// and keeps replies) and whether it forbids replies.
+    fn executor_answers(&self) -> Vec<Answer> {
+        use lk_agents_voice::amd::{AmdAnswer, DetachCancel};
+        let view = self.0.amd_run();
+        let mut out = Vec::new();
+        for (_, run) in view.entered() {
+            for (at, answer) in view.answers(run) {
+                match answer {
+                    AmdAnswer::ReplyDecided { turn, decision, .. } => {
+                        let staged = decision.instructions.is_some();
+                        let silence = decision.silence.is_some_and(|d| !d.is_zero());
+                        let verdict = match (decision.allow, staged, decision.dtmf, silence) {
+                            (false, ..) => AmdVerdict::Deny,
+                            (true, true, true, _) => AmdVerdict::Ivr,
+                            (true, false, true, _) => AmdVerdict::HeldIvr,
+                            (true, true, false, true) => AmdVerdict::Silence,
+                            (true, true, false, false) => AmdVerdict::Stage,
+                            (true, false, false, true) => AmdVerdict::Held,
+                            (true, false, false, false) => AmdVerdict::Allow,
+                        };
+                        out.push(Answer::Decide { at, run: run.0, turn: turn.0, verdict });
+                    }
+                    AmdAnswer::Detach { pending, cancel, .. } => {
+                        let forbid = cancel == DetachCancel::ForbidReplies;
+                        let category = if !pending.allow && !forbid {
+                            AmdVerdict::Wait
+                        } else {
+                            AmdVerdict::Allow
+                        };
+                        out.push(Answer::Detach { at, run: run.0, category, forbid });
+                    }
+                    AmdAnswer::Activated { .. } | AmdAnswer::InsertUserItem { .. } => {}
+                }
+            }
+        }
+        out
     }
 
     /// Whether the session refused run `run`'s attach.
@@ -319,7 +289,7 @@ impl<'a> AmdView<'a> {
                 run: attachment.run,
                 turn: done.turn.0,
                 words: done.new_transcript.clone(),
-                committed: self.committed_at(attachment.run, done.turn.0).unwrap_or(*at).min(*at),
+                committed: *at,
                 item_id,
                 superseded: None,
             });
@@ -368,32 +338,10 @@ impl<'a> AmdView<'a> {
                         forbid: *forbid,
                     });
                 }
-                Input::AmdEnter { .. } => run += 1,
                 _ => {}
             }
         }
-        // A real run's answers, read as the scripted answerer's verdicts would be.
-        for (at, answer) in self.real_answers() {
-            match answer {
-                AmdAnswer::ReplyDecided { run, turn, decision } => out.push(Answer::Decide {
-                    at,
-                    run: run.0,
-                    turn: turn.0,
-                    verdict: verdict_of(&decision),
-                }),
-                AmdAnswer::Detach { run, pending, cancel } => {
-                    let forbid = cancel == DetachCancel::ForbidReplies;
-                    // Only a `wait` category denies a completion that keeps replies.
-                    let category = if !pending.allow && !forbid {
-                        AmdVerdict::Wait
-                    } else {
-                        AmdVerdict::Allow
-                    };
-                    out.push(Answer::Detach { at, run: run.0, category, forbid });
-                }
-                AmdAnswer::Activated { .. } | AmdAnswer::InsertUserItem { .. } => {}
-            }
-        }
+        out.extend(self.executor_answers());
         out.sort_by_key(Answer::at);
         out
     }

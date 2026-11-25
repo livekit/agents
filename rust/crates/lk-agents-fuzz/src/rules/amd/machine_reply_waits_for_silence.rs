@@ -31,12 +31,12 @@ impl Rule for MachineReplyWaitsForSilence {
         let amd = r.amd_view();
         let threshold = SILENCE.as_millis() as u64;
         for turn in amd.gated_turns() {
-            let Some(Answer::Decide {
-                verdict: AmdVerdict::Silence | AmdVerdict::Ivr, at: decided, ..
-            }) = amd.deciding(&turn)
-            else {
+            let Some(Answer::Decide { verdict, at: decided, .. }) = amd.deciding(&turn) else {
                 continue;
             };
+            if !verdict.waits_for_silence() {
+                continue;
+            }
             let released = amd
                 .answers()
                 .into_iter()

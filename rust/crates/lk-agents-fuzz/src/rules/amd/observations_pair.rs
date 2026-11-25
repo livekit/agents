@@ -60,13 +60,7 @@ impl Rule for ObservationsPair {
                             .find(|t| t.run == run && t.turn == turn.0)
                             .and_then(|t| amd.applied(t))
                             .is_some_and(|(answer, _)| {
-                                matches!(
-                                    answer,
-                                    Answer::Decide {
-                                        verdict: AmdVerdict::Silence | AmdVerdict::Ivr,
-                                        ..
-                                    }
-                                )
+                                matches!(answer, Answer::Decide { verdict, .. } if verdict.waits_for_silence())
                             });
                         check.expect_with(Subject::Session, silence, || {
                             format!(

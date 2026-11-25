@@ -29,8 +29,19 @@ impl Rule for GateAnswersAreKeyed {
         for answer in amd.answers() {
             let Answer::Decide { at, run, turn, .. } = answer else { continue };
             let current = amd.attached_at(at).map(|a| a.run);
-            let latest =
-                turns.iter().filter(|t| t.run == run && t.committed < at).map(|t| t.turn).next_back();
+            // A turn counts from the gate's own report of its commit, which AMD answers, or from
+            // the host's, whichever came first: the host's can come after AMD's answer.
+            let reported = |turn: u64| {
+                amd.observed(run).into_iter().any(|(seen, o)| {
+                    seen < at
+                        && matches!(o, lk_agents_voice::amd::AmdObservation::TurnCommitted { turn: t, .. }
+                            if t.0 == turn)
+                })
+            };
+            let latest = (turns.iter())
+                .filter(|t| t.run == run && (t.committed < at || reported(t.turn)))
+                .map(|t| t.turn)
+                .next_back();
             if current == Some(run) && latest == Some(turn) {
                 continue;
             }

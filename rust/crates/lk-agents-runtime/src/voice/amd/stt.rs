@@ -22,10 +22,10 @@ use lk_agents_voice::audio::AudioChannel;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// Opens `stt`'s stream with its own connection options and reports it, opened or refused. A
+/// Opens `stt`'s stream with the session's `stt_conn_options` and reports it, opened or refused. A
 /// stream opened after nobody listens is closed by its owner.
 pub(super) async fn open(
-    stt: Arc<dyn Stt>,
+    (stt, options): (Arc<dyn Stt>, lk_agents_abi::ApiConnectOptions),
     cx: telemetry::Cx,
     time: Timebase,
     resources: Resources,
@@ -33,7 +33,6 @@ pub(super) async fn open(
     cancel: CancellationToken,
     report: impl Fn(LegReport) -> bool,
 ) {
-    let options = stt.conn_options().unwrap_or_default();
     let open = lk_agents_inference::stt::stream(stt, options, time.clock(), &cx, None, None);
     // Abandoning an open is safe: a host open dropped unsettled is cancelled, and a stream it
     // returned unread is closed.

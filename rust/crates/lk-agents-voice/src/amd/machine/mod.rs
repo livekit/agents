@@ -568,7 +568,8 @@ impl Amd {
             },
         );
         self.latest = Some(turn);
-        self.trace.push(AmdStep::TurnBound { turn, has_text, late_wait: late });
+        let (run, turn_id) = (self.run, self.last_turn_id);
+        self.trace.push(AmdStep::TurnBound { run, turn, turn_id, has_text, late_wait: late });
         // The voicemail reservation belongs to the turn that was allowed the message.
         self.voicemail.reserved = None;
         // The newest commit takes over the wait; an older turn's own wait still runs out.
@@ -881,8 +882,11 @@ impl Amd {
             self.last_prediction = Some(event.clone());
         }
         let mut events = vec![event.clone()];
-        let predicted = move |turn, raw, reason| AmdStep::Predicted {
+        let run = self.run;
+        let predicted = move |turn, turn_id, raw, reason| AmdStep::Predicted {
+            run,
             turn,
+            turn_id,
             source_req,
             raw,
             category,
@@ -890,13 +894,13 @@ impl Amd {
             reason,
             likely_human,
         };
-        self.trace.push(predicted(turn, raw, reason));
+        self.trace.push(predicted(turn, turn_id, raw, reason));
         // Empty turns committed during inference reuse its result, each with its own event. A
         // turn with text would have cancelled this request.
         for (later_turn, later) in
             self.turns.iter_mut().filter(|(_, t)| t.id > turn_id && t.prediction.is_none())
         {
-            self.trace.push(predicted(*later_turn, None, AmdReason::Reused));
+            self.trace.push(predicted(*later_turn, later.id, None, AmdReason::Reused));
             let reused = Prediction {
                 turn_id: later.id,
                 reason: AmdReason::Reused,

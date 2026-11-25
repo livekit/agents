@@ -90,6 +90,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         avatar_latency_ms: 20,
         stt_model: 0,
         stt_speech: Default::default(),
+        amd: None,
         tts_latency: None,
         conn: None,
         chunked_tts: false,
@@ -231,7 +232,40 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         setup.remote = Some(peer_script(rng));
         setup.tools.push(crate::fakes::remote_tool::REMOTE_TOOL.into());
     }
+    // AMD through its executor on a call in ten, drawn after everything else. The answerer then
+    // answers the executor's model requests instead of the gate (`search::conversation::answerer`).
+    if setup.realtime.is_none() && rng.u8(0..100) < 10 {
+        setup.amd = Some(amd(rng, setup.stt));
+        // Mostly a caller in the room to listen to; otherwise AMD finds no participant.
+        if setup.room_legs.is_none() && !setup.console && rng.u8(0..100) < 80 {
+            setup.room_legs = Some(RoomLegs { pre_connect: None });
+        }
+    }
     setup
+}
+
+/// AMD's models and options for a run of the executor: a decision model or an LLM, AMD's own
+/// recogniser or not, an opening, and a stage the application handles.
+fn amd(rng: &mut Rng, stt: bool) -> crate::fakes::amd::AmdSetup {
+    let mut options = crate::fakes::amd::options();
+    match rng.u8(0..6) {
+        0 => options.opening_text = Some(crate::fakes::amd::OPENING_TEXT.into()),
+        1 => options.opening_instructions = Some(crate::fakes::amd::OPENING_INSTRUCTIONS.into()),
+        _ => {}
+    }
+    match rng.u8(0..8) {
+        0 => options.screening_instructions = None,
+        1 => options.voicemail_instructions = None,
+        2 => options.ivr_instructions = None,
+        _ => {}
+    }
+    crate::fakes::amd::AmdSetup {
+        decision: rng.u8(0..100) < 25,
+        own_stt: stt && rng.bool(),
+        inference: rng.bool(),
+        options,
+        ..Default::default()
+    }
 }
 
 /// How the remote peer works and misbehaves: slow work, progress bursts, questions, a lost

@@ -10,8 +10,9 @@
 //! session's `Detached`, in either order.
 
 use super::callee::{self, CalleeSetup};
-use super::classifier::{self, Classified, Classifier};
+use super::classifier;
 use super::stt;
+use super::{Classifier, ModelCloser};
 use crate::telemetry;
 use crate::voice::legs::OpeningLeg;
 use crate::voice::resources::Resources;
@@ -20,10 +21,10 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ApiConnectOptions, Spawner, Stt, TimerSet};
 use lk_agents_net::owned::Background;
 use lk_agents_net::task::{ScopedTask, TaskSet};
-use lk_agents_voice::agent_session::{Command, VoiceEvent};
+use lk_agents_voice::agent_session::VoiceEvent;
 use lk_agents_voice::amd::effects::{AmdEffect, AmdTimer, ClassifyRequest, MenuRequest, ReqId};
-use lk_agents_voice::amd::events::{AmdEvent, Outcome};
-use lk_agents_voice::amd::machine::{Amd, Callee, In, Lifecycle, Menu};
+use lk_agents_voice::amd::events::{AmdEvent, AmdReason, Outcome, Stage};
+use lk_agents_voice::amd::machine::{Amd, Callee, In, Lifecycle};
 use lk_agents_voice::amd::{AmdAnswer, AmdObservation, AmdRunId};
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::data_plane::AudioInputRouterCommand;
@@ -34,15 +35,15 @@ use tokio_util::sync::CancellationToken;
 
 /// What a leg tells the executor.
 pub(crate) enum LegReport {
+    /// The classifier's answer to `req`: `In::Classified` or `In::LegFailed`.
     Classified {
         req: ReqId,
-        outcome: Classified,
-        metrics: Option<lk_agents_abi::metrics::base::LlmMetrics>,
+        input: In,
     },
+    /// The menu extraction's answer to `req`: `In::MenuExtracted`.
     Menu {
         req: ReqId,
-        menu: Option<Menu>,
-        metrics: Option<lk_agents_abi::metrics::base::LlmMetrics>,
+        input: In,
     },
     /// AMD's STT stream opened; its owner closes it if nobody adopts it.
     SttOpened(Box<OpeningLeg>),
@@ -67,10 +68,13 @@ pub(crate) struct AmdPeer {
 
 /// The models and the callee a run uses.
 pub(crate) struct Legs {
-    pub classifier: Classifier,
+    pub classifier: Arc<Classifier>,
     pub llm_conn_options: ApiConnectOptions,
     pub stt: Option<Arc<dyn Stt>>,
+    pub stt_conn_options: ApiConnectOptions,
     pub callee: CalleeSetup,
+    /// The models AMD created, closed once every leg ended and before the outcome.
+    pub closers: Vec<ModelCloser>,
 }
 
 /// AMD's own STT, from listening to teardown.
@@ -153,15 +157,16 @@ impl Executor {
         }
     }
 
-    /// Runs the run to its outcome: `None` if the session went away before it completed.
-    pub(crate) async fn run(mut self, mut inputs: Inputs) -> Option<Outcome> {
+    /// Runs the run to its outcome. A session that went away first completes it as its close
+    /// would.
+    pub(crate) async fn run(mut self, mut inputs: Inputs) -> Outcome {
         self.start_callee();
         let mut host_open = true;
         let mut session_open = true;
         loop {
             if let Some(outcome) = self.outcome.take() {
                 self.peer.route.detach(self.run);
-                return Some(outcome);
+                return outcome;
             }
             let now = self.peer.time.now();
             let deadline = self.timers.next_deadline();
@@ -191,8 +196,7 @@ impl Executor {
                     None => host_open = false,
                 },
                 _ = leg_tasks.wait_empty(clock.as_ref(), None), if joining => {
-                    self.teardown = Teardown::Joined;
-                    self.step(In::LegsClosed);
+                    self.legs_closed().await;
                 }
                 () = api.closed(), if session_open => {
                     session_open = false;
@@ -210,16 +214,26 @@ impl Executor {
         // The session is gone before `Detached`: the machine completes as if it had sent it.
         self.step(In::Observed(AmdObservation::Detached { run: self.run }));
         self.join_legs().await;
-        self.outcome.take()
+        // The machine completes once detached and joined; nothing else is left to wait for.
+        self.outcome.take().unwrap_or_else(lost)
     }
 
     /// Joins the legs outside the loop, for a run whose session went away.
     async fn join_legs(&mut self) {
         if self.teardown == Teardown::Joining {
             self.leg_tasks.wait_empty(self.peer.time.clock().as_ref(), None).await;
-            self.teardown = Teardown::Joined;
-            self.step(In::LegsClosed);
+            self.legs_closed().await;
         }
+    }
+
+    /// Every leg ended: the models AMD created close, then the machine hears `LegsClosed`
+    /// (`_cleanup` closes them before it sets the completion).
+    async fn legs_closed(&mut self) {
+        for close in std::mem::take(&mut self.legs.closers) {
+            close().await;
+        }
+        self.teardown = Teardown::Joined;
+        self.step(In::LegsClosed);
     }
 
     /// Fires every deadline due at `now`, in order; one an earlier fire cleared is skipped.
@@ -247,7 +261,7 @@ impl Executor {
                 AmdEffect::CancelClassify => {
                     if let Some((req, cancel)) = self.classify.take() {
                         cancel.cancel();
-                        self.peer.journal.record(AmdStep::RequestCancelled { req });
+                        self.peer.journal.record(AmdStep::RequestCancelled { run: self.run, req });
                     }
                 }
                 AmdEffect::ExtractMenu(request) => self.start_menu(request),
@@ -264,9 +278,13 @@ impl Executor {
                 }
                 AmdEffect::Emit(event) => {
                     if let AmdEvent::Completed(outcome) = &event {
-                        let outcome = outcome.clone();
-                        self.peer.journal.record(AmdStep::Completed { outcome: outcome.clone() });
-                        self.outcome = Some(outcome);
+                        let (category, reason) = (outcome.category, outcome.reason);
+                        self.peer.journal.record(AmdStep::Completed {
+                            run: self.run,
+                            category,
+                            reason,
+                        });
+                        self.outcome = Some(outcome.clone());
                     }
                     // The host may have stopped reading its events.
                     let _ = self.events.send(event);
@@ -278,9 +296,6 @@ impl Executor {
     /// An answer to the session, in sending order. A session gone refuses it; its close
     /// reports `Detached` or the queue's end tells the loop.
     fn answer(&mut self, answer: AmdAnswer) {
-        if self.peer.journal.is_on() {
-            self.peer.journal.record(AmdStep::Answered { answer: answer.clone() });
-        }
         let _ = self.peer.api.send(VoiceEvent::Amd(answer));
     }
 
@@ -292,7 +307,7 @@ impl Executor {
                     && let Some(model) = self.legs.stt.clone()
                 {
                     self.stt = SttLeg::Opening;
-                    self.open_stt(model);
+                    self.open_stt(model, self.legs.stt_conn_options);
                 }
             }
             Lifecycle::Finished(_) if self.teardown == Teardown::Running => self.stop_legs(),
@@ -337,55 +352,50 @@ impl Executor {
 
     fn start_classify(&mut self, request: ClassifyRequest) {
         let req = request.req;
-        self.peer.journal.record(AmdStep::RequestIssued { req, turn: request.turn });
+        self.peer.journal.record(AmdStep::RequestIssued { run: self.run, req, turn: request.turn });
         let cancel = self.leg_token.child_token();
         self.classify = Some((req, cancel.clone()));
         let report = self.reporter();
-        let work = classifier::classify(
-            self.legs.classifier.clone(),
-            self.peer.cx.clone(),
-            request,
-            self.legs.llm_conn_options,
-            self.peer.time.clone(),
-            cancel,
-        );
+        let classifier = Arc::clone(&self.legs.classifier);
+        let (conn, clock, cx) =
+            (self.legs.llm_conn_options, self.peer.time.clock(), self.peer.cx.clone());
         let spawner = Arc::clone(&self.peer.spawner);
         self.leg_tasks.try_spawn(spawner.as_ref(), "amd classify", async move {
-            if let Some((outcome, metrics)) = work.await {
-                report(LegReport::Classified { req, outcome, metrics });
+            let classified = classifier::classify(&classifier, &request, conn, clock, &cx, &cancel);
+            if let Some(input) = classified.await {
+                report(LegReport::Classified { req, input });
             }
         });
     }
 
     fn start_menu(&mut self, request: MenuRequest) {
         // A decision model never asks for a menu (`AmdSetup::extract_menus`).
-        let Classifier::Llm(llm) = self.legs.classifier.clone() else { return };
+        if !self.legs.classifier.extracts_menus() {
+            return;
+        }
         let req = request.req;
         let cancel = self.leg_token.child_token();
         self.menu = Some((req, cancel.clone()));
         let report = self.reporter();
-        let work = classifier::extract_menu(
-            llm,
-            self.peer.cx.clone(),
-            request,
-            self.legs.llm_conn_options,
-            self.peer.time.clone(),
-            cancel,
-        );
+        let classifier = Arc::clone(&self.legs.classifier);
+        let (conn, clock, cx) =
+            (self.legs.llm_conn_options, self.peer.time.clock(), self.peer.cx.clone());
         let spawner = Arc::clone(&self.peer.spawner);
         self.leg_tasks.try_spawn(spawner.as_ref(), "amd menu", async move {
-            if let Some((menu, metrics)) = work.await {
-                report(LegReport::Menu { req, menu, metrics });
+            let Classifier::Llm(llm) = classifier.as_ref() else { return };
+            let extracted = classifier::extract_menu(llm, &request, conn, clock, &cx, &cancel);
+            if let Some(input) = extracted.await {
+                report(LegReport::Menu { req, input });
             }
         });
     }
 
-    fn open_stt(&mut self, model: Arc<dyn Stt>) {
+    fn open_stt(&mut self, model: Arc<dyn Stt>, conn_options: ApiConnectOptions) {
         let spawner = Arc::clone(&self.peer.spawner);
         let background =
             Background::new(Arc::clone(&self.leg_tasks), spawner.clone(), self.peer.time.clock());
         let work = stt::open(
-            model,
+            (model, conn_options),
             self.peer.cx.clone(),
             self.peer.time.clone(),
             self.peer.resources.clone(),
@@ -398,23 +408,18 @@ impl Executor {
 
     fn on_report(&mut self, report: LegReport) {
         match report {
-            LegReport::Classified { req, outcome, metrics } => {
-                self.account(metrics);
+            LegReport::Classified { req, input } => {
                 if self.classify.as_ref().is_none_or(|(current, _)| *current != req) {
                     return;
                 }
                 self.classify = None;
-                match outcome {
-                    Classified::Result(result) => self.step(In::Classified { req, result }),
-                    Classified::Failed => self.step(In::LegFailed),
-                }
+                self.step(input);
             }
-            LegReport::Menu { req, menu, metrics } => {
-                self.account(metrics);
+            LegReport::Menu { req, input } => {
                 if self.menu.as_ref().is_some_and(|(current, _)| *current == req) {
                     self.menu = None;
                 }
-                self.step(In::MenuExtracted { req, menu });
+                self.step(input);
             }
             LegReport::SttOpened(leg) => self.adopt_stt(*leg),
             LegReport::AmdFinal(text) => self.step(In::AmdFinal(text)),
@@ -448,12 +453,15 @@ impl Executor {
         let spawner = Arc::clone(&self.peer.spawner);
         self.leg_tasks.try_spawn(spawner.as_ref(), "amd stt", work);
     }
+}
 
-    /// A model call's usage, counted by the session as a host's metrics are.
-    fn account(&self, metrics: Option<lk_agents_abi::metrics::base::LlmMetrics>) {
-        if let Some(metrics) = metrics {
-            let metrics = lk_agents_abi::metrics::base::AgentMetrics::Llm(metrics);
-            let _ = self.peer.api.send(Command::HostMetrics(Box::new(metrics)));
-        }
+/// The outcome of a run whose task ended without one: it failed, as a failed task ends a Python
+/// run (`_on_task_done`).
+pub(super) fn lost() -> Outcome {
+    Outcome {
+        category: Stage::Uncertain,
+        reason: AmdReason::InternalError,
+        voicemail_message_played: false,
+        last_prediction: None,
     }
 }

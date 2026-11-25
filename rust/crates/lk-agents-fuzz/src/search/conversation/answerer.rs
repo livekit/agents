@@ -1,13 +1,10 @@
-//! AMD on the call: the real run, or the scripted answerer.
-//!
-//! A real run (`Input::AmdEnter`) is the production executor and machine over fake models whose
-//! categories follow a callee persona; it answers on its own, and the actor only enters it,
-//! sometimes closes it, and sometimes enters a second one after it completed.
-//!
-//! The scripted answerer plays AMD's side of the reply gate's protocol where the real machine
-//! would not go: it attaches, activates, answers each turn it observed, and completes. Like
-//! every actor it acts only on what it observed: a turn it can answer exists only once the
-//! session reported its commit.
+//! The scripted AMD answerer. It plays AMD's side of the reply gate's protocol: it attaches,
+//! activates, answers each turn it observed, and completes. Like every actor it acts only on what
+//! it observed: a turn it can answer exists only once the session reported its commit. When the
+//! setup carries AMD (`Setup::amd`), AMD's executor answers the gate instead, and the answerer
+//! plays its models: it answers each request the executor made by the callee's script, late or
+//! at once, sometimes with a failure, sometimes never, and now and then after the executor
+//! abandoned it.
 //!
 //! The search chooses when it answers: at once (before the customer hook returns), late, for a
 //! turn a newer one already superseded, twice for the latest turn, for a turn the session has not
@@ -21,8 +18,8 @@ use fastrand::Rng;
 
 use super::{Halt, Talk};
 use crate::{
-    input::{AmdModel, AmdOpening, AmdPersona, AmdVerdict, Count, Input, Ref},
-    record::Kind,
+    input::{AmdOpening, AmdSays, AmdVerdict, Input, Ref},
+    record::{Kind, amd_run::AskKind},
 };
 
 /// Who answered the call, drawn once per run: the categories AMD's classifier would report turn
@@ -36,6 +33,17 @@ enum Callee {
 }
 
 impl Callee {
+    /// What AMD's classifier answers turn by turn (the proposal's DST personas).
+    fn says(self, turn: usize) -> AmdSays {
+        let script: &[AmdSays] = match self {
+            Callee::Human => &[AmdSays::Human],
+            Callee::Screener => &[AmdSays::Screening, AmdSays::Human, AmdSays::Human],
+            Callee::Voicemail => &[AmdSays::Voicemail, AmdSays::Voicemail, AmdSays::Ivr],
+            Callee::Hold => &[AmdSays::Wait, AmdSays::Wait, AmdSays::Human],
+        };
+        script[turn.min(script.len() - 1)]
+    }
+
     fn verdict(self, turn: usize) -> AmdVerdict {
         let script: &[AmdVerdict] = match self {
             Callee::Human => &[AmdVerdict::Allow],
@@ -67,25 +75,6 @@ const STRAY: u8 = 2;
 /// How often a completed run is followed by a second one.
 const REATTACH: u8 = 30;
 
-/// How often AMD on the call is a real run rather than the scripted answerer.
-const REAL: u8 = 50;
-
-/// How often, per beat, the host closes a real run (`aclose()`).
-const CLOSE: u8 = 1;
-
-/// A real run's draw: who answers, what classifies, and AMD's own STT.
-#[derive(Clone, Copy, Debug)]
-struct Real {
-    persona: AmdPersona,
-    model: AmdModel,
-    own_stt: bool,
-    stt_fails: bool,
-    seed: u32,
-    /// Runs entered so far.
-    entered: u32,
-    closed: bool,
-}
-
 /// The scripted answerer's plan and state, drawn once per run from its own stream.
 pub(super) struct Answerer {
     rng: Rng,
@@ -107,8 +96,11 @@ pub(super) struct Answerer {
     detached: bool,
     /// A second run attaches once this one completed.
     reattaches: bool,
-    /// A real run instead of the scripted answers.
-    real: Option<Real>,
+    /// Each request of AMD's executor seen, by `AmdAsk` index: when its answer is due, and what
+    /// it says; `None` for one never answered.
+    asks: BTreeMap<u32, Option<(u64, AmdSays)>>,
+    /// Classifications answered so far: the callee's script goes by them.
+    classified: usize,
 }
 
 impl Answerer {
@@ -129,25 +121,6 @@ impl Answerer {
         let detaches_pending = completes_after == Some(0) && rng.bool();
         let forbids = rng.u8(0..100) < 20;
         let reattaches = rng.u8(0..100) < REATTACH;
-        // Its own stream, so the scripted draws above stay as they were.
-        let mut real = Rng::with_seed(seed ^ 0x0000_5245_414c_414d);
-        let real = (real.u8(0..100) < REAL).then(|| Real {
-            persona: *[
-                AmdPersona::Human,
-                AmdPersona::Screener,
-                AmdPersona::Voicemail,
-                AmdPersona::Hold,
-                AmdPersona::Unavailable,
-            ]
-            .get(real.usize(0..5))
-            .unwrap_or(&AmdPersona::Human),
-            model: if real.u8(0..100) < 25 { AmdModel::Decision } else { AmdModel::Llm },
-            own_stt: real.bool(),
-            stt_fails: real.u8(0..100) < 10,
-            seed: real.u32(..),
-            entered: 0,
-            closed: false,
-        });
         Answerer {
             rng,
             on,
@@ -163,7 +136,8 @@ impl Answerer {
             last: AmdVerdict::Allow,
             detached: false,
             reattaches,
-            real,
+            asks: BTreeMap::new(),
+            classified: 0,
         }
     }
 }
@@ -172,11 +146,11 @@ impl Talk {
     /// AMD's beat: attach, activate when due, schedule a decision for each turn it observed and
     /// send what is due, now and then a stale one, and complete when its script says.
     pub(super) async fn answer_amd(&mut self) -> Result<(), Halt> {
+        if self.run.setup.amd.is_some() {
+            return self.answer_amd_models().await;
+        }
         if !self.amd.on {
             return Ok(());
-        }
-        if self.amd.real.is_some() {
-            return self.enter_amd().await;
         }
         // A second run: attached afresh, with its own turns, after the first completed.
         if self.amd.detached {
@@ -279,39 +253,65 @@ impl Talk {
         }
         Ok(())
     }
-}
 
-impl Talk {
-    /// A real run's beat: enter it, now and then close it, and enter a second one after the
-    /// first completed.
-    async fn enter_amd(&mut self) -> Result<(), Halt> {
-        let Some(mut real) = self.amd.real else { return Ok(()) };
-        let detached = (self.run.record.amd().iter())
-            .filter(|(_, _, o)| matches!(o, lk_agents_voice::amd::AmdObservation::Detached { .. }))
-            .count();
-        let second = real.entered == 1
-            && detached >= 1
-            && self.amd.reattaches
-            && self.amd.rng.u8(0..100) < 20;
-        if real.entered == 0 || second {
-            real.entered += 1;
-            real.closed = false;
-            self.amd.real = Some(real);
-            return self
-                .send(Input::AmdEnter {
-                    persona: real.persona,
-                    model: real.model,
-                    opening: self.amd.opening,
-                    own_stt: real.own_stt,
-                    stt_fails: real.stt_fails,
-                    seed: Count(real.seed.wrapping_add(real.entered)),
-                })
-                .await;
+    /// AMD's executor answers the gate; this beat plays its models. It enters once (again after
+    /// a completion, now and then), answers each request when due, sometimes answers one the
+    /// executor already abandoned, and now and then closes the run.
+    async fn answer_amd_models(&mut self) -> Result<(), Halt> {
+        let now = self.run.record.now().at_ms;
+        if !self.amd.attached {
+            self.amd.attached = true;
+            return self.send(Input::AmdEnter {}).await;
         }
-        if !real.closed && self.amd.rng.u8(0..100) < CLOSE {
-            real.closed = true;
-            self.amd.real = Some(real);
-            return self.send(Input::AmdClose {}).await;
+        let live = self.run.record.live().of(Kind::AmdAsk);
+        let asks: Vec<(u32, AskKind)> = (self.run.record.amd_run().asks().into_iter())
+            .map(|(nth, _, asked)| (nth, asked.kind))
+            .collect();
+        for (nth, kind) in &asks {
+            if self.amd.asks.contains_key(nth) || !live.contains(nth) {
+                continue;
+            }
+            let delay =
+                if self.amd.rng.u8(0..100) < AT_ONCE { 0 } else { self.amd.rng.u64(100..3_000) };
+            let says = match (kind, self.amd.rng.u8(0..100)) {
+                // A request never answered: the executor's deadline decides.
+                (_, 0..5) => None,
+                (_, 5..9) => Some(AmdSays::Failed),
+                (_, 9..12) => Some(AmdSays::Garbled),
+                (_, 12) => Some(AmdSays::Crashed),
+                (AskKind::Menu, n) => {
+                    Some(if n % 2 == 0 { AmdSays::Menu } else { AmdSays::NoMenu })
+                }
+                (AskKind::Classify | AskKind::Choice, _) => {
+                    self.amd.classified += 1;
+                    Some(self.amd.callee.says(self.amd.classified - 1))
+                }
+            };
+            self.amd.asks.insert(*nth, says.map(|says| (now + delay, says)));
+        }
+        let due: Vec<(u32, AmdSays)> = (self.amd.asks.iter_mut())
+            .filter_map(|(nth, plan)| {
+                let (at, says) = (*plan)?;
+                (at <= now).then(|| {
+                    *plan = None;
+                    (*nth, says)
+                })
+            })
+            .collect();
+        for (nth, says) in due {
+            self.send(Input::AmdReply { ask: Ref::new(nth), says }).await?;
+        }
+        // A request the executor abandoned, answered anyway: a classifier that ignores
+        // cancellation.
+        let gone: Vec<u32> =
+            asks.iter().map(|(nth, _)| *nth).filter(|nth| !live.contains(nth)).collect();
+        if !gone.is_empty() && self.amd.rng.u8(0..100) < STALE {
+            let nth = gone[self.amd.rng.usize(0..gone.len())];
+            let says = self.amd.callee.says(0);
+            self.send(Input::AmdReply { ask: Ref::new(nth), says }).await?;
+        }
+        if self.amd.rng.u8(0..100) < 1 {
+            self.send(Input::AmdClose {}).await?;
         }
         Ok(())
     }

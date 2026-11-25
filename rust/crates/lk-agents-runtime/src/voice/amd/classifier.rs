@@ -5,18 +5,18 @@
 //! exactly once. A decision model answers one `category` choice. A provider failure, an invalid
 //! answer or a timeout is an `inference_error` prediction; any other failure ends the run.
 
-use super::prompts::{CLASSIFY_PROMPT, MENU_PROMPT};
+pub use super::prompts::{CLASSIFY_PROMPT, MENU_PROMPT};
+use super::{AmdModel, ChoiceRequest, Classifier};
 use crate::telemetry;
-use crate::voice::session::Timebase;
 use lk_agents_abi::errors::{ApiErrorKind, ErrorKind, ProviderError};
-use lk_agents_abi::types::provider::NativeLabel;
+use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::{
-    ApiConnectOptions, BoxFuture, ChatContext, ChatItem, ChatMessage, ChatRequest, Closed, Llm,
-    Role, ToolChoice, ToolSpec,
+    ApiConnectOptions, ChatContext, ChatItem, ChatMessage, ChatRequest, Clock, Closed, Llm, Role,
+    ToolChoice, ToolSpec,
 };
 use lk_agents_voice::amd::effects::{ClassifierItem, ClassifyRequest, MenuRequest};
 use lk_agents_voice::amd::events::{Category, IvrMenuOption};
-use lk_agents_voice::amd::machine::{Classification, ClassifyError, Menu};
+use lk_agents_voice::amd::machine::{Classification, ClassifyError, In, Menu};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -31,73 +31,6 @@ pub const CLIENT_FEATURE: &str = "AMD";
 /// The choice a decision model answers.
 pub const CATEGORY_CHOICE: &str = "category";
 
-/// A model that answers one named choice: `llm.DecisionModel.evaluate` with one `Choice`. The
-/// host's decision models implement it; it never reads a menu.
-pub trait DecisionModel: Send + Sync {
-    /// The class path logs and metrics name it by.
-    fn label(&self) -> String;
-
-    /// Every request reaches only LiveKit Inference, so AMD tags it with its client feature.
-    fn inference(&self) -> bool {
-        false
-    }
-
-    /// The option chosen for `choice`, or `None` when the model gave no result for it.
-    fn choose<'a>(
-        &'a self,
-        cx: &telemetry::Cx,
-        choice: Choice,
-    ) -> BoxFuture<'a, Result<Option<String>, ProviderError>>;
-}
-
-/// One choice for a [`DecisionModel`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct Choice {
-    /// What the model decides on: the request's state and the transcript.
-    pub input: String,
-    /// The decision's name; its result is read under it.
-    pub name: String,
-    pub prompt: String,
-    /// The options, with no descriptions: a short definition next to a choice outweighed the
-    /// prompt's conditions.
-    pub options: Vec<String>,
-    pub conn_options: ApiConnectOptions,
-    /// Extra request headers: AMD's client feature on an Inference model.
-    pub headers: BTreeMap<String, String>,
-}
-
-/// What classifies AMD's turns.
-#[derive(Clone)]
-pub enum Classifier {
-    Llm(Arc<dyn Llm>),
-    Decision(Arc<dyn DecisionModel>),
-}
-
-impl Classifier {
-    /// Only an LLM reads menus.
-    pub fn extracts_menus(&self) -> bool {
-        matches!(self, Classifier::Llm(_))
-    }
-}
-
-impl std::fmt::Debug for Classifier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Classifier::Llm(llm) => f.debug_tuple("Llm").field(&llm.label()).finish(),
-            Classifier::Decision(model) => f.debug_tuple("Decision").field(&model.label()).finish(),
-        }
-    }
-}
-
-/// How a classifier call ended, as the machine reads it.
-#[derive(Debug)]
-pub enum Classified {
-    /// A category, or an `inference_error`.
-    Result(Result<Classification, ClassifyError>),
-    /// Neither a provider failure nor an invalid answer: the run ends with `internal_error`.
-    Failed,
-}
-
 /// A structured call's end.
 enum Called {
     /// The arguments of the one `record_result` call.
@@ -105,11 +38,6 @@ enum Called {
     /// No call, several, or another tool.
     Invalid,
     Failed(ProviderError),
-}
-
-/// `client_feature_kwargs`: only a model that reaches only Inference is tagged.
-pub fn inference_llm(llm: &dyn Llm) -> bool {
-    llm.label() == NativeLabel::InferenceLlm.as_str()
 }
 
 fn feature_headers(inference: bool) -> BTreeMap<String, String> {
@@ -278,15 +206,15 @@ pub fn decision_choice(
     request: &ClassifyRequest,
     inference: bool,
     conn_options: ApiConnectOptions,
-) -> Choice {
+) -> ChoiceRequest {
     let transcript = history_transcript(&request.history);
-    Choice {
+    ChoiceRequest {
         input: format!("Request: {}\nTranscript:\n{transcript}", request.state_json()),
         name: CATEGORY_CHOICE.into(),
         prompt: CLASSIFY_PROMPT.into(),
         options: Category::ALL.iter().map(|c| c.as_str().to_owned()).collect(),
         conn_options,
-        headers: feature_headers(inference),
+        extra_headers: feature_headers(inference),
     }
 }
 
@@ -341,101 +269,95 @@ fn parse_menu(arguments: &str) -> Option<Menu> {
     Some(Menu { menu: args.menu, options })
 }
 
-/// One classification. Model time is measured around the model call alone. `None` once
-/// cancelled: a cancelled request reports nothing.
+/// Runs `request` on the classifier and returns what the machine is told: `In::Classified` with
+/// the category and the model time measured around the call, or an `inference_error` category of
+/// failure; `In::LegFailed` for a failure outside the provider taxonomy. `None` once `cancel`
+/// fired: a cancelled request reports nothing, and its stream is closed.
 pub async fn classify(
-    model: Classifier,
-    cx: telemetry::Cx,
-    request: ClassifyRequest,
+    classifier: &Classifier,
+    request: &ClassifyRequest,
     conn_options: ApiConnectOptions,
-    time: Timebase,
-    cancel: CancellationToken,
-) -> Option<(Classified, Option<lk_agents_abi::metrics::base::LlmMetrics>)> {
-    let started = time.now();
-    let (outcome, metrics) = match model {
+    clock: Arc<dyn Clock>,
+    cx: &Cx,
+    cancel: &CancellationToken,
+) -> Option<In> {
+    let req = request.req;
+    let started = clock.now();
+    let answered = |answer: Option<Category>, clock: &dyn Clock| match answer {
+        Some(category) => {
+            let inference_duration = clock.now().saturating_duration_since(started);
+            In::Classified { req, result: Ok(Classification { category, inference_duration }) }
+        }
+        None => In::Classified { req, result: Err(ClassifyError::InvalidOutput) },
+    };
+    let got = match classifier {
         Classifier::Llm(llm) => {
-            let inference = inference_llm(llm.as_ref());
-            let chat = classify_request(&request, inference, conn_options, time.wall());
-            let (called, metrics) = structured(llm, &cx, &chat, &time, &cancel).await?;
-            let took = time.now().saturating_duration_since(started);
-            let outcome = match called {
-                Called::Answer(arguments) => match parse_category(&arguments) {
-                    Some(category) => Classified::Result(Ok(Classification {
-                        category,
-                        inference_duration: took,
-                    })),
-                    None => Classified::Result(Err(ClassifyError::InvalidOutput)),
-                },
-                Called::Invalid => Classified::Result(Err(ClassifyError::InvalidOutput)),
-                Called::Failed(error) => failed(&error),
-            };
-            (outcome, metrics)
+            let chat = classify_request(request, llm.inference, conn_options, clock.wall());
+            match structured(llm.model.clone(), cx, &chat, clock.clone(), cancel).await? {
+                Called::Answer(arguments) => answered(parse_category(&arguments), clock.as_ref()),
+                Called::Invalid => answered(None, clock.as_ref()),
+                Called::Failed(error) => failed(req, &error),
+            }
         }
         Classifier::Decision(model) => {
-            let choice = decision_choice(&request, model.inference(), conn_options);
+            let choice = decision_choice(request, model.inference, conn_options);
             let answer = tokio::select! {
                 biased;
                 () = cancel.cancelled() => return None,
-                answer = model.choose(&cx, choice) => answer,
+                answer = model.model.choose(cx, &choice) => answer,
             };
-            let took = time.now().saturating_duration_since(started);
-            let outcome = match answer {
-                Ok(Some(value)) => match Category::from_wire(&value) {
-                    Some(category) => Classified::Result(Ok(Classification {
-                        category,
-                        inference_duration: took,
-                    })),
-                    None => Classified::Result(Err(ClassifyError::InvalidOutput)),
-                },
-                Ok(None) => Classified::Result(Err(ClassifyError::InvalidOutput)),
-                Err(error) => failed(&error),
-            };
-            (outcome, None)
+            match answer {
+                Ok(value) => {
+                    answered(value.as_deref().and_then(Category::from_wire), clock.as_ref())
+                }
+                Err(error) => failed(req, &error),
+            }
         }
     };
-    Some((outcome, metrics))
+    Some(got)
 }
 
-fn failed(error: &ProviderError) -> Classified {
+fn failed(req: lk_agents_voice::amd::effects::ReqId, error: &ProviderError) -> In {
     match classify_error(error) {
-        Some(error) => Classified::Result(Err(error)),
-        None => Classified::Failed,
+        Some(error) => In::Classified { req, result: Err(error) },
+        None => In::LegFailed,
     }
 }
 
-/// One menu extraction; any failure is silent (`None`). `None` outside once cancelled.
+/// Extracts the menu `request` names (spec §11.2) and returns `In::MenuExtracted`: the menu, or
+/// `None` when the model failed or answered something that does not validate. A failure is
+/// silent. `None` outside once `cancel` fired.
 pub async fn extract_menu(
-    llm: Arc<dyn Llm>,
-    cx: telemetry::Cx,
-    request: MenuRequest,
+    model: &AmdModel<dyn Llm>,
+    request: &MenuRequest,
     conn_options: ApiConnectOptions,
-    time: Timebase,
-    cancel: CancellationToken,
-) -> Option<(Option<Menu>, Option<lk_agents_abi::metrics::base::LlmMetrics>)> {
-    let inference = inference_llm(llm.as_ref());
-    let chat = menu_request(&request, inference, conn_options, time.wall());
-    let (called, metrics) = structured(llm, &cx, &chat, &time, &cancel).await?;
-    let menu = match called {
+    clock: Arc<dyn Clock>,
+    cx: &Cx,
+    cancel: &CancellationToken,
+) -> Option<In> {
+    let chat = menu_request(request, model.inference, conn_options, clock.wall());
+    let menu = match structured(model.model.clone(), cx, &chat, clock, cancel).await? {
         Called::Answer(arguments) => parse_menu(&arguments),
         Called::Invalid | Called::Failed(_) => None,
     };
-    Some((menu, metrics))
+    Some(In::MenuExtracted { req: request.req, menu })
 }
 
 /// `_structured_response`: the call's tool calls, its stream closed on every path. `None` once
 /// cancelled.
 async fn structured(
     llm: Arc<dyn Llm>,
-    cx: &telemetry::Cx,
+    cx: &Cx,
     request: &ChatRequest,
-    time: &Timebase,
+    clock: Arc<dyn Clock>,
     cancel: &CancellationToken,
-) -> Option<(Called, Option<lk_agents_abi::metrics::base::LlmMetrics>)> {
+) -> Option<Called> {
     let mut trace = telemetry::LlmTrace::start(cx, llm.as_ref(), request);
     let mut attempt = Some(trace.attempt());
     // Abandoning an open is safe: a host open dropped unsettled is cancelled, and a stream it
     // returned unread is closed.
-    let open = lk_agents_inference::llm::chat(llm.clone(), trace.cx(), request, time.clock(), None);
+    let open =
+        lk_agents_inference::llm::chat(llm.clone(), trace.cx(), request, clock.clone(), None);
     let opened = tokio::select! {
         biased;
         () = cancel.cancelled() => return None,
@@ -446,7 +368,7 @@ async fn structured(
         Err(error) => {
             trace.end_attempt(attempt.take().flatten(), Some(&error));
             trace.fail(&error);
-            return Some((Called::Failed(error), None));
+            return Some(Called::Failed(error));
         }
     };
     let mut calls: Vec<lk_agents_abi::FunctionToolCall> = Vec::new();
@@ -479,7 +401,7 @@ async fn structured(
         }
     }
     // Dropping does not cancel a host stream; `close` runs on every path.
-    let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+    let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
     let closed = stream.close(deadline).await;
     if closed != Closed::Clean {
         log::warn!(target: lk_agents_abi::LOG_TARGET, outcome:? = closed; "AMD model stream cleanup incomplete");
@@ -488,17 +410,18 @@ async fn structured(
         return None;
     }
     if let Some(error) = failure {
-        return Some((Called::Failed(error), None));
+        return Some(Called::Failed(error));
     }
     if let Some(attempt) = attempt.take() {
         trace.end_attempt(attempt, None);
     }
-    let metrics = trace.end(Default::default());
+    // AMD's own model usage is not the session's, as in Python.
+    let _ = trace.end(Default::default());
     let called = match calls.as_slice() {
         [call] if call.name == RECORD_RESULT => Called::Answer(call.arguments.clone()),
         _ => Called::Invalid,
     };
-    Some((called, metrics))
+    Some(called)
 }
 
 #[cfg(test)]

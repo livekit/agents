@@ -245,6 +245,8 @@ pub enum SpeechStep {
     AuthorizationHeld(crate::agent_session::machine::activity::amd_gate::Hold),
 }
 
+pub use crate::amd::steps::AmdStep;
+
 /// The AMD reply gate's steps (`agent_session::machine::activity::amd_gate`), once per change.
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum GateStep {
@@ -307,40 +309,6 @@ pub enum GateStep {
     Detached {
         run: crate::amd::AmdRunId,
     },
-}
-
-/// An AMD run's own steps: the machine's (`amd::machine`) and its executor's, which journals
-/// them in the order they happened. The session's side of the protocol is [`GateStep`].
-#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
-pub enum AmdStep {
-    /// A committed turn joined the run. `late_wait`: it waits for its late AMD final.
-    TurnBound { turn: crate::audio_recognition::TurnId, has_text: bool, late_wait: bool },
-    /// A classifier request went to the leg.
-    RequestIssued { req: crate::amd::effects::ReqId, turn: crate::audio_recognition::TurnId },
-    /// The request in flight was abandoned; its result, if any, is stale.
-    RequestCancelled { req: crate::amd::effects::ReqId },
-    /// A turn's prediction. `source_req` is the request whose result decided it, which for a
-    /// `reused` prediction belongs to an older turn; `None` when no result did (a timeout, or an
-    /// empty turn with nothing pending). `raw` is the classifier's category before the
-    /// likely-human downgrade.
-    Predicted {
-        turn: crate::audio_recognition::TurnId,
-        source_req: Option<crate::amd::effects::ReqId>,
-        raw: Option<crate::amd::events::Category>,
-        category: crate::amd::events::Category,
-        stage: crate::amd::events::Stage,
-        reason: crate::amd::events::AmdReason,
-        likely_human: bool,
-    },
-    /// The session made a reply for the turn: created, adopted from a preemptive generation, or
-    /// rebuilt after a correction.
-    ReplyBound { turn: crate::audio_recognition::TurnId, speech: SpeechId },
-    /// The voicemail message played to its end.
-    VoicemailPlayed,
-    /// An answer the run sent the session, in sending order.
-    Answered { answer: crate::amd::AmdAnswer },
-    /// `amd_completed`: the session detached and the legs closed.
-    Completed { outcome: crate::amd::events::Outcome },
 }
 
 /// Why the gate did not apply an AMD answer.
@@ -1152,13 +1120,13 @@ impl Step {
                 | GateStep::Detached { .. } => None,
             },
             Step::Amd(step) => match step {
-                AmdStep::ReplyBound { speech, .. } => Some(*speech),
+                AmdStep::ReplyBound { speech, .. } | AmdStep::VoicemailPlayed { speech, .. } => {
+                    Some(*speech)
+                }
                 AmdStep::TurnBound { .. }
                 | AmdStep::RequestIssued { .. }
                 | AmdStep::RequestCancelled { .. }
                 | AmdStep::Predicted { .. }
-                | AmdStep::VoicemailPlayed
-                | AmdStep::Answered { .. }
                 | AmdStep::Completed { .. } => None,
             },
             Step::Close(_) | Step::Detector(_) | Step::Room(_) => None,
@@ -1197,7 +1165,7 @@ pub fn step_names() -> Vec<String> {
         Detector => detector_step_vocabulary::NAMES;
         Room => room_step_vocabulary::NAMES;
         Gate => gate_step_vocabulary::NAMES;
-        Amd => amd_step_vocabulary::NAMES;
+        Amd => crate::amd::steps::amd_step_vocabulary::NAMES;
         Decided => crate::audio_recognition::observation::recognition_observation_vocabulary::NAMES;
     }
     assert_step_is_covered::<Names, &'static [&'static str]>();

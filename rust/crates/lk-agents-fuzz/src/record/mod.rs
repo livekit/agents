@@ -31,27 +31,12 @@ pub use storage::{
     BoundaryOperation, BoundaryOutcome, StorageFault, StorageOperation, StorageStep,
 };
 pub mod amd;
+pub mod amd_run;
 mod views;
 
 #[cfg(test)]
-mod tests {
-    use super::Tag;
-
-    #[test]
-    fn reserved_marker_values_are_unknown_audio_without_a_producer() {
-        for chunk in 0..=Tag::MAX_CHUNK as i16 {
-            for sample in [chunk, -chunk, Tag::MIC | chunk, -(Tag::MIC | chunk)] {
-                assert_eq!(Tag::decode(sample), Tag::Unknown(sample), "sample {sample}");
-            }
-        }
-        assert_eq!(Tag::decode(i16::MIN), Tag::Unknown(i16::MIN));
-        // The first representable producer remains producer zero, including both marker sides.
-        assert_eq!(Tag::decode(Tag::synthesized(0, 0)), Tag::Synthesized { tts: 0, chunk: 0 });
-        assert_eq!(Tag::decode(Tag::generated(0, 0)), Tag::Generated { generation: 0, chunk: 0 });
-        assert_eq!(Tag::decode(Tag::fed(0, 0)), Tag::Fed { stream: 0, chunk: 0 });
-        assert_eq!(Tag::decode(Tag::mic(0, 0)), Tag::Mic { mic: 0, chunk: 0 });
-    }
-}
+#[path = "tag_tests.rs"]
+mod tag_tests;
 pub use resources::{Resource, hook_of, step_name};
 pub use views::*;
 
@@ -161,6 +146,9 @@ pub enum Kind {
     Generation,
     /// A turn the AMD gate committed: open until its run detaches, so a late answer names it.
     AmdTurn,
+    /// One request AMD's executor made of its fake models: a classification, a menu extraction
+    /// or a decision model's choice. Open until answered or abandoned.
+    AmdAsk,
 }
 
 /// The production identity behind a resource, once the run knows it.
@@ -209,6 +197,10 @@ pub enum Detail {
         run: u64,
         turn: u64,
     },
+    /// What AMD's executor asked one of its fake models, as the model received it.
+    AmdAsk(Box<amd_run::Asked>),
+    /// AMD's own recogniser, apart from the session's.
+    AmdStt,
     Tool {
         invocation_id: String,
         operation: u64,
@@ -580,6 +572,8 @@ pub enum Answer {
     VoiceTask(
         Result<u64, lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskEnded>,
     ),
+    /// What `AmdEnter`'s `enter` answered: the run's id, or why it refused.
+    AmdEnter(Result<u64, String>),
     /// The channel closed without an answer.
     Lost,
     /// The host stopped awaiting it: the tool body that awaited a `VoiceTask.run()` ended first.
@@ -729,8 +723,11 @@ pub struct Recording {
     /// What each audio source published in the room played, by source, as last looked at.
     room_speakers: Vec<crate::fakes::room::Speaker>,
     journal: Vec<(Observed, Step)>,
-    /// What the attached AMD runs observed, and what a real run's fake models answered.
-    amd: amd::AmdLog,
+    /// What the attached AMD runs observed, in the order the session emitted it.
+    amd: Vec<amd::Seen>,
+    /// What the runs entered through AMD's executor told the host, and what their fake models
+    /// were answered.
+    amd_run: amd_run::Executed,
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,

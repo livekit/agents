@@ -415,9 +415,7 @@ impl Run {
             steps,
             amd,
             amd_runs: 0,
-            amd_real: None,
-            amd_ear: fakes::amd_models::AmdEar::new(0),
-            amd_models: Arc::default(),
+            entered: Arc::default(),
             livelock,
             busiest_instant: 0,
             deadlock: None,
@@ -521,7 +519,12 @@ impl Run {
     /// the session's (unless the host replaced it), and their app sends what it buffered before
     /// the agent was there, as the setup says.
     pub(super) fn join_caller(&mut self) {
-        let caller = self.room.add_participant(CALLER, ParticipantKind::Standard);
+        let sip = self.setup.amd.as_ref().and_then(|amd| amd.sip_status.clone());
+        let kind = if sip.is_some() { ParticipantKind::Sip } else { ParticipantKind::Standard };
+        let caller = self.room.add_participant(CALLER, kind);
+        if let Some(status) = sip {
+            caller.set_attribute(SIP_CALL_STATUS, status);
+        }
         let Some(legs) = self.setup.room_legs else {
             return;
         };
@@ -608,6 +611,8 @@ pub(super) const AVATAR: &str = "avatar";
 
 /// The person on the call: who joins, leaves and speaks in the room.
 pub(super) const CALLER: &str = "caller";
+/// The attribute a SIP participant's call status is in.
+pub(super) const SIP_CALL_STATUS: &str = "sip.callStatus";
 
 /// Someone else in the room while the person is: present, never linked.
 pub(super) const GUEST: &str = "guest";

@@ -21,6 +21,7 @@ pub mod effects;
 pub mod events;
 pub mod machine;
 pub mod options;
+pub mod steps;
 
 use crate::agent_session::RequestId;
 pub use crate::agent_session::machine::activity::amd_gate::Hold;

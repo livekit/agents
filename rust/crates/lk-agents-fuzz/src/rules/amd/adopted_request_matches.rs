@@ -46,10 +46,11 @@ impl Rule for AdoptedRequestMatches {
                 // The decision applied, not the first one sent: a detach replaces a decision
                 // stored while the turn was in its hook.
                 let allowed = amd.deciding(&turn).filter(Answer::allows);
-                let plain = matches!(
-                    allowed,
-                    Some(Answer::Decide { verdict: AmdVerdict::Allow, .. } | Answer::Detach { .. })
-                );
+                let plain = match allowed {
+                    Some(Answer::Decide { verdict, .. }) => verdict.plain(),
+                    Some(Answer::Detach { .. }) => true,
+                    None => false,
+                };
                 check.expect_with(
                     Subject::Resource(crate::record::Kind::Chat, request.chat),
                     plain && allowed.is_some_and(|a| a.at() < heard),

@@ -583,10 +583,6 @@ impl Run {
     /// Hand one answer to the fake waiting for it. An utterance is reached through the recognition
     /// stream it was opened on: the recogniser has the channel, an utterance spans what it carried.
     fn deliver(&mut self, at: Observed, input: &Input) -> bool {
-        // A real AMD run's own STT hears what the session's finalized, after its lag.
-        if let Input::SttFinal { text, .. } = input {
-            self.amd_ear.hear(&text.0);
-        }
         let (slot, utterance) = match input {
             Input::LlmText { chat, .. }
             | Input::LlmToolCall { chat, .. }
@@ -630,6 +626,7 @@ impl Run {
             Input::RealtimeEvent { socket, .. } => {
                 (Slot { kind: Kind::Realtime, nth: socket.nth }, None)
             }
+            Input::AmdReply { ask, .. } => (Slot { kind: Kind::AmdAsk, nth: ask.nth }, None),
             _ => return false,
         };
         // an expressive model opens its reply with reasoning and a delivery marker
@@ -650,7 +647,17 @@ impl Run {
             }
             _ => input,
         };
-        if !self.record.live().has(slot.kind, slot.nth) || !self.deliver_to(slot, input) {
+        let delivered = self.record.live().has(slot.kind, slot.nth) && self.deliver_to(slot, input);
+        if let Input::AmdReply { ask, says } = input {
+            let reply = crate::record::amd_run::Reply {
+                at,
+                ask: ask.nth,
+                says: *says,
+                accepted: delivered,
+            };
+            self.record.record_amd_reply(reply);
+        }
+        if !delivered {
             return false;
         }
         match input {

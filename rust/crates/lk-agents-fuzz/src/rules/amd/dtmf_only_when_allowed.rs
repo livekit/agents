@@ -29,10 +29,12 @@ impl Rule for DtmfOnlyWhenAllowed {
         let amd = r.amd_view();
         let mut ivr_requests = std::collections::BTreeSet::new();
         for turn in amd.gated_turns() {
-            let Some(Answer::Decide { at, verdict: AmdVerdict::Ivr, .. }) = amd.deciding(&turn)
-            else {
+            let Some(Answer::Decide { at, verdict, .. }) = amd.deciding(&turn) else {
                 continue;
             };
+            if !verdict.offers_dtmf() {
+                continue;
+            }
             for request in amd.requests_answering(&turn) {
                 if amd.preemptive(&request) || request.opened < at {
                     continue;

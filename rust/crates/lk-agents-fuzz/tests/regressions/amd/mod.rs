@@ -13,12 +13,17 @@ mod silence;
 use lk_agents_abi::Role;
 use lk_agents_fuzz::check::Failure;
 use lk_agents_fuzz::drive::{Run, Setup, simulate};
+use lk_agents_fuzz::fakes::amd::AmdSetup;
+use lk_agents_fuzz::input::AmdSays;
 use lk_agents_fuzz::input::{
     AgentText, AmdOpening, AmdTurn, AmdVerdict, Input, Millis, Ref, UserText,
 };
 use lk_agents_fuzz::record::Kind;
 use lk_agents_fuzz::record::amd::RequestMessage;
+use lk_agents_fuzz::record::amd_run::{AskKind, Asked as AmdAsked};
 use lk_agents_voice::amd::AmdObservation;
+use lk_agents_voice::amd::AmdRunId;
+use lk_agents_voice::amd::events::{Outcome, Prediction};
 use lk_agents_voice::events::SessionEvent;
 
 /// A call with AMD on it: the session, and the next utterance the recogniser will open.
@@ -53,7 +58,91 @@ pub fn listening() -> Setup {
     Setup { stt: true, vad: true, ..Setup::default() }
 }
 
+/// A call AMD's executor runs on: the person joined the room with their microphone, which the
+/// session hears through a detector and a recogniser.
+pub fn detecting(amd: AmdSetup) -> Setup {
+    Setup {
+        room_legs: Some(lk_agents_fuzz::drive::RoomLegs { pre_connect: None }),
+        amd: Some(amd),
+        ..listening()
+    }
+}
+
 impl Call {
+    /// `async with AMD(...)` through the executor: once it answered, a moment more for the run
+    /// to start listening.
+    pub async fn enter(&mut self) {
+        let before = self.run.record.amd_run().enter_answers().len();
+        self.send(Input::AmdEnter {}).await;
+        for _ in 0..10 {
+            self.advance(100).await;
+            if self.run.record.amd_run().enter_answers().len() > before {
+                break;
+            }
+        }
+        self.advance(100).await;
+    }
+
+    /// `aclose()` on the run entered last.
+    pub async fn close_amd(&mut self) {
+        self.send(Input::AmdClose {}).await;
+    }
+
+    /// Every request AMD's executor made of its fake models, by `Ref<AmdAsk>` number.
+    pub fn amd_asks(&self) -> Vec<(u32, AmdAsked)> {
+        self.run.record.amd_run().asks().into_iter().map(|(nth, _, asked)| (nth, asked)).collect()
+    }
+
+    /// The requests of one kind.
+    pub fn amd_asks_of(&self, kind: AskKind) -> Vec<AmdAsked> {
+        self.amd_asks().into_iter().filter(|(_, a)| a.kind == kind).map(|(_, a)| a).collect()
+    }
+
+    /// The latest request of `kind` still waiting for its answer.
+    pub fn open_ask(&self, kind: AskKind) -> Option<Ref<lk_agents_fuzz::input::AmdAsk>> {
+        let live = self.run.record.live().of(Kind::AmdAsk);
+        (self.amd_asks().into_iter().rev())
+            .find(|(nth, a)| a.kind == kind && live.contains(nth))
+            .map(|(nth, _)| Ref::new(nth))
+    }
+
+    /// The classifier (an LLM or a decision model) answers its open request with `says`.
+    pub async fn classifier_says(&mut self, says: AmdSays) {
+        let ask = self.open_ask(AskKind::Classify).or_else(|| self.open_ask(AskKind::Choice));
+        let ask = ask.expect("a classification waits for its answer");
+        self.send(Input::AmdReply { ask, says }).await;
+    }
+
+    /// The menu extraction answers its open request with `says`.
+    pub async fn menu_says(&mut self, says: AmdSays) {
+        let ask = self.open_ask(AskKind::Menu).expect("a menu extraction waits for its answer");
+        self.send(Input::AmdReply { ask, says }).await;
+    }
+
+    /// The run `AmdEnter` attached last.
+    pub fn amd_run(&self) -> AmdRunId {
+        let entered = self.run.record.amd_run().entered();
+        entered.last().map(|(_, run)| *run).expect("a run attached")
+    }
+
+    /// What every `execute()` of the latest run returned.
+    pub fn outcomes(&self) -> Vec<Outcome> {
+        let run = self.amd_run();
+        self.run.record.amd_run().outcomes(run).into_iter().map(|(_, o)| o).collect()
+    }
+
+    /// The latest run's `amd_prediction` events.
+    pub fn predictions(&self) -> Vec<Prediction> {
+        let run = self.amd_run();
+        self.run.record.amd_run().predictions(run).into_iter().map(|(_, p)| p).collect()
+    }
+
+    /// The latest run's `amd_completed` events.
+    pub fn completions(&self) -> Vec<Outcome> {
+        let run = self.amd_run();
+        self.run.record.amd_run().completed(run).into_iter().map(|(_, o)| o).collect()
+    }
+
     pub fn run(setup: Setup, story: impl AsyncFnOnce(&mut Call)) -> Call {
         simulate(async move {
             let run = Run::start(&setup, 0, Default::default()).await;

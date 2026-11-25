@@ -29,7 +29,7 @@ impl Rule for StageInstructionsNeverSaved {
         let mut staged_any = false;
         for turn in amd.gated_turns() {
             let Some(Answer::Decide { at, verdict, .. }) = amd.deciding(&turn) else { continue };
-            if !matches!(verdict, AmdVerdict::Stage | AmdVerdict::Silence | AmdVerdict::Ivr) {
+            if !verdict.staged() {
                 continue;
             }
             staged_any = true;

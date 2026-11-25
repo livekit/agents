@@ -56,6 +56,7 @@ impl Run {
         let from_journal = self.record.journal().len();
         self.absorb_journal();
         self.absorb_amd();
+        self.absorb_amd_runs();
         self.attribute_chats(from_journal, from_host);
 
         // The snapshot takes a stamp of its own, so what it saw never shares an instant with what
@@ -355,6 +356,38 @@ impl Run {
         }
     }
 
+    /// Absorb what the runs entered through AMD's executor told the host: each entry, the events
+    /// sent since, and `execute()` once it returned.
+    fn absorb_amd_runs(&mut self) {
+        let entered = self.entered.clone();
+        let mut entered = entered.lock().unwrap();
+        for e in entered.iter_mut() {
+            if !std::mem::replace(&mut e.recorded, true) {
+                let at = self.stamps.next();
+                self.record.record_amd_entered(at, e.result.clone());
+            }
+            let Ok(run) = e.result else { continue };
+            if let Some(events) = &mut e.events {
+                while let Ok(event) = events.try_recv() {
+                    let at = self.stamps.next();
+                    self.record.record_amd_event(at, run, event);
+                }
+            }
+            if let Some(execute) = e.execute.as_mut()
+                && let Some(outcome) = super::apply::ready_now(execute.as_mut())
+            {
+                e.execute = None;
+                let at = self.stamps.next();
+                self.record.record_amd_outcome(at, run, outcome);
+            }
+            if let Some(close) = e.close.as_mut()
+                && super::apply::ready_now(close.as_mut()).is_some()
+            {
+                e.close = None;
+            }
+        }
+    }
+
     /// Absorb what the AMD gate observed: a committed turn opens an `AmdTurn` the answerer can
     /// name, and its run's detach closes every turn of that run.
     fn absorb_amd(&mut self) {
@@ -381,11 +414,6 @@ impl Run {
                 _ => {}
             }
             self.record.record_amd(at, run, observation);
-        }
-        let calls = std::mem::take(&mut *self.amd_models.lock().unwrap());
-        for call in calls {
-            let at = self.stamps.next();
-            self.record.record_amd_model(at, call);
         }
     }
 

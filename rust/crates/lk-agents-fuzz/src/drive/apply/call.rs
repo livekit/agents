@@ -87,7 +87,7 @@ impl Run {
             | Input::AmdDecide { .. }
             | Input::AmdDecideAhead { .. }
             | Input::AmdDetach { .. } => self.call_amd(input),
-            Input::AmdEnter { .. } | Input::AmdClose { .. } => self.call_real_amd(input),
+            Input::AmdEnter { .. } | Input::AmdClose { .. } => self.call_amd_executor(input),
             _ => unreachable!("{input:?} is not a call"),
         };
         let Some(pending) = pending else { return false };
@@ -550,6 +550,60 @@ impl Run {
         Some(Pending::default())
     }
 
+    /// AMD through the runtime's executor: `enter` with the setup's fakes, and `aclose()`.
+    fn call_amd_executor(&mut self, input: &Input) -> Option<Pending> {
+        match input {
+            Input::AmdEnter {} => {
+                let setup = self.setup.amd.clone()?;
+                let config =
+                    crate::fakes::amd::config(&setup, &self.registry, self.setup.stt_speech);
+                let (api, entered) = (self.api.clone(), self.entered.clone());
+                let reply = async move {
+                    let result = lk_agents_runtime::voice::amd::enter(&api, config).await;
+                    let mut entered = entered.lock().unwrap();
+                    match result {
+                        Ok(run) => {
+                            let id = run.id();
+                            let (events, execute) = (run.events(), Some(run.execute()));
+                            let run = Some(run);
+                            let close = None;
+                            let result = Ok(id);
+                            entered.push(super::super::Entered {
+                                result,
+                                recorded: false,
+                                run,
+                                events,
+                                execute,
+                                close,
+                            });
+                            Ok(id.0)
+                        }
+                        Err(error) => {
+                            let refused = error.to_string();
+                            entered.push(super::super::Entered {
+                                result: Err(refused.clone()),
+                                recorded: false,
+                                run: None,
+                                events: None,
+                                execute: None,
+                                close: None,
+                            });
+                            Err(refused)
+                        }
+                    }
+                };
+                Some(Pending::answer(AnswerWait::reply(reply, Answer::AmdEnter)))
+            }
+            Input::AmdClose {} => {
+                let mut entered = self.entered.lock().unwrap();
+                let last = entered.iter_mut().rev().find(|e| e.run.is_some())?;
+                last.close = Some(last.run.as_ref()?.close());
+                Some(Pending::default())
+            }
+            _ => unreachable!("{input:?} is not AMD's executor's"),
+        }
+    }
+
     /// The scripted AMD answerer: its attach and its answers, keyed by its run, which is the
     /// latest one attached; a decision names the run and turn of the turn it was made for.
     fn call_amd(&mut self, input: &Input) -> Option<Pending> {
@@ -597,75 +651,6 @@ impl Run {
         // AMD's answers are session inputs, as its executor will send them.
         self.api.answer_amd(answer).ok()?;
         Some(Pending::default())
-    }
-
-    /// A real AMD run: started through the production entry point over fake models, or closed.
-    /// It numbers its runs with the scripted answerer's, so a case may mix them.
-    fn call_real_amd(&mut self, input: &Input) -> Option<Pending> {
-        use crate::fakes::{amd, amd_models};
-        use crate::input::{AmdModel, AmdOpening};
-        use lk_agents_runtime::voice::amd::{AmdStart, Classifier};
-        use lk_agents_voice::amd::AmdRunId;
-        use lk_agents_voice::amd::options::AmdOptions;
-        match input {
-            Input::AmdEnter { persona, model, opening, own_stt, stt_fails, seed } => {
-                self.amd_runs += 1;
-                let run = AmdRunId(self.amd_runs);
-                let seed = u64::from(seed.0) ^ (run.0 << 32);
-                let log = self.amd_models.clone();
-                let classifier = match model {
-                    AmdModel::Llm => {
-                        Classifier::Llm(amd_models::AmdClassifier::new(*persona, seed, log))
-                    }
-                    AmdModel::Decision => {
-                        Classifier::Decision(amd_models::AmdDecision::new(*persona, seed, log))
-                    }
-                };
-                self.amd_ear = amd_models::AmdEar::new(seed);
-                let stt = own_stt.then(|| {
-                    amd_models::AmdStt::new(self.amd_ear.clone(), *stt_fails)
-                        as Arc<dyn lk_agents_abi::Stt>
-                });
-                // Stage instructions a rule can find in a request and must never find saved.
-                let stage = Some(amd::STAGE.to_owned());
-                let mut options = AmdOptions {
-                    screening_instructions: stage.clone(),
-                    voicemail_instructions: stage.clone(),
-                    ivr_instructions: stage.clone(),
-                    human_instructions: stage,
-                    ..AmdOptions::default()
-                };
-                match opening {
-                    Some(AmdOpening::Text) => options.opening_text = Some(amd::OPENING_TEXT.into()),
-                    Some(AmdOpening::Instructions) => {
-                        options.opening_instructions = Some(amd::OPENING_INSTRUCTIONS.into())
-                    }
-                    None => {}
-                }
-                let start = AmdStart {
-                    run,
-                    options,
-                    classifier,
-                    // One attempt: a refusal is the call's outcome.
-                    llm_conn_options: lk_agents_abi::ApiConnectOptions {
-                        max_retry: 0,
-                        ..Default::default()
-                    },
-                    stt,
-                    room: None,
-                    participant: None,
-                    dtmf_tool: amd::dtmf_tool(),
-                    session_id: format!("amd_{}", run.0),
-                };
-                self.amd_real = Some(self.api.start_amd(start).ok()?);
-                Some(Pending::default())
-            }
-            Input::AmdClose {} => {
-                self.amd_real.as_ref()?.close();
-                Some(Pending::default())
-            }
-            _ => unreachable!("{input:?} is not a real AMD run's"),
-        }
     }
 
     fn call_lifecycle(&mut self, input: &Input) -> Option<Pending> {
