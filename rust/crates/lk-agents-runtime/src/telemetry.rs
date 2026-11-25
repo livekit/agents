@@ -169,14 +169,6 @@ pub async fn shutdown() {
 /// How long the process-exit flush of product statistics may take.
 const PRODUCT_STATS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub struct ProductStatsHost;
-
-impl lk_agents_abi::productstats::ProductStatsHost for ProductStatsHost {
-    fn _core_product_stats_plugin(package: String, version: String) {
-        productstats::plugin(&package, &version);
-    }
-}
-
 fn allow_pii_from_env() -> bool {
     std::env::var("LIVEKIT_TELEMETRY_ALLOW_PII").is_ok_and(|v| {
         !matches!(v.trim().to_lowercase().as_str(), "" | "0" | "false" | "no" | "off")
@@ -408,7 +400,6 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
     };
     let count = |n: Option<u64>| n.filter(|n| *n != 0);
     let secs = |s: Option<f64>| s.filter(|s| *s != 0.0);
-    record_product_stats(metrics);
     macro_rules! add {
         ($instrument:ident, $value:expr) => {
             if let Some(v) = $value {
@@ -458,48 +449,6 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
             &ConnectionAcquireTime { model: model(), reused: BoolString(reused) },
             acquire,
         );
-    }
-}
-
-/// The product statistics a metrics record carries that no request records itself: STT and
-/// realtime latencies, end-of-turn and VAD inferences.
-fn record_product_stats(metrics: &AgentMetrics) {
-    use lk_agents_abi::productstats::{
-        Operation, ProviderDuration, ProviderRequests, ProviderTtft,
-    };
-    use lk_agents_telemetry::productstats::measure;
-    let labels = |operation| {
-        let md = metrics.metadata();
-        let id = lk_agents_abi::ProviderId {
-            label: String::new(),
-            model: md.and_then(|m| m.model_name.clone()).unwrap_or_default(),
-            provider: md.and_then(|m| m.model_provider.clone()).unwrap_or_default(),
-        };
-        lk_agents_inference::telemetry::stat_labels(operation, &id)
-    };
-    match metrics {
-        AgentMetrics::Stt(m) => {
-            if let Some(duration) = m.duration.filter(|d| *d > 0.0) {
-                measure(&ProviderDuration { provider: labels(Operation::Stt) }, duration);
-            }
-        }
-        AgentMetrics::RealtimeModel(m) if !m.cancelled => {
-            let provider = labels(Operation::Realtime);
-            if let Some(ttft) = m.ttft.filter(|t| *t >= 0.0) {
-                measure(&ProviderTtft { provider: provider.clone() }, ttft);
-            }
-            measure(&ProviderDuration { provider }, m.duration);
-        }
-        AgentMetrics::EotInference(m) => {
-            let provider = labels(Operation::Eot);
-            measure(&ProviderRequests { provider: provider.clone() }, u64::from(m.num_requests));
-            measure(&ProviderDuration { provider }, m.prediction_duration);
-        }
-        AgentMetrics::Vad(m) if m.inference_count > 0 => {
-            let provider = labels(Operation::Vad);
-            measure(&ProviderRequests { provider }, u64::from(m.inference_count));
-        }
-        _ => {}
     }
 }
 

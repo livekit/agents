@@ -149,9 +149,6 @@ from ._generated._core_native_enums import (
     SpanKind as SpanKind,
     StatusCode as StatusCode,
 )
-from ._generated._core_productstats import (
-    _core_product_stats_plugin as _core_product_stats_plugin,
-)
 from ._generated._core_recorder import (
     SessionRecorder as SessionRecorder,
 )

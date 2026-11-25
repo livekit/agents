@@ -1,8 +1,4 @@
 use crate::telemetry;
-use lk_agents_abi::productstats::{
-    FailureType, Operation, ProviderFailures, ProviderLabels, ProviderRequests, ProviderRetries,
-};
-use lk_agents_abi::telemetry::decl::{MetricDecl, ProductStats};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -37,26 +33,12 @@ struct Report<'a> {
 
 impl Report<'_> {
     fn retrying(&self, error: ProviderError) {
-        self.stat(|provider| ProviderRetries { provider });
         self.stt.failed(error, true);
     }
 
     fn gave_up(&self, error: ProviderError) {
-        let error_type = FailureType::of(&error);
-        self.stat(|provider| ProviderFailures { provider, error_type });
         if let GiveUp::Reported = self.give_up {
             self.stt.failed(error, false);
-        }
-    }
-
-    /// Counts a product statistic of the provider; an adapter's members count their own.
-    fn stat<M: MetricDecl<Audience = ProductStats>>(
-        &self,
-        labels: impl FnOnce(ProviderLabels) -> M,
-    ) {
-        if !self.stt.retries_itself() {
-            let provider = telemetry::stat_labels(Operation::Stt, &self.stt.id());
-            lk_agents_telemetry::productstats::measure(&labels(provider), 1u64);
         }
     }
 }
@@ -199,7 +181,6 @@ pub(crate) async fn recognize_reported(
 ) -> Result<SpeechEvent, ProviderError> {
     let (stt, options) = attempt_view(stt, options);
     let report = Report { stt: &*stt, give_up };
-    report.stat(|provider| ProviderRequests { provider });
     let mut attempts = attempts(&options, clock.now(), report)?;
     let deadline = attempts.wake_at(None);
     match before(
@@ -236,7 +217,6 @@ pub(crate) async fn stream_reported(
 ) -> Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError> {
     let (stt, options) = attempt_view(stt, options);
     let report = Report { stt: &*stt, give_up };
-    report.stat(|provider| ProviderRequests { provider });
     let accepted = clock.now();
     let mut attempts = attempts(&options, accepted, report)?;
     let deadline = attempts.wake_at(None);

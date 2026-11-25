@@ -133,22 +133,68 @@ anonymous product statistics about the framework and its plugins, so LiveKit can
 see how they behave across versions and providers. They are never shown in your
 dashboard, never billed, and never contain customer data.
 
-- What is sent, once a minute per process: the framework, Python and LiveKit
-  plugin versions, the OS and architecture, whether the process runs in
-  production, development or CI; per provider, model and kind (STT, TTS, LLM,
-  realtime, end of turn, VAD): request, failure (by error class), retry,
-  fallback and reconnect counts, and time to first byte or token and request
-  duration; job starts and outcomes; crashed job processes and event-loop
-  stalls (by function names only).
-- What is never sent: transcripts, prompts, audio, tool arguments or any other
-  content; room, participant, job, thread or agent names; ids; hostnames, user
-  names or paths.
 - Where: `https://<your LiveKit Cloud host>/observability/productstats/agents/metrics/otlp/v0`,
-  signed with your project's key. Nothing is sent when `LIVEKIT_URL` is not a
-  LiveKit Cloud URL.
+  signed with your project's key, once a minute per process. Nothing is sent when
+  `LIVEKIT_URL` is not a LiveKit Cloud URL.
 - Opt out with `LIVEKIT_PRODUCT_STATS=0` or `DO_NOT_TRACK=1`, read once when the
   process starts. Opting out does not affect your observability data, and
   turning observability off does not opt out.
+
+### What is collected
+
+This list is complete: nothing else is sent. Every value is a closed set or a bounded
+identifier, never content.
+
+**Once per process, on every export**
+
+| Key | Example | Used for |
+| --- | --- | --- |
+| `service.name` | `livekit-agents` | Tells the framework apart from other senders |
+| `lk.productstats.framework.version` | `2.0.0` | Which versions are in use |
+| `lk.productstats.python.version` | `3.12.4` | Which Python versions to support |
+| `lk.productstats.os`, `lk.productstats.arch` | `linux`, `aarch64` | Which platforms to support |
+| `lk.productstats.runner.launch` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
+| `lk.productstats.runner.kind` | `production` | What the process is, derived from the launch and its environment: `production`, `development`, `ci` or `unknown` |
+| `lk.productstats.plugins` | `livekit.plugins.deepgram==1.2.3` | Versions of the loaded `livekit.plugins.*` packages; other packages are never listed |
+
+`runner.kind`, first match: `ci` when `CI=true`; `production` on LiveKit Cloud;
+`development` for `dev`, `console` and `simulation`, and for `start` on macOS or Windows;
+`production` for `start` on Linux; `unknown` otherwise.
+
+**Model usage**
+
+Each metric carries the same labels:
+
+| Label | Values |
+| --- | --- |
+| `lk.productstats.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
+| `lk.productstats.model.plugin` | the plugin's package (`livekit.plugins.deepgram`), `livekit-inference` for LiveKit Inference, `custom` for any class outside `livekit.plugins.*` |
+| `lk.productstats.model.provider` | the provider's name (`deepgram`, `openai`); a self-hosted endpoint is `other` |
+| `lk.productstats.model.name` | the model's name as configured |
+
+| Metric | Type | Counts |
+| --- | --- | --- |
+| `lk.productstats.model.requests` | counter | Requests made to a model |
+| `lk.productstats.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
+| `lk.productstats.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
+
+**Feature usage**
+
+| Metric | Label | Counts |
+| --- | --- | --- |
+| `lk.productstats.sessions` | `lk.productstats.session.kind`: `voice`, `text` | Sessions started |
+| `lk.productstats.feature.sessions` | `lk.productstats.feature` | Sessions that used the feature at least once |
+
+`lk.productstats.feature` is one of: `voice_task`, `remote_agent`, `local_agent_tool`,
+`tool_approval`, `mcp_toolset`, `avatar`, `channel`, `context_store`, `simulation`,
+`override_options`.
+
+**Never collected**
+
+- Content: transcripts, prompts, replies, tool arguments or results, audio.
+- Names and ids of rooms, participants, jobs, threads, agents or tools; host names, user
+  names or paths.
+- Failures, retries, fallbacks, reconnects, crashes, stalls and job outcomes.
 
 Product statistics are Telemetry Data under section 7.2 of the LiveKit Terms of
 Service.
