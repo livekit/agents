@@ -23,9 +23,7 @@ impl Rule for ReplyFollowsDecision {
                     allowing decision for it, at most once; a denied turn is never answered.",
         examples: &[allowed_then_answered, denied_and_silent],
         counterexamples: &[answered_before_its_decision, denied_but_heard, answered_twice],
-        // A probe runs against production; the gate's behavior is the gate commit's to prove,
-        // in `tests/regressions/amd`.
-        probe: None,
+        probe: Some(an_allowed_turn),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -121,4 +119,9 @@ fn answered_twice() -> Recording {
         .pushed(10)
         .pushed(11)
         .done()
+}
+
+/// A turn AMD allows is answered after its decision.
+fn an_allowed_turn() -> crate::drive::Case {
+    crate::fakes::amd::probe::one_turn("hello who is this", AmdVerdict::Allow)
 }

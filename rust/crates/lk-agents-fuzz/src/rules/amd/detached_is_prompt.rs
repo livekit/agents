@@ -23,7 +23,7 @@ impl Rule for DetachedIsPrompt {
                     instant, whatever customer hook is still running.",
         examples: &[acknowledged],
         counterexamples: &[never_acknowledged, acknowledged_late],
-        probe: None,
+        probe: Some(a_completion),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -74,4 +74,16 @@ fn acknowledged_late() -> Recording {
         .amd(1, AmdObservation::Detached { run: lk_agents_voice::amd::AmdRunId(1) })
         .later(1_000)
         .done()
+}
+
+/// AMD completes after one allowed turn.
+fn a_completion() -> crate::drive::Case {
+    use crate::fakes::amd::probe::*;
+    let mut inputs = attached(None);
+    inputs.extend(says(0, "hello"));
+    inputs.push(decide(0, AmdVerdict::Allow));
+    inputs.push(Input::AmdDetach { category: AmdVerdict::Allow, forbid: false });
+    inputs.extend(answered(3));
+    inputs.push(advance(3_000));
+    call(inputs)
 }

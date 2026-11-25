@@ -25,7 +25,7 @@ impl Rule for GateCleansUp {
                     decision, and replies are as interruptible as before the run attached.",
         examples: &[clean],
         counterexamples: &[observed_after, still_gated, interruptions_kept_forced],
-        probe: None,
+        probe: Some(a_turn_after_completion),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -139,4 +139,19 @@ fn interruptions_kept_forced() -> Recording {
         .speech_created(6, SpeechKind::TurnReply)
         .speech(6, reply(true))
         .done()
+}
+
+/// AMD completes, and the next turn is answered with no decision.
+fn a_turn_after_completion() -> crate::drive::Case {
+    use crate::fakes::amd::probe::*;
+    let mut inputs = attached(None);
+    inputs.extend(says(0, "hello"));
+    inputs.push(decide(0, AmdVerdict::Allow));
+    inputs.extend(answered(3));
+    inputs.push(advance(3_000));
+    inputs.push(Input::AmdDetach { category: AmdVerdict::Allow, forbid: false });
+    inputs.extend(says(1, "who is this"));
+    inputs.extend(answered(6));
+    inputs.push(advance(3_000));
+    call(inputs)
 }

@@ -30,7 +30,7 @@ impl Rule for GateSettles {
                     turn superseded it.",
         examples: &[answered_and_ended, superseded_and_ended],
         counterexamples: &[never_reported, answered_never_ended, allowed_with_no_reply],
-        probe: None,
+        probe: Some(a_denied_turn),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -169,4 +169,9 @@ fn allowed_with_no_reply() -> Recording {
         .amd(1, ended(TurnEnd::Replied))
         .later(3_000)
         .done()
+}
+
+/// A turn AMD denies is reported and ends with its words saved.
+fn a_denied_turn() -> crate::drive::Case {
+    crate::fakes::amd::probe::one_turn("please hold", AmdVerdict::Wait)
 }

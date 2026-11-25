@@ -22,7 +22,7 @@ impl Rule for DtmfOnlyWhenAllowed {
                     nowhere else.",
         examples: &[offered_to_the_ivr_reply],
         counterexamples: &[missing_from_the_ivr_reply, offered_twice, offered_to_a_plain_reply],
-        probe: None,
+        probe: Some(an_ivr_menu),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -88,4 +88,9 @@ fn offered_to_a_plain_reply() -> Recording {
         .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Allow })
         .request(10, 1, "hello this is Sam", &[], &[SEND_DTMF_TOOL])
         .done()
+}
+
+/// An IVR menu's turn is answered with the DTMF tool.
+fn an_ivr_menu() -> crate::drive::Case {
+    crate::fakes::amd::probe::one_turn("press one for appointments", AmdVerdict::Ivr)
 }

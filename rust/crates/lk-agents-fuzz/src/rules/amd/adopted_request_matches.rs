@@ -24,7 +24,7 @@ impl Rule for AdoptedRequestMatches {
                     either.",
         examples: &[plain_allow_adopts],
         counterexamples: &[staged_allow_adopts],
-        probe: None,
+        probe: Some(a_direct_human),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -85,4 +85,9 @@ fn staged_allow_adopts() -> Recording {
         .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Stage })
         .pushed(10)
         .done()
+}
+
+/// A direct human answer adopts the preemptive generation made for its words.
+fn a_direct_human() -> crate::drive::Case {
+    crate::fakes::amd::probe::one_turn("hello this is Sam", AmdVerdict::Allow)
 }

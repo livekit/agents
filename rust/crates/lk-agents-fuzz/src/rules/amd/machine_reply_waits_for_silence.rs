@@ -22,7 +22,7 @@ impl Rule for MachineReplyWaitsForSilence {
                     has been silent for the threshold, unless AMD completed first.",
         examples: &[heard_after_the_silence, released_by_detach],
         counterexamples: &[heard_inside_the_silence, heard_while_speaking],
-        probe: None,
+        probe: Some(a_voicemail_greeting),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -98,4 +98,9 @@ fn heard_while_speaking() -> Recording {
         .sent(Input::VadStart { vad: Ref::new(0), speech_ms: Millis(0) })
         .pushed(10)
         .done()
+}
+
+/// A voicemail greeting's reply waits for the silence.
+fn a_voicemail_greeting() -> crate::drive::Case {
+    crate::fakes::amd::probe::one_turn("please leave a message", AmdVerdict::Silence)
 }

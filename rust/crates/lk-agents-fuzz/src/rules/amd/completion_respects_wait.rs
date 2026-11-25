@@ -19,7 +19,7 @@ impl Rule for CompletionRespectsWait {
                     answered afterwards.",
         examples: &[waiting_turn_stays_silent],
         counterexamples: &[stored_allow_answers_after_wait],
-        probe: None,
+        probe: Some(completion_in_wait),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -73,4 +73,16 @@ fn waiting_turn_stays_silent() -> Recording {
 
 fn stored_allow_answers_after_wait() -> Recording {
     waiting().request(10, 1, "please hold", &[], &[]).pushed(10).done()
+}
+
+/// AMD completes in `wait` with the turn it held unanswered.
+fn completion_in_wait() -> crate::drive::Case {
+    use crate::fakes::amd::probe::*;
+    let mut inputs = attached(None);
+    inputs.extend(says(0, "please hold"));
+    inputs.push(decide(0, AmdVerdict::Wait));
+    inputs.push(Input::AmdDetach { category: AmdVerdict::Wait, forbid: false });
+    inputs.extend(answered(3));
+    inputs.push(advance(3_000));
+    call(inputs)
 }

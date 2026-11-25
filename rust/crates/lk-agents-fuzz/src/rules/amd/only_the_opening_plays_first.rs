@@ -22,7 +22,7 @@ impl Rule for OnlyTheOpeningPlaysFirst {
                     reply, and the opening is not heard once the participant spoke first.",
         examples: &[opening_then_allowed_reply],
         counterexamples: &[reply_before_any_decision, opening_after_the_participant_spoke],
-        probe: None,
+        probe: Some(an_opening),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -131,4 +131,12 @@ fn reply_before_any_decision() -> Recording {
 
 fn opening_after_the_participant_spoke() -> Recording {
     activated().sent(Input::VadStart { vad: Ref::new(0), speech_ms: Millis(0) }).pushed(5).done()
+}
+
+/// The opening plays at activation, before any turn.
+fn an_opening() -> crate::drive::Case {
+    use crate::fakes::amd::probe::*;
+    let mut inputs = attached(Some(AmdOpening::Text));
+    inputs.push(advance(3_000));
+    call(inputs)
 }

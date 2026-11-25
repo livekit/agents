@@ -21,7 +21,7 @@ impl Rule for StageInstructionsNeverSaved {
                     saved item ever does.",
         examples: &[staged_and_unsaved],
         counterexamples: &[staged_but_lost, staged_and_saved],
-        probe: None,
+        probe: Some(a_screener),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -94,4 +94,9 @@ fn staged_and_saved() -> Recording {
             visibility: lk_agents_voice::agent::Visibility::Both,
         })
         .done()
+}
+
+/// A screener's turn is answered under stage instructions.
+fn a_screener() -> crate::drive::Case {
+    crate::fakes::amd::probe::one_turn("you have reached the screener", AmdVerdict::Stage)
 }

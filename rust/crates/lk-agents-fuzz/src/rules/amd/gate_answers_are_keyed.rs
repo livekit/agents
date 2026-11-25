@@ -20,7 +20,7 @@ impl Rule for GateAnswersAreKeyed {
                     AMD run answers nothing and is dropped.",
         examples: &[stale_dropped],
         counterexamples: &[stale_applied, stale_not_journalled],
-        probe: None,
+        probe: Some(a_stale_decision),
     };
 
     fn on_complete(r: &Recording, check: &mut Check) {
@@ -94,4 +94,17 @@ fn stale_applied() -> Recording {
 
 fn stale_not_journalled() -> Recording {
     two_turns().sent(stale()).done()
+}
+
+/// AMD decides an older turn after a newer one committed, then the newer one.
+fn a_stale_decision() -> crate::drive::Case {
+    use crate::fakes::amd::probe::*;
+    let mut inputs = attached(None);
+    inputs.extend(says(0, "hello"));
+    inputs.extend(says(1, "is anyone there"));
+    inputs.push(decide(0, AmdVerdict::Allow));
+    inputs.push(decide(1, AmdVerdict::Allow));
+    inputs.extend(answered(3));
+    inputs.push(advance(3_000));
+    call(inputs)
 }
