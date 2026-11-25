@@ -308,6 +308,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not self._tts._expired(ws):
                 break
             pool.remove(ws)
+            self._tts._close_soon(ws)
         self._acquire_time = pool.last_acquire_time
         self._connection_reused = pool.last_connection_reused
         return ws
