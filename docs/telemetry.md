@@ -179,10 +179,22 @@ Each metric carries the same labels:
 | `lk.product.agents.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
 | `lk.product.agents.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
 | `lk.product.agents.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
-| `lk.product.agents.model.audio_duration` | counter, seconds | Audio a model handled: sent to an STT, or synthesized by a TTS. A streaming STT keeps one stream for a whole session, so this, not its request count, is its usage |
-| `lk.product.agents.model.characters` | counter | Characters sent to a TTS |
-| `lk.product.agents.model.input_tokens` | counter | Tokens sent to an LLM, realtime or duplex model, as the provider reports them |
-| `lk.product.agents.model.output_tokens` | counter | Tokens an LLM, realtime or duplex model produced, as the provider reports them |
+| `lk.product.agents.model.audio_duration` | counter, seconds | Audio the model heard (an STT) or spoke (a TTS) |
+| `lk.product.agents.model.characters` | counter | Characters of text the model was given to speak |
+| `lk.product.agents.model.input_tokens` | counter | Tokens the model consumed, as its provider reports them |
+| `lk.product.agents.model.output_tokens` | counter | Tokens the model produced, as its provider reports them |
+
+Usage has one rule for every kind of model: the unit is the metric, and the kind of model
+is only a label. A model adds to each unit it is measured in and to no other, so:
+
+| Model | Adds to |
+| --- | --- |
+| An LLM | `requests`, `input_tokens`, `output_tokens` |
+| A TTS billed by characters | `requests`, `characters`, `audio_duration` |
+| A TTS billed by tokens | `requests`, `input_tokens`, `output_tokens`, `characters`, `audio_duration` |
+| A streaming STT | `requests` (one per stream), `audio_duration` |
+
+A new way of measuring a model is one new unit, never a metric for one kind of model.
 
 The transcription delay starts at the end of speech, which the STT does not always decide.
 So this metric alone is split by one extra label,
