@@ -184,6 +184,9 @@ pub enum DetachCancel {
     ForbidReplies,
 }
 
+/// The built-in tool AMD may add to a `machine-ivr` reply (spec §11.1).
+pub const SEND_DTMF_TOOL: &str = "send_dtmf_events";
+
 /// Session commands for AMD. Producer: the host (step 5) or a test; handler: the session's gate.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 #[vocabulary(kind = AmdCommandKind)]

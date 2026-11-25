@@ -792,3 +792,7 @@ impl VoiceDriver {
 #[cfg(test)]
 #[path = "amd_gate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "amd_gate_rule_tests.rs"]
+mod rule_tests;
