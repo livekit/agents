@@ -154,8 +154,8 @@ identifier, never content.
 | `lk.productstats.runtime.name` | `python` | The runtime the agent runs on: `python`, `node` or `bun` |
 | `lk.productstats.runtime.version` | `3.12.4` | Which versions of each runtime to support |
 | `lk.productstats.os`, `lk.productstats.arch` | `linux`, `aarch64` | Which platforms to support |
-| `lk.productstats.runner.launch` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
-| `lk.productstats.runner.kind` | `production` | What the process is, derived from the launch and its environment: `production`, `development`, `ci` or `unknown` |
+| `lk.productstats.runner.cmd` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
+| `lk.productstats.runner.kind` | `production` | What the process is, derived from the command and its environment: `production`, `development`, `ci` or `unknown` |
 
 `runner.kind`, first match: `ci` when `CI=true`; `production` on LiveKit Cloud;
 `development` for `dev`, `console` and `simulation`, and for `start` on macOS or Windows;
