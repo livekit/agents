@@ -325,3 +325,17 @@ async def test_an_ivr_reply_runs_the_dtmf_tool() -> None:
         # the room-less session has no room to publish on: the body ran and raised
         [output] = executed[0].function_call_outputs
         assert output is not None and "unknown tool" not in output.output
+
+
+# Catches: a session close leaving `execute()` waiting, or `session.amd` naming a finished run.
+async def test_closing_the_session_completes_a_running_detection() -> None:
+    session, _ = _session(_classifier("human"), [])
+    async with session:
+        await session.start(Agent(instructions="Help."))
+        detector = AMD(session, llm=None, stt=None)
+        await detector.__aenter__()
+        await until(lambda: detector.lifecycle is AMDLifecycle.ACTIVE, "AMD listens")
+    result = await detector.execute()
+    assert result.reason is AMDReason.CANCELLED
+    assert session.amd is None
+    await detector.aclose()
