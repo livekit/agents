@@ -1,5 +1,5 @@
 //! The session side of the AMD reply gate, at the decision core: one test per transition and
-//! local rule of the AMD proposal ("The session side"). Python's `tests/test_amd.py` on
+//! local rule. Python's `tests/test_amd.py` on
 //! `main` is the reference for intent; a test that ports one names it.
 //!
 //! Every test reads what the session does, not what it says it did: whether a reply was created
@@ -452,9 +452,9 @@ impl Gate {
     }
 }
 
-// ---- Commit and decision (proposal "Transitions": Commit, Decision; rules 1 and 2) ----
+// ---- Commit and decision: hold by default, key every answer ----
 
-/// Rule 1: the session holds at commit in the same transition; nothing replies before the
+/// The session holds at commit in the same transition; nothing replies before the
 /// turn's decision. Python: `test_reply_waits_for_classification_and_silence`.
 #[test]
 fn a_committed_turn_waits_for_its_decision() {
@@ -469,7 +469,7 @@ fn a_committed_turn_waits_for_its_decision() {
     assert_eq!(g.ended(1), [TurnEnd::Replied]);
 }
 
-/// Each `TurnCommitted` carries the fields the proposal lists ("Session to AMD"), with the
+/// Each `TurnCommitted` carries the turn, its words and its facts, with the
 /// time it describes.
 #[test]
 fn turn_committed_carries_the_turn_and_its_facts() {
@@ -498,7 +498,7 @@ fn turn_committed_carries_the_turn_and_its_facts() {
     );
 }
 
-/// A denied turn commits only its user item (proposal "Apply a decision"). Python's
+/// A denied turn commits only its user item. Python's
 /// `wait` row: `test_wait_skips_reply_and_allows_a_fresh_prediction`.
 #[test]
 fn a_denied_turn_saves_its_words_and_never_replies() {
@@ -517,7 +517,7 @@ fn a_denied_turn_saves_its_words_and_never_replies() {
     assert!(g.authorized(speech));
 }
 
-/// Rule 2: a decision naming a turn other than the latest committed one is dropped, as
+/// A decision naming a turn other than the latest committed one is dropped, as
 /// `on_hook_done` drops a late hook answer. Python: `turn_id != self._turn_id` denies.
 #[test]
 fn a_decision_for_an_older_turn_is_dropped() {
@@ -574,7 +574,7 @@ fn an_answer_from_another_run_is_dropped() {
     );
 }
 
-// ---- The customer hook (proposal "Customer hook returns") ----
+// ---- The customer hook ----
 
 /// A decision may arrive before the hook returns; `finish_turn` consumes it.
 #[test]
@@ -615,7 +615,7 @@ fn a_parked_turn_keeps_its_hook_edits() {
     g.only_reply_to("hello there");
 }
 
-/// Rule 3: a newer commit denies a parked turn locally, with no answer from AMD. A denied turn
+/// A newer commit denies a parked turn locally, with no answer from AMD. A denied turn
 /// commits only its user item.
 #[test]
 fn a_newer_commit_supersedes_a_parked_turn() {
@@ -635,7 +635,7 @@ fn a_newer_commit_supersedes_a_parked_turn() {
 }
 
 /// A turn whose hook answers `StopResponse` ends without a decision applied and holds until the
-/// next commit (proposal "Turn exits without a decision applied").
+/// next commit.
 #[test]
 fn stop_response_ends_the_turn_and_a_later_decision_does_nothing() {
     let mut g = Gate::listening_hooked();
@@ -676,7 +676,7 @@ fn a_turn_superseded_in_its_hook_ends_as_superseded() {
     assert!(g.reply_to("hello").is_none());
 }
 
-// ---- Local supersession of held replies (rule 3; "Local rules": commit interrupt) ----
+// ---- Local supersession of held replies, and the commit interrupt ----
 
 /// Python: `test_newer_turn_cancels_a_held_reply`. The newer commit cancels the reply held for
 /// silence before it plays, without waiting for AMD.
@@ -712,7 +712,7 @@ fn a_skip_reply_commit_also_cancels_a_held_reply() {
     assert!(!g.authorized(speech));
 }
 
-// ---- Silence hold (proposal "Silence"; spec §10.3) ----
+// ---- Silence hold (spec §10.3) ----
 
 /// The hold is timed from the VAD's boundary time, backdated by the silence the VAD measured,
 /// not from the event's arrival (`detector.py:668`). Python:
@@ -794,7 +794,7 @@ fn a_boundary_before_the_previous_commit_is_not_reused() {
 
 /// Python: `test_resumed_speech_extends_the_hold_for_a_generated_reply`. Start of speech
 /// disarms the hold; end of speech re-arms it with a new deadline; the stale expiry does not
-/// release it (proposal: "a timer for any other deadline is stale").
+/// release it: a timer for any deadline but the armed one is stale.
 #[test]
 fn speech_that_restarts_during_the_hold_rearms_it() {
     let mut g = Gate::listening();

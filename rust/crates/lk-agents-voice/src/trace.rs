@@ -320,7 +320,7 @@ pub enum AnswerDrop {
     TurnEnded,
     /// `Activated` arrived twice.
     AlreadyActive,
-    /// The session does not take this answer yet (realtime paths, implementation step 4).
+    /// The session does not take this answer yet: realtime sessions are refused at attach.
     Unsupported,
 }
 

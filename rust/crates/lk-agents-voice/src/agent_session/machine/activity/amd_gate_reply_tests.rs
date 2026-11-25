@@ -3,7 +3,7 @@
 
 use super::*;
 
-// ---- Activation and entry (proposal "Apply a decision", "Activation and the opening") ----
+// ---- Activation and entry ----
 
 /// Row 1 while `Pending` allows the reply but keeps `Hold::Entry` (`detector.py:1047`): the
 /// reply is made and held until the gate frees authorization.
@@ -102,9 +102,9 @@ fn speech_before_the_openings_first_frame_cancels_it() {
     );
 }
 
-// ---- Detach (proposal "Detach", steps 1-5; spec §12.3) ----
+// ---- Detach (spec §12.3) ----
 
-/// Steps 3-5: `pending` decides a parked turn now; the gate goes and `Detached` is emitted in the
+/// `pending` decides a parked turn now; the gate goes and `Detached` is emitted in the
 /// same transition.
 #[test]
 fn detach_settles_a_parked_turn_and_acknowledges_at_once() {
@@ -170,7 +170,7 @@ fn a_denying_pending_settles_the_turn_in_its_hook() {
     assert_eq!(g.saved_user_words(), ["please hold"]);
 }
 
-/// Step 4: a reply held for silence plays at once, for every completion reason. Python:
+/// A reply held for silence plays at once, for every completion reason. Python:
 /// `test_completion_cancels_silence_wait_and_releases_the_held_reply`.
 #[test]
 fn detach_releases_a_reply_held_for_silence() {
@@ -184,7 +184,7 @@ fn detach_releases_a_reply_held_for_silence() {
     assert!(g.authorized_since(from, speech), "released by the detach, not the timer");
 }
 
-/// Steps 1 and 4: a `cancel` that forbids replies removes the held reply.
+/// A `cancel` that forbids replies removes the held reply.
 #[test]
 fn detach_forbidding_replies_removes_a_held_reply() {
     let mut g = Gate::listening();
@@ -197,7 +197,7 @@ fn detach_forbidding_replies_removes_a_held_reply() {
     assert!(!g.authorized(speech));
 }
 
-/// Step 1: forbidding replies cancels every speech with no playout yet and keeps a speech that is
+/// Forbidding replies cancels every speech with no playout yet and keeps a speech that is
 /// playing. Python: `test_cancel_pending_speech_includes_preemptive_and_queued_speech`.
 // Both speeches predate the attach: any commit under the gate interrupts the current speech
 // ("Local rules": commit interrupt), so a playing opening cannot outlive a gated turn's reply.
@@ -248,7 +248,7 @@ fn detach_forbidding_replies_cancels_only_an_unplayed_opening() {
     }
 }
 
-/// Step 5: commits after `Detach` are not gated (spec §9.5) and AMD observes nothing more.
+/// Commits after `Detach` are not gated (spec §9.5) and AMD observes nothing more.
 #[test]
 fn commits_after_detach_are_not_gated() {
     let mut g = Gate::listening();
@@ -346,7 +346,7 @@ fn interruptions_are_forced_on_and_restored() {
     assert_eq!(interruptible(&g, after), Some(false), "restored at detach");
 }
 
-// ---- Reply payload (proposal "Reply payload") ----
+// ---- Reply payload ----
 
 /// Stage instructions reach the reply's request and never the saved conversation (spec §14
 /// invariant 8). Python: `test_stage_instructions_expire_after_first_human_reply`.
@@ -412,7 +412,7 @@ fn an_agents_own_dtmf_tool_is_kept() {
     assert_eq!(dtmf[0].description, "the agent's own");
 }
 
-// ---- Preemptive generation (proposal "Preemptive generation"; Decisions) ----
+// ---- Preemptive generation ----
 
 impl Gate {
     fn preemptive(&mut self, transcript: &str) -> Vec<SpeechId> {
@@ -468,7 +468,7 @@ fn a_denied_turn_discards_the_preemptive_generation() {
     assert!(!g.authorized(early[0]));
 }
 
-// ---- Observations (proposal "Session to AMD") ----
+// ---- Observations ----
 
 /// Participant speech boundaries carry the VAD's backdated boundary times.
 #[test]
@@ -552,7 +552,7 @@ fn the_close_abandons_a_parked_turn() {
 }
 
 /// A turn dropped behind a speech that cannot be interrupted ends as `Dropped` and is not
-/// answered later (proposal "Turn exits without a decision applied": the uninterruptible drop).
+/// answered later.
 /// The speech predates the attach, so AMD's forced interruptions do not reach it.
 #[test]
 fn a_turn_dropped_behind_an_uninterruptible_speech_ends_as_dropped() {
