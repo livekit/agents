@@ -1,0 +1,47 @@
+rust/crates/lk-agents-fuzz/src/fakes/amd.rs
+  s_fbde04b424db54::t_f05af31aab5867 1-2,58
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_fbde04b424db54::t_96eff4fb1c67c6 224,353-357,359,377-379,393-396,399,401,403,407-432,477-479,488,490-494,498,501
+rust/crates/lk-agents-fuzz/src/rules/amd/adopted_request_matches.rs
+  s_fbde04b424db54::t_31e0e98e15a048 12,32-33,36,47
+rust/crates/lk-agents-fuzz/src/rules/amd/completion_respects_wait.rs
+  s_fbde04b424db54::t_8156ae22369dc1 8
+rust/crates/lk-agents-fuzz/src/rules/amd/detached_is_prompt.rs
+  s_fbde04b424db54::t_b27b3c851b4be7 10
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_fbde04b424db54::t_377c543b990dd6 10
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_answers_are_keyed.rs
+  s_fbde04b424db54::t_59c95689bd4f18 10,43-47
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
+  s_fbde04b424db54::t_3986666efc4bc6 3,13,22-24,26,52-56,65,98-215,243-247
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_fbde04b424db54::t_b95f9cb5875755 8-11,14-20,27-29,34-45,84,97-117,119,124-140,142-212,262,265,267-275,280-314
+rust/crates/lk-agents-fuzz/src/rules/amd/machine_reply_waits_for_silence.rs
+  s_fbde04b424db54::t_33aa61c1b47b46 13,26,62-67,111-123
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_fbde04b424db54::t_b2e1901ceff98e 2,11-15,22-24,26-31,38-39,41,43-47,50-86,108,120-121,129-130,134,179-212
+rust/crates/lk-agents-fuzz/src/rules/amd/reply_follows_decision.rs
+  s_fbde04b424db54::t_0079b99158eda4 10
+rust/crates/lk-agents-fuzz/src/rules/amd/stage_instructions_never_saved.rs
+  s_fbde04b424db54::t_48e32913eb7e02 11
+rust/crates/lk-agents-fuzz/src/rules/speech/speech_is_heard.rs
+  s_fbde04b424db54::t_c5a43fe74c5500 311-315,319,324,328-335,337-338,341,349,355,368
+rust/crates/lk-agents-fuzz/src/rules/turns/forwarded_while_enabled.rs
+  s_fbde04b424db54::t_f8360873d557f0 27,159-162,169-174,177,180-183,420-435
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4eeaff6d0267247a0bf5c9c78c6222310827ed25",
+  "prompts": {},
+  "sessions": {
+    "s_fbde04b424db54": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_fbde04b424db54",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
