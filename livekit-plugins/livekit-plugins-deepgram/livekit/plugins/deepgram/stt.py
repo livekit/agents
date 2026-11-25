@@ -621,6 +621,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         closing_ws = False
+        close_sent = asyncio.Event()
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # if we want to keep the connection alive even if no audio is sent,
@@ -628,9 +629,14 @@ class SpeechStream(stt.SpeechStream):
             # https://developers.deepgram.com/reference/listen-live#stream-keepalive
             nonlocal closing_ws
             try:
-                while True:
+                # stop once CloseStream is sent, so the stream ends when Deepgram closes
+                # the socket instead of after the next keepalive wakeup
+                while not close_sent.is_set():
                     await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-                    await asyncio.sleep(5)
+                    try:
+                        await asyncio.wait_for(close_sent.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        pass
             except (aiohttp.ClientError, ConnectionError) as e:
                 # when no audio is flowing this write is the only thing touching the
                 # socket, so it is where a drop surfaces first. if the close is
@@ -676,6 +682,7 @@ class SpeechStream(stt.SpeechStream):
 
                 # tell deepgram we are done sending audio/inputs
                 closing_ws = True
+                close_sent.set()
                 await ws.send_str(SpeechStream._CLOSE_MSG)
             except (aiohttp.ClientError, ConnectionError) as e:
                 # a mid-write socket drop surfaces here as a raw connection error.
