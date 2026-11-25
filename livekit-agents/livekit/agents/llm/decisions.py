@@ -7,7 +7,7 @@ import copy
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Generic, Literal
 
 from opentelemetry import trace
@@ -61,8 +61,9 @@ Decision = Probability | Choice | Score
 class DecisionCapabilities:
     decision_kinds: list[DecisionKind]
     """Decision kinds the model can evaluate"""
-    audio_input: bool = False
-    """The model can hear audio passed to ``evaluate(audio=...)``"""
+    input_modalities: list[Literal["text", "audio"]] = field(default_factory=lambda: ["text"])
+    """What ``evaluate`` can take: ``"text"`` for ``input`` alone, ``"audio"`` for
+    ``audio``. A model without ``"text"`` needs audio on every call."""
 
 
 class ProbabilityResult(BaseModel):
@@ -143,7 +144,7 @@ def _combine_audio(
 ) -> rtc.AudioFrame | None:
     if audio is None:
         return None
-    if not capabilities.audio_input:
+    if "audio" not in capabilities.input_modalities:
         raise ValueError("decision model does not support audio input")
     frames = [audio] if isinstance(audio, rtc.AudioFrame) else list(audio)
     if not frames:
@@ -224,7 +225,7 @@ class DecisionModel(
     Generic[TEvent],
 ):
     """Provider-neutral batched decisions over a text input or conversation, and audio
-    for models with ``capabilities.audio_input``.
+    for models with ``"audio"`` in ``capabilities.input_modalities``.
 
     A ChatContext is converted to a ``role: text`` transcript, so every provider receives
     the same text. In ``on_user_turn_completed``, add the new message to the context first.
@@ -255,7 +256,7 @@ class DecisionModel(
     async def evaluate(
         self,
         *,
-        input: str | ChatContext = "",
+        input: NotGivenOr[str | ChatContext] = NOT_GIVEN,
         decisions: Mapping[str, Decision],
         audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -265,17 +266,23 @@ class DecisionModel(
 
         Args:
             input: Text to evaluate, sent as-is, or a conversation converted to a
-                transcript of user and assistant text. With ``audio``, the text the
-                provider reads alongside the recording.
+                transcript of user and assistant text. Required without ``audio``;
+                with it, optional text the provider reads alongside the recording.
             decisions: Decisions keyed by name.
             audio: A recording for the model to hear, combined into one frame. Requires
-                ``capabilities.audio_input``.
+                ``"audio"`` in ``capabilities.input_modalities``, and required when
+                ``"text"`` is not.
             conn_options: Retry and per-attempt timeout settings.
             extra_headers: Headers sent with every attempt.
 
         Each requested name appears in either ``results`` or ``errors``. Request failures
         and malformed responses raise.
         """
+        if audio is None:
+            if "text" not in self.capabilities.input_modalities:
+                raise ValueError("decision model requires audio: pass evaluate(audio=...)")
+            if not is_given(input):
+                raise ValueError("decision input is required without audio")
         span = trace.get_current_span()
         span.set_attributes(
             {
@@ -289,7 +296,10 @@ class DecisionModel(
         frame = _combine_audio(audio, capabilities=self.capabilities)
         if frame is not None:
             span.set_attribute("lk.decision_audio_duration", frame.duration)
-        text = input if isinstance(input, str) else _format_transcript(input)
+        if isinstance(input, ChatContext):
+            text = _format_transcript(input)
+        else:
+            text = input if is_given(input) else ""
         headers = dict(extra_headers) if is_given(extra_headers) else {}
         if not definitions:
             return DecisionResponse(results={}, model=self.model, provider=self.provider)
@@ -321,7 +331,9 @@ class DecisionModel(
                     if isinstance(error, asyncio.TimeoutError):
                         raise APITimeoutError("decision request timed out") from error
                     raise
-                await asyncio.sleep(conn_options._interval_for_retry(attempt))
+                await asyncio.sleep(
+                    self._retry_delay(error, attempt=attempt, conn_options=conn_options)
+                )
                 continue
 
             response.model = response.model or self.model
@@ -364,6 +376,13 @@ class DecisionModel(
         extra_headers: Mapping[str, str],
     ) -> DecisionResponse: ...
 
+    def _retry_delay(
+        self, error: Exception, *, attempt: int, conn_options: APIConnectOptions
+    ) -> float:
+        """Seconds to wait before retrying after ``error``. Override to honor a wait the
+        provider asks for, such as ``Retry-After``."""
+        return conn_options._interval_for_retry(attempt)
+
     async def _evaluate_audio_impl(
         self,
         *,
@@ -373,7 +392,7 @@ class DecisionModel(
         conn_options: APIConnectOptions,
         extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
-        """Evaluate decisions over ``audio``. Models with ``audio_input`` override this."""
+        """Evaluate decisions over ``audio``. Models that take ``"audio"`` override this."""
         raise NotImplementedError
 
     async def aclose(self) -> None:

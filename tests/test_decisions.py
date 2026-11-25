@@ -320,7 +320,7 @@ class AudioModel(StaticModel):
     def __init__(self, *outcomes: DecisionResponse | Exception) -> None:
         super().__init__(*outcomes)
         self._capabilities = decisions.DecisionCapabilities(
-            decision_kinds=["probability", "choice", "score"], audio_input=True
+            decision_kinds=["probability", "choice", "score"], input_modalities=["text", "audio"]
         )
         self.audio_requests: list[tuple[str, rtc.AudioFrame]] = []
 
@@ -349,8 +349,19 @@ def audio_frames(count: int) -> list[rtc.AudioFrame]:
     ]
 
 
-def test_audio_input_is_off_by_default() -> None:
-    assert not decisions.DecisionCapabilities(decision_kinds=["probability"]).audio_input
+def test_input_modalities_default_to_text() -> None:
+    capabilities = decisions.DecisionCapabilities(decision_kinds=["probability"])
+    assert capabilities.input_modalities == ["text"]
+
+
+async def test_audio_only_model_requires_audio() -> None:
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    model._capabilities = decisions.DecisionCapabilities(
+        decision_kinds=["probability", "choice", "score"], input_modalities=["audio"]
+    )
+    with pytest.raises(ValueError, match="requires audio"):
+        await evaluate(model)
+    assert model.requests == []
 
 
 async def test_audio_fails_before_provider_request_without_audio_input() -> None:
@@ -380,6 +391,13 @@ async def test_empty_audio_is_rejected() -> None:
     model = AudioModel()
     with pytest.raises(ValueError, match="at least one frame"):
         await evaluate(model, audio=[])
+
+
+async def test_input_is_required_without_audio() -> None:
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    with pytest.raises(ValueError, match="input is required"):
+        await model.evaluate(decisions=QUESTIONS)
+    assert model.requests == []
 
 
 async def test_string_input_is_sent_as_is() -> None:
@@ -636,3 +654,9 @@ def test_fallback_requires_models_with_a_shared_kind() -> None:
         DecisionModelFallbackAdapter(
             [SwitchModel("a", kinds=["choice"]), SwitchModel("b", kinds=["score"])]
         )
+    audio_only = SwitchModel("b", kinds=["choice"])
+    audio_only._capabilities = decisions.DecisionCapabilities(
+        decision_kinds=["choice"], input_modalities=["audio"]
+    )
+    with pytest.raises(ValueError, match="take text input"):
+        DecisionModelFallbackAdapter([SwitchModel("a", kinds=["choice"]), audio_only])

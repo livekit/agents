@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import time
 import wave
 from typing import Any
 
@@ -134,7 +135,7 @@ class TestConstruction:
         model = DecisionModel(api_key="k")
         assert model.provider == "Hume"
         assert model.capabilities.decision_kinds == ["probability", "choice", "score"]
-        assert model.capabilities.audio_input
+        assert model.capabilities.input_modalities == ["audio"]
 
 
 async def test_request_sends_questions_then_16k_mono_wav() -> None:
@@ -217,7 +218,7 @@ async def test_empty_input_sends_no_context_and_chat_context_is_a_transcript() -
 
 async def test_text_only_evaluate_is_rejected() -> None:
     model = DecisionModel(api_key="k")
-    with pytest.raises(ValueError, match="require audio"):
+    with pytest.raises(ValueError, match="requires audio"):
         await model.evaluate(input="The caller asked for a refund.", decisions=QUESTIONS)
 
 
@@ -227,11 +228,17 @@ async def test_input_longer_than_hume_context_is_rejected_locally() -> None:
         await model.evaluate(audio=_frames(5), input="x" * 1001, decisions=QUESTIONS)
 
 
-@pytest.mark.parametrize("seconds", [4.9, 300.5])
+@pytest.mark.parametrize("seconds", [0.9, 300.5])
 async def test_audio_outside_duration_limits_is_rejected_locally(seconds: float) -> None:
     model = DecisionModel(api_key="k")
-    with pytest.raises(ValueError, match="5 to 300 seconds"):
+    with pytest.raises(ValueError, match="1 to 300 seconds"):
         await model.evaluate(audio=_frames(seconds, sample_rate=8000), decisions=QUESTIONS)
+
+
+async def test_one_second_of_audio_is_accepted() -> None:
+    async with _hume(_handler([(200, response_body(), {})])) as (url, session):
+        response = await _model(url, session).evaluate(audio=_frames(1), decisions=QUESTIONS)
+    assert response.results["frustrated"].value == 0.1274
 
 
 async def test_unknown_answer_type_is_a_per_decision_error() -> None:
@@ -266,18 +273,20 @@ async def test_client_error_is_not_retried_and_carries_hume_detail() -> None:
     assert "/questions/naturalness/criteria" in exc.message
 
 
-async def test_rate_limit_and_busy_are_retried() -> None:
+async def test_rate_limit_and_busy_are_retried_after_retry_after() -> None:
     captured: dict[str, Any] = {}
     responses = [
-        (429, {"message": "API rate limit exceeded"}, {"Retry-After": "1"}),
+        (429, {"message": "API rate limit exceeded"}, {"Retry-After": "0.3"}),
         (503, {"type": "error", "code": "server_busy", "message": "busy"}, {}),
         (200, response_body(), {}),
     ]
     async with _hume(_handler(responses, captured)) as (url, session):
+        started = time.perf_counter()
         response = await _model(url, session).evaluate(
             audio=_frames(5),
             decisions=QUESTIONS,
             conn_options=APIConnectOptions(max_retry=2, retry_interval=0, timeout=10),
         )
+    assert time.perf_counter() - started >= 0.3
     assert captured["calls"] == 3
     assert response.results["frustrated"].value == 0.1274

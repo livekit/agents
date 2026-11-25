@@ -14,7 +14,7 @@ You will need an API Key from Hume, it can be set as an environment variable: `H
 
 ## Audio decisions
 
-`DecisionModel` calls Hume's [Audio Decisions API](https://dev.hume.ai/audio-decisions/docs/overview), which answers decisions by listening to a recording instead of reading a transcript. Use it for things a transcript can't show, such as tone, frustration, naturalness or whether one speaker talks over another. It is an `llm.DecisionModel` with the `audio_input` capability, so it takes the same `Probability`, `Choice` and `Score` decisions and returns a `DecisionResponse`.
+`DecisionModel` calls Hume's [Audio Decisions API](https://dev.hume.ai/audio-decisions/docs/overview), which answers decisions by listening to a recording instead of reading a transcript. Use it for things a transcript can't show, such as tone, frustration, naturalness or whether one speaker talks over another. It is an `llm.DecisionModel` whose `input_modalities` capability is `["audio"]`, so it takes the same `Probability`, `Choice` and `Score` decisions and returns a `DecisionResponse`.
 
 ```python
 from livekit.agents import llm

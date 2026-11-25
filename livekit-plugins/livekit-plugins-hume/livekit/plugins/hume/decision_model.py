@@ -57,7 +57,7 @@ DEFAULT_HEADERS = {
 # The model hears one channel at 16 kHz, so anything more only adds bytes against the
 # 25 MB request limit.
 MODEL_SAMPLE_RATE = 16000
-MIN_AUDIO_DURATION = 5.0
+MIN_AUDIO_DURATION = 1.0
 MAX_AUDIO_DURATION = 300.0
 MAX_CONTEXT_LENGTH = 1000
 
@@ -77,6 +77,21 @@ class _ErrorBody(BaseModel):
     message: str = ""
     param: str = ""
     request_id: str = ""
+
+
+class _HumeStatusError(APIStatusError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        request_id: str | None,
+        body: object,
+        retry_after: float | None,
+    ) -> None:
+        super().__init__(message, status_code=status_code, request_id=request_id, body=body)
+        self.retry_after = retry_after
+        """Seconds Hume asked to wait before retrying, from ``Retry-After``."""
 
 
 class DecisionModel(llm.DecisionModel):
@@ -120,7 +135,7 @@ class DecisionModel(llm.DecisionModel):
         """
         super().__init__(
             capabilities=DecisionCapabilities(
-                decision_kinds=["probability", "choice", "score"], audio_input=True
+                decision_kinds=["probability", "choice", "score"], input_modalities=["audio"]
             )
         )
         key = api_key or os.environ.get("HUME_API_KEY")
@@ -138,6 +153,14 @@ class DecisionModel(llm.DecisionModel):
     def provider(self) -> str:
         return "Hume"
 
+    def _retry_delay(
+        self, error: Exception, *, attempt: int, conn_options: APIConnectOptions
+    ) -> float:
+        # Hume asks clients to wait out Retry-After on 429 and 503
+        if isinstance(error, _HumeStatusError) and error.retry_after is not None:
+            return error.retry_after
+        return super()._retry_delay(error, attempt=attempt, conn_options=conn_options)
+
     async def _evaluate_impl(
         self,
         *,
@@ -146,7 +169,8 @@ class DecisionModel(llm.DecisionModel):
         conn_options: APIConnectOptions,
         extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
-        raise ValueError("Hume decisions require audio: pass evaluate(audio=...)")
+        # never called: without "text" in input_modalities, evaluate requires audio
+        raise NotImplementedError
 
     async def _evaluate_audio_impl(
         self,
@@ -157,8 +181,9 @@ class DecisionModel(llm.DecisionModel):
         conn_options: APIConnectOptions,
         extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
-        """``audio`` must be 5 seconds to 5 minutes long. It is mixed to mono and
-        resampled to 16 kHz before upload. ``request_id`` is Hume's run id."""
+        """``audio`` must be 1 second to 5 minutes long; most decisions answer better
+        with 5 seconds or more. It is mixed to mono and resampled to 16 kHz before
+        upload. ``request_id`` is Hume's run id."""
         if not MIN_AUDIO_DURATION <= audio.duration <= MAX_AUDIO_DURATION:
             raise ValueError(
                 f"Hume decisions take {MIN_AUDIO_DURATION:g} to {MAX_AUDIO_DURATION:g} "
@@ -197,7 +222,10 @@ class DecisionModel(llm.DecisionModel):
                 request_id = resp.headers.get("X-Request-Id")
                 if resp.status >= 400:
                     raise _error_from_response(
-                        await resp.text(), status=resp.status, request_id=request_id
+                        await resp.text(),
+                        status=resp.status,
+                        request_id=request_id,
+                        retry_after=_retry_after(resp),
                     )
                 parsed = _Response.model_validate(await resp.json())
         except asyncio.TimeoutError as exc:
@@ -260,7 +288,19 @@ def _to_model_format(frame: rtc.AudioFrame) -> rtc.AudioFrame:
     return rtc.combine_audio_frames([*resampler.push(frame), *resampler.flush()])
 
 
-def _error_from_response(text: str, *, status: int, request_id: str | None) -> APIStatusError:
+def _retry_after(resp: aiohttp.ClientResponse) -> float | None:
+    if resp.status not in (429, 503):
+        return None
+    try:
+        seconds = float(resp.headers.get("Retry-After", ""))
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def _error_from_response(
+    text: str, *, status: int, request_id: str | None, retry_after: float | None = None
+) -> APIStatusError:
     body: object = text
     message = "Hume decision request failed"
     try:
@@ -275,4 +315,11 @@ def _error_from_response(text: str, *, status: int, request_id: str | None) -> A
             message = f"{message}: {detail}"
             if parsed.param:
                 message = f"{message} (at {parsed.param})"
-    return create_api_error_from_http(message, status=status, request_id=request_id, body=body)
+    error = create_api_error_from_http(message, status=status, request_id=request_id, body=body)
+    return _HumeStatusError(
+        error.message,
+        status_code=status,
+        request_id=request_id,
+        body=body,
+        retry_after=retry_after,
+    )

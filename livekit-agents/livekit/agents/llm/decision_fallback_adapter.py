@@ -96,10 +96,14 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
             retry_interval: Seconds between retries on the same model.
 
         Raises:
-            ValueError: If no model is given, or the models share no decision kind.
+            ValueError: If no model is given, a model does not take text input, or the
+                models share no decision kind.
         """
         if not models:
             raise ValueError("at least one decision model must be provided")
+        # the adapter only sends text, so an audio-only model could never answer
+        if any("text" not in model.capabilities.input_modalities for model in models):
+            raise ValueError("every decision model must take text input")
 
         # a decision has to be answerable by whichever model ends up serving it
         kinds = [
@@ -142,7 +146,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
     async def evaluate(
         self,
         *,
-        input: str | ChatContext = "",
+        input: NotGivenOr[str | ChatContext] = NOT_GIVEN,
         decisions: Mapping[str, Decision],
         audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -154,7 +158,7 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
             input: Text to evaluate, sent as-is, or a conversation converted to a
                 transcript of user and assistant text.
             decisions: Decisions keyed by name.
-            audio: Not supported; the adapter does not advertise ``audio_input``.
+            audio: Not supported; the adapter only takes text input.
             conn_options: The adapter's ``attempt_timeout``, ``max_retry_per_model`` and
                 ``retry_interval`` replace the retry and timeout settings given here.
             extra_headers: Headers sent with every attempt on every model, and with a
@@ -166,6 +170,8 @@ class DecisionModelFallbackAdapter(DecisionModel[Literal["decision_availability_
         definitions = copy.deepcopy(dict(decisions))
         _validate_decisions(definitions, capabilities=self.capabilities)
         _combine_audio(audio, capabilities=self.capabilities)
+        if not isinstance(input, (str, ChatContext)):
+            raise ValueError("decision input is required without audio")
         if not definitions:
             # no request is made, so this must not count as a model answering
             return DecisionResponse(results={}, model=self.model, provider=self.provider)
