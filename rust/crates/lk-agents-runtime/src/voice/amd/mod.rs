@@ -156,6 +156,9 @@ pub enum AmdEnterError {
     Options(#[from] AmdOptionsError),
     #[error("amd requires a streaming STT")]
     NotStreaming,
+    /// A realtime model with neither session STT nor AMD's own: AMD would classify nothing.
+    #[error("amd requires session STT or AMD STT with realtime models")]
+    RealtimeWithoutStt,
     /// The session refused the attach (spec §5.1 entry checks).
     #[error(transparent)]
     Refused(#[from] AmdAttachRefused),
@@ -359,17 +362,21 @@ fn prepare(
     if stt.as_ref().is_some_and(|stt| !stt.model.capabilities().streaming) {
         return Err(AmdEnterError::NotStreaming);
     }
+    let (session_stt, realtime) = (session.legs().stt, session.amd_realtime());
+    if realtime.is_some() && !session_stt && stt.is_none() {
+        return Err(AmdEnterError::RealtimeWithoutStt);
+    }
     let (peer, agent) = session.amd_peer()?;
     let run = peer.route.next_run();
     let setup = AmdSetup {
         agent,
         session_id: format!("amd_{}", run.0),
         entered_at: peer.time.wall(),
-        session_stt: session.legs().stt,
+        session_stt,
         amd_stt: stt.is_some(),
         extract_menus: classifier.extracts_menus(),
-        // Realtime models are refused at attach.
-        insert_user_items: false,
+        // The session's record has no words for the turn otherwise (spec §7.2).
+        insert_user_items: realtime.is_some_and(|caps| !caps.user_transcription) && !session_stt,
     };
     let callee = callee.unwrap_or_else(|| {
         let room = session.amd_room();

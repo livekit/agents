@@ -572,6 +572,14 @@ impl VoiceSession {
         Some((self.rtc.clone()?, Arc::clone(&self.room_io)))
     }
 
+    /// The capabilities of the realtime model the session opened on, `None` on a pipeline: what
+    /// AMD checks at entry.
+    pub(crate) fn amd_realtime(
+        &self,
+    ) -> Option<lk_agents_abi::llm::realtime::RealtimeCapabilities> {
+        self.realtime
+    }
+
     /// What an AMD run executes against, and the agent running now. Refused unless running.
     pub(crate) fn amd_peer(&self) -> Result<(crate::voice::amd::AmdPeer, String), SessionRefused> {
         let agent = self.view.get().agent.clone();
