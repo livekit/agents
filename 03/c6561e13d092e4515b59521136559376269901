@@ -1,0 +1,23 @@
+rust/crates/lk-agents-fuzz/src/drive/mod.rs
+  s_fe0b584e74cb4c::t_e979582c4b105b 433-435,452
+rust/crates/lk-agents-fuzz/src/drive/start.rs
+  s_fe0b584e74cb4c::t_af3a1e3b04bf52 141-170,759-760,832-833
+rust/crates/lk-agents-fuzz/tests/regressions/amd/realtime.rs
+  s_fe0b584e74cb4c::t_ef364ecd3fb202 13,491-679
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "03c6561e13d092e4515b59521136559376269901",
+  "prompts": {},
+  "sessions": {
+    "s_fe0b584e74cb4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da1f6a87-9ec4-476b-ba24-265326562452",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
