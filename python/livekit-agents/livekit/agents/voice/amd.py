@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Mapping
-from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import Unpack
 
@@ -50,48 +48,7 @@ __all__ += _public.__all__
 AMDEventTypes = Literal["amd_prediction", "amd_completed", "amd_menu_observed"]
 
 
-class _DecisionCapabilities(Protocol):
-    @property
-    def decision_kinds(self) -> list[str]: ...
-
-
-class _DecisionModel(Protocol):
-    """A decision model (``DecisionModel``): batched decisions through ``evaluate``. AMD asks it
-    for one ``Choice`` per turn and never asks it for a menu."""
-
-    @property
-    def capabilities(self) -> _DecisionCapabilities: ...
-
-    @property
-    def model(self) -> str: ...
-
-    @property
-    def provider(self) -> str: ...
-
-    async def evaluate(
-        self,
-        *,
-        input: str,
-        decisions: Mapping[str, Any],
-        conn_options: Any = ...,
-        extra_headers: Any = ...,
-    ) -> Any: ...
-
-
-@dataclass(frozen=True)
-class Choice:
-    """Select one named option (``DecisionModel``'s ``Choice``). Descriptions explain when each
-    option applies."""
-
-    prompt: str
-    options: dict[str, str]
-
-
-def _is_decision_model(model: object) -> TypeGuard[_DecisionModel]:
-    return callable(getattr(model, "evaluate", None)) and hasattr(model, "capabilities")
-
-
-async def _choose(model: _DecisionModel, request: AmdChoiceRequest) -> str | None:
+async def _choose(model: llm.DecisionModel, request: AmdChoiceRequest) -> str | None:
     """One ``evaluate`` call with one ``Choice``: the chosen option, or ``None`` when the
     response holds no choice for it. A failure propagates: an ``APIError``, ``ValueError`` or
     ``TimeoutError`` is an ``inference_error`` prediction."""
@@ -101,18 +58,17 @@ async def _choose(model: _DecisionModel, request: AmdChoiceRequest) -> str | Non
     response = await model.evaluate(
         input=request.input,
         decisions={
-            request.name: Choice(prompt=request.prompt, options=dict.fromkeys(request.options, ""))
+            request.name: llm.Choice(
+                prompt=request.prompt, options=dict.fromkeys(request.options, "")
+            )
         },
         **kwargs,
     )
     result = response.results.get(request.name)
-    if getattr(result, "kind", None) != "choice":
-        return None
-    value = getattr(result, "value", None)
-    return value if isinstance(value, str) else None
+    return result.value if isinstance(result, llm.ChoiceResult) else None
 
 
-def _decision_label(model: _DecisionModel) -> str:
+def _decision_label(model: llm.DecisionModel) -> str:
     return f"{model.provider}/{model.model}"
 
 
@@ -187,7 +143,7 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
         self,
         session: VoiceSession[Any],
         *,
-        llm: NotGivenOr[llm.LLM | _DecisionModel | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | llm.DecisionModel | str | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | str | None] = NOT_GIVEN,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
         **options: Unpack[AMDOptionsKwargs],
@@ -238,14 +194,10 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
         agent = session.current_agent
         agent_llm = agent.llm if is_given(agent.llm) else session.llm
         classifier = self._llm or agent_llm
-        if self._llm_model is None and not (
-            isinstance(classifier, llm.LLM) or _is_decision_model(classifier)
-        ):
+        if self._llm_model is None and not isinstance(classifier, (llm.LLM, llm.DecisionModel)):
             raise ValueError("amd requires an LLM or a decision model for classification")
         if (
-            self._llm_model is None
-            and _is_decision_model(classifier)
-            and not isinstance(classifier, llm.LLM)
+            isinstance(classifier, llm.DecisionModel)
             and "choice" not in classifier.capabilities.decision_kinds
         ):
             raise ValueError("amd requires a decision model that supports choice decisions")

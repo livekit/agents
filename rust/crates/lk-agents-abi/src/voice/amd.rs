@@ -375,9 +375,9 @@ pub struct AmdChoiceRequest {
     pub extra_headers: std::collections::BTreeMap<String, String>,
 }
 
-/// A host decision model (`DecisionModel.evaluate` with one `Choice`), reached through the
-/// module's glue, which builds the decision and reads its result.
-#[crate::host(proxy(host = "livekit.agents.voice.amd._DecisionModel", owns))]
+/// A host decision model (`llm.DecisionModel.evaluate` with one `Choice`), reached through
+/// `voice.amd`'s glue, which builds the decision and reads its result.
+#[crate::host(proxy(host = "livekit.agents.llm.DecisionModel", owns))]
 pub trait AmdDecisionModel: Send + Sync {
     /// The chosen option, or `None` when the response holds no choice result for the decision.
     #[host(await, function = "livekit.agents.voice.amd._choose")]

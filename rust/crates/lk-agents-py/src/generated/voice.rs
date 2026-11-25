@@ -6314,7 +6314,7 @@ pub fn wait_for_track_publication<'py>(
 
 // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
 
-/// [`::lk_agents_abi::voice::amd::AmdDecisionModel`] over a host `livekit.agents.voice.amd._DecisionModel`.
+/// [`::lk_agents_abi::voice::amd::AmdDecisionModel`] over a host `livekit.agents.llm.DecisionModel`.
 #[derive(Clone)]
 pub struct AmdDecisionModelProxy {
     host: crate::py_objects::HostObject,

@@ -13,9 +13,8 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
-    from livekit.agents.llm import LLM
+    from livekit.agents.llm import LLM, DecisionModel
     from livekit.agents.stt import STT
-    from livekit.agents.voice.amd import _DecisionModel
 
     from .connect import APIConnectOptions
     from .tool_options import ToolSpec
@@ -290,7 +289,7 @@ class AmdLlm:
 class AmdDecision:
     """A decision model AMD classifies with, as the host resolved it."""
 
-    model: _DecisionModel
+    model: DecisionModel
     inference: bool
     """The model reaches only LiveKit Inference: its requests carry AMD's client feature header."""
 

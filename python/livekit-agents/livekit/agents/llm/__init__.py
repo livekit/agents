@@ -18,6 +18,20 @@ from .chat_context import (
     FunctionCallOutput,
     ImageContent,
 )
+from .decisions import (
+    Choice,
+    ChoiceResult,
+    Decision,
+    DecisionCapabilities,
+    DecisionKind,
+    DecisionModel,
+    DecisionResponse,
+    DecisionResult,
+    Probability,
+    ProbabilityResult,
+    Score,
+    ScoreResult,
+)
 from .duplex import (
     AudioGate,
     DuplexAudioFrame,
@@ -131,6 +145,18 @@ __all__ = [
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
     "RemoteItemAddedEvent",
+    "Choice",
+    "ChoiceResult",
+    "Decision",
+    "DecisionCapabilities",
+    "DecisionKind",
+    "DecisionModel",
+    "DecisionResponse",
+    "DecisionResult",
+    "Probability",
+    "ProbabilityResult",
+    "Score",
+    "ScoreResult",
 ]
 __all__ += _public.__all__
 
