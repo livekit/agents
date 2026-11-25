@@ -678,6 +678,11 @@ class VoiceSession:
         value the host validated, which this resolves to; the parent comes back without its hooks.
         A cancelled await ends the task, and every task it started, and puts the parent back.
         """
+    async def check_amd(self, amd_stt: bool) -> None:
+        """`AMD.__aenter__`'s session checks, in its order, with nothing attached: the error it
+        raises when the session cannot run AMD now. `amd_stt` says the run brings its own STT.
+        A handoff asked before the check is in flight for it.
+        """
     async def enter_amd(self, entry: AmdEntry) -> AmdRun:
         """`async with AMD(session, ...)`: attach a new answering-machine detection run to the
         session. Resolves once the session accepted the attach; the run then listens as its callee

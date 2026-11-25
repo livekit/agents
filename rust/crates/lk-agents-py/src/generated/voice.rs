@@ -3519,6 +3519,20 @@ impl VoiceSession {
         })
     }
 
+    /// `AMD.__aenter__`'s session checks, in its order, with nothing attached: the error it
+    /// raises when the session cannot run AMD now. `amd_stt` says the run brings its own STT.
+    /// A handoff asked before the check is in flight for it.
+    #[pyo3(signature = (amd_stt))]
+    fn check_amd<'py>(&self, py: Python<'py>, amd_stt: bool) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::check_amd(&this, amd_stt)
+                .await.map_err(|e: ::lk_agents_abi::voice::amd::AmdEnterRefused| <::lk_agents_abi::voice::amd::AmdEnterRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
     /// `async with AMD(session, ...)`: attach a new answering-machine detection run to the
     /// session. Resolves once the session accepted the attach; the run then listens as its callee
     /// allows. A refused run raises the error `AMD.__aenter__` raises.

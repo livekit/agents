@@ -378,6 +378,13 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         }))
     }
 
+    async fn check_amd(
+        &self,
+        amd_stt: bool,
+    ) -> Result<(), lk_agents_abi::voice::amd::AmdEnterRefused> {
+        crate::voice::amd::host::check(self, amd_stt).await
+    }
+
     async fn enter_amd(
         &self,
         entry: lk_agents_abi::voice::amd::AmdEntry,

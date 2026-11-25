@@ -187,10 +187,11 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
         return self._run.lifecycle
 
     async def __aenter__(self) -> AMD:
-        if self._lifecycle is not AMDLifecycle.INITIALIZED:
-            raise RuntimeError("use a new AMD instance for each run")
         session = self._session
         native = session._running
+        # the session's checks first, in `detector.py`'s order: a refused instance creates no
+        # model and can enter later
+        await native.check_amd(self._stt is not None or self._stt_model is not None)
         agent = session.current_agent
         agent_llm = agent.llm if is_given(agent.llm) else session.llm
         classifier = self._llm or agent_llm
@@ -213,6 +214,8 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
             )
         if self._options.opening_instructions is not None and agent_llm is None:
             raise ValueError("amd opening_instructions requires an LLM on the session")
+        if self._lifecycle is not AMDLifecycle.INITIALIZED:
+            raise RuntimeError("use a new AMD instance for each run")
 
         self._lifecycle = AMDLifecycle.PENDING
         try:

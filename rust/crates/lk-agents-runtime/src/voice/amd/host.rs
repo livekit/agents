@@ -107,6 +107,11 @@ pub fn refused(error: AmdEnterError) -> abi::AmdEnterRefused {
     }
 }
 
+/// `AMD.__aenter__`'s session checks from the host, before it creates any model.
+pub async fn check(session: &VoiceSession, amd_stt: bool) -> Result<(), abi::AmdEnterRefused> {
+    super::check(session, amd_stt).await.map_err(refused)
+}
+
 /// `async with AMD(session, ...)` from the host's entry.
 pub async fn enter(
     session: &VoiceSession,

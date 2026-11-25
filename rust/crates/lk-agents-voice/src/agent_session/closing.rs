@@ -398,8 +398,11 @@ impl VoiceDriver {
                 return;
             }
             Command::VoiceTask(_) => return,
-            // An attach somebody awaits: refused as closing.
-            Command::Amd(crate::amd::AmdCommand::Attach { call, .. }) => {
+            // An attach or its check somebody awaits: refused as closing.
+            Command::Amd(
+                crate::amd::AmdCommand::Attach { call, .. }
+                | crate::amd::AmdCommand::Check { call, .. },
+            ) => {
                 let refused = crate::amd::AmdAttachRefused::Closing;
                 self.answer(call, Answer::AmdAttach(Err(refused)));
                 return;

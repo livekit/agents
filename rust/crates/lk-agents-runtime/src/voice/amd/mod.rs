@@ -277,6 +277,27 @@ async fn close_models(closers: Vec<ModelCloser>, time: &Timebase) {
     }
 }
 
+/// `AMD.__aenter__`'s session checks, in its order, with nothing attached: the refusal an attach
+/// would get now. The host runs them before it creates the models it names by string, so a
+/// refused instance creates none and can enter later. A handoff asked before this call is seen
+/// in flight.
+pub async fn check(session: &VoiceSession, amd_stt: bool) -> Result<(), AmdEnterError> {
+    let turn = session.handoff_turn().await;
+    let (peer, _) = session.amd_peer()?;
+    let (call, checked) = session.call(pick_attach)?;
+    let command = Command::Amd(AmdCommand::Check { amd_stt, call: Some(call.id) });
+    let sent = send_command(&peer.api, VoiceCommandOrigin::Host, command, Some(call));
+    drop(turn);
+    match sent.ok().map(|()| checked) {
+        Some(checked) => match checked.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(why)) => Err(why.into()),
+            Err(_) => Err(SessionRefused::Closed.into()),
+        },
+        None => Err(SessionRefused::Closed.into()),
+    }
+}
+
 /// `async with AMD(session, ...)`: attaches a new run to `session` and starts its executor.
 /// Returns once the session accepted the attach; the run then listens as its callee leg allows.
 /// A refused run closes the models AMD created before this returns, as `__aenter__` does.
@@ -305,6 +326,8 @@ async fn enter_with(
         }
     };
     let Prepared { peer, run, machine, legs, dtmf_tool, amd_stt } = prepared;
+    // A handoff asked before the attach reaches the loop first, which then refuses the attach.
+    let handoff_turn = session.handoff_turn().await;
     let tasks = Arc::clone(peer.route.tasks());
     let mut models = OwnedModels {
         closers,
@@ -346,6 +369,7 @@ async fn enter_with(
         },
         entered: entered_tx,
         outcome: producer,
+        handoff_turn,
     };
     if !tasks.try_spawn(peer.spawner.as_ref(), "amd", entry.run()) {
         // Refused: the entry was dropped unsent, and its models close on the task set.
@@ -465,6 +489,8 @@ struct Entry {
     inputs: Inputs,
     entered: tokio::sync::oneshot::Sender<Result<(), AmdEnterError>>,
     outcome: signal::Producer<Option<Outcome>>,
+    /// Held until the attach is sent, so no handoff asked after the entry overtakes it.
+    handoff_turn: tokio::sync::OwnedMutexGuard<()>,
 }
 
 impl Entry {
@@ -481,13 +507,16 @@ impl Entry {
             inputs,
             entered,
             outcome,
+            handoff_turn,
         } = self;
         // Routed before the attach, so the observations the gate sends at attach are heard.
         // Routes are keyed by run: a refused run never displaces the one attached.
         peer.route.attach(run, observed);
         let attach =
             Command::Amd(AmdCommand::Attach { run, dtmf_tool, amd_stt, call: Some(call.id) });
-        let answer = match send_command(&peer.api, VoiceCommandOrigin::Host, attach, Some(call)) {
+        let sent = send_command(&peer.api, VoiceCommandOrigin::Host, attach, Some(call));
+        drop(handoff_turn);
+        let answer = match sent {
             Ok(()) => attached.await.ok(),
             Err(_) => None,
         };

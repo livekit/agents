@@ -204,6 +204,10 @@ pub enum DetachCancel {
 /// Session commands for AMD. Producer: the host or a test; handler: the session's gate.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 #[vocabulary(kind = AmdCommandKind)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one attach and at most one check per run: the size is paid twice per AMD entry"
+)]
 pub enum AmdCommand {
     /// Install the gate for `run`, hold authorization, and set the attached rules. Answered with
     /// [`Answer::AmdAttach`](crate::agent_session::Answer::AmdAttach). `dtmf_tool` declares
@@ -216,6 +220,10 @@ pub enum AmdCommand {
         amd_stt: bool,
         call: Option<RequestId>,
     },
+    /// The attach's refusals, in its order, with nothing installed: `AMD.__aenter__` checks the
+    /// session before it creates the models it names by string, and a refused instance stays
+    /// unentered. Answered with [`Answer::AmdAttach`](crate::agent_session::Answer::AmdAttach).
+    Check { amd_stt: bool, call: Option<RequestId> },
 }
 
 /// Why the session refused to attach a run.

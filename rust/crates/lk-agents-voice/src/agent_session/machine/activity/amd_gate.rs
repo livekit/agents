@@ -6,7 +6,7 @@
 //!
 //! - **State**: [`Gate`] on the activity, its [`Hold`] read by the scheduling pass
 //!   ([`Gate::authorizes`]).
-//! - **Inputs**: [`AmdCommand::Attach`], [`AmdAnswer`] (`VoiceEvent::Amd`), the turn path's
+//! - **Inputs**: [`AmdCommand::Attach`] and [`AmdCommand::Check`], [`AmdAnswer`] (`VoiceEvent::Amd`), the turn path's
 //!   commit, hook return and exits, participant speech boundaries, and `Timer::AmdSilence`.
 //! - **Effects**: [`AmdObservation`]s as `VoiceEffect::Amd`, `GateStep` and
 //!   `SpeechStep::AuthorizationHeld` traces.
@@ -232,6 +232,25 @@ impl VoiceDriver {
             AmdCommand::Attach { run, dtmf_tool, amd_stt, call } => {
                 self.attach_amd(now, run, dtmf_tool, amd_stt, call)
             }
+            AmdCommand::Check { amd_stt, call } => {
+                let checked = self.amd_attach_refusal(amd_stt).map_or(Ok(()), Err);
+                self.answer(call, Answer::AmdAttach(checked));
+            }
+        }
+    }
+
+    /// Why the session would refuse to attach a run now, in `detector.py`'s order (spec §5.1).
+    fn amd_attach_refusal(&self, amd_stt: bool) -> Option<AmdAttachRefused> {
+        if self.session.closing.is_some() {
+            Some(AmdAttachRefused::Closing)
+        } else if self.activity.gate.is_some() {
+            Some(AmdAttachRefused::AlreadyAttached)
+        } else if self.activity.in_window() {
+            Some(AmdAttachRefused::HandoffInFlight)
+        } else if self.activity.voice_tasks.running() {
+            Some(AmdAttachRefused::TaskRunning)
+        } else {
+            self.realtime_amd_refusal(amd_stt)
         }
     }
 
@@ -243,18 +262,7 @@ impl VoiceDriver {
         amd_stt: bool,
         call: Option<RequestId>,
     ) {
-        let refused = if self.session.closing.is_some() {
-            Some(AmdAttachRefused::Closing)
-        } else if self.activity.gate.is_some() {
-            Some(AmdAttachRefused::AlreadyAttached)
-        } else if self.activity.in_window() {
-            Some(AmdAttachRefused::HandoffInFlight)
-        } else if self.activity.voice_tasks.running() {
-            Some(AmdAttachRefused::TaskRunning)
-        } else {
-            self.realtime_amd_refusal(amd_stt)
-        };
-        if let Some(why) = refused {
+        if let Some(why) = self.amd_attach_refusal(amd_stt) {
             self.record_trace(GateStep::AttachRefused { run, why });
             return self.answer(call, Answer::AmdAttach(Err(why)));
         }

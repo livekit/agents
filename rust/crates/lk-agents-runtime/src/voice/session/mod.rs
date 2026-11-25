@@ -595,6 +595,12 @@ impl VoiceSession {
         })
     }
 
+    /// This session's turn among handoffs: every `update_agent` asked before it has reached the
+    /// loop once it is held, so a command sent under it sees that handoff in flight.
+    pub(crate) async fn handoff_turn(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        Arc::clone(&self.host.handoffs).lock_owned().await
+    }
+
     /// A call to await: its id goes in the command, which carries its reply; `pick` takes its
     /// answer.
     pub fn call<T>(
