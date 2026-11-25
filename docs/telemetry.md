@@ -168,7 +168,7 @@ Each metric carries the same labels:
 | Label | Values |
 | --- | --- |
 | `lk.productstats.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
-| `lk.productstats.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
+| `lk.productstats.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), or `custom` for any class outside a LiveKit plugin |
 | `lk.productstats.model.provider` | the vendor that is called (`deepgram`, `cerebras`); a self-hosted endpoint is `other` |
 | `lk.productstats.model.name` | the model's name as configured |
 
@@ -199,9 +199,11 @@ one plugin reaches several vendors:
 | The Deepgram plugin | `deepgram` | `deepgram` |
 | The OpenAI plugin pointed at Cerebras (`openai.LLM.with_cerebras()`) | `openai` | `cerebras` |
 | The OpenAI plugin pointed at a self-hosted endpoint | `openai` | `other` |
-| LiveKit Inference | `livekit-inference` | `livekit`; the vendor is in the model name (`deepgram/nova-3`) |
 
 The plugin says which code to maintain; the provider says which vendor people use.
+
+A model served by LiveKit Inference records no model usage here: LiveKit already has it
+from the Inference service.
 
 The plugin id is the last part of the package name, lowercase with hyphens, the same in
 every language: `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram`
