@@ -46,16 +46,28 @@ impl Journal {
 type AmdObserver =
     dyn FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation) + Send;
 
-/// Where the gate's AMD observations go: to the scripted answerer a test or the simulation
-/// installed, or nowhere.
-// Until the AMD executor consumes them, only a test or the DST reads observations; production
-// drops them, and nothing in the session waits on one.
+/// Where the gate's AMD observations go: to the attached run's executor, routed by run, and to
+/// the observer a test or the simulation installed. A run's observations reach only that run;
+/// with no run routed they go nowhere, and nothing in the session waits on one.
 #[derive(Clone, Default)]
-pub struct AmdTap(Option<Arc<Mutex<AmdObserver>>>);
+pub struct AmdTap {
+    observer: Option<Arc<Mutex<AmdObserver>>>,
+    route: Arc<Mutex<Option<AmdRoute>>>,
+}
+
+/// The attached run's executor input.
+struct AmdRoute {
+    run: lk_agents_voice::amd::AmdRunId,
+    observations: tokio::sync::mpsc::UnboundedSender<lk_agents_voice::amd::AmdObservation>,
+}
 
 impl std::fmt::Debug for AmdTap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("AmdTap").field(&self.0.is_some()).finish()
+        let routed = self.route.lock().as_ref().map(|route| route.run);
+        f.debug_struct("AmdTap")
+            .field("observer", &self.observer.is_some())
+            .field("routed", &routed)
+            .finish()
     }
 }
 
@@ -65,7 +77,24 @@ impl AmdTap {
         + Send
         + 'static,
     ) -> Self {
-        AmdTap(Some(Arc::new(Mutex::new(observer))))
+        AmdTap { observer: Some(Arc::new(Mutex::new(observer))), route: Arc::default() }
+    }
+
+    /// From here, `run`'s observations go to `observations`, in the order the gate sent them.
+    /// Replaces any earlier run's route.
+    pub fn attach(
+        &self,
+        run: lk_agents_voice::amd::AmdRunId,
+        observations: tokio::sync::mpsc::UnboundedSender<lk_agents_voice::amd::AmdObservation>,
+    ) {
+        let previous = self.route.lock().replace(AmdRoute { run, observations });
+        drop(previous);
+    }
+
+    /// `run`'s observations go nowhere any more, if it is the one routed.
+    pub fn detach(&self, run: lk_agents_voice::amd::AmdRunId) {
+        let previous = self.route.lock().take_if(|route| route.run == run);
+        drop(previous);
     }
 
     pub fn deliver(
@@ -73,8 +102,15 @@ impl AmdTap {
         run: lk_agents_voice::amd::AmdRunId,
         observation: &lk_agents_voice::amd::AmdObservation,
     ) {
-        if let Some(observer) = &self.0 {
+        if let Some(observer) = &self.observer {
             (observer.lock())(run, observation);
+        }
+        let mut route = self.route.lock();
+        // A run whose executor is gone stops being routed.
+        if route.as_ref().is_some_and(|r| r.run == run)
+            && route.as_ref().is_some_and(|r| r.observations.send(observation.clone()).is_err())
+        {
+            *route = None;
         }
     }
 }
@@ -180,6 +216,8 @@ pub struct PeerHandle {
     pub time: Timebase,
     /// The session's context, under its `agent_session`.
     pub session: telemetry::Cx,
+    /// Where the gate's AMD observations go: an AMD run routes its own here.
+    pub amd: AmdTap,
 }
 
 impl PeerHandle {

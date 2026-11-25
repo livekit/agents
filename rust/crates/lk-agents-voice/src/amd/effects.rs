@@ -175,6 +175,18 @@ pub struct MenuRequest {
     pub transcript: String,
 }
 
+#[derive(serde::Serialize)]
+struct MenuInput<'a> {
+    transcript: &'a str,
+}
+
+impl MenuRequest {
+    /// The extraction's user message, as `extract_ivr_menu` encodes the transcript.
+    pub fn user_json(&self) -> String {
+        python_json(&MenuInput { transcript: &self.transcript })
+    }
+}
+
 /// `json.dumps` with its defaults: `", "` and `": "` separators, non-ASCII escaped. The model
 /// reads these strings, so they match Python's byte for byte.
 fn python_json(value: &impl serde::Serialize) -> String {

@@ -562,6 +562,24 @@ impl VoiceSession {
         self.running(|r| Ok(r.api.clone()))
     }
 
+    /// What an AMD run executes against, and the agent running now. Refused unless running.
+    pub(crate) fn amd_peer(&self) -> Result<(crate::voice::amd::AmdPeer, String), SessionRefused> {
+        let agent = self.view.get().agent.clone();
+        self.running(|r| {
+            let peer = crate::voice::amd::AmdPeer {
+                api: r.api.clone(),
+                journal: r.peer.journal.clone(),
+                time: self.time.clone(),
+                spawner: Arc::clone(&self.spawner),
+                tasks: Arc::clone(&self.tasks),
+                resources: self.resources.clone(),
+                cx: r.peer.session.clone(),
+                route: r.peer.amd.clone(),
+            };
+            Ok((peer, agent))
+        })
+    }
+
     /// A call to await: its id goes in the command, which carries its reply; `pick` takes its
     /// answer.
     pub fn call<T>(

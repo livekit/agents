@@ -473,8 +473,14 @@ impl DriverBuilder {
         });
         let keyterms_pushed = shared.keyterms.clone();
         let chat_ctx = shared.chat_ctx.clone();
-        let peer =
-            PeerHandle { queue: queue.clone(), events: ev_tx, journal, time, session: session_cx };
+        let peer = PeerHandle {
+            queue: queue.clone(),
+            events: ev_tx,
+            journal,
+            time,
+            session: session_cx,
+            amd: self.amd.clone(),
+        };
 
         let (conversation, commands) = crate::session::CommandPort::channel(
             32,

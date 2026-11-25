@@ -1,3 +1,4 @@
+pub mod amd;
 mod audio;
 pub mod background_audio;
 pub mod console;
