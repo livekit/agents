@@ -245,6 +245,7 @@ One count per voice session, recorded when it starts, with the configuration it 
 | `lk.product.agents.voice.pipeline` | `stt-llm-tts`, `realtime`, `realtime+tts` (a realtime model with a separate TTS), `duplex` |
 | `lk.product.agents.voice.turn_detection` | `vad`, `stt`, `realtime_llm`, `manual`, or `model` for a turn detection model |
 | `lk.product.agents.voice.interruption` | how the session decides that the person is interrupting: `adaptive` (the interruption model classifies overlapping speech), `vad` (any detected speech interrupts), `off` (interruptions disabled) |
+| `lk.product.agents.voice.false_interruption` | whether a false interruption pauses the agent's speech and resumes it: `on`, `off` |
 
 **Feature usage**
 
