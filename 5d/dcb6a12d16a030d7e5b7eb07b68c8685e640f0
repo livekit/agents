@@ -1,0 +1,27 @@
+python/livekit-agents/livekit/agents/beta/__init__.py
+  s_342953b2c18827::t_8ef8a58e0ce071 19,116,119,129-134
+rust/crates/lk-agents-abi/src/voice/workflows/dtmf.rs
+  s_342953b2c18827::t_e4a992f674fdaa 18-27,35
+rust/crates/lk-agents-py/src/generated/voice.rs
+  s_342953b2c18827::t_59dbc2fa8bec01 5627,14319-14328
+rust/crates/lk-agents-runtime/src/voice/workflows/dtmf.rs
+  s_342953b2c18827::t_e269f2fd39a6c7 3,12-13,18-26,28,70
+rust/crates/lk-agents-voice/src/workflows/machine/dtmf.rs
+  s_342953b2c18827::t_594bcde13823aa 65-69,73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ddcb6a12d16a030d7e5b7eb07b68c8685e640f0",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
