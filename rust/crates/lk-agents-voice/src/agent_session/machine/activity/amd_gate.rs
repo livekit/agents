@@ -650,9 +650,9 @@ impl VoiceDriver {
             if advertised.specs.iter().any(|spec| spec.name == tool.name) {
                 return None;
             }
-            let mut toolset = (*advertised).clone();
-            toolset.specs.push(tool.clone());
-            Some(Arc::new(toolset))
+            // The tool carries its policies, as the agent's own tools do: a reply's run refuses
+            // an offered tool without them.
+            Some(Arc::new(advertised.with_builtin(tool.clone())))
         });
         ReplyPayload {
             stage: decision.instructions.clone(),
