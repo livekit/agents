@@ -73,8 +73,6 @@ pub enum TurnEnd {
     Stopped,
     /// The turn asked for no reply.
     SkipReply,
-    /// Kept for the arriving agent inside a handoff's window.
-    HeldForHandoff,
     /// A newer turn committed first: by `supersede_turn` behind a hook, or by the gate's local
     /// supersession of a parked turn or a held reply.
     Superseded,
@@ -185,37 +183,15 @@ pub enum DetachCancel {
     ForbidReplies,
 }
 
-/// The built-in tool AMD may add to a `machine-ivr` reply (spec §11.1).
-pub const SEND_DTMF_TOOL: &str = "send_dtmf_events";
-
-/// The declaration of AMD's built-in [`SEND_DTMF_TOOL`], as `livekit.agents.beta`'s
-/// `send_dtmf_events(events: list[DtmfEvent])` declares it. The host runs its body.
-pub fn send_dtmf_tool() -> lk_agents_abi::ToolSpec {
-    let keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "*", "#", "A", "B", "C", "D"];
-    lk_agents_abi::ToolSpec {
-        name: SEND_DTMF_TOOL.into(),
-        description: "Send a list of DTMF events to the telephony provider.\n\nCall when:\n- \
-                      User wants to send DTMF events"
-            .into(),
-        json_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "events": { "type": "array", "items": { "type": "string", "enum": keys } }
-            },
-            "required": ["events"],
-        }),
-        flags: Default::default(),
-        provider_tool: None,
-    }
-}
-
-/// Session commands for AMD. Producer: the host (step 5) or a test; handler: the session's gate.
+/// Session commands for AMD. Producer: the host or a test; handler: the session's gate.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 #[vocabulary(kind = AmdCommandKind)]
 pub enum AmdCommand {
     /// Install the gate for `run`, hold authorization, and set the attached rules. Answered with
-    /// [`Answer::AmdAttach`](crate::agent_session::Answer::AmdAttach).
-    Attach { run: AmdRunId, call: Option<RequestId> },
+    /// [`Answer::AmdAttach`](crate::agent_session::Answer::AmdAttach). `dtmf_tool` declares
+    /// AMD's built-in `send_dtmf_events`, which the host runs: a reply whose decision allows DTMF
+    /// offers it, unless the agent has a tool by that name.
+    Attach { run: AmdRunId, dtmf_tool: lk_agents_abi::ToolSpec, call: Option<RequestId> },
 }
 
 /// Why the session refused to attach a run.
@@ -227,7 +203,7 @@ pub enum AmdAttachRefused {
     HandoffInFlight,
     #[error("finish the AgentTask before entering AMD")]
     TaskRunning,
-    /// Realtime commit paths are not gated yet (implementation step 4).
+    /// Realtime commit paths are not gated yet.
     #[error("amd does not support realtime models yet")]
     Realtime,
     #[error("the session is closing")]

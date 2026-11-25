@@ -40,7 +40,15 @@ fn answer(driver: &mut VoiceDriver, ms: u64, answer: AmdAnswer) -> Vec<VoiceEffe
 /// Attach and activate the run, with no opening.
 fn attached(hosted: bool) -> VoiceDriver {
     let mut driver = driver(hosted);
-    host(&mut driver, 0, Command::Amd(AmdCommand::Attach { run: RUN, call: None }));
+    host(
+        &mut driver,
+        0,
+        Command::Amd(AmdCommand::Attach {
+            run: RUN,
+            dtmf_tool: super::rule_tests::dtmf_tool(),
+            call: None,
+        }),
+    );
     answer(&mut driver, 0, AmdAnswer::Activated { run: RUN, opening: None });
     driver
 }
@@ -247,7 +255,15 @@ fn detach_settles_a_turn_still_in_its_hook() {
 fn only_the_opening_bypasses_the_hold() {
     let mut driver = driver(false);
     driver.session.outputs.audio = None;
-    host(&mut driver, 0, Command::Amd(AmdCommand::Attach { run: RUN, call: None }));
+    host(
+        &mut driver,
+        0,
+        Command::Amd(AmdCommand::Attach {
+            run: RUN,
+            dtmf_tool: super::rule_tests::dtmf_tool(),
+            call: None,
+        }),
+    );
     let say = SpeechCommand::Say {
         text: crate::agent_session::SayText::Text("hi".into()),
         allow_interruptions: None,

@@ -41,9 +41,9 @@ pub(crate) struct SpeechSpec {
     pub(crate) voice_run: VoiceRunParticipation,
     pub(crate) new_message: Option<ChatMessage>,
     pub(crate) turn_instructions: Option<String>,
-    /// `turn_instructions` stay for the reply's tool follow-ups: AMD's stage instructions
-    /// (spec §10.2).
-    pub(crate) keep_turn_instructions: bool,
+    /// Whether `turn_instructions` stay for the reply's tool follow-ups, as AMD's stage
+    /// instructions do (spec §10.2).
+    pub(crate) turn_instructions_scope: crate::generation::TurnInstructionsScope,
     pub(crate) source: ReplySource,
     /// Already resolved against the session default: the loop does not re-resolve options.
     pub(crate) allow_interruptions: bool,
@@ -77,7 +77,7 @@ impl SpeechSpec {
             voice_run: kind.voice_run(),
             new_message: None,
             turn_instructions: None,
-            keep_turn_instructions: false,
+            turn_instructions_scope: crate::generation::TurnInstructionsScope::Once,
             source,
             allow_interruptions,
             add_to_chat_ctx: true,
@@ -315,14 +315,14 @@ impl VoiceDriver {
 
     /// The reply to a decided user turn. A preemptive generation for another turn is discarded;
     /// adopted, the user item enters the conversation stamped at the turn's onset. `gate` is
-    /// AMD's decision for the turn: its stage instructions ride on the reply. The reply, when
-    /// one was admitted.
+    /// what AMD's decision for the turn adds to the reply's request. The reply, when one was
+    /// admitted.
     pub(crate) fn reply_to_turn(
         &mut self,
         now: Ts,
         info: &EndOfTurnInfo,
         edits: TurnEdits,
-        gate: Option<&crate::amd::ReplyDecision>,
+        gate: Option<super::amd_gate::ReplyPayload>,
     ) -> Option<SpeechId> {
         self.activity.last_turn = Some(info.turn_id);
         // A realtime session answers from the audio it heard: the STT's words are neither sent
@@ -340,7 +340,7 @@ impl VoiceDriver {
         let edited = edits.instructions.is_some()
             || edits.chat_ctx.is_some()
             || edits.user_text.is_some()
-            || gate.is_some_and(crate::amd::ReplyDecision::changes_request);
+            || gate.as_ref().is_some_and(super::amd_gate::ReplyPayload::changes_request);
         if let Some(preemptive) = self.activity.preemptive.take()
             && (preemptive.turn != info.turn_id
                 || edited
@@ -365,26 +365,23 @@ impl VoiceDriver {
             self.emit_eou_metrics(info, Some(preemptive));
             return Some(preemptive);
         }
-        let stage = gate.and_then(|decision| decision.instructions.clone());
-        let toolset = gate.and_then(|decision| self.gate_toolset(decision));
-        let speech = self.start_speech(
-            now,
-            SpeechSpec {
-                toolset,
-                new_message: Some(user),
-                chat_ctx,
-                turn: Some(info.turn_id),
-                instructions_override: instructions,
-                end_of_turn: Some(info.clone()),
-                keep_turn_instructions: stage.is_some(),
-                turn_instructions: stage,
-                ..SpeechSpec::new(
-                    SpeechKind::TurnReply,
-                    ReplySource::Llm,
-                    self.session.config.effective.turn.interruption.enabled(),
-                )
-            },
-        );
+        let spec = SpeechSpec {
+            new_message: Some(user),
+            chat_ctx,
+            turn: Some(info.turn_id),
+            instructions_override: instructions,
+            end_of_turn: Some(info.clone()),
+            ..SpeechSpec::new(
+                SpeechKind::TurnReply,
+                ReplySource::Llm,
+                self.session.config.effective.turn.interruption.enabled(),
+            )
+        };
+        let spec = match gate {
+            Some(payload) => payload.onto(spec),
+            None => spec,
+        };
+        let speech = self.start_speech(now, spec);
         self.activity.speech_scheduler.contains(speech).then_some(speech)
     }
 
@@ -469,7 +466,7 @@ impl VoiceDriver {
             new_message: spec.new_message.clone(),
             instructions: spec.instructions_override.clone(),
             turn_instructions: spec.turn_instructions.clone(),
-            keep_turn_instructions: spec.keep_turn_instructions,
+            turn_instructions_scope: spec.turn_instructions_scope,
             // Snapshotted for this request: handoffs replace the list, replies overlap.
             tools: turn_toolset.specs.clone(),
             on_enter: spec.on_enter,

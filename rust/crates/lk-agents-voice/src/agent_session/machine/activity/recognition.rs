@@ -24,6 +24,8 @@ use crate::trace::{
 pub(crate) struct DecidedTurn {
     pub(crate) info: EndOfTurnInfo,
     pub(crate) span: telemetry::UserTurnSpan,
+    /// The decision an AMD `Detach` settled for the turn, applied when it is answered.
+    pub(crate) settled: Option<crate::amd::ReplyDecision>,
 }
 
 /// A decided turn parked on the end-of-turn hook until the host answers or the bound passes.
@@ -34,6 +36,8 @@ pub(crate) struct PendingTurn {
     pub(crate) issued_at: Ts,
     /// `None` when no host runs hooks.
     pub(crate) hook: Option<crate::agent_session::HookId>,
+    /// The decision an AMD `Detach` settled for the turn while its hook ran.
+    pub(crate) settled: Option<crate::amd::ReplyDecision>,
 }
 
 /// What a committed turn took of an interim, by identity: its utterance's final replaces exactly
@@ -354,40 +358,36 @@ impl VoiceDriver {
     }
 
     /// The newest reply, while none of it was heard, is cancelled and made again from the record.
-    /// Under the AMD gate only the latest turn's own reply is, while its hold is silence or open,
-    /// and the replacement carries the same decision.
+    /// A reply an AMD decision made is remade with the same request; while its run is attached,
+    /// only the latest turn's reply is, while its hold is silence or open.
     fn reply_again_unheard(&mut self, now: Ts, turn: TurnId) {
-        let Some(decision) = self.gate_remake(turn) else { return };
+        let Some(gated) = self.gate_remake(turn) else { return };
         let scheduling = &self.activity.speech_scheduler;
-        let gated = self.gate_reply_speech(turn);
         let reply = scheduling.speeches().rev().find_map(|(id, handle)| {
             // A preemptive generation not yet adopted guesses a newer turn.
             let reply =
                 matches!(scheduling.kind(id)?, SpeechKind::TurnReply | SpeechKind::Preemptive)
                     && scheduling.status(id)? != Status::Preemptive
-                    && gated.is_none_or(|gated| gated == id);
+                    && gated.as_ref().is_none_or(|(gated, _)| *gated == id);
             (reply && !handle.interrupted() && !handle.done()).then_some(id)
         });
         let Some(reply) = reply.filter(|id| !self.activity.spoke.contains(id)) else { return };
         let Some(user) = self.session.chat_ctx.user_turn_message(turn).cloned() else { return };
         self.force_interrupt_speech(now, reply, InterruptCause::Superseded);
         let interruptible = self.session.config.effective.turn.interruption.enabled();
-        let stage = decision.as_ref().and_then(|decision| decision.instructions.clone());
-        let toolset = decision.as_ref().and_then(|decision| self.gate_toolset(decision));
-        let speech = self.start_speech(
-            now,
-            SpeechSpec {
-                toolset,
-                // Replanning must recognize the corrected words before invoking the frontend;
-                // the previous verdict authorized only the earlier version of this same item.
-                new_message: Some(user),
-                turn: Some(turn),
-                keep_turn_instructions: stage.is_some(),
-                turn_instructions: stage,
-                ..SpeechSpec::new(SpeechKind::TurnReply, ReplySource::Llm, interruptible)
-            },
-        );
-        if decision.is_some() && self.activity.speech_scheduler.contains(speech) {
+        let spec = SpeechSpec {
+            // Replanning must recognize the corrected words before invoking the frontend;
+            // the previous verdict authorized only the earlier version of this same item.
+            new_message: Some(user),
+            turn: Some(turn),
+            ..SpeechSpec::new(SpeechKind::TurnReply, ReplySource::Llm, interruptible)
+        };
+        let Some((_, payload)) = gated else {
+            self.start_speech(now, spec);
+            return;
+        };
+        let speech = self.start_speech(now, payload.onto(spec));
+        if self.activity.speech_scheduler.contains(speech) {
             self.gate_remade(turn, speech);
         }
     }
@@ -622,7 +622,7 @@ impl VoiceDriver {
         self.gate_commit(now, &info);
         // User code is never cancelled: a newer turn waits for the older one's hook.
         let span = span.unwrap_or_else(telemetry::UserTurnSpan::none);
-        self.activity.waiting_turns.push_back(DecidedTurn { info, span });
+        self.activity.waiting_turns.push_back(DecidedTurn { info, span, settled: None });
         self.next_turn(now);
     }
 
@@ -674,7 +674,7 @@ impl VoiceDriver {
     }
 
     fn begin_turn(&mut self, now: Ts, turn: DecidedTurn) {
-        let DecidedTurn { info, mut span } = turn;
+        let DecidedTurn { info, mut span, settled } = turn;
         // A turn that asks for a reply while the current speech cannot be interrupted is dropped,
         // before the hook and with no user item.
         if !info.skip_reply
@@ -695,10 +695,10 @@ impl VoiceDriver {
         }
         // A turn that asks for no reply commits its item without `on_user_turn_completed`.
         if self.activity.hook_bound.is_some() && !info.skip_reply {
-            self.issue_turn_hook(now, info, span);
+            self.issue_turn_hook(now, info, span, settled);
         } else {
             span.end(&mut self.telemetry, telemetry::UserTurnOutcome::Committed);
-            self.finish_turn(now, info, Vec::new());
+            self.finish_turn(now, info, Vec::new(), settled);
         }
     }
 
@@ -727,16 +727,16 @@ impl VoiceDriver {
     }
 
     /// `StopResponse` ends it with no item and no reply; `skip_reply` commits the item and asks for
-    /// nothing.
+    /// nothing. `settled` is the decision an AMD `Detach` settled for the turn.
     pub(crate) fn finish_turn(
         &mut self,
         now: Ts,
         info: EndOfTurnInfo,
         edits: Vec<crate::agent::TurnEdit>,
+        settled: Option<crate::amd::ReplyDecision>,
     ) {
-        // Kept for the arriving agent.
+        // Kept for the arriving agent. No AMD run is attached inside a handoff's window.
         if self.activity.in_window() {
-            self.gate_turn_ended(info.turn_id, crate::amd::TurnEnd::HeldForHandoff);
             self.hold_user_turn(now, info, Some(edits));
             return;
         }
@@ -776,7 +776,7 @@ impl VoiceDriver {
             return;
         }
         // A gated turn replies on its decision, or parks for it.
-        let Some((info, applied)) = self.gate_reply(now, info, applied) else { return };
+        let Some((info, applied)) = self.gate_reply(now, info, applied, settled) else { return };
         // Before the reply exists: supersede an unheard late reply, then interrupt the current
         // speech if it allows it. A realtime session interrupts in `generate_reply`.
         if self.activity.realtime().is_none() {

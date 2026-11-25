@@ -15,8 +15,11 @@
 
 use crate::agent::{Source, Visibility};
 use crate::agent_session::effects::{Timer, VoiceEffect};
-use crate::agent_session::machine::activity::scheduling::{PreemptiveDiscard, SpeechId, Status};
-use crate::agent_session::options::{AgentSessionOptions, ConfigLayer, OverrideLayer};
+use crate::agent_session::machine::activity::scheduling::{
+    PreemptiveDiscard, SpeechId, SpeechKind, Status,
+};
+use crate::agent_session::machine::activity::speech::SpeechSpec;
+use crate::agent_session::options::{AgentSessionOptions, ConfigLayer};
 use crate::agent_session::{Answer, RequestId, VoiceDriver};
 use crate::amd::{
     AmdAnswer, AmdAttachRefused, AmdCommand, AmdObservation, AmdRunId, DetachCancel, Opening,
@@ -24,16 +27,14 @@ use crate::amd::{
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnEdits, TurnId};
 use crate::events::SessionEvent;
-use crate::generation::ReplySource;
+use crate::generation::{ReplySource, TurnInstructionsScope};
+use crate::tool_executor::Toolset;
 use crate::trace::{AnswerDrop, GateStep, InterruptCause, OpeningDrop, SpeechStep};
 use lk_agents_abi::voice::events::AgentState;
-use lk_agents_abi::{ChatItem, Ts};
+use lk_agents_abi::{ChatItem, ToolSpec, Ts};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::time::Duration;
-
-/// The override layer that forces interruptions on while a run is attached. Host layers are
-/// minted from 1 upward by the session that holds them, so this id never collides.
-const AMD_OVERRIDE_LAYER: u64 = u64::MAX;
 
 /// What authorization waits on while a run is attached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,15 +59,13 @@ pub(crate) struct Gate {
     run: AmdRunId,
     /// Set by `Activated`.
     active: bool,
-    /// The latest committed turn and its decision, once known.
+    /// The latest committed turn and where its reply stands.
     latest: Option<Latest>,
-    /// The latest turn, back from its hook before its decision. At most one.
-    parked: Option<ParkedTurn>,
     hold: Hold,
-    /// Turns committed under the gate that have not ended.
+    /// Turns committed under the gate that have not ended. Only these report to the run.
     turns: BTreeSet<TurnId>,
-    /// The latest allowed turn's reply and the decision it was made under.
-    reply: Option<GateReply>,
+    /// AMD's built-in DTMF tool, as the host declared it at attach.
+    dtmf_tool: ToolSpec,
     /// The opening, the only speech that bypasses the hold, until it ends.
     opening: Option<OpeningSpeech>,
     /// The latest participant speech boundary the silence hold measures from.
@@ -79,10 +78,24 @@ pub(crate) struct Gate {
 
 struct Latest {
     turn: TurnId,
-    /// A decision that arrived while the turn was still in its customer hook.
-    decision: Option<ReplyDecision>,
-    /// The turn's decision was applied, or the turn ended without one.
-    settled: bool,
+    /// The run was active at commit: the turn is bound, and only a bound turn's decision moves
+    /// the hold. `Detach` unbinds it.
+    bound: bool,
+    reply: TurnReply,
+}
+
+/// Where the latest turn's reply stands.
+enum TurnReply {
+    /// In its customer hook, or behind another turn's, with no decision.
+    Waiting,
+    /// Back from its hook before its decision.
+    Parked(Box<ParkedTurn>),
+    /// Decided while still in its hook.
+    Decided(ReplyDecision),
+    /// Its decision was applied.
+    Applied,
+    /// It left without a decision applied: `skip_reply`, `StopResponse` or a drop.
+    Ended,
 }
 
 /// The latest turn, back from its customer hook, waiting for its decision.
@@ -91,10 +104,43 @@ pub(crate) struct ParkedTurn {
     edits: TurnEdits,
 }
 
-struct GateReply {
+/// A reply an AMD decision made, and what the decision added to its request.
+pub(crate) struct GatedReply {
+    run: AmdRunId,
     turn: TurnId,
     speech: SpeechId,
-    decision: ReplyDecision,
+    payload: ReplyPayload,
+}
+
+/// What an AMD decision adds to its reply's request: stage instructions that last for the
+/// reply's tool follow-ups, and the advertised tools plus AMD's DTMF tool.
+#[derive(Clone, Default)]
+pub(crate) struct ReplyPayload {
+    stage: Option<String>,
+    toolset: Option<Arc<Toolset>>,
+    /// The request differs from a plain reply's: the reply never adopts the preemptive
+    /// generation.
+    changes_request: bool,
+}
+
+impl ReplyPayload {
+    pub(crate) fn changes_request(&self) -> bool {
+        self.changes_request
+    }
+
+    /// `spec` carrying the payload.
+    pub(crate) fn onto(self, spec: SpeechSpec) -> SpeechSpec {
+        let scope = match self.stage {
+            Some(_) => TurnInstructionsScope::Sticky,
+            None => TurnInstructionsScope::Once,
+        };
+        SpeechSpec {
+            turn_instructions: self.stage,
+            turn_instructions_scope: scope,
+            toolset: self.toolset,
+            ..spec
+        }
+    }
 }
 
 struct OpeningSpeech {
@@ -103,15 +149,14 @@ struct OpeningSpeech {
 }
 
 impl Gate {
-    fn new(run: AmdRunId) -> Self {
+    fn new(run: AmdRunId, dtmf_tool: ToolSpec) -> Self {
         Gate {
             run,
             active: false,
             latest: None,
-            parked: None,
             hold: Hold::Entry,
             turns: BTreeSet::new(),
-            reply: None,
+            dtmf_tool,
             opening: None,
             boundary: None,
             boundary_since_commit: false,
@@ -128,16 +173,38 @@ impl Gate {
         self.latest.as_ref().map(|latest| latest.turn)
     }
 
+    fn parked(&self) -> Option<&ParkedTurn> {
+        match &self.latest.as_ref()?.reply {
+            TurnReply::Parked(parked) => Some(parked),
+            _ => None,
+        }
+    }
+
+    /// The parked turn, taken out: the latest turn's reply moves to `then`.
+    fn take_parked(&mut self, then: TurnReply) -> Option<ParkedTurn> {
+        let latest = self.latest.as_mut()?;
+        if !matches!(latest.reply, TurnReply::Parked(_)) {
+            return None;
+        }
+        match std::mem::replace(&mut latest.reply, then) {
+            TurnReply::Parked(parked) => Some(*parked),
+            _ => None,
+        }
+    }
+
     pub(crate) fn parked_turn(&self) -> Option<TurnId> {
-        self.parked.as_ref().map(|parked| parked.info.turn_id)
+        self.parked().map(|parked| parked.info.turn_id)
     }
 
     pub(crate) fn parked_info(&self) -> Option<&EndOfTurnInfo> {
-        self.parked.as_ref().map(|parked| &parked.info)
+        self.parked().map(|parked| &parked.info)
     }
 
     pub(crate) fn parked_info_mut(&mut self) -> Option<&mut EndOfTurnInfo> {
-        self.parked.as_mut().map(|parked| &mut parked.info)
+        match &mut self.latest.as_mut()?.reply {
+            TurnReply::Parked(parked) => Some(&mut parked.info),
+            _ => None,
+        }
     }
 }
 
@@ -151,11 +218,13 @@ impl super::AgentActivity {
 impl VoiceDriver {
     pub(crate) fn on_amd(&mut self, now: Ts, cmd: AmdCommand) {
         match cmd {
-            AmdCommand::Attach { run, call } => self.attach_amd(now, run, call),
+            AmdCommand::Attach { run, dtmf_tool, call } => {
+                self.attach_amd(now, run, dtmf_tool, call)
+            }
         }
     }
 
-    fn attach_amd(&mut self, now: Ts, run: AmdRunId, call: Option<RequestId>) {
+    fn attach_amd(&mut self, now: Ts, run: AmdRunId, dtmf_tool: ToolSpec, call: Option<RequestId>) {
         let refused = if self.session.closing.is_some() {
             Some(AmdAttachRefused::Closing)
         } else if self.activity.gate.is_some() {
@@ -164,7 +233,7 @@ impl VoiceDriver {
             Some(AmdAttachRefused::HandoffInFlight)
         } else if self.activity.voice_tasks.running() {
             Some(AmdAttachRefused::TaskRunning)
-        // Realtime commit paths bypass the gate until implementation step 4.
+        // Realtime commit paths do not reach the gate.
         } else if self.activity.realtime().is_some() {
             Some(AmdAttachRefused::Realtime)
         } else {
@@ -174,14 +243,14 @@ impl VoiceDriver {
             self.record_trace(GateStep::AttachRefused { run, why });
             return self.answer(call, Answer::AmdAttach(Err(why)));
         }
-        self.activity.gate = Some(Gate::new(run));
+        self.activity.gate = Some(Gate::new(run, dtmf_tool));
         self.record_trace(GateStep::Attached { run });
         self.record_trace(SpeechStep::AuthorizationHeld(Hold::Entry));
-        // Interruptions are forced on, and restored by releasing the layer at detach.
+        // Interruptions are forced on over every layer, the host's `override_options` included,
+        // and the layers decide again at detach.
         let mut options = AgentSessionOptions::default();
         options.turn.interruption.enabled = Some(true);
-        let layer = OverrideLayer { id: AMD_OVERRIDE_LAYER, options };
-        let diff = self.session.config.push_override(layer);
+        let diff = self.session.config.require(Some(options));
         self.apply_config(now, ConfigLayer::Override, diff);
         // No participant speech exists before activation, on either side.
         self.route_session_audio();
@@ -222,8 +291,8 @@ impl VoiceDriver {
         match answer {
             AmdAnswer::Activated { opening, .. } => self.amd_activated(now, opening),
             AmdAnswer::ReplyDecided { turn, decision, .. } => self.amd_decided(now, turn, decision),
-            // Only a realtime model without user transcription needs it; realtime sessions are
-            // refused at attach until implementation step 4.
+            // Only a realtime model without user transcription needs it, and realtime sessions
+            // are refused at attach.
             AmdAnswer::InsertUserItem { turn, .. } => self.record_trace(GateStep::AnswerDropped {
                 run,
                 turn: Some(turn),
@@ -252,7 +321,7 @@ impl VoiceDriver {
         if self.session.states.user_speaking() {
             return self.record_trace(GateStep::OpeningDropped { why: OpeningDrop::UserSpeaking });
         }
-        let speech = match opening {
+        let spec = match opening {
             Opening::Text(_)
                 if self.session.tts.is_none() && self.session.outputs.plays_audio() =>
             {
@@ -261,29 +330,19 @@ impl VoiceDriver {
             Opening::Instructions(_) if self.session.llm.is_none() => {
                 return self.record_trace(GateStep::OpeningDropped { why: OpeningDrop::NoModel });
             }
-            Opening::Text(text) => {
-                use crate::agent_session::machine::activity::scheduling::SpeechKind;
-                use crate::agent_session::machine::activity::speech::SpeechSpec;
-                let spec = SpeechSpec::new(SpeechKind::Say, ReplySource::Text(text), true);
-                self.start_speech(now, spec)
-            }
-            Opening::Instructions(instructions) => {
-                let none = Some(lk_agents_abi::ToolChoice::Forbidden);
-                let (user, chat_ctx, tools) = (None, None, None);
-                let instructions = Some(instructions);
-                self.generate_reply_speech(
-                    now,
-                    user,
-                    instructions,
-                    Some(true),
-                    none,
-                    chat_ctx,
-                    tools,
-                    false,
-                    None,
-                )
-            }
+            Opening::Text(text) => SpeechSpec::new(SpeechKind::Say, ReplySource::Text(text), true),
+            // The opening cannot call tools.
+            Opening::Instructions(instructions) => SpeechSpec {
+                turn_instructions: Some(instructions),
+                tool_choice: Some(lk_agents_abi::ToolChoice::Forbidden),
+                ..SpeechSpec::new(SpeechKind::GenerateReply, ReplySource::Llm, true)
+            },
         };
+        let speech = self.start_speech(now, spec);
+        // A speech the scheduler refused is no opening.
+        if self.activity.speech_scheduler.status(speech) != Some(Status::Queued) {
+            return self.record_trace(GateStep::OpeningDropped { why: OpeningDrop::Refused });
+        }
         // Scheduling runs after this transition, so the bypass is in place before it.
         if let Some(gate) = self.activity.gate.as_mut() {
             gate.opening = Some(OpeningSpeech { speech, played: false });
@@ -296,67 +355,79 @@ impl VoiceDriver {
     fn amd_decided(&mut self, now: Ts, turn: TurnId, decision: ReplyDecision) {
         let Some(gate) = self.activity.gate.as_mut() else { return };
         let (run, allow) = (gate.run, decision.allow);
-        let why = match gate.latest.as_mut() {
-            Some(latest) if latest.turn != turn => Some(AnswerDrop::NotLatest),
+        let latest = gate.latest.as_mut().filter(|latest| latest.turn == turn);
+        let why = match latest.map(|latest| &mut latest.reply) {
             None => Some(AnswerDrop::NotLatest),
-            Some(latest) if latest.settled || latest.decision.is_some() => {
-                Some(AnswerDrop::Duplicate)
-            }
-            Some(latest) => {
-                latest.decision = Some(decision.clone());
+            Some(TurnReply::Decided(_) | TurnReply::Applied) => Some(AnswerDrop::Duplicate),
+            Some(TurnReply::Ended) => Some(AnswerDrop::TurnEnded),
+            Some(reply @ TurnReply::Waiting) => {
+                *reply = TurnReply::Decided(decision.clone());
                 None
             }
+            Some(TurnReply::Parked(_)) => None,
         };
         if let Some(why) = why {
             return self.record_trace(GateStep::AnswerDropped { run, turn: Some(turn), why });
         }
-        let parked = gate.parked.take_if(|parked| parked.info.turn_id == turn);
-        let decision = parked.as_ref().and_then(|_| {
-            let latest = gate.latest.as_mut()?;
-            latest.settled = true;
-            latest.decision.take()
-        });
+        let parked = gate.take_parked(TurnReply::Applied);
         self.record_trace(GateStep::Decided { run, turn, allow });
-        if let (Some(ParkedTurn { info, edits }), Some(decision)) = (parked, decision) {
-            self.apply_reply_decision(now, info, edits, decision, true);
+        if let Some(ParkedTurn { info, edits }) = parked {
+            self.apply_reply_decision(now, info, edits, decision);
         }
     }
 
     /// AMD completed (spec §12.3): cancel what it forbids, restore the session, settle the
     /// pending turns, free authorization, remove the gate.
     fn amd_detach(&mut self, now: Ts, pending: ReplyDecision, cancel: DetachCancel) {
-        // 1. A cancel that forbids replies takes every speech with no playout yet.
+        // A cancel that forbids replies takes every speech with no playout yet.
         if cancel == DetachCancel::ForbidReplies {
             self.cancel_unplayed_speeches(now);
         }
-        // 2. The session's own settings and rules come back.
-        let diff = self.session.config.release_override(AMD_OVERRIDE_LAYER);
+        // The session's own settings and rules come back.
+        let diff = self.session.config.require(None);
         self.apply_config(now, ConfigLayer::Override, diff);
-        // 3. Settle turns: a parked turn now; one in its hook carries the decision to
-        // `finish_turn`.
-        let parked = self.activity.gate.as_mut().and_then(|gate| gate.parked.take());
-        if let Some(ParkedTurn { info, edits }) = parked {
+        // Settle turns: a parked turn now, one in its hook when it returns. No settled decision
+        // moves the hold.
+        let Some(gate) = self.activity.gate.as_mut() else { return };
+        if let Some(latest) = gate.latest.as_mut() {
+            latest.bound = false;
+        }
+        if let Some(ParkedTurn { info, edits }) = gate.take_parked(TurnReply::Applied) {
             self.record_trace(GateStep::Settled { turn: info.turn_id, allow: pending.allow });
-            self.apply_reply_decision(now, info, edits, pending.clone(), false);
+            self.apply_reply_decision(now, info, edits, pending.clone());
         }
-        let Some(gate) = self.activity.gate.as_ref() else { return };
-        let in_hook: Vec<TurnId> = (self.activity.pending_turn.iter().map(|t| t.info.turn_id))
-            .chain(self.activity.waiting_turns.iter().map(|t| t.info.turn_id))
-            .filter(|turn| gate.turns.contains(turn))
-            .collect();
-        for turn in in_hook {
+        let a = &mut self.activity;
+        let Some(gate) = a.gate.as_ref() else { return };
+        let mut settled = Vec::new();
+        let in_hook = (a.pending_turn.iter_mut().map(|t| (&t.info, &mut t.settled)))
+            .chain(a.waiting_turns.iter_mut().map(|t| (&t.info, &mut t.settled)));
+        for (info, decision) in in_hook.filter(|(info, _)| gate.turns.contains(&info.turn_id)) {
+            *decision = Some(pending.clone());
+            settled.push(info.turn_id);
+        }
+        for turn in settled {
             self.record_trace(GateStep::Settled { turn, allow: pending.allow });
-            self.activity.amd_settled.insert(turn, pending.clone());
         }
-        // 4. Free authorization: a reply held for silence plays at once.
+        // Free authorization: a reply held for silence plays at once.
         self.set_hold(now, Hold::Open);
         self.clear_deadline_if_set(Timer::AmdSilence);
-        // 5. The gate is gone: later commits are not gated.
+        // The gate is gone: later commits are not gated.
         let Some(gate) = self.activity.gate.take() else { return };
         let run = gate.run;
         self.route_session_audio();
         self.record_trace(GateStep::Detached { run });
         self.record_effect(VoiceEffect::Amd { run, observation: AmdObservation::Detached { run } });
+    }
+
+    /// The close ends the attached run as its completion would: a held speech drains (spec
+    /// §12.3), a parked turn keeps its words with no reply, a turn in its hook is settled to no
+    /// reply, and the run hears `Detached`.
+    pub(crate) fn release_gate_for_close(&mut self, now: Ts) {
+        let Some(gate) = self.activity.gate.as_mut() else { return };
+        if let Some(ParkedTurn { info, edits }) = gate.take_parked(TurnReply::Ended) {
+            self.deny_turn(now, info, edits, TurnEnd::Abandoned);
+        }
+        self.amd_detach(now, ReplyDecision::deny(), DetachCancel::Keep);
     }
 
     /// `_cancel_pending_speeches`: the preemptive generation, every queued or held speech, and
@@ -404,11 +475,12 @@ impl VoiceDriver {
         let speaking = self.session.states.user_speaking();
         let Some(gate) = self.activity.gate.as_mut() else { return };
         let (run, turn) = (gate.run, info.turn_id);
-        // Rule 3: a parked turn is denied, and a reply not yet authorized is cancelled.
-        let parked = gate.parked.take();
-        let held = gate.reply.take().filter(|reply| {
+        // A parked turn is denied, and this run's reply not yet authorized is cancelled.
+        let parked = gate.take_parked(TurnReply::Ended);
+        let held = self.activity.gated_reply.take_if(|reply| {
             let s = &self.activity.speech_scheduler;
-            s.status(reply.speech) == Some(Status::Queued)
+            reply.run == run
+                && s.status(reply.speech) == Some(Status::Queued)
                 && s.speech(reply.speech).is_some_and(|h| !h.done() && !h.interrupted())
         });
         if let Some(ParkedTurn { info: older, edits }) = parked {
@@ -428,9 +500,10 @@ impl VoiceDriver {
                 Some(now.saturating_sub(info.metrics.end_of_turn_delay.unwrap_or_default()));
         }
         gate.boundary_since_commit = false;
-        gate.latest = Some(Latest { turn, decision: None, settled: false });
+        // Before activation no turn is bound: its decision never moves the hold.
+        let bound = gate.active;
+        gate.latest = Some(Latest { turn, bound, reply: TurnReply::Waiting });
         gate.turns.insert(turn);
-        let active = gate.active;
         self.record_trace(GateStep::Committed { run, turn });
         self.observe_amd(AmdObservation::TurnCommitted {
             turn,
@@ -441,17 +514,14 @@ impl VoiceDriver {
             agent: self.activity.agent.clone(),
             at: now,
         });
-        // Before activation no turn is bound: the hold stays at its entry.
-        if active {
-            self.set_hold(now, Hold::Undecided { turn });
-        }
+        self.set_hold_for(now, turn, Hold::Undecided { turn });
         // The commit interrupt does not wait for an older turn's hook.
         if !info.skip_reply {
             self.interrupt_for_user_turn(now);
         }
     }
 
-    /// The hook returned (or there was none): a turn settled by `Detach` replies on its own;
+    /// The hook returned (or there was none): a turn `Detach` settled replies on that decision;
     /// the latest gated turn replies on its decision or parks for it. `Some` hands the turn back
     /// to the ungated path.
     pub(crate) fn gate_reply(
@@ -459,46 +529,43 @@ impl VoiceDriver {
         now: Ts,
         info: EndOfTurnInfo,
         edits: TurnEdits,
+        settled: Option<ReplyDecision>,
     ) -> Option<(EndOfTurnInfo, TurnEdits)> {
-        if let Some(decision) = self.activity.amd_settled.remove(&info.turn_id) {
-            self.apply_reply_decision(now, info, edits, decision, false);
+        if let Some(decision) = settled {
+            self.apply_reply_decision(now, info, edits, decision);
             return None;
         }
         let Some(gate) = self.activity.gate.as_mut() else { return Some((info, edits)) };
-        let Some(latest) =
-            gate.latest.as_mut().filter(|latest| latest.turn == info.turn_id && !latest.settled)
-        else {
+        let Some(latest) = gate.latest.as_mut().filter(|latest| latest.turn == info.turn_id) else {
             return Some((info, edits));
         };
-        match latest.decision.take() {
-            Some(decision) => {
-                latest.settled = true;
-                self.apply_reply_decision(now, info, edits, decision, true);
-            }
-            None => {
+        match std::mem::replace(&mut latest.reply, TurnReply::Applied) {
+            TurnReply::Decided(decision) => self.apply_reply_decision(now, info, edits, decision),
+            TurnReply::Waiting => {
                 let turn = info.turn_id;
-                gate.parked = Some(ParkedTurn { info, edits });
+                latest.reply = TurnReply::Parked(Box::new(ParkedTurn { info, edits }));
                 self.record_trace(GateStep::Parked { turn });
+            }
+            reply @ (TurnReply::Parked(_) | TurnReply::Applied | TurnReply::Ended) => {
+                latest.reply = reply;
+                return Some((info, edits));
             }
         }
         None
     }
 
-    /// Apply a decision to its turn. `gated`: the current gate holds for it; else a decision
-    /// `Detach` settled, applied with no gate.
+    /// Apply a decision to its turn. Only the gating run hears of it, and only a bound turn's
+    /// decision moves the hold.
     fn apply_reply_decision(
         &mut self,
         now: Ts,
         info: EndOfTurnInfo,
         edits: TurnEdits,
         decision: ReplyDecision,
-        gated: bool,
     ) {
         let turn = info.turn_id;
         if !decision.allow {
-            if gated {
-                self.set_hold_for(now, turn, Hold::Denied { turn });
-            }
+            self.set_hold_for(now, turn, Hold::Denied { turn });
             return self.deny_turn(now, info, edits, TurnEnd::Denied);
         }
         // As the ungated reply path: an unheard late reply goes, the current speech is cut.
@@ -506,7 +573,8 @@ impl VoiceDriver {
             self.supersede_unheard_reply(now);
         }
         self.interrupt_for_user_turn(now);
-        let Some(speech) = self.reply_to_turn(now, &info, edits, Some(&decision)) else {
+        let payload = self.reply_payload(&decision);
+        let Some(speech) = self.reply_to_turn(now, &info, edits, Some(payload.clone())) else {
             return self.gate_turn_ended(turn, TurnEnd::Dropped);
         };
         // A speech fixes its interruptibility at creation, and the gate forces it on while
@@ -517,23 +585,43 @@ impl VoiceDriver {
         if s.speech(speech).is_some_and(|h| h.allow_interruptions() != interruptible) {
             self.set_allow_interruptions(speech, interruptible);
         }
+        let Some(run) = self.gating_run(turn) else { return };
+        self.activity.gated_reply = Some(GatedReply { run, turn, speech, payload });
         self.observe_amd(AmdObservation::ReplyCreated { turn, speech });
         self.gate_turn_ended(turn, TurnEnd::Replied);
-        if !gated {
-            return;
-        }
-        let Some(gate) = self.activity.gate.as_mut() else { return };
-        gate.reply = Some(GateReply { turn, speech, decision: decision.clone() });
-        // An allow before activation binds no turn: authorization stays held from entry.
-        if !gate.active {
-            return;
-        }
         let hold = match decision.silence.filter(|needed| !needed.is_zero()) {
             Some(needed) => Hold::Silence { turn, needed, deadline: None },
             None => Hold::Open,
         };
         self.set_hold_for(now, turn, hold);
         self.arm_silence(now);
+    }
+
+    /// The attached run, when it gated `turn` and the turn has not ended.
+    fn gating_run(&self, turn: TurnId) -> Option<AmdRunId> {
+        let gate = self.activity.gate.as_ref()?;
+        gate.turns.contains(&turn).then_some(gate.run)
+    }
+
+    /// What `decision` adds to its reply's request. The DTMF tool comes from the attached run;
+    /// a decision `Detach` settled never allows DTMF.
+    fn reply_payload(&self, decision: &ReplyDecision) -> ReplyPayload {
+        let dtmf = self.activity.gate.as_ref().map(|gate| &gate.dtmf_tool);
+        let toolset = dtmf.filter(|_| decision.dtmf).and_then(|tool| {
+            let advertised = self.activity.advertised_toolset(&self.session.tools);
+            // An agent tool with the same id is kept instead.
+            if advertised.specs.iter().any(|spec| spec.name == tool.name) {
+                return None;
+            }
+            let mut toolset = (*advertised).clone();
+            toolset.specs.push(tool.clone());
+            Some(Arc::new(toolset))
+        });
+        ReplyPayload {
+            stage: decision.instructions.clone(),
+            toolset,
+            changes_request: decision.changes_request(),
+        }
     }
 
     /// The turn's words are committed with no reply. A denied turn's preemptive generation goes;
@@ -551,16 +639,17 @@ impl VoiceDriver {
         self.gate_turn_ended(turn, how);
     }
 
-    /// A gated turn left the activity. One that leaves without a reply keeps authorization
-    /// held until the next commit.
+    /// A gated turn left the activity: its run hears it. One that leaves without a reply keeps
+    /// authorization held until the next commit.
     pub(crate) fn gate_turn_ended(&mut self, turn: TurnId, how: TurnEnd) {
-        self.activity.amd_settled.remove(&turn);
         let Some(gate) = self.activity.gate.as_mut() else { return };
         if !gate.turns.remove(&turn) {
             return;
         }
-        if let Some(latest) = gate.latest.as_mut().filter(|latest| latest.turn == turn) {
-            latest.settled = true;
+        if let Some(latest) = gate.latest.as_mut().filter(|latest| latest.turn == turn)
+            && matches!(latest.reply, TurnReply::Waiting | TurnReply::Decided(_))
+        {
+            latest.reply = TurnReply::Ended;
         }
         self.observe_amd(AmdObservation::TurnEnded { turn, how });
         if !matches!(how, TurnEnd::Replied | TurnEnd::Superseded) {
@@ -569,64 +658,34 @@ impl VoiceDriver {
         }
     }
 
-    /// The close: a parked turn's words are kept with no reply, and every gated turn ends.
-    pub(crate) fn gate_close(&mut self, now: Ts) {
-        let Some(gate) = self.activity.gate.as_mut() else { return };
-        let parked = gate.parked.take();
-        if let Some(ParkedTurn { info, edits }) = parked {
-            self.deny_turn(now, info, edits, TurnEnd::Abandoned);
-        }
-        let turns: Vec<TurnId> =
-            self.activity.gate.iter().flat_map(|gate| gate.turns.iter().copied()).collect();
-        for turn in turns {
-            self.gate_turn_ended(turn, TurnEnd::Abandoned);
-        }
-    }
-
-    /// A correction remade the latest gated turn's unheard reply: the replacement carries the
-    /// same decision. `None` when the gate does not allow a remake for `turn`.
-    pub(crate) fn gate_remake(&self, turn: TurnId) -> Option<Option<ReplyDecision>> {
-        let Some(gate) = self.activity.gate.as_ref() else { return Some(None) };
-        let reply = gate.reply.as_ref().filter(|reply| reply.turn == turn)?;
+    /// What a correction may remake for `turn`. `None` refuses; `Some(None)` remakes the newest
+    /// unheard reply, as with no gate; `Some(Some(_))` remakes only the reply an AMD decision
+    /// made, with the same request. While its run is attached, only the latest turn's reply is
+    /// remade, while its hold is silence or open; after `Detach` it keeps its request.
+    pub(crate) fn gate_remake(&self, turn: TurnId) -> Option<Option<(SpeechId, ReplyPayload)>> {
+        let reply = self.activity.gated_reply.as_ref().filter(|reply| reply.turn == turn);
+        let remake = reply.map(|reply| (reply.speech, reply.payload.clone()));
+        let Some(gate) = self.activity.gate.as_ref() else { return Some(remake) };
         let held_or_open = match gate.hold {
             Hold::Silence { turn: held, .. } => held == turn,
             Hold::Open => true,
             Hold::Entry | Hold::Undecided { .. } | Hold::Denied { .. } => false,
         };
-        (gate.latest_turn() == Some(turn) && held_or_open).then(|| Some(reply.decision.clone()))
+        let ours = reply.is_some_and(|reply| reply.run == gate.run);
+        (ours && gate.latest_turn() == Some(turn) && held_or_open).then_some(remake)
     }
 
+    /// A correction remade the gated reply of `turn` as `speech`.
     pub(crate) fn gate_remade(&mut self, turn: TurnId, speech: SpeechId) {
-        let Some(gate) = self.activity.gate.as_mut() else { return };
-        if let Some(reply) = gate.reply.as_mut().filter(|reply| reply.turn == turn) {
-            reply.speech = speech;
+        let Some(reply) = self.activity.gated_reply.as_mut().filter(|reply| reply.turn == turn)
+        else {
+            return;
+        };
+        reply.speech = speech;
+        let run = reply.run;
+        if self.activity.gate.as_ref().is_some_and(|gate| gate.run == run) {
             self.observe_amd(AmdObservation::ReplyCreated { turn, speech });
         }
-    }
-
-    /// The reply's tools under a decision that allows DTMF: the advertised ones plus AMD's
-    /// built-in `send_dtmf_events`, unless the agent already has a tool with that id. `None`
-    /// keeps the advertised tools.
-    pub(crate) fn gate_toolset(
-        &self,
-        decision: &ReplyDecision,
-    ) -> Option<std::sync::Arc<crate::tool_executor::Toolset>> {
-        if !decision.dtmf {
-            return None;
-        }
-        let advertised = self.activity.advertised_toolset(&self.session.tools);
-        if advertised.specs.iter().any(|spec| spec.name == crate::amd::SEND_DTMF_TOOL) {
-            return None;
-        }
-        let mut toolset = (*advertised).clone();
-        toolset.specs.push(crate::amd::send_dtmf_tool());
-        Some(std::sync::Arc::new(toolset))
-    }
-
-    /// The gated reply `speech` is the gate's: the one a remake may replace.
-    pub(crate) fn gate_reply_speech(&self, turn: TurnId) -> Option<SpeechId> {
-        let gate = self.activity.gate.as_ref()?;
-        gate.reply.as_ref().filter(|reply| reply.turn == turn).map(|reply| reply.speech)
     }
 }
 
@@ -656,11 +715,11 @@ impl VoiceDriver {
         }
     }
 
-    /// Only the latest turn moves the hold: an older turn's late end leaves it alone.
+    /// Only the latest turn moves the hold, and only if it is bound: an older turn's late end,
+    /// a turn committed before activation and a decision `Detach` settled leave it alone.
     fn set_hold_for(&mut self, now: Ts, turn: TurnId, hold: Hold) {
-        let latest = self.activity.gate.as_ref().and_then(Gate::latest_turn);
-        let active = self.activity.gate.as_ref().is_some_and(|gate| gate.active);
-        if latest == Some(turn) && active {
+        let latest = self.activity.gate.as_ref().and_then(|gate| gate.latest.as_ref());
+        if latest.is_some_and(|latest| latest.turn == turn && latest.bound) {
             self.set_hold(now, hold);
         }
     }
@@ -707,6 +766,10 @@ impl VoiceDriver {
     }
 
     pub(crate) fn observe_speech(&mut self, speech: SpeechId, event: SpeechObservation) {
+        // A gated reply is remade only until it ends.
+        if let SpeechObservation::Done { .. } = event {
+            self.activity.gated_reply.take_if(|reply| reply.speech == speech);
+        }
         if self.activity.gate.is_none() {
             return;
         }
@@ -805,7 +868,7 @@ impl VoiceDriver {
             )
             || a.pending_turn.is_some()
             || !a.waiting_turns.is_empty()
-            || gate.parked.is_some();
+            || gate.parked().is_some();
         if previous == Some(busy) {
             return;
         }

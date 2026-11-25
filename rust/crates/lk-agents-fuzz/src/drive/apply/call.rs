@@ -557,7 +557,8 @@ impl Run {
         let answer = match input {
             Input::AmdAttach {} => {
                 self.amd_runs += 1;
-                let attach = AmdCommand::Attach { run: AmdRunId(self.amd_runs), call: None };
+                let run = AmdRunId(self.amd_runs);
+                let attach = AmdCommand::Attach { run, dtmf_tool: amd::dtmf_tool(), call: None };
                 self.api.send(Command::Amd(attach)).ok()?;
                 return Some(Pending::default());
             }

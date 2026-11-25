@@ -153,6 +153,7 @@ impl VoiceDriver {
         now: Ts,
         info: crate::audio_recognition::EndOfTurnInfo,
         span: telemetry::UserTurnSpan,
+        settled: Option<crate::amd::ReplyDecision>,
     ) {
         let id = self.activity.hooks.mint();
         let call = HookCall::OnUserTurnCompleted {
@@ -166,7 +167,7 @@ impl VoiceDriver {
             span: None,
         };
         self.activity.pending_turn =
-            Some(PendingTurn { info, span, issued_at: now, hook: Some(id) });
+            Some(PendingTurn { info, span, issued_at: now, hook: Some(id), settled });
         self.issue_hook(now, call, None);
     }
 
@@ -329,8 +330,9 @@ impl VoiceDriver {
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
+                    let settled = pending.settled.clone();
                     let info = if local { pending.info } else { pending.finished(now) };
-                    self.finish_turn(now, info, edits);
+                    self.finish_turn(now, info, edits, settled);
                     if !local {
                         self.next_turn(now);
                     }

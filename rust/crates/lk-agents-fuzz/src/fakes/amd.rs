@@ -15,6 +15,30 @@ pub const SILENCE: Duration = Duration::from_millis(1500);
 /// and must never find in the record.
 pub const STAGE: &str = "AMD stage: you reached a machine. Leave the callback number.";
 
+/// The name the host gives AMD's built-in DTMF tool.
+pub const SEND_DTMF_TOOL: &str = "send_dtmf_events";
+
+/// AMD's built-in DTMF tool, as `livekit.agents.beta`'s `send_dtmf_events(events: list[DtmfEvent])`
+/// declares it. The host passes it at attach and runs its body.
+pub fn dtmf_tool() -> lk_agents_abi::ToolSpec {
+    let keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "*", "#", "A", "B", "C", "D"];
+    lk_agents_abi::ToolSpec {
+        name: SEND_DTMF_TOOL.into(),
+        description: "Send a list of DTMF events to the telephony provider.\n\nCall when:\n- \
+                      User wants to send DTMF events"
+            .into(),
+        json_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "events": { "type": "array", "items": { "type": "string", "enum": keys } }
+            },
+            "required": ["events"],
+        }),
+        flags: Default::default(),
+        provider_tool: None,
+    }
+}
+
 /// What the opening says, or is generated from.
 pub const OPENING_TEXT: &str = "Hi, this is the clinic calling about your appointment.";
 pub const OPENING_INSTRUCTIONS: &str = "AMD opening: greet the callee and say who is calling.";

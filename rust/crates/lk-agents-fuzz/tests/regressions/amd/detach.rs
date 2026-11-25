@@ -136,12 +136,12 @@ fn ivr_then_human_with_an_uninterruptible_agent() {
         call.run.record.handles().get(&speech).map(|h| h.allow_interruptions)
     };
     let ivr = call.made("press one for appointments");
-    assert_eq!(ivr[0].offers(lk_agents_voice::amd::SEND_DTMF_TOOL), 1);
+    assert_eq!(ivr[0].offers(lk_agents_fuzz::fakes::amd::SEND_DTMF_TOOL), 1);
     assert!(ivr[0].carries(STAGE));
     assert_eq!(interruptible("press one for appointments"), Some(true), "forced on");
     let human = call.heard_requests("hello this is Sam");
     assert_eq!(human.len(), 1);
-    assert_eq!(human[0].offers(lk_agents_voice::amd::SEND_DTMF_TOOL), 0);
+    assert_eq!(human[0].offers(lk_agents_fuzz::fakes::amd::SEND_DTMF_TOOL), 0);
     assert!(!human[0].carries(STAGE), "no human instructions after a plain completion");
     assert_eq!(interruptible("hello this is Sam"), Some(false), "restored at detach");
     assert!(call.failures().is_empty(), "{:?}", call.failures());

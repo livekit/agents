@@ -599,7 +599,9 @@ impl VoiceDriver {
         if let Some(delivery) = delivery {
             self.deliver_outcome(self.step.now, running.speech, delivery);
         }
-        if reply_required {
+        // AMD owns replies while it runs: an update that arrives then keeps its output on the
+        // record and owes no reply, before or after the run ends.
+        if reply_required && !self.activity.amd_attached() {
             let agent = self.activity.agent.clone();
             let mut hosted = running.hosted.clone();
             hosted.invocation.operation = self.activity.tools.mint_operation();
@@ -710,16 +712,17 @@ impl VoiceDriver {
     /// One reply for every pending update, at the first idle instant with no current speech. Runs
     /// before idle waiters are answered, so a `foreground()` waits behind it.
     pub(crate) fn try_deliver_tool_reply(&mut self) {
+        // AMD owns replies while it runs: updates owed a reply from before it attached keep
+        // their outputs on the record, with no reply.
+        if self.activity.amd_attached() {
+            self.activity.tools.pending.clear();
+            return;
+        }
         let tools = &self.activity.tools;
         if tools.pending.is_empty() || tools.reply.is_some() {
             return;
         }
         if self.session.closing_past_edge() || self.session.idle.held() || !self.is_idle() {
-            return;
-        }
-        // AMD owns replies while it runs: the outputs stay on the record, with no reply.
-        if self.activity.amd_attached() {
-            self.activity.tools.pending.clear();
             return;
         }
         let batch = Batch(std::mem::take(&mut self.activity.tools.pending));
@@ -760,6 +763,10 @@ impl VoiceDriver {
         else {
             return;
         };
+        // Rendered while AMD runs: the reply is dropped, as one owed under it is.
+        if self.activity.amd_attached() {
+            return;
+        }
         if self.session.closing_past_edge() || self.session.idle.held() || !self.is_idle() {
             self.activity.tools.pending.splice(0..0, batch.0);
             return;

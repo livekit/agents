@@ -158,8 +158,9 @@ pub(crate) struct AgentActivity {
     launching: BTreeSet<SpeechId>,
     /// The attached AMD run's reply gate.
     gate: Option<amd_gate::Gate>,
-    /// Decisions `Detach` settled for turns still in their customer hook.
-    amd_settled: BTreeMap<crate::audio_recognition::TurnId, crate::amd::ReplyDecision>,
+    /// The latest reply an AMD decision made, kept past `Detach` until it ends: a correction
+    /// remakes it with the same request.
+    gated_reply: Option<amd_gate::GatedReply>,
 }
 
 enum ActivityModel {
@@ -329,6 +330,9 @@ impl AgentActivity {
 pub struct DriverConfig {
     pub stack: ConfigStack,
     pub legs: SessionLegs,
+    /// What an attached AMD run requires, over every layer of the stack: a host
+    /// `override_options` entered while it runs does not undo it.
+    required: Option<AgentSessionOptions>,
     effective: AgentSessionOptions,
 }
 
@@ -353,13 +357,29 @@ impl DriverConfig {
 
     pub fn new(stack: ConfigStack, legs: SessionLegs) -> Self {
         let effective = stack.resolve(&legs);
-        DriverConfig { stack, legs, effective }
+        DriverConfig { stack, legs, required: None, effective }
+    }
+
+    /// The stack's answer with the requirement laid over it.
+    fn resolved(&self) -> AgentSessionOptions {
+        let mut cfg = self.stack.resolve(&self.legs);
+        if let Some(required) = &self.required {
+            cfg.merge(required);
+        }
+        cfg
     }
 
     /// Before `start()`: no machine exists yet to tell.
     pub fn edit(&mut self, f: impl FnOnce(&mut AgentSessionOptions, &mut SessionLegs)) {
         f(&mut self.stack.session, &mut self.legs);
-        self.effective = self.stack.resolve(&self.legs);
+        self.effective = self.resolved();
+    }
+
+    /// Set or clear what an attached mode requires, re-resolved. Cleared, the layers decide
+    /// again.
+    pub fn require(&mut self, required: Option<AgentSessionOptions>) -> ConfigDiff {
+        self.required = required;
+        self.resolve()
     }
 
     /// Whether the application set `aec_warmup_duration` (on the session or the agent).
@@ -393,7 +413,7 @@ impl DriverConfig {
     }
 
     fn resolve(&mut self) -> ConfigDiff {
-        let next = self.stack.resolve(&self.legs);
+        let next = self.resolved();
         let diff = ConfigDiff {
             endpointing: (next.turn.endpointing != self.effective.turn.endpointing)
                 .then_some(next.turn.endpointing),
@@ -825,7 +845,7 @@ impl AgentActivity {
             },
             launching: Default::default(),
             gate: None,
-            amd_settled: Default::default(),
+            gated_reply: None,
         }
     }
 }

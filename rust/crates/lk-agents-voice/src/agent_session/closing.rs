@@ -92,6 +92,9 @@ impl VoiceDriver {
         let drains = self.activity.take_drain_waiters();
         let phase = ClosePhase::Requested;
         self.session.closing = Some(Closing { reason, error, phase, drains: Some(drains) });
+        // An attached AMD run ends with the session: its gate releases, so the drain plays what
+        // it held.
+        self.release_gate_for_close(now);
         if !drain {
             let generating = self.activity.realtime_generating();
             self.force_cut_open(now);
@@ -504,8 +507,6 @@ impl VoiceDriver {
         if host_commit_pending {
             self.perform_pending_commit(now);
         }
-        // A turn parked on AMD's decision keeps its words, with no reply.
-        self.gate_close(now);
         self.record_effect(VoiceEffect::EotClose);
         // Skips timers the turn machine just cancelled, so each cancel is journalled once.
         for t in [

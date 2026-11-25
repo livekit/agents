@@ -316,6 +316,8 @@ pub enum AnswerDrop {
     NotLatest,
     /// The latest turn already has a decision.
     Duplicate,
+    /// The latest turn already ended without one: `skip_reply`, `StopResponse` or a drop.
+    TurnEnded,
     /// `Activated` arrived twice.
     AlreadyActive,
     /// The session does not take this answer yet (realtime paths, implementation step 4).
@@ -331,6 +333,8 @@ pub enum OpeningDrop {
     NoVoice,
     /// Opening instructions with no LLM.
     NoModel,
+    /// The scheduler refused the speech: scheduling was paused.
+    Refused,
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]

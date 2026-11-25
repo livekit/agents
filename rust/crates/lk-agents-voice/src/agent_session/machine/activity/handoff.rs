@@ -306,7 +306,7 @@ impl VoiceDriver {
         if let Some(HeldUserTurn { info, edits }) = self.activity.handoff.held_user_turn.take() {
             match edits {
                 None => self.on_end_of_turn(now, info),
-                Some(edits) => self.finish_turn(now, info, edits),
+                Some(edits) => self.finish_turn(now, info, edits, None),
             }
         }
     }

@@ -1,4 +1,4 @@
-use lk_agents_voice::amd::SEND_DTMF_TOOL;
+use crate::fakes::amd::SEND_DTMF_TOOL;
 
 use crate::{
     authored::Authored,

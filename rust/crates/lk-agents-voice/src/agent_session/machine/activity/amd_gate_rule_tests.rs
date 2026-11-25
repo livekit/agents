@@ -17,7 +17,7 @@ use crate::agent_session::{
 };
 use crate::amd::{
     AmdAnswer, AmdCommand, AmdObservation, AmdRunId, DetachCancel, Opening, ReplyDecision,
-    SEND_DTMF_TOOL, SpeechObservation, TurnEnd, UserSpeechObservation,
+    SpeechObservation, TurnEnd, UserSpeechObservation,
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnDetectionMode, TurnId};
 use crate::events::SessionEvent;
@@ -31,6 +31,24 @@ const RUN: AmdRunId = AmdRunId(1);
 /// `machine_silence_threshold`'s default (spec §4.1).
 const SILENCE: Duration = Duration::from_millis(1500);
 const STAGE: &str = "You reached a call screener. Say who you are and why you are calling.";
+
+/// The name the host gives AMD's built-in DTMF tool.
+const SEND_DTMF_TOOL: &str = "send_dtmf_events";
+
+/// AMD's built-in DTMF tool, as a host declares it at attach.
+pub(super) fn dtmf_tool() -> lk_agents_abi::ToolSpec {
+    lk_agents_abi::ToolSpec {
+        name: SEND_DTMF_TOOL.into(),
+        description: "Send a list of DTMF events to the telephony provider.".into(),
+        json_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "events": { "type": "array", "items": { "type": "string" } } },
+            "required": ["events"],
+        }),
+        flags: Default::default(),
+        provider_tool: None,
+    }
+}
 
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
@@ -122,7 +140,7 @@ impl Gate {
     }
 
     fn attach(&mut self, run: AmdRunId) -> usize {
-        self.send(Command::Amd(AmdCommand::Attach { run, call: None }))
+        self.send(Command::Amd(AmdCommand::Attach { run, dtmf_tool: dtmf_tool(), call: None }))
     }
 
     /// AMD's answers are inputs of their own, not host commands.
@@ -841,3 +859,8 @@ fn speech_in_progress_holds_without_a_deadline() {
 // the observations.
 #[path = "amd_gate_reply_tests.rs"]
 mod reply;
+
+// A second run, activation while a turn is in its hook, the session's options, deferred tool
+// replies and the close.
+#[path = "amd_gate_lifecycle_tests.rs"]
+mod lifecycle;

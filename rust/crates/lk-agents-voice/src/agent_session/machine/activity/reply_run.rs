@@ -288,7 +288,7 @@ impl VoiceDriver {
         plan.tools = offered.clone();
         plan.record = None;
         plan.new_message = None;
-        if !plan.keep_turn_instructions {
+        if plan.turn_instructions_scope == crate::generation::TurnInstructionsScope::Once {
             plan.turn_instructions = None;
         }
         plan.on_enter = false;

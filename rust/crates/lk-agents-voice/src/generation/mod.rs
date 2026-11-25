@@ -642,6 +642,16 @@ pub struct Replan {
     pub spec: PlanSpec,
 }
 
+/// How long a reply's `turn_instructions` last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TurnInstructionsScope {
+    /// The first step only: the reply's tool follow-ups go without them.
+    #[default]
+    Once,
+    /// Every step of the reply, its tool follow-ups included (AMD's stage instructions).
+    Sticky,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PlanSpec {
     /// `None` plans against the frame's record.
@@ -650,8 +660,7 @@ pub struct PlanSpec {
     /// `None` renders the frame's instructions.
     pub instructions: Option<String>,
     pub turn_instructions: Option<String>,
-    /// `turn_instructions` stay for the reply's tool follow-ups (AMD's stage instructions).
-    pub keep_turn_instructions: bool,
+    pub turn_instructions_scope: TurnInstructionsScope,
     pub tools: Vec<lk_agents_abi::ToolSpec>,
     pub on_enter: bool,
     pub running_tool_calls: Vec<crate::generation::RunningToolCall>,
@@ -796,7 +805,7 @@ mod expressive_tests {
             new_message: None,
             instructions: None,
             turn_instructions: None,
-            keep_turn_instructions: false,
+            turn_instructions_scope: TurnInstructionsScope::Once,
             tools: vec![],
             on_enter: false,
             running_tool_calls: vec![],

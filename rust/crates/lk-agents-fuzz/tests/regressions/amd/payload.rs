@@ -3,12 +3,12 @@
 
 use super::{Call, listening};
 use lk_agents_fuzz::drive::Setup;
+use lk_agents_fuzz::fakes::amd::SEND_DTMF_TOOL;
 use lk_agents_fuzz::fakes::amd::STAGE;
 use lk_agents_fuzz::input::{
     AgentText, AmdVerdict, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
 };
 use lk_agents_fuzz::record::Kind;
-use lk_agents_voice::amd::SEND_DTMF_TOOL;
 
 const LINE: &str = "Hello, this is the clinic.";
 

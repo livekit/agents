@@ -231,6 +231,23 @@ fn detach_forbidding_replies_keeps_only_what_is_playing() {
     );
 }
 
+/// Forbidding replies cancels an opening that has not played and keeps one that is playing.
+#[test]
+fn detach_forbidding_replies_cancels_only_an_unplayed_opening() {
+    for played in [false, true] {
+        let mut g = Gate::new();
+        g.attach(RUN);
+        g.activate(Some(Opening::Text("Hi, this is Ada from the clinic.".into())));
+        let opening = g.one_opening();
+        if played {
+            g.first_frame(opening);
+        }
+        g.advance_to(100);
+        g.detach(deny(), DetachCancel::ForbidReplies);
+        assert_eq!(g.cancelled(opening), !played, "played={played}");
+    }
+}
+
 /// Step 5: commits after `Detach` are not gated (spec §9.5) and AMD observes nothing more.
 #[test]
 fn commits_after_detach_are_not_gated() {
