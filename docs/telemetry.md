@@ -180,7 +180,7 @@ Every model metric carries the same four labels:
 | --- | --- |
 | `model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
 | `model.plugin` | the code that runs: a plugin id (`deepgram`, `openai`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
-| `model.provider` | the vendor whose model runs, from one list of names (`deepgram`, `cerebras`) |
+| `model.provider` | the vendor whose model runs, as the model declares it (`deepgram`, `cerebras`) |
 | `model.name` | the vendor's own id for the model (`nova-3`, `gpt-4o-mini`) |
 
 Plugin and provider are usually the same name. Both are kept because one plugin can reach
@@ -197,13 +197,13 @@ people use.
   Through LiveKit Inference the provider is the vendor behind it, never `livekit`, and the
   name loses its vendor prefix and its options: `deepgram/nova-3:en` is `deepgram` and
   `nova-3`. So one query compares a model across plugins and Inference.
-- Provider names come from one list in the framework, shared by Python and Node and
-  spelled as LiveKit Inference spells them (`google`, `xai`). An endpoint that list does
-  not know is `unknown`: its host name is never sent.
-- A model name is the vendor's id as the application gave it, with nothing folded
-  together: a dated snapshot (`gpt-4o-mini-2024-07-18`) stays itself. Grouping snapshots
-  and aliases into one model is done where the statistics are read, never in the agent,
-  so it can be corrected for past data too.
+- No table maps names, in the framework or anywhere else. The provider is the name the
+  model declares for itself: a plugin names its vendor where the vendor is chosen
+  (`openai.LLM.with_cerebras()` declares `cerebras`), and LiveKit Inference takes it from
+  the model string. The model name is the vendor's id as the application gave it; nothing
+  is renamed or grouped, so a dated snapshot (`gpt-4o-mini-2024-07-18`) stays itself.
+- A model that declares no provider, like a plugin given only a base URL, is `unknown`:
+  its host name is never sent.
 - A plugin id is the last part of the package name, the same in every language:
   `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram` in Node are
   both `deepgram`.
