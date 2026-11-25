@@ -1,0 +1,69 @@
+python/livekit-agents/livekit/agents/_generated/_core_voice.pyi
+  s_342953b2c18827::t_f54f599d7714ad 38,84-121,681-685
+python/livekit-agents/livekit/agents/_generated/amd.py
+  s_342953b2c18827::t_8bdd9572c9f63f 1-371
+rust/crates/lk-agents-abi/src/voice/amd.rs
+  s_dd9a897e9627fc::t_d3a630b23b1df7 1-446
+rust/crates/lk-agents-py/src/generated/voice.rs
+  s_342953b2c18827::t_ba65c7cf61db9a 12-152,3522-3545,6315-6463,13928-13941
+python/livekit-agents/livekit/agents/_core.pyi
+  s_342953b2c18827::t_a5b18a18004b20 265,294-298
+python/livekit-agents/livekit/agents/_generated/public_voice_amd.py
+  s_342953b2c18827::t_bab187764101e7 1-42
+rust/crates/lk-agents-abi/src/voice/mod.rs
+  s_342953b2c18827::t_930675a77e941e 1
+rust/crates/lk-agents-abi/src/voice/session.rs
+  s_342953b2c18827::t_f393bf45e98557 586-588,673-681
+rust/crates/lk-agents-abi/src/worker/remote_session.rs
+  s_342953b2c18827::t_9bd01f18480c6b 125-128,263-265
+rust/crates/lk-agents-py/src/generated/core_names.json
+  s_342953b2c18827::t_4d019ac0607804 11,161-165
+rust/crates/lk-agents-py/src/generated/implementations.rs
+  s_342953b2c18827::t_21b1648706cd34 133-134
+rust/crates/lk-agents-py/src/generated/mod.rs
+  s_342953b2c18827::t_1278dc6ff31f71 194-195,236,484-489
+rust/crates/lk-agents-py/src/generated/records.rs
+  s_342953b2c18827::t_8014202f859fdb 3241-4085
+rust/crates/lk-agents-runtime/src/voice/amd/executor.rs
+  s_342953b2c18827::t_ff4781899ca743 30-31,79-81,141-142,151-154,184,196-197,200,235-238,328-332,362-368
+rust/crates/lk-agents-runtime/src/voice/amd/host.rs
+  s_342953b2c18827::t_90a13353e0765f 1-303
+rust/crates/lk-agents-runtime/src/voice/amd/host_tests.rs
+  s_342953b2c18827::t_a7d73563adc5ba 1-148
+rust/crates/lk-agents-runtime/src/voice/amd/mod.rs
+  s_342953b2c18827::t_c88527c13cbf35 24,176-177,180-182,213-233,325-326,340-346,360-361
+rust/crates/lk-agents-runtime/src/voice/remote_session/driver.rs
+  s_342953b2c18827::t_31973ef4157fea 249-259,378-381
+rust/crates/lk-agents-runtime/src/voice/session/class.rs
+  s_342953b2c18827::t_2af5c7e54843b5 30,381-387
+rust/crates/lk-agents-runtime/src/voice/session/mod.rs
+  s_342953b2c18827::t_d4e8251dc88d59 592
+rust/crates/lk-agents-voice/src/remote_session/mod.rs
+  s_342953b2c18827::t_624b6ac99f6874 8,130-136,140-167
+rust/crates/lk-agents-voice/src/remote_session/remote_session_tests.rs
+  s_342953b2c18827::t_926fe3ad53e604 152-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "85d2b94f61413348c517a67acc0ecc3bd279533d",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_dd9a897e9627fc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a214e4-dbb5-7d83-9d05-e8132c11fd7b",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
