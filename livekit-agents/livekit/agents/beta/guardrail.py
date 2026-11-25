@@ -158,6 +158,7 @@ class DecisionGuardrail:
         self._turn_text = ""
         self._eager: dict[int, _EagerEvaluation] = {}
         self._warned_rt_turn_detection = False
+        self._warned_empty_turn = False
 
         session.on("user_input_transcribed", self._on_user_input_transcribed)
         session.on("conversation_item_added", self._on_conversation_item_added)
@@ -388,7 +389,11 @@ class DecisionGuardrail:
                 )
 
     def _agent_history(self) -> llm.ChatContext:
-        # the context the reply is generated from, before on_user_turn_completed edits it
+        """The conversation an eager ``input="history"`` check is sent before the turn.
+
+        This is the context the reply is generated from, before ``on_user_turn_completed``
+        edits it; outside a running agent, the session history.
+        """
         try:
             return self._session.current_agent.chat_ctx
         except RuntimeError:
@@ -540,8 +545,19 @@ class DecisionGuardrail:
         ``eager`` is the turn's state from :meth:`_take_turn`. Evaluations
         reused here are removed from it; the caller cancels the rest.
         """
-        if not self._checks_for("user_turn"):
+        checks = self._checks_for("user_turn")
+        if not checks:
             return None
+        if not (user_message.text_content or "").strip():
+            # nothing to check, e.g. a realtime model without an STT, which transcribes the
+            # turn itself after replying. Classifying empty text would pass anything
+            if not self._warned_empty_turn:
+                self._warned_empty_turn = True
+                logger.warning(
+                    "on_user_turn guardrail checks got a turn without a transcript, applying "
+                    "on_error; add an STT to the session to check realtime turns"
+                )
+            return _combine([Block() if c.on_error == "block" else None for c in checks])
         verdicts = await self._user_turn_verdicts(
             chat_ctx=chat_ctx, user_message=user_message, eager=eager
         )
@@ -561,7 +577,9 @@ class DecisionGuardrail:
         while earlier ones are spoken. Sentences are released in order. When one is blocked,
         nothing from it onwards is released and ``on_block`` is awaited.
         """
-        tokenizer = SentenceTokenizer(retain_format=True)
+        # every sentence is checked on its own, however short: the default merges short
+        # ones into the next, so a check about the last sentence would skip them
+        tokenizer = SentenceTokenizer(min_sentence_len=1, retain_format=True)
         queue = aio.Chan[_SentenceItem]()
         checks: set[asyncio.Task[Block | None]] = set()
         reply = ""

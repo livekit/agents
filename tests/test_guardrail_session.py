@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from typing import Any
 
 import pytest
 
@@ -183,3 +184,53 @@ async def test_agent_sentence_replacement_is_part_of_the_run_result() -> None:
                 "Thanks for asking about that order.",
                 "Let me check with a colleague.",
             ]
+
+
+async def _run_typed(
+    setup: Callable[[DecisionGuardrail], None], responses: list[Any], user_input: str
+) -> list[str]:
+    from livekit.agents import AgentSession
+
+    from .fake_llm import FakeLLM
+
+    async with AgentSession(llm=FakeLLM(fake_responses=responses)) as session:
+        guardrail = DecisionGuardrail(session, model=KeywordModel("idiot"))
+        setup(guardrail)
+        await session.start(Agent(instructions="You are a helpful assistant."))
+        result = await asyncio.wait_for(session.run(user_input=user_input), timeout=5.0)
+        return [
+            f"{ev.item.role}: {(ev.item.text_content or '').strip()}"
+            for ev in result.events
+            if ev.type == "message"
+        ]
+
+
+async def test_typed_user_turn_is_checked() -> None:
+    from .fake_llm import FakeLLMResponse
+
+    def setup(guardrail: DecisionGuardrail) -> None:
+        @guardrail.on_user_turn(decisions=FLAG)
+        def before_reply(ev: DecisionEvaluated) -> Block | None:
+            return Block(say="Please keep it civil.") if ev.get("flag") else None
+
+    responses = [
+        FakeLLMResponse(input="you idiot", content="Never generated.", ttft=0.1, duration=0.1)
+    ]
+    # typed input (room chat, session.run) goes through generate_reply, not turn completion
+    assert await _run_typed(setup, responses, "you idiot") == ["assistant: Please keep it civil."]
+
+
+async def test_typed_user_turn_steer_reaches_the_reply() -> None:
+    from .fake_llm import FakeLLMResponse
+
+    def setup(guardrail: DecisionGuardrail) -> None:
+        @guardrail.on_user_turn(decisions=FLAG)
+        def before_reply(ev: DecisionEvaluated) -> Steer | None:
+            return Steer(instructions="Stay calm.") if ev.get("flag") else None
+
+    responses = [
+        FakeLLMResponse(input="you idiot", content="Unsteered reply.", ttft=0.1, duration=0.1),
+        # the fake LLM answers by its last message, which is the steer's instructions
+        FakeLLMResponse(input="Stay calm.", content="Let's sort this out.", ttft=0.1, duration=0.1),
+    ]
+    assert await _run_typed(setup, responses, "you idiot") == ["assistant: Let's sort this out."]

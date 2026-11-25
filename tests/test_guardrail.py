@@ -633,3 +633,51 @@ async def test_agent_turn_reports_the_message_and_its_speech() -> None:
     await asyncio.wait_for(done.wait(), timeout=1.0)
     assert seen == [("speech_1", "item_1")]
     await guardrail.aclose()
+
+
+async def test_sentence_gate_checks_short_sentences_on_their_own() -> None:
+    session = StubSession()
+    guardrail = DecisionGuardrail(session, model=ScriptedModel(lambda _: 0.0))  # type: ignore[arg-type]
+
+    @guardrail.on_agent_sentence(decisions=OFF_POLICY)
+    def during_reply(ev: DecisionEvaluated) -> Block | None:
+        # about the last sentence only, as the decisions are written
+        last = ev.input_text.rstrip().rsplit(". ", 1)[-1]
+        return Block() if last.startswith("Refund") else None
+
+    blocked: list[Block] = []
+
+    async def on_block(block: Block) -> None:
+        blocked.append(block)
+
+    out = [
+        c
+        async for c in guardrail._gate_agent_sentences(
+            _stream("Refund approved. Is there anything else I can help you with today?"),
+            chat_ctx=ChatContext(),
+            speech_id="s",
+            on_block=on_block,
+        )
+    ]
+    # the short first sentence is checked by itself, so nothing is released
+    assert out == []
+    assert blocked == [Block()]
+    await guardrail.aclose()
+
+
+@pytest.mark.parametrize("on_error, expected", [("allow", None), ("block", Block())])
+async def test_user_turn_without_a_transcript_follows_on_error(
+    on_error: Any, expected: Any
+) -> None:
+    session = StubSession()
+    model = ScriptedModel(lambda _: 0.0)
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+
+    @guardrail.on_user_turn(decisions=ABUSIVE, on_error=on_error, eager=False)
+    def before_reply(ev: DecisionEvaluated) -> None:
+        return None
+
+    # a realtime model without an STT: the turn reaches the check with no text
+    assert await _run_user_turn(session, "") == expected
+    assert model.inputs == []
+    await guardrail.aclose()

@@ -1883,7 +1883,13 @@ class AgentActivity(RecognitionHooks):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         schedule_speech: bool = True,
         input_details: InputDetails = DEFAULT_INPUT_DETAILS,
+        check_user_turn: bool = False,
     ) -> SpeechHandle:
+        """Create and schedule a reply.
+
+        ``check_user_turn`` runs the guardrail's ``on_user_turn`` checks on ``user_message``
+        before replying. Audio turns are checked in ``_user_turn_completed_impl`` instead.
+        """
         if self._rt_turn_detection_enabled and allow_interruptions is False:
             logger.warning(
                 "the RealtimeModel uses a server-side turn detection, allow_interruptions cannot be False when using VoiceAgent.generate_reply(), "  # noqa: E501
@@ -1947,6 +1953,7 @@ class AgentActivity(RecognitionHooks):
                     else None,
                     tools=resolved_tools if is_given(resolved_tools) else None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
+                    check_user_turn=check_user_turn,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.realtime_reply",
@@ -1966,6 +1973,7 @@ class AgentActivity(RecognitionHooks):
                         else self._tool_choice
                     ),
                     _previous_user_metrics=user_metrics,
+                    check_user_turn=check_user_turn,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.pipeline_reply",
@@ -2103,8 +2111,12 @@ class AgentActivity(RecognitionHooks):
         return_handle: bool = False,
     ) -> asyncio.Future[str] | asyncio.Future[CommitUserTurnResult]:
         completion = _TurnCompletion() if return_handle else None
-        # Turn hooks gate realtime replies after EOT.
-        if self._rt_session is not None and (self._session._turn_hooks is None or skip_reply):
+        # Turn hooks and on_user_turn guardrail checks gate realtime replies after EOT.
+        guardrail = self._session._guardrail
+        gated = self._session._turn_hooks is not None or (
+            guardrail is not None and bool(guardrail._checks_for("user_turn"))
+        )
+        if self._rt_session is not None and (not gated or skip_reply):
             # commit audio buffer and conditionally trigger response generation
             self._rt_session.commit_audio()
             if skip_reply:
@@ -3017,6 +3029,38 @@ class AgentActivity(RecognitionHooks):
                 eager.task.cancel()
             _end_user_turn_span(info)
 
+    async def _check_typed_user_turn(
+        self,
+        user_message: llm.ChatMessage,
+        *,
+        chat_ctx: llm.ChatContext,
+        record_blocked: bool = True,
+    ) -> tuple[bool, str | None]:
+        """Run the guardrail's ``on_user_turn`` checks on a typed message.
+
+        Returns whether the reply is blocked, and the steer instructions for it. A blocked
+        turn says its replacement and, with ``record_blocked``, stays in the history.
+        """
+        guardrail = self._session._guardrail
+        if guardrail is None:
+            return False, None
+
+        from ..beta.guardrail import Block, Steer
+
+        verdict = await guardrail._run_user_turn_checks(
+            chat_ctx=chat_ctx, user_message=user_message, eager={}
+        )
+        if isinstance(verdict, Block):
+            if record_blocked:
+                self._agent._chat_ctx.insert(user_message)
+                self._session._conversation_item_added(user_message)
+            if verdict.say:
+                self._session.say(verdict.say)
+            return True, None
+        if isinstance(verdict, Steer):
+            return False, verdict.instructions
+        return False, None
+
     async def _user_turn_completed_impl(
         self,
         old_task: asyncio.Task[None] | None,
@@ -3830,6 +3874,7 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
+        check_user_turn: bool = False,
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -3844,6 +3889,7 @@ class AgentActivity(RecognitionHooks):
                 new_message=new_message,
                 instructions=instructions,
                 _previous_user_metrics=_previous_user_metrics,
+                check_user_turn=check_user_turn,
             )
 
     async def _pipeline_reply_task_impl(
@@ -3856,8 +3902,15 @@ class AgentActivity(RecognitionHooks):
         new_message: llm.ChatMessage | None = None,
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
+        check_user_turn: bool = False,
     ) -> None:
         from .agent import ModelSettings
+
+        steer: str | None = None
+        if check_user_turn and new_message is not None:
+            blocked, steer = await self._check_typed_user_turn(new_message, chat_ctx=chat_ctx)
+            if blocked:
+                return
 
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
@@ -3889,6 +3942,8 @@ class AgentActivity(RecognitionHooks):
 
         if new_message is not None:
             chat_ctx.insert(new_message)
+        if steer is not None:
+            chat_ctx.add_message(role="system", content=[steer])
 
         # resolve modality-specific instructions for this turn
         turn_modality = speech_handle.input_details.modality
@@ -4557,6 +4612,7 @@ class AgentActivity(RecognitionHooks):
         instructions: str | None = None,
         tool_reply: bool = False,
         text: str | AsyncIterable[str] | None = None,
+        check_user_turn: bool = False,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
@@ -4587,6 +4643,18 @@ class AgentActivity(RecognitionHooks):
             )
             return
 
+        blocked = False
+        if check_user_turn and user_input is not None:
+            # the message is pushed below either way: a blocked turn stays in the history
+            blocked, steer = await self._check_typed_user_turn(
+                llm.ChatMessage(role="user", content=[user_input]),
+                chat_ctx=self._agent.chat_ctx,
+                record_blocked=False,
+            )
+            if steer is not None:
+                # a realtime reply ignores the chat context, like the audio path's steer
+                instructions = f"{instructions}\n{steer}" if instructions else steer
+
         if user_input is not None:
             try:
                 async with self._rt_chat_ctx_lock:
@@ -4605,6 +4673,9 @@ class AgentActivity(RecognitionHooks):
                 return
             self._agent._chat_ctx._upsert_item(msg)
             self._session._conversation_item_added(msg)
+
+        if blocked:
+            return
 
         # inside on_enter, hide flagged tools even when no tools= was passed (fall back to self.tools)
         turn_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN

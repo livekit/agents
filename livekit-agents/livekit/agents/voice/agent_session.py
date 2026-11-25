@@ -1786,6 +1786,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
                 input_details=InputDetails(modality=input_modality),
+                # typed input and run(): audio turns are checked when the turn completes
+                check_user_turn=bool(user_message),
             )
             if run_state:
                 run_state._watch_handle(handle)
