@@ -531,9 +531,9 @@ async def test_stt_realtime_stream_outlasts_server_silence(monkeypatch: pytest.M
     reader = asyncio.create_task(drain())
     try:
         silence = b"\x00\x00" * 480
-        for _ in range(150):  # 3 s of silence, three liveness windows
+        for _ in range(150):
             if reader.done():
-                reader.result()  # surfaces why the stream ended
+                reader.result()
             stream.push_frame(
                 rtc.AudioFrame(
                     data=silence, sample_rate=24000, num_channels=1, samples_per_channel=480
