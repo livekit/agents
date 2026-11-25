@@ -489,6 +489,114 @@ async def test_tool_result_reply_required_reaches_realtime_session(
 # --- chat context sync ---------------------------------------------------------
 
 
+@asynccontextmanager
+async def _realtime_turns() -> AsyncIterator[
+    tuple[AgentSession, FakeRealtimeModel, Agent, list[llm.ChatMessage]]
+]:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        added: list[llm.ChatMessage] = []
+        session.on(
+            "conversation_item_added",
+            lambda ev: (
+                added.append(ev.item)
+                if isinstance(ev.item, llm.ChatMessage) and ev.item.role == "user"
+                else None
+            ),
+        )
+        agent = Agent(instructions="test")
+        await session.start(agent)
+        yield session, model, agent, added
+
+
+async def _send(
+    session: AgentSession, model: FakeRealtimeModel, user_input: str | llm.ChatMessage, index: int
+) -> None:
+    reply = session.generate_reply(user_input=user_input)
+    (await _reply_future(model.active_session, index)).set_result(_generation("Hi"))
+    await reply
+    assert reply.exception() is None
+
+
+async def _added_user_message(
+    user_input: str | llm.ChatMessage,
+) -> tuple[llm.ChatMessage, FakeRealtimeSession, Agent]:
+    async with _realtime_turns() as (session, model, agent, added):
+        await _send(session, model, user_input, 0)
+        assert len(added) == 1
+        return added[0], model.active_session, agent
+
+
+async def test_generate_reply_keeps_the_chat_message_extra() -> None:
+    sent = llm.ChatMessage(role="user", content=["hello"], extra={"flag": "from-app"})
+
+    added, rt_session, agent = await _added_user_message(sent)
+
+    assert added.extra == {"flag": "from-app"}
+    assert added.content == ["hello"]
+    local = agent.chat_ctx.get_by_id(added.id)
+    assert isinstance(local, llm.ChatMessage) and local.extra == {"flag": "from-app"}
+    assert rt_session.chat_ctx.get_by_id(added.id) is not None
+
+
+async def test_generate_reply_text_input_is_unchanged() -> None:
+    added, rt_session, _ = await _added_user_message("hello")
+
+    assert added.content == ["hello"]
+    assert added.extra == {}
+    assert rt_session.chat_ctx.get_by_id(added.id) is not None
+
+
+async def test_generate_reply_turn_differs_from_a_text_turn_only_by_extra() -> None:
+    sent = llm.ChatMessage(
+        role="assistant",
+        content=["first", "second"],
+        interrupted=True,
+        transcript_confidence=0.4,
+        metrics=llm.MetricsReport(end_of_turn_delay=1.5),
+        extra={"flag": "from-app"},
+    )
+    text_turn, _, _ = await _added_user_message(sent.raw_text_content or "")
+
+    added, rt_session, _ = await _added_user_message(sent)
+
+    fields = {"id", "extra", "created_at"}
+    assert added.model_dump(exclude=fields) == text_turn.model_dump(exclude=fields)
+    remote = rt_session.chat_ctx.get_by_id(added.id)
+    assert isinstance(remote, llm.ChatMessage)
+    assert remote.model_dump(exclude=fields) == text_turn.model_dump(exclude=fields)
+    assert added.id != sent.id
+    assert added.extra == {"flag": "from-app"}
+
+
+async def test_generate_reply_uses_the_message_as_it_was_when_called() -> None:
+    sent = llm.ChatMessage(role="user", content=["hello"], extra={"flag": "first"})
+
+    async with _realtime_turns() as (session, model, _, added):
+        reply = session.generate_reply(user_input=sent)
+        sent.content[0] = "edited"
+        sent.extra["flag"] = "edited"
+        (await _reply_future(model.active_session)).set_result(_generation("Hi"))
+        await reply
+
+        assert reply.exception() is None
+        assert [(m.content, m.extra) for m in added] == [(["hello"], {"flag": "first"})]
+
+
+async def test_generate_reply_retagged_resend_keeps_the_first_turn_tag() -> None:
+    sent = llm.ChatMessage(role="user", content=["hello"], extra={"source": "web"})
+
+    async with _realtime_turns() as (session, model, _, added):
+        await _send(session, model, sent, 0)
+        sent.extra["source"] = "sms"
+        await _send(session, model, sent, 1)
+
+        assert [m.extra for m in added] == [{"source": "web"}, {"source": "sms"}]
+        assert added[0].id != added[1].id
+        first = session.history.get_by_id(added[0].id)
+        assert isinstance(first, llm.ChatMessage) and first.extra == {"source": "web"}
+
+
 class _AckedSession(FakeRealtimeSession):
     """Mirror a provider that commits context updates only when acknowledged."""
 

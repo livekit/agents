@@ -1941,6 +1941,7 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=handle,
                     # TODO(theomonnom): support llm.ChatMessage for the realtime model
                     user_input=user_message.raw_text_content if user_message else None,
+                    user_extra=dict(user_message.extra) if user_message else None,
                     instructions=self._render_realtime_instructions(instructions)
                     if instructions
                     else None,
@@ -4474,6 +4475,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         tools: list[llm.Tool | llm.Toolset] | None = None,
         user_input: str | None = None,
+        user_extra: dict[str, Any] | None = None,
         instructions: str | None = None,
         tool_reply: bool = False,
         text: str | AsyncIterable[str] | None = None,
@@ -4511,7 +4513,9 @@ class AgentActivity(RecognitionHooks):
             try:
                 async with self._rt_chat_ctx_lock:
                     chat_ctx = self._rt_session.chat_ctx.copy()
-                    msg = chat_ctx.add_message(role="user", content=user_input)
+                    msg = chat_ctx.add_message(
+                        role="user", content=user_input, extra=user_extra or NOT_GIVEN
+                    )
                     await self._rt_session.update_chat_ctx(chat_ctx)
             except llm.RealtimeError as e:
                 # the push is best-effort (the items were sent; only the ack timed out),
