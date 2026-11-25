@@ -151,7 +151,8 @@ identifier, never content.
 | --- | --- | --- |
 | `service.name` | `livekit-agents` | Tells the framework apart from other senders |
 | `lk.productstats.framework.version` | `2.0.0` | Which versions are in use |
-| `lk.productstats.python.version` | `3.12.4` | Which Python versions to support |
+| `lk.productstats.runtime.name` | `python` | The runtime the agent runs on: `python`, `node`, `bun` or `deno` |
+| `lk.productstats.runtime.version` | `3.12.4` | Which versions of each runtime to support |
 | `lk.productstats.os`, `lk.productstats.arch` | `linux`, `aarch64` | Which platforms to support |
 | `lk.productstats.runner.launch` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
 | `lk.productstats.runner.kind` | `production` | What the process is, derived from the launch and its environment: `production`, `development`, `ci` or `unknown` |
@@ -178,22 +179,19 @@ Each metric carries the same labels:
 | `lk.productstats.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
 | `lk.productstats.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
 | `lk.productstats.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
-| `lk.productstats.model.transcriptions` | counter | User turns an STT transcribed, by `lk.productstats.stt.final` |
 
-The two STT metrics carry two more labels, because the delay starts at the end of speech,
+The transcription delay carries one more label, because it starts at the end of speech,
 which the STT does not always decide:
 
 | Label | Values |
 | --- | --- |
 | `lk.productstats.stt.speech_end` | who ended the speech: `vad` (the session's VAD) or `provider` (the STT detects speech itself) |
-| `lk.productstats.stt.final` | `after_speech_end`, or `before_speech_end` when the final transcript arrived first |
 
-- The delay is recorded only for `after_speech_end` turns. A final that arrives before the
-  end of speech has no delay to measure; it is counted, never recorded as zero.
+- A turn whose final transcript arrived before the end of speech has no delay to measure:
+  it records nothing, never a zero. So does a turn whose end of speech was not detected.
 - Delays are compared only within one `speech_end` value, as medians and percentiles per
   provider and model. A `vad` delay includes the VAD's silence window; a `provider` delay
   includes the provider's own endpointing.
-- A turn whose end of speech was not detected records nothing.
 
 **Feature usage**
 
