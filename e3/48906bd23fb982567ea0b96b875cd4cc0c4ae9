@@ -1,0 +1,36 @@
+rust/crates/lk-agents-voice/src/amd/events.rs
+  s_bbb46b29e16294::t_1180d95ffb5057 1-250
+rust/crates/lk-agents-voice/src/amd/effects.rs
+  s_bbb46b29e16294::t_115ece400770fb 1-228
+rust/crates/lk-agents-voice/src/amd/options.rs
+  s_bbb46b29e16294::t_12a7ec2b57725a 1-134
+rust/crates/lk-agents-voice/src/effects.rs
+  s_bbb46b29e16294::t_a6efa299acb197 1
+rust/crates/lk-agents-voice/src/amd/mod.rs
+  s_64d3c26af4526a::t_62aa8e9281a1ed 16-18
+  s_64d3c26af4526a::t_abcebe35fcc1d0 15,19-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e348906bd23fb982567ea0b96b875cd4cc0c4ae9",
+  "prompts": {},
+  "sessions": {
+    "s_64d3c26af4526a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a21353-af43-7743-8ece-4bfdefa38f1a",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
