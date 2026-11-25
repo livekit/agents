@@ -279,6 +279,33 @@ impl VoiceSession {
         }
     }
 
+    /// Every observation the reply gate sends the attached AMD run, to `observer`. Before
+    /// `start()`. The scripted answerer of a test or the simulation reads them.
+    #[cfg(any(test, feature = "dst"))]
+    pub fn observe_amd(
+        &self,
+        observer: impl FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation)
+        + Send
+        + 'static,
+    ) {
+        if let Stage::Ready(ready) = &mut *self.stage.lock() {
+            ready.builder.amd = shared::AmdTap::observed(observer);
+        }
+    }
+
+    /// An answer of the attached AMD run, applied by the session's reply gate in the order sent.
+    /// The scripted answerer of a test or the simulation sends it, as the AMD executor will.
+    #[cfg(any(test, feature = "dst"))]
+    pub fn answer_amd(
+        &self,
+        answer: lk_agents_voice::amd::AmdAnswer,
+    ) -> Result<(), SessionRefused> {
+        self.running(|r| {
+            (r.api.send(lk_agents_voice::agent_session::VoiceEvent::Amd(answer)))
+                .map_err(|_| SessionRefused::LoopEnded)
+        })
+    }
+
     #[cfg(feature = "dst")]
     pub fn probe(&self, Probe { step, host_event }: Probe) {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {

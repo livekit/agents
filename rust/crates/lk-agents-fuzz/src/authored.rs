@@ -138,6 +138,7 @@ impl Authored {
                 speech: Some(speech),
                 tools: vec![],
                 input_candidates: None,
+                messages: vec![],
             },
         )
     }
@@ -436,6 +437,107 @@ impl Authored {
     pub fn later(mut self, ms: u64) -> Self {
         self.later_ms += ms;
         self
+    }
+
+    /// The AMD run `run` observed this.
+    pub fn amd(mut self, run: u64, observation: lk_agents_voice::amd::AmdObservation) -> Self {
+        let at = self.next();
+        self.recording.record_amd(at, lk_agents_voice::amd::AmdRunId(run), observation);
+        self
+    }
+
+    /// The session committed `turn` for a reply with these words: the end of turn, the host's
+    /// `UserTurnCompleted`, its user item (`user_<turn>`) and, under a gate, its `AmdTurn`.
+    pub fn user_turn(mut self, run: Option<u64>, turn: u64, words: &str) -> Self {
+        use lk_agents_voice::audio_recognition::{TurnId, UserTurnCommitVerdict};
+        use lk_agents_voice::trace::TurnStep;
+        self = self.journal(Step::Turn(TurnStep::EndOfTurn {
+            transcript: words.into(),
+            verdict: UserTurnCommitVerdict::Reply,
+            committed: true,
+        }));
+        self = self.session(SessionEvent::UserTurnCompleted(
+            lk_agents_voice::events::UserTurnCompletedEvent {
+                turn: TurnId(turn),
+                new_transcript: words.into(),
+                transcript_confidence: 1.0,
+            },
+        ));
+        if let Some(run) = run {
+            self = self.opens(Kind::AmdTurn, Detail::AmdTurn { run, turn });
+            self = self.amd(
+                run,
+                lk_agents_voice::amd::AmdObservation::TurnCommitted {
+                    turn: TurnId(turn),
+                    transcript: words.into(),
+                    eot_delay: None,
+                    skip_reply: false,
+                    speaking: false,
+                    agent: "agent".into(),
+                    at: lk_agents_abi::Ts::ZERO,
+                },
+            );
+        }
+        self.session(SessionEvent::ConversationItemAdded {
+            item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
+                format!("user_{turn}"),
+                lk_agents_abi::Role::User,
+                words,
+                std::time::UNIX_EPOCH,
+            ))),
+            agent: "agent".into(),
+            source: lk_agents_voice::agent::Source::UserTurn { turn: TurnId(turn) },
+            visibility: lk_agents_voice::agent::Visibility::Both,
+        })
+    }
+
+    /// A model request for `speech` answering the user item `user_<turn>` (with `words`), with
+    /// `extra` system messages after it and these tools.
+    pub fn request(
+        self,
+        speech: u64,
+        turn: u64,
+        words: &str,
+        extra: &[&str],
+        tools: &[&str],
+    ) -> Self {
+        use crate::record::amd::RequestMessage;
+        let mut messages = vec![
+            RequestMessage {
+                id: "prompt".into(),
+                role: lk_agents_abi::Role::System,
+                text: "Be brief.".into(),
+            },
+            RequestMessage {
+                id: format!("user_{turn}"),
+                role: lk_agents_abi::Role::User,
+                text: words.into(),
+            },
+        ];
+        messages.extend(extra.iter().map(|text| RequestMessage {
+            id: "turn_instructions".into(),
+            role: lk_agents_abi::Role::System,
+            text: (*text).into(),
+        }));
+        self.opens(
+            Kind::Chat,
+            Detail::Chat {
+                ctx_ids: messages.iter().map(|m| m.id.clone()).collect(),
+                speech: Some(speech),
+                tools: tools.iter().map(|t| (*t).to_string()).collect(),
+                input_candidates: None,
+                messages,
+            },
+        )
+    }
+
+    /// The speech's audio reached the sink.
+    pub fn pushed(self, speech: u64) -> Self {
+        use lk_agents_voice::trace::{PlayoutStep, SinkCall};
+        self.journal(Step::Playout(PlayoutStep::SinkCalled {
+            speech: Some(SpeechId(speech)),
+            call: SinkCall::Push { frames: 1 },
+        }))
     }
 
     pub fn done(mut self) -> Recording {

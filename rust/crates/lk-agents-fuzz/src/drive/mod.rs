@@ -694,6 +694,9 @@ impl RefRegistry for NoopRefs {
 }
 
 /// A real session, the fakes behind it, and everything the run has learned.
+/// AMD observations as the gate emitted them, stamped.
+pub(crate) type AmdSeen = Vec<crate::record::amd::Seen>;
+
 pub struct Run {
     wall_clock: Arc<fakes::clock::SkewClock>,
     /// The session, as a host holds it.
@@ -727,6 +730,10 @@ pub struct Run {
     /// Journal steps the probe stamped, waiting to be absorbed. The probe runs under the
     /// driver's own lock and cannot touch the recording, so it parks them here.
     steps: Arc<Mutex<Vec<(Observed, Step)>>>,
+    /// What the AMD gate observed, waiting to be absorbed, as `steps` are.
+    amd: Arc<Mutex<AmdSeen>>,
+    /// How many AMD runs attached: the latest is the one answering.
+    amd_runs: u64,
     /// What the host received, with the live handle of a speech it was told of, taken as the
     /// event was delivered (the session lets it go once nothing names it).
     host: HostJournal,

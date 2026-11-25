@@ -23,6 +23,7 @@ use crate::{
 // A delivery to a closed receiver is a recorded, rejected attempt, never a panic.
 
 pub mod a2a_peer;
+pub mod amd;
 mod avatar;
 pub(crate) mod clock;
 mod console;

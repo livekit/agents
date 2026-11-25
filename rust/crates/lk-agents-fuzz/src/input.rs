@@ -11,6 +11,7 @@ use lk_agents_voice::agent_session::{
     command_vocabulary as command, speech_command_vocabulary as speech,
     turn_command_vocabulary as turn,
 };
+use lk_agents_voice::amd::amd_command_vocabulary as amd;
 
 use crate::record::{Kind, Live};
 
@@ -123,7 +124,8 @@ resources!(
     Output,
     Video,
     Realtime,
-    Generation
+    Generation,
+    AmdTurn
 );
 
 // Realistic on purpose: normalisation, tokenisation and chunk boundaries are where a driver
@@ -446,6 +448,18 @@ plain_enum! {
     SpeechWait { Created, Scheduled, Playout, Generation, LatestGeneration, StepAuthorized, Reported }
 }
 plain_enum! {
+    /// What the scripted AMD answerer decides for a turn, as the spec §10.1 rows produce it:
+    /// `Allow` replies under the agent's own instructions (a direct human), `Deny` and `Wait`
+    /// deny (`Wait` is the `wait` category), `Stage` replies with stage instructions, `Silence`
+    /// with stage instructions after `machine_silence_threshold` of silence (a machine stage),
+    /// and `Ivr` with stage instructions, silence and the DTMF tool (`machine-ivr`).
+    AmdVerdict { Allow, Deny, Wait, Stage, Silence, Ivr }
+}
+plain_enum! {
+    /// What AMD's opening is: words to say, or instructions to generate from.
+    AmdOpening { Text, Instructions }
+}
+plain_enum! {
     /// Which models a swap replaces.
     Models { Stt, Llm, Tts, LlmAndTts, All }
 }
@@ -469,7 +483,7 @@ macro_rules! unreferenced {
 unreferenced!(
     bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
     Knob, TurnMode, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker, RtEvent,
-    DtmfInput, DtmfKey, AgentTurn, SpeechWait
+    DtmfInput, DtmfKey, AgentTurn, SpeechWait, AmdVerdict, AmdOpening
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -656,6 +670,18 @@ inputs! {
     /// conversation's tool bodies, never drawn uniformly.
     VoiceTask { tool: Ref<Tool>, agent: String, reply: bool } opens [Answer] leaf command::VoiceTask never true;
     Run { user_input: Option<UserText> } leaf command::Run;
+    /// A new AMD run attaches to the session: the reply gate installs and holds every reply.
+    /// Made only by the scripted AMD answerer, which then answers every turn it observes.
+    AmdAttach { } leaf amd::Attach never true;
+    /// The attached run starts listening, with or without an opening (spec §5.2, §10.6). AMD's
+    /// answers are session inputs, not commands.
+    AmdActivate { opening: Option<AmdOpening> } never true;
+    /// The run's decision for a turn it observed: the latest, or an older one the session drops.
+    AmdDecide { turn: Ref<AmdTurn>, verdict: AmdVerdict } never true;
+    /// The run completes. `category` is its last category; it builds `pending` as the machine
+    /// will: a `Wait` category or `forbid` denies, anything else allows with no instructions,
+    /// DTMF or silence. `forbid` cancels every speech with no playout yet.
+    AmdDetach { category: AmdVerdict, forbid: bool } never true;
 
     FeedText { stream: Ref<Stream>, text: AgentText };
     FeedAudio { stream: Ref<Stream>, chunks: Count };
@@ -765,8 +791,8 @@ not_sent! {
     command::Speech => "a family, not a leaf: its leaves are in the table";
     command::Turn => "a family, not a leaf: its leaves are in the table";
     command::Activity => "a family, not a leaf: its leaves are in the table";
+    command::Amd => "a family, not a leaf: its leaves are in the table";
     command::DelegateUsage => "an agent tool's in-process child reports its usage; no fake runs one";
-    command::Amd => "a family, not a leaf: attaching AMD needs a scripted answerer, not yet in the DST";
 }
 
 /// Compiles only while every production command leaf is either in the table or excused above.

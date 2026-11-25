@@ -58,6 +58,7 @@ mod playout {
     }
 }
 
+mod amd;
 mod avatar;
 mod realtime;
 mod remote;

@@ -43,6 +43,42 @@ impl Journal {
     }
 }
 
+type AmdObserver =
+    dyn FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation) + Send;
+
+/// Where the gate's AMD observations go: to the scripted answerer a test or the simulation
+/// installed, or nowhere.
+// Until the AMD executor consumes them, only a test or the DST reads observations; production
+// drops them, and nothing in the session waits on one.
+#[derive(Clone, Default)]
+pub struct AmdTap(Option<Arc<Mutex<AmdObserver>>>);
+
+impl std::fmt::Debug for AmdTap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("AmdTap").field(&self.0.is_some()).finish()
+    }
+}
+
+impl AmdTap {
+    pub fn observed(
+        observer: impl FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation)
+        + Send
+        + 'static,
+    ) -> Self {
+        AmdTap(Some(Arc::new(Mutex::new(observer))))
+    }
+
+    pub fn deliver(
+        &self,
+        run: lk_agents_voice::amd::AmdRunId,
+        observation: &lk_agents_voice::amd::AmdObservation,
+    ) {
+        if let Some(observer) = &self.0 {
+            (observer.lock())(run, observation);
+        }
+    }
+}
+
 /// The loop's one queue: every source sends on it, so the loop receives one [`VoiceRuntimeEvent`] at a time
 /// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
 /// event sequence.
@@ -225,6 +261,8 @@ pub struct SessionShared {
     pub(in crate::voice) keyterms: lk_agents_net::signal::Cell<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.
     pub(in crate::voice) journal: Journal,
+    /// The attached AMD run's observations.
+    pub(in crate::voice) amd: AmdTap,
 }
 
 impl SessionShared {

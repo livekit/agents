@@ -30,6 +30,7 @@ mod storage;
 pub use storage::{
     BoundaryOperation, BoundaryOutcome, StorageFault, StorageOperation, StorageStep,
 };
+pub mod amd;
 mod views;
 
 #[cfg(test)]
@@ -158,6 +159,8 @@ pub enum Kind {
     Realtime,
     /// A turn the realtime server is in the middle of: open until the case says it finished.
     Generation,
+    /// A turn the AMD gate committed: open until its run detaches, so a late answer names it.
+    AmdTurn,
 }
 
 /// The production identity behind a resource, once the run knows it.
@@ -198,6 +201,13 @@ pub enum Detail {
         tools: Vec<String>,
         /// Count observed in an input classifier's actual prompt, without retaining dialogue.
         input_candidates: Option<usize>,
+        /// Each message, in request order: which turn a reply answers, with what instructions.
+        messages: Vec<amd::RequestMessage>,
+    },
+    /// A turn the AMD gate committed: the run that observed it and the session's turn id.
+    AmdTurn {
+        run: u64,
+        turn: u64,
     },
     Tool {
         invocation_id: String,
@@ -719,6 +729,8 @@ pub struct Recording {
     /// What each audio source published in the room played, by source, as last looked at.
     room_speakers: Vec<crate::fakes::room::Speaker>,
     journal: Vec<(Observed, Step)>,
+    /// What the attached AMD runs observed, in the order the session emitted it.
+    amd: Vec<amd::Seen>,
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,

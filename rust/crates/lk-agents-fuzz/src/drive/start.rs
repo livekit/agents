@@ -372,6 +372,14 @@ impl Run {
             });
             api.probe(Probe { step, host_event });
         }
+        // The scripted AMD answerer reads what the gate observes, stamped as it is emitted.
+        let amd: Arc<Mutex<AmdSeen>> = Arc::default();
+        {
+            let (amd, stamps) = (amd.clone(), stamps.clone());
+            api.observe_amd(move |run, observation| {
+                amd.lock().unwrap().push((stamps.next(), run, observation.clone()));
+            });
+        }
         api.start_with(Box::new(super::executor::Handover::new(
             runtime_tx,
             time.clone(),
@@ -405,6 +413,8 @@ impl Run {
             user_turn: None,
             segments: BTreeMap::new(),
             steps,
+            amd,
+            amd_runs: 0,
             livelock,
             busiest_instant: 0,
             deadlock: None,

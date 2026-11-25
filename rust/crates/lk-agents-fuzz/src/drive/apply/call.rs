@@ -82,6 +82,10 @@ impl Run {
             Input::Drain { .. } | Input::Close { .. } | Input::Run { .. } => {
                 self.call_lifecycle(input)
             }
+            Input::AmdAttach { .. }
+            | Input::AmdActivate { .. }
+            | Input::AmdDecide { .. }
+            | Input::AmdDetach { .. } => self.call_amd(input),
             _ => unreachable!("{input:?} is not a call"),
         };
         let Some(pending) = pending else { return false };
@@ -541,6 +545,47 @@ impl Run {
             },
             _ => unreachable!(),
         }
+        Some(Pending::default())
+    }
+
+    /// The scripted AMD answerer: its attach and its answers, keyed by its run, which is the
+    /// latest one attached; a decision names the run and turn of the turn it was made for.
+    fn call_amd(&mut self, input: &Input) -> Option<Pending> {
+        use crate::fakes::amd;
+        use lk_agents_voice::amd::{AmdAnswer, AmdCommand, AmdRunId};
+        let run = AmdRunId(self.amd_runs);
+        let answer = match input {
+            Input::AmdAttach {} => {
+                self.amd_runs += 1;
+                let attach = AmdCommand::Attach { run: AmdRunId(self.amd_runs), call: None };
+                self.api.send(Command::Amd(attach)).ok()?;
+                return Some(Pending::default());
+            }
+            _ if self.amd_runs == 0 => return None,
+            Input::AmdActivate { opening } => {
+                AmdAnswer::Activated { run, opening: opening.map(amd::opening) }
+            }
+            Input::AmdDecide { turn, verdict } => {
+                let Detail::AmdTurn { run, turn } =
+                    *self.record.resource(Kind::AmdTurn, turn.nth)?.detail()
+                else {
+                    return None;
+                };
+                AmdAnswer::ReplyDecided {
+                    run: AmdRunId(run),
+                    turn: lk_agents_voice::audio_recognition::TurnId(turn),
+                    decision: amd::decision(*verdict),
+                }
+            }
+            Input::AmdDetach { category, forbid } => AmdAnswer::Detach {
+                run,
+                pending: amd::pending(*category, *forbid),
+                cancel: amd::cancel(*forbid),
+            },
+            _ => unreachable!("{input:?} is not AMD's"),
+        };
+        // AMD's answers are session inputs, as its executor will send them.
+        self.api.answer_amd(answer).ok()?;
         Some(Pending::default())
     }
 
