@@ -141,6 +141,17 @@ def _resolve_local_participant_identity(room: rtc.Room) -> str:
     raise SpatialRealException("failed to get local participant identity")
 
 
+def _worth_retrying(error: Exception) -> bool:
+    """Whether reconnecting after this connect failure can plausibly succeed."""
+    if not isinstance(error, AvatarSDKError):
+        return True  # timeouts, network errors
+    # the SDK doesn't count a 5xx from the session-token endpoint as retryable, but an
+    # outage there is as temporary as one anywhere else
+    if error.http_status is not None and error.http_status >= 500:
+        return True
+    return error.retryable
+
+
 def _format_error_reason(error: BaseException) -> str:
     root: BaseException = error
     seen: set[int] = set()
@@ -604,7 +615,7 @@ class AvatarSession(BaseAvatarSession):
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                if isinstance(error, AvatarSDKError) and not error.retryable:
+                if not _worth_retrying(error):
                     # retrying won't fix it (credentials, quota, ...): stop, and try again
                     # when the next reply comes
                     self._recovery_exhausted = True

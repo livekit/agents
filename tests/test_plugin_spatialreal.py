@@ -21,6 +21,7 @@ from spatialreal import (
     PlaybackSignal,
     PlaybackState,
     PlaybackStateEvent,
+    SessionTokenError,
 )
 
 from livekit import api, rtc
@@ -613,6 +614,25 @@ async def test_a_reply_during_a_long_outage_is_given_up_on_and_the_next_one_play
     await settle()
     await h.reply(frames=1)
     assert replacement.calls == [("audio", "p2-req-1"), ("end", "p2-req-1")]
+
+
+async def test_a_server_error_from_the_token_endpoint_is_retried(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_reconnect(h)
+
+    class TokenOutage(FakeProvider):
+        async def init(self) -> None:
+            raise SessionTokenError(
+                "unavailable", code=AvatarSDKErrorCode.serverError, http_status=503
+            )
+
+    replacement = FakeProvider("p2")
+    use_replacements(monkeypatch, TokenOutage("x"), replacement)
+
+    h.session._on_provider_lost(1, "provider_closed")
+    await settle()
+    assert h.session._provider is replacement, "stopped retrying a temporary outage"
 
 
 async def test_after_a_rejected_reconnect_the_next_reply_tries_again(
