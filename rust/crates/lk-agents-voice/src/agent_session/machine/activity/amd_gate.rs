@@ -928,7 +928,3 @@ mod rule_tests;
 #[cfg(test)]
 #[path = "amd_gate_realtime_tests.rs"]
 mod realtime_tests;
-
-#[cfg(test)]
-#[path = "amd_gate_realtime_flow_tests.rs"]
-mod realtime_flow_tests;

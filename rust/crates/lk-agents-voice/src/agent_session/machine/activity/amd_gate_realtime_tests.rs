@@ -1,8 +1,9 @@
 //! The AMD gate over a realtime model (step 4 of the multi-turn AMD proposal): the entry checks
 //! of spec §5.1, both realtime commit paths gated, the server buffer committed at commit, the
 //! response asked once at authorization with the decision's per-response instructions and tools,
-//! `InsertUserItem`, and the realtime session rules while attached (spec §5.3). Outcomes are read
-//! at what the realtime session was sent (`VoiceEffect::Realtime`) and at the chat record.
+//! the user item's one source, `InsertUserItem`, the opening, and the realtime session rules while
+//! attached (spec §5.3). Outcomes are read at what the realtime session was sent
+//! (`VoiceEffect::Realtime`) and at the chat record.
 //! Expected values come from `voice/amd/detector.py`, `voice/agent_activity.py` and
 //! `tests/test_amd.py` on `main`.
 
@@ -10,6 +11,7 @@ use super::*;
 use crate::agent_session::machine::activity::realtime::RealtimeWake;
 use crate::agent_session::{Command, Now, RequestId, Sent, SpeechCommand, TurnCommand, VoiceEvent};
 use crate::audio_recognition::TurnDetectionMode;
+use crate::trace::Step;
 use lk_agents_abi::RealtimeCommand;
 use lk_agents_abi::llm::realtime as rt;
 
@@ -211,6 +213,13 @@ fn replies(effects: &[VoiceEffect]) -> Vec<(TurnId, SpeechId)> {
             _ => None,
         })
         .collect()
+}
+
+fn steps(effects: &[VoiceEffect]) -> impl Iterator<Item = &Step> {
+    effects.iter().filter_map(|effect| match effect {
+        VoiceEffect::Journal(step) => Some(step.as_ref()),
+        _ => None,
+    })
 }
 
 fn user_items(driver: &VoiceDriver) -> Vec<String> {
@@ -702,19 +711,78 @@ fn a_fallback_swap_does_not_regenerate_while_attached() {
 }
 
 // Catches: a backchannel over agent speech reaching AMD as a turn on a realtime model without
-// session STT (spec §5.3: "That turn does not reach AMD"), or its audio committed.
+// session STT (spec §5.3: "That turn does not reach AMD"), or its audio committed. Under the gate
+// the session asks whether the server's detection runs, so a model whose server detection the
+// client switched off drops it too.
 #[test]
 fn a_backchannel_over_agent_speech_is_dropped_without_session_stt() {
     let no_server_vad = Model { server_vad: false, vad_disabled: false, ..CLIENT_SIDE };
-    let mut driver = attached(no_server_vad, false);
-    driver.session.config.effective.turn.interruption.detection_enabled = Some(true);
-    let backchannel = EndOfTurnInfo { backchannel_over_agent: true, ..info(1, "", false) };
-    let effects = end_of_turn(&mut driver, 10, backchannel);
-    assert!(committed(&effects).is_empty(), "the backchannel never reaches AMD: {effects:?}");
-    assert_eq!(buffer_commits(&effects), 0, "its audio is not committed");
-    assert!(responses(&effects).is_empty());
+    for model in [no_server_vad, CLIENT_SIDE] {
+        let mut driver = attached(model, false);
+        driver.session.config.effective.turn.interruption.detection_enabled = Some(true);
+        let backchannel = EndOfTurnInfo { backchannel_over_agent: true, ..info(1, "", false) };
+        let effects = end_of_turn(&mut driver, 10, backchannel);
+        assert!(committed(&effects).is_empty(), "the backchannel never reaches AMD: {effects:?}");
+        assert_eq!(buffer_commits(&effects), 0, "its audio is not committed");
+        assert!(responses(&effects).is_empty());
 
-    // The same turn that is not a backchannel reaches AMD.
-    let effects = end_of_turn(&mut driver, 100, info(2, "", false));
-    assert_eq!(committed(&effects), [TurnId(2)]);
+        // The same turn that is not a backchannel reaches AMD.
+        let effects = end_of_turn(&mut driver, 100, info(2, "", false));
+        assert_eq!(committed(&effects), [TurnId(2)]);
+    }
+}
+
+// Catches: participant speech during the hold not restarting the realtime reply's silence (spec
+// §10.3).
+#[test]
+fn speech_during_the_hold_restarts_the_silence_before_the_request() {
+    use lk_agents_abi::voice::events::{EndOfSpeechEvent, StartOfSpeechEvent};
+    let mut driver = attached(CLIENT_SIDE, true);
+    end_of_turn(&mut driver, 10, info(1, "please hold", true));
+    let silence =
+        ReplyDecision { silence: Some(Duration::from_millis(1500)), ..ReplyDecision::allow() };
+    answer(&mut driver, 20, decide(1, silence));
+    driver.handle(None, now(1_000));
+    let start =
+        StartOfSpeechEvent { at: at(1000), speech_duration: Duration::ZERO, from_vad: true };
+    driver.publish_event(SessionEvent::StartOfSpeech(start));
+    driver.handle(None, now(1_000));
+    let effects = driver.handle(None, now(1_600));
+    assert!(responses(&effects).is_empty(), "speech restarted the wait");
+    let end = EndOfSpeechEvent { at: at(2000), from_vad: true, silence_duration: 0.0 };
+    driver.publish_event(SessionEvent::EndOfSpeech(end));
+    driver.handle(None, now(2_000));
+    let effects = driver.handle(None, now(3_400));
+    assert!(responses(&effects).is_empty(), "the new silence has not run out");
+    let effects = driver.handle(None, now(3_600));
+    assert_eq!(responses(&effects).len(), 1);
+}
+
+// --- The opening (spec §10.6) ---
+
+// Catches: a realtime opening dropped for want of a pipeline TTS or LLM: the model says the text
+// itself, or generates from the instructions with no tools; both bypass the hold.
+#[test]
+fn a_realtime_opening_is_said_or_generated_by_the_model() {
+    let mut says = rt_driver(CLIENT_SIDE, true);
+    let rt = says.activity.realtime_activity_mut().expect("a realtime activity");
+    rt.session.capabilities.supports_say = true;
+    rt.state = crate::agent_session::machine::activity::realtime::RealtimeSessionState::new(
+        rt.session.capabilities,
+    );
+    attach(&mut says, false).expect("attached");
+    let opening = Some(Opening::Text("Hi, this is Ada from the clinic.".into()));
+    let effects = answer(&mut says, 0, AmdAnswer::Activated { run: RUN, opening });
+    assert!(steps(&effects).any(|s| matches!(s, Step::Gate(GateStep::OpeningBypass { .. }))));
+    assert!(sent(&effects).iter().any(|c| matches!(c,
+        RealtimeCommand::Say(say) if say.text == "Hi, this is Ada from the clinic.")));
+
+    let mut driver = rt_driver(CLIENT_SIDE, true);
+    attach(&mut driver, false).expect("attached");
+    let opening = Some(Opening::Instructions("Greet the callee.".into()));
+    let effects = answer(&mut driver, 0, AmdAnswer::Activated { run: RUN, opening });
+    let asked = responses(&effects);
+    assert_eq!(asked.len(), 1, "the opening is asked at once, past the hold");
+    assert_eq!(asked[0].instructions.as_deref(), Some("Greet the callee."));
+    assert_eq!(asked[0].tool_choice, Some(lk_agents_abi::ToolChoice::Forbidden));
 }
