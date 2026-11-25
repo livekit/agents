@@ -150,12 +150,12 @@ identifier, never content.
 | Key | Example | Used for |
 | --- | --- | --- |
 | `service.name` | `livekit-agents` | Tells the framework apart from other senders |
-| `lk.productstats.framework.version` | `2.0.0` | Which versions are in use |
-| `lk.productstats.runtime.name` | `python` | The runtime the agent runs on: `python`, `node` or `bun` |
-| `lk.productstats.runtime.version` | `3.12.4` | Which versions of each runtime to support |
-| `lk.productstats.os`, `lk.productstats.arch` | `linux`, `aarch64` | Which platforms to support |
-| `lk.productstats.runner.cmd` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
-| `lk.productstats.runner.kind` | `production` | What the process is, derived from the command and its environment: `production`, `development`, `ci` or `unknown` |
+| `lk.product.agents.framework.version` | `2.0.0` | Which versions are in use |
+| `lk.product.agents.runtime.name` | `python` | The runtime the agent runs on: `python`, `node` or `bun` |
+| `lk.product.agents.runtime.version` | `3.12.4` | Which versions of each runtime to support |
+| `lk.product.agents.os`, `lk.product.agents.arch` | `linux`, `aarch64` | Which platforms to support |
+| `lk.product.agents.runner.cmd` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
+| `lk.product.agents.runner.kind` | `production` | What the process is, derived from the command and its environment: `production`, `development`, `ci` or `unknown` |
 
 `runner.kind`, first match: `ci` when `CI=true`; `production` on LiveKit Cloud;
 `development` for `dev`, `console` and `simulation`, and for `start` on macOS or Windows;
@@ -167,22 +167,22 @@ Each metric carries the same labels:
 
 | Label | Values |
 | --- | --- |
-| `lk.productstats.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
-| `lk.productstats.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), or `custom` for any class outside a LiveKit plugin |
-| `lk.productstats.model.provider` | the vendor that is called (`deepgram`, `cerebras`); a self-hosted endpoint is `other` |
-| `lk.productstats.model.name` | the model's name as configured |
+| `lk.product.agents.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
+| `lk.product.agents.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), or `custom` for any class outside a LiveKit plugin |
+| `lk.product.agents.model.provider` | the vendor that is called (`deepgram`, `cerebras`); a self-hosted endpoint is `other` |
+| `lk.product.agents.model.name` | the model's name as configured |
 
 | Metric | Type | Counts |
 | --- | --- | --- |
-| `lk.productstats.model.requests` | counter | Requests made to a model: one LLM completion or one TTS synthesis. Not counted for an STT, whose usage is `audio_duration` |
-| `lk.productstats.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
-| `lk.productstats.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
-| `lk.productstats.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
-| `lk.productstats.model.audio_duration` | counter, seconds | Audio sent to an STT. A streaming STT keeps one stream for a whole session, so its usage is the audio, not a count of streams |
+| `lk.product.agents.model.requests` | counter | Requests made to a model: one LLM completion or one TTS synthesis. Not counted for an STT, whose usage is `audio_duration` |
+| `lk.product.agents.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
+| `lk.product.agents.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
+| `lk.product.agents.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
+| `lk.product.agents.model.audio_duration` | counter, seconds | Audio sent to an STT. A streaming STT keeps one stream for a whole session, so its usage is the audio, not a count of streams |
 
 The transcription delay starts at the end of speech, which the STT does not always decide.
 So this metric alone is split by one extra label,
-`lk.productstats.model.transcription_delay.endpointing`: `vad` when the session's VAD ended
+`lk.product.agents.model.transcription_delay.endpointing`: `vad` when the session's VAD ended
 the speech, `stt` when the STT detects the end of speech itself.
 
 - A turn whose final transcript arrived before the end of speech has no delay to measure:
@@ -220,10 +220,10 @@ about itself; a plugin that reports none appears as `unknown`.
 
 | Metric | Label | Counts |
 | --- | --- | --- |
-| `lk.productstats.sessions` | `lk.productstats.session.kind`: `voice`, `text` | Sessions started |
-| `lk.productstats.feature.sessions` | `lk.productstats.feature` | Sessions that used the feature at least once |
+| `lk.product.agents.sessions` | `lk.product.agents.session.kind`: `voice`, `text` | Sessions started |
+| `lk.product.agents.feature.sessions` | `lk.product.agents.feature` | Sessions that used the feature at least once |
 
-`lk.productstats.feature` is one of: `voice_task`, `remote_agent`, `local_agent_tool`,
+`lk.product.agents.feature` is one of: `voice_task`, `remote_agent`, `local_agent_tool`,
 `tool_approval`, `mcp_toolset`, `avatar`, `channel`, `context_store`, `simulation`,
 `override_options`.
 
