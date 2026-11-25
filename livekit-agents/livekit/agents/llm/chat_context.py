@@ -128,15 +128,14 @@ class Instructions:
         """
         any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
         if any_instructions:
+            # a kwarg's audio/text are additions to its common text, so each placeholder
+            # takes what that kwarg renders to for the modality
             audio_kw: dict[str, object] = {
-                # an explicit "" removes the section; only None falls back to common
-                k: (v.audio if v.audio is not None else str(v))
-                if isinstance(v, Instructions)
-                else v
+                k: v.render_static(modality="audio") if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
             }
             text_kw: dict[str, object] = {
-                k: (v.text if v.text is not None else str(v)) if isinstance(v, Instructions) else v
+                k: v.render_static(modality="text") if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
             }
             # audio/text hold fully rendered variants of the whole template, so they go in
