@@ -35,7 +35,13 @@ impl Rule for GateSettles {
                     follows the decision applied: an allowed reply is heard unless a fault, a \
                     refusal, newer speech or the close explains why not, and a denied turn keeps \
                     its words with no reply.",
-        examples: &[answered_and_ended, superseded_and_ended, allowed_and_heard, denied_and_kept],
+        examples: &[
+            answered_and_ended,
+            superseded_and_ended,
+            allowed_and_heard,
+            denied_and_kept,
+            allowed_and_the_model_spoke_late,
+        ],
         counterexamples: &[
             never_reported,
             answered_never_ended,
@@ -196,10 +202,13 @@ fn unheard_explained(r: &Recording, turn: &GatedTurn, requests: &[Request<'_>], 
         // A real run's completion that forbids replies.
         matches!(a, crate::record::amd::Answer::Detach { at, forbid: true, .. } if after(*at))
     });
-    // The model never asked, still answering, or answering with no words or a tool call.
+    // The model never asked, still answering at the bound, or answering with no words or a tool
+    // call: the gate settles "while AMD and the classifier make progress" (proposal, DST), and a
+    // model that first speaks after the bound made none before it.
     let spoke = |chat: u32| {
         r.applied().iter().any(|a| {
             a.accepted
+                && a.at.at_ms <= due
                 && matches!(&a.input, Input::LlmText { chat: c, text } if c.nth == chat && !text.0.trim().is_empty())
         })
     };
@@ -293,6 +302,23 @@ fn allowed_reply_never_heard() -> Recording {
         .closed(Kind::Chat, 0)
         .amd(1, ended(TurnEnd::Replied))
         .later(20_000)
+        .done()
+}
+
+/// Allowed and asked, and the model's first words come only after the bound: the model, not
+/// the gate, kept the reply unheard.
+fn allowed_and_the_model_spoke_late() -> Recording {
+    turn()
+        .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Allow })
+        .request(10, 1, "hello", &[], &[])
+        .amd(1, ended(TurnEnd::Replied))
+        .later(20_000)
+        .sent(Input::LlmText {
+            chat: Ref::new(0),
+            text: crate::input::AgentText("Hi, who is this?".into()),
+        })
+        .sent(Input::LlmEnd { chat: Ref::new(0) })
+        .closed(Kind::Chat, 0)
         .done()
 }
 

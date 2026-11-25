@@ -22,7 +22,7 @@ impl Rule for GateCleansUp {
         guarantee: "After Detached, AMD observes nothing, the gate neither holds nor acts, a \
                     later turn with nothing in its way reaches its model, and replies are as \
                     interruptible as before the run attached.",
-        examples: &[clean],
+        examples: &[clean, preemptive_adopted],
         counterexamples: &[observed_after, still_gated, interruptions_kept_forced, never_answered],
         probe: Some(a_turn_after_completion),
     };
@@ -175,7 +175,7 @@ fn answers_later_turns(
         let replied = events.iter().any(|(seen, e)| {
             window(*seen)
                 && matches!(e, SessionEvent::SpeechCreated { kind: SpeechKind::TurnReply, .. })
-        });
+        }) || adopted(r, *at, due);
         let answered = replied
             || amd.requests().into_iter().any(|q| {
                 q.opened.at_ms <= due
@@ -191,6 +191,30 @@ fn answers_later_turns(
             )
         });
     }
+}
+
+/// Whether the turn the host heard commit at `at` adopted the preemptive generation by `due`
+/// ms: that is the reply made for it, though its request may not have opened yet (proposal,
+/// "Preemptive generation may run while authorization is held"). The adoption is journalled in
+/// the commit's own transition, after its committed end of turn and before the host hears it.
+fn adopted(r: &Recording, at: Observed, due: u64) -> bool {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::PreemptiveVerdict;
+    use lk_agents_voice::trace::TurnStep;
+    let committed =
+        |step: &Step| matches!(step, Step::Turn(TurnStep::EndOfTurn { committed: true, .. }));
+    let steps = r.journal();
+    let Some(ended) = steps.iter().rposition(|(seen, step)| *seen < at && committed(step)) else {
+        return false;
+    };
+    steps[ended + 1..]
+        .iter()
+        .take_while(|(seen, step)| seen.at_ms <= due && !committed(step))
+        .any(|(_, step)| {
+            matches!(
+                step,
+                Step::Turn(TurnStep::PreemptiveReconciled { verdict: PreemptiveVerdict::Reuse, .. })
+            )
+        })
 }
 
 /// Whether a hook of any kind ran at some point between `from` and `to` ms.
@@ -237,6 +261,23 @@ fn still_gated() -> Recording {
         .journal(Step::Speech(SpeechStep::AuthorizationHeld(lk_agents_voice::amd::Hold::Undecided {
             turn: lk_agents_voice::audio_recognition::TurnId(1),
         })))
+        .later(3_000)
+        .done()
+}
+
+/// A turn after the detach adopts its preemptive generation, which the host interrupts before
+/// its request opens: the turn had its reply.
+fn preemptive_adopted() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::{
+        PreemptiveVerdict, SpeechId,
+    };
+    use lk_agents_voice::trace::TurnStep;
+    attached()
+        .user_turn(None, 1, "hello")
+        .journal(Step::Turn(TurnStep::PreemptiveReconciled {
+            speech: SpeechId(7),
+            verdict: PreemptiveVerdict::Reuse,
+        }))
         .later(3_000)
         .done()
 }
