@@ -1,3 +1,5 @@
+use lk_agents_voice::events::SessionEvent;
+
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -22,7 +24,11 @@ impl Rule for RealtimeTurnAudioCommitted {
         guarantee: "On a realtime model, every turn committed under the AMD gate commits the \
                     server's audio buffer, denied or allowed, before the reply to it is asked.",
         examples: &[each_turn_committed],
-        counterexamples: &[denied_turn_left_in_the_buffer, committed_with_the_reply],
+        counterexamples: &[
+            denied_turn_left_in_the_buffer,
+            committed_with_the_reply,
+            committed_at_the_commit_and_again_with_the_reply,
+        ],
         probe: Some(a_wait_then_a_person),
     };
 
@@ -48,7 +54,11 @@ impl Rule for RealtimeTurnAudioCommitted {
             let made = |before: crate::record::Observed| {
                 commits.iter().filter(|c| **c > attached.attached && **c < before).count()
             };
-            if let Some(response) = amd.rt_responses_answering(turn).first() {
+            // The reply's response: the first dispatched for a speech the session reported for
+            // the turn, else the first asked in the turn's window.
+            let response = (amd.rt_responses_for(turn).into_iter().next())
+                .or_else(|| amd.rt_responses_answering(turn).into_iter().next());
+            if let Some(response) = response {
                 check.expect_with(Subject::Session, made(response.at) >= owed, || {
                     format!(
                         "turn {}'s realtime reply was asked at {} ms after {} buffer commits; \
@@ -56,6 +66,26 @@ impl Rule for RealtimeTurnAudioCommitted {
                         turn.turn,
                         response.at.at_ms,
                         made(response.at)
+                    )
+                });
+                // Its own commit is the only one before the response, but for each turn or host
+                // commit in between: a second one commits audio the turn did not hold.
+                let between = |at: &crate::record::Observed| *at > turn.committed && *at < response.at;
+                let own = commits.iter().filter(|c| **c >= turn.committed && between(c)).count();
+                let others = (r.host_view().events().iter())
+                    .filter(|(at, e)| between(at) && matches!(e, SessionEvent::UserTurnCompleted(_)))
+                    .count()
+                    + (r.applied().iter())
+                        .filter(|a| a.accepted && between(&a.at))
+                        .filter(|a| {
+                            matches!(a.input, Input::CommitTurn { .. } | Input::CommitUserTurn { .. })
+                        })
+                        .count();
+                check.expect_with(Subject::Session, own <= 1 + others, || {
+                    format!(
+                        "turn {} committed the server's buffer {own} times before its reply was \
+                         asked at {} ms, with {others} other commits between",
+                        turn.turn, response.at.at_ms
                     )
                 });
             } else if !amd.answers_for(turn).is_empty() {
@@ -117,11 +147,31 @@ fn denied_turn_left_in_the_buffer() -> Recording {
 }
 
 /// The ungated path's order: the buffer is committed only with the response request, so the
-/// denied turn never commits.
+/// denied turn's audio rides the person's reply.
 fn committed_with_the_reply() -> Recording {
     wait_then_person()
         .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Wait })
         .later(1_000)
+        .user_turn(Some(1), 2, "hello who is this")
+        .sent(Input::AmdDecide { turn: Ref::new(1), verdict: AmdVerdict::Allow })
+        .reply_created(1, 2, 7)
+        .rt_sent(RtSent::CommitAudio)
+        .rt_request("rt_1", 7, None)
+        .done()
+}
+
+/// The gate commits at the commit, and the reply commits again with its request, as a request
+/// built with `commit_audio` would.
+fn committed_at_the_commit_and_again_with_the_reply() -> Recording {
+    Authored::new()
+        .rt_sent(RtSent::Tools(Vec::new()))
+        .sent(Input::AmdAttach {})
+        .user_turn(Some(1), 1, "hello who is this")
+        .rt_sent(RtSent::CommitAudio)
+        .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Allow })
+        .reply_created(1, 1, 7)
+        .rt_sent(RtSent::CommitAudio)
+        .rt_request("rt_1", 7, None)
         .done()
 }
 

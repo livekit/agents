@@ -30,6 +30,7 @@ impl Rule for DtmfOnlyWhenAllowed {
             offered_to_a_plain_reply,
             realtime_tools_never_set,
             realtime_tools_never_restored,
+            realtime_tools_left_after_the_reply,
         ],
         probe: Some(an_ivr_menu),
     };
@@ -57,15 +58,14 @@ impl Rule for DtmfOnlyWhenAllowed {
         }
         let agents_own_tool = amd.agent_declared_at(SEND_DTMF_TOOL).is_some();
         let mut dtmf_responses = std::collections::BTreeSet::new();
+        let mut dtmf_speeches = Vec::new();
         for turn in amd.gated_turns() {
             let Some(deciding) = amd.deciding(&turn) else { continue };
             if !amd.decision(&deciding).dtmf {
                 continue;
             }
-            for response in amd.rt_responses_answering(&turn) {
-                if response.at <= deciding.at() {
-                    continue;
-                }
+            dtmf_speeches.extend(amd.rt_reply_speeches(&turn));
+            for response in amd.rt_responses_for(&turn) {
                 dtmf_responses.insert(response.req_id.clone());
                 let offered = (response.tools.iter().flatten())
                     .filter(|t| *t == SEND_DTMF_TOOL)
@@ -80,6 +80,7 @@ impl Rule for DtmfOnlyWhenAllowed {
             }
         }
         if !agents_own_tool {
+            restored(r, &dtmf_speeches, check);
             for response in amd.rt_responses() {
                 if dtmf_responses.contains(&response.req_id) {
                     continue;
@@ -111,6 +112,51 @@ impl Rule for DtmfOnlyWhenAllowed {
     }
 }
 
+/// Once every DTMF reply's speech ended before the close, the last tools the live socket
+/// received lack AMD's tool, after detach too. A socket a fatal error or a lost connection ended
+/// holds nothing to restore.
+fn restored(r: &Recording, dtmf_speeches: &[u64], check: &mut Check) {
+    use crate::input::RtEvent;
+    use crate::record::RtSent;
+    if dtmf_speeches.is_empty() {
+        return;
+    }
+    let close = r.close_begun().unwrap_or(crate::record::Observed::END);
+    let ends: Vec<_> = (dtmf_speeches.iter())
+        .map(|s| {
+            let speech = r.host_view().speech(*s);
+            speech.done_announcements().first().map(|(at, _)| *at).or(speech.done_at())
+        })
+        .collect();
+    let Some(last_end) = ends.iter().copied().collect::<Option<Vec<_>>>().and_then(|e| e.into_iter().max())
+    else {
+        return;
+    };
+    let lost = r.applied().iter().any(|a| {
+        a.accepted
+            && matches!(
+                a.input,
+                Input::RealtimeEvent { event: RtEvent::Disconnected | RtEvent::FatalError, .. }
+            )
+    });
+    if last_end >= close || lost {
+        return;
+    }
+    let sent = r.rt_sent();
+    let Some(socket) = sent.iter().map(|(_, socket, _)| *socket).max() else { return };
+    let last = sent.iter().rev().find_map(|(_, s, sent)| match sent {
+        RtSent::Tools(tools) if *s == socket => Some(tools),
+        _ => None,
+    });
+    check.expect_with(Subject::Session, last.is_none_or(|t| !t.iter().any(|n| n == SEND_DTMF_TOOL)), || {
+        format!(
+            "every DTMF reply's speech ended by {} ms, and socket {socket}'s last tools still \
+             offer AMD's DTMF tool: {last:?}",
+            last_end.at_ms
+        )
+    });
+}
+
 fn ivr() -> Authored {
     Authored::new()
         .sent(Input::AmdAttach {})
@@ -134,30 +180,52 @@ fn realtime_ivr() -> Authored {
 fn realtime_tools_set_and_restored() -> Recording {
     use crate::record::RtSent;
     realtime_ivr()
+        .reply_created(1, 1, 7)
         .rt_sent(RtSent::Tools(vec!["lookup".into(), SEND_DTMF_TOOL.into()]))
-        .rt_response("rt_1", Some(crate::fakes::amd::STAGE))
+        .rt_request("rt_1", 7, Some(crate::fakes::amd::STAGE))
         .later(2_000)
         .rt_sent(RtSent::Tools(vec!["lookup".into()]))
+        .speech_done(7, lk_agents_voice::events::SpeechOutcome::Completed)
         .user_turn(Some(1), 2, "hello this is Sam")
         .sent(Input::AmdDecide { turn: Ref::new(1), verdict: AmdVerdict::Allow })
-        .rt_response("rt_2", None)
+        .reply_created(1, 2, 8)
+        .rt_request("rt_2", 8, None)
         .done()
 }
 
 /// `SpeechSpec.toolset` alone does not reach the server.
 fn realtime_tools_never_set() -> Recording {
-    realtime_ivr().rt_response("rt_1", Some(crate::fakes::amd::STAGE)).done()
+    realtime_ivr()
+        .reply_created(1, 1, 7)
+        .rt_request("rt_1", 7, Some(crate::fakes::amd::STAGE))
+        .done()
 }
 
 fn realtime_tools_never_restored() -> Recording {
     use crate::record::RtSent;
     realtime_ivr()
+        .reply_created(1, 1, 7)
         .rt_sent(RtSent::Tools(vec!["lookup".into(), SEND_DTMF_TOOL.into()]))
-        .rt_response("rt_1", Some(crate::fakes::amd::STAGE))
+        .rt_request("rt_1", 7, Some(crate::fakes::amd::STAGE))
         .later(2_000)
+        .speech_done(7, lk_agents_voice::events::SpeechOutcome::Completed)
         .user_turn(Some(1), 2, "hello this is Sam")
         .sent(Input::AmdDecide { turn: Ref::new(1), verdict: AmdVerdict::Allow })
-        .rt_response("rt_2", None)
+        .reply_created(1, 2, 8)
+        .rt_request("rt_2", 8, None)
+        .done()
+}
+
+/// The DTMF reply ended and no other response followed: the server keeps the keypad.
+fn realtime_tools_left_after_the_reply() -> Recording {
+    use crate::record::RtSent;
+    realtime_ivr()
+        .reply_created(1, 1, 7)
+        .rt_sent(RtSent::Tools(vec!["lookup".into(), SEND_DTMF_TOOL.into()]))
+        .rt_request("rt_1", 7, Some(crate::fakes::amd::STAGE))
+        .later(2_000)
+        .speech_done(7, lk_agents_voice::events::SpeechOutcome::Completed)
+        .later(2_000)
         .done()
 }
 

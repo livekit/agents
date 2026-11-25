@@ -225,6 +225,8 @@ impl Realtime for FakeRealtime {
                 Control::Realtime(socket.clone()),
             );
             assert!(socket.slot.set(slot).is_ok(), "realtime socket registered twice");
+            let opened = crate::record::RtSent::Opened { transcribes: caps.user_transcription };
+            self.registry.record_rt_sent(slot.nth, opened);
             socket.state.lock().unwrap().server = socket.new_server(1);
             let pump = socket.clone();
             let pump = self.spawner.spawn(async move { pump.run().await });

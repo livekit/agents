@@ -42,6 +42,7 @@ impl Rule for GateSettles {
             denied_and_kept,
             allowed_and_the_model_spoke_late,
             allowed_and_the_late_words_heard,
+            realtime_denied_and_transcribed,
         ],
         counterexamples: &[
             never_reported,
@@ -50,6 +51,7 @@ impl Rule for GateSettles {
             allowed_reply_never_heard,
             denied_but_answered,
             allowed_and_the_late_words_never_heard,
+            realtime_denied_and_lost_without_transcription,
         ],
         probe: Some(a_denied_turn),
     };
@@ -111,24 +113,24 @@ impl Rule for GateSettles {
 fn outcome(r: &Recording, turn: &GatedTurn, check: &mut Check) {
     let amd = r.amd_view();
     let requests = amd.requests_answering(turn);
-    // A realtime reply is the response the server was asked for in the turn's window, played as
-    // the speech the session reported for the turn.
-    let responses = amd.rt_responses_answering(turn);
-    let made = requests.iter().filter(|q| !amd.preemptive(q)).count() + responses.len();
-    let replied = amd.observed(turn.run).into_iter().filter_map(|(_, o)| match o {
-        AmdObservation::ReplyCreated { turn: t, speech } if t.0 == turn.turn => Some(speech.0),
-        _ => None,
-    });
-    let replied = replied.filter(|_| !responses.is_empty());
+    // A realtime reply is a response the session dispatched for a speech it reported for the
+    // turn; a response asked in the turn's window for no reply and no opening is a stray.
+    let responses = amd.rt_responses_for(turn);
+    let strays = amd.rt_strays(turn).len();
+    let made = requests.iter().filter(|q| !amd.preemptive(q)).count() + responses.len() + strays;
     let heard = (requests.iter().filter_map(|q| amd.first_audio(q.speech?)))
-        .chain(replied.filter_map(|speech| amd.first_audio(speech)))
+        .chain(responses.iter().filter_map(|q| amd.first_audio(q.speech?)))
         .min();
-    // A turn with no words has none to keep, and a realtime turn's are the server's transcript of
-    // the audio committed for it; `StopResponse` ignores the turn, as Python does
-    // (`agent_activity.py`); a turn dropped behind a speech it could not interrupt keeps none.
-    let kept = turn.item_id.is_some()
-        || amd.audio_committed(turn)
-        || turn.words.trim().is_empty()
+    // A turn with no words has none to keep. A realtime turn's words are the server's transcript
+    // of the audio committed for it when the socket's model transcribes; otherwise the turn's
+    // own item, from the session's STT or AMD's insertion. `StopResponse` ignores the turn, as
+    // Python does (`agent_activity.py`); a turn dropped behind a speech it could not interrupt
+    // keeps none.
+    let words = !turn.words.trim().is_empty() || amd.amd_sent_words(turn);
+    let transcribed = amd.audio_committed(turn).is_some_and(|socket| amd.rt_transcribes(socket));
+    let kept = !words
+        || turn.item_id.is_some()
+        || transcribed
         || amd.stopped(turn)
         || amd.dropped_unanswered(turn);
     let Some((answer, applied)) = amd.applied(turn) else {
@@ -414,6 +416,30 @@ fn allowed_and_the_late_words_never_heard() -> Recording {
         .closed(Kind::Chat, 0)
         .later(20_000)
         .done()
+}
+
+/// A realtime turn denied: the socket's model transcribes the committed audio, and nothing
+/// answers it.
+fn realtime_denied(transcribes: bool) -> Authored {
+    use crate::record::RtSent;
+    Authored::new()
+        .rt_sent(RtSent::Opened { transcribes })
+        .sent(Input::AmdAttach {})
+        .user_turn_unsaved(Some(1), 1, "please hold")
+        .rt_sent(RtSent::CommitAudio)
+        .sent(Input::AmdDecide { turn: Ref::new(0), verdict: AmdVerdict::Deny })
+        .amd(1, ended(TurnEnd::Denied))
+        .later(3_000)
+}
+
+fn realtime_denied_and_transcribed() -> Recording {
+    realtime_denied(true).done()
+}
+
+/// The model does not transcribe and the session kept no item: the committed audio is no
+/// evidence that the words were kept.
+fn realtime_denied_and_lost_without_transcription() -> Recording {
+    realtime_denied(false).done()
 }
 
 /// Denied, and answered anyway.

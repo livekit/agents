@@ -27,7 +27,11 @@ impl Rule for OnlyTheOpeningPlaysFirst {
         guarantee: "Under AMD, nothing but the opening is heard before an allowing decision is \
                     applied, a run lets at most one say or generate_reply bypass its hold, and \
                     the opening is not heard once the participant spoke first.",
-        examples: &[opening_then_allowed_reply, speech_after_the_opening_started_playing],
+        examples: &[
+            opening_then_allowed_reply,
+            speech_after_the_opening_started_playing,
+            realtime_opening_from_its_instructions,
+        ],
         counterexamples: &[
             reply_before_any_decision,
             opening_after_the_participant_spoke,
@@ -35,6 +39,7 @@ impl Rule for OnlyTheOpeningPlaysFirst {
             reply_heard_before_its_decision_applied,
             two_bypasses,
             speaking_edge_long_before_the_audio,
+            realtime_bypass_without_the_opening,
         ],
         probe: Some(an_opening),
     };
@@ -92,6 +97,23 @@ impl Rule for OnlyTheOpeningPlaysFirst {
                     ),
                     || format!("the opening {speech} of run {} is a {kind:?}", attachment.run),
                 );
+                // A realtime model's own speech is the opening only if the session asked the
+                // server to say the text or to reply to the opening's instructions.
+                if kind == Some(SpeechKind::Realtime) {
+                    let opening = amd.rt_says_for(*speech)
+                        || amd.rt_responses().iter().any(|q| {
+                            q.speech == Some(*speech)
+                                && q.instructions.as_deref()
+                                    == Some(crate::fakes::amd::OPENING_INSTRUCTIONS)
+                        });
+                    check.expect_with(Subject::Speech(*speech), opening, || {
+                        format!(
+                            "the realtime opening {speech} of run {} asked the server neither to \
+                             say the opening nor to follow its instructions",
+                            attachment.run
+                        )
+                    });
+                }
             }
             // The opening is the speech the session let bypass the hold. The session applies
             // `Activated` after the driver has moved on, so no input window can pick it out.
@@ -111,8 +133,10 @@ impl Rule for OnlyTheOpeningPlaysFirst {
                 .gated_turns()
                 .iter()
                 .filter(|t| t.run != attachment.run)
-                .flat_map(|t| amd.requests_answering(t))
-                .filter_map(|q| q.speech)
+                .flat_map(|t| {
+                    let replies = amd.requests_answering(t).into_iter().filter_map(|q| q.speech);
+                    replies.chain(amd.rt_reply_speeches(t)).collect::<Vec<_>>()
+                })
                 .collect();
             for speech in r.host_view().speeches() {
                 if earlier.contains(&speech.id) || authorized_before(speech.id) {
@@ -229,6 +253,30 @@ fn reply_heard_before_its_decision_applied() -> Recording {
         .request(10, 1, "hello", &[], &[])
         .pushed(10)
         .done()
+}
+
+/// A realtime opening from instructions: its speech bypasses the hold, and the request
+/// dispatched for it carries the opening's instructions.
+fn realtime_bypass(instructions: Option<&str>) -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+    Authored::new()
+        .rt_sent(crate::record::RtSent::Opened { transcribes: true })
+        .sent(Input::AmdAttach {})
+        .sent(Input::AmdActivate { opening: Some(AmdOpening::Instructions) })
+        .speech_created(5, SpeechKind::Realtime)
+        .journal(Step::Gate(GateStep::OpeningBypass { speech: SpeechId(5) }))
+        .rt_request("rt_1", 5, instructions)
+        .sent(Input::Advance { ms: Millis(1) })
+        .done()
+}
+
+fn realtime_opening_from_its_instructions() -> Recording {
+    realtime_bypass(Some(crate::fakes::amd::OPENING_INSTRUCTIONS))
+}
+
+/// A realtime speech bypasses the hold, and its request is a plain reply, not the opening.
+fn realtime_bypass_without_the_opening() -> Recording {
+    realtime_bypass(None)
 }
 
 /// Two speeches bypass one run's hold.

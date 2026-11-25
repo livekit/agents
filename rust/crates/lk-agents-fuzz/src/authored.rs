@@ -395,6 +395,27 @@ impl Authored {
         })
     }
 
+    /// The session dispatched request `req_id` for `speech` (its journal's `Requested`), and
+    /// realtime socket 0 received it with these per-response instructions.
+    pub fn rt_request(self, req_id: &str, speech: u64, instructions: Option<&str>) -> Self {
+        use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+        use lk_agents_voice::trace::RealtimeStep;
+        let requested =
+            RealtimeStep::Requested { req_id: req_id.into(), speech: Some(SpeechId(speech)) };
+        self.journal(Step::Realtime(requested)).rt_response(req_id, instructions)
+    }
+
+    /// The session reported to run `run` that `speech` replies to `turn` (`ReplyCreated`).
+    pub fn reply_created(self, run: u64, turn: u64, speech: u64) -> Self {
+        use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+        use lk_agents_voice::audio_recognition::TurnId;
+        let created = lk_agents_voice::amd::AmdObservation::ReplyCreated {
+            turn: TurnId(turn),
+            speech: SpeechId(speech),
+        };
+        self.amd(run, created)
+    }
+
     /// The person heard `ms` of a realtime generation's audio.
     pub fn heard(mut self, generation: u32, ms: u64) -> Self {
         let at = self.next();
@@ -557,7 +578,28 @@ impl Authored {
 
     /// The session committed `turn` for a reply with these words: the end of turn, the host's
     /// `UserTurnCompleted`, its user item (`user_<turn>`) and, under a gate, its `AmdTurn`.
-    pub fn user_turn(mut self, run: Option<u64>, turn: u64, words: &str) -> Self {
+    pub fn user_turn(self, run: Option<u64>, turn: u64, words: &str) -> Self {
+        self.user_turn_unsaved(run, turn, words).user_item(turn, words)
+    }
+
+    /// The turn's user item, `user_<turn>`, as the session saves it.
+    pub fn user_item(self, turn: u64, words: &str) -> Self {
+        use lk_agents_voice::audio_recognition::TurnId;
+        self.session(SessionEvent::ConversationItemAdded {
+            item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
+                format!("user_{turn}"),
+                lk_agents_abi::Role::User,
+                words,
+                std::time::UNIX_EPOCH,
+            ))),
+            agent: "agent".into(),
+            source: lk_agents_voice::agent::Source::UserTurn { turn: TurnId(turn) },
+            visibility: lk_agents_voice::agent::Visibility::Both,
+        })
+    }
+
+    /// As [`Self::user_turn`], with no user item saved.
+    pub fn user_turn_unsaved(mut self, run: Option<u64>, turn: u64, words: &str) -> Self {
         use lk_agents_voice::audio_recognition::{TurnId, UserTurnCommitVerdict};
         use lk_agents_voice::trace::TurnStep;
         self = self.journal(Step::Turn(TurnStep::EndOfTurn {
@@ -588,17 +630,7 @@ impl Authored {
                 },
             );
         }
-        self.session(SessionEvent::ConversationItemAdded {
-            item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
-                format!("user_{turn}"),
-                lk_agents_abi::Role::User,
-                words,
-                std::time::UNIX_EPOCH,
-            ))),
-            agent: "agent".into(),
-            source: lk_agents_voice::agent::Source::UserTurn { turn: TurnId(turn) },
-            visibility: lk_agents_voice::agent::Visibility::Both,
-        })
+        self
     }
 
     /// A model request for `speech` answering the user item `user_<turn>` (with `words`), with

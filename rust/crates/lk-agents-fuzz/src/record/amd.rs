@@ -124,6 +124,9 @@ pub struct RtResponse {
     pub socket: u32,
     pub at: Observed,
     pub req_id: String,
+    /// The speech the session dispatched it for (its journal's `Requested`): a reply's own, or
+    /// the speech a tool follow-up continues.
+    pub speech: Option<u64>,
     /// The per-response instructions it carried.
     pub instructions: Option<String>,
     /// The session's tools on the socket when it was sent: the last `UpdateTools` before it, or
@@ -339,9 +342,25 @@ impl<'a> AmdView<'a> {
         sent
     }
 
-    /// Every response request the session sent a realtime socket, in order.
+    /// The speech the session dispatched each realtime request for, by request id: the last
+    /// `Requested` step its journal holds for the id.
+    fn requested_speeches(&self) -> std::collections::BTreeMap<String, Option<u64>> {
+        use lk_agents_voice::trace::RealtimeStep;
+        (self.0.journal().iter())
+            .filter_map(|(_, step)| match step {
+                Step::Realtime(RealtimeStep::Requested { req_id, speech }) => {
+                    Some((req_id.clone(), speech.map(|s| s.0)))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every response request the session sent a realtime socket, in order, with the speech it
+    /// was dispatched for and the tools the socket held when it arrived.
     pub fn rt_responses(&self) -> Vec<RtResponse> {
         use super::RtSent;
+        let speeches = self.requested_speeches();
         let mut tools: std::collections::BTreeMap<u32, Vec<String>> = Default::default();
         let mut out = Vec::new();
         for (at, socket, sent) in self.0.rt_sent() {
@@ -353,6 +372,7 @@ impl<'a> AmdView<'a> {
                     socket: *socket,
                     at: *at,
                     req_id: req_id.clone(),
+                    speech: speeches.get(req_id).copied().flatten(),
                     instructions: instructions.clone(),
                     tools: tools.get(socket).cloned(),
                 }),
@@ -362,11 +382,99 @@ impl<'a> AmdView<'a> {
         out
     }
 
+    /// Whether the session asked a realtime socket to `say()` text for `speech`.
+    pub fn rt_says_for(&self, speech: u64) -> bool {
+        let speeches = self.requested_speeches();
+        self.0.rt_sent().iter().any(|(_, _, sent)| {
+            matches!(sent, super::RtSent::Say { req_id, .. }
+                if speeches.get(req_id).copied().flatten() == Some(speech))
+        })
+    }
+
+    /// The speeches the session reported to `turn`'s run as replies to it (`ReplyCreated`).
+    pub fn rt_reply_speeches(&self, turn: &GatedTurn) -> Vec<u64> {
+        (self.observed(turn.run).into_iter())
+            .filter_map(|(_, o)| match o {
+                AmdObservation::ReplyCreated { turn: t, speech } if t.0 == turn.turn => {
+                    Some(speech.0)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The response requests the session dispatched for `turn`'s replies: each reply speech the
+    /// session reported for the turn, joined to the requests dispatched for that speech.
+    pub fn rt_responses_for(&self, turn: &GatedTurn) -> Vec<RtResponse> {
+        let speeches = self.rt_reply_speeches(turn);
+        (self.rt_responses().into_iter())
+            .filter(|q| q.speech.is_some_and(|s| speeches.contains(&s)))
+            .collect()
+    }
+
+    /// Responses asked in `turn`'s window for a speech that is no gated turn's reply and no
+    /// opening: under the gate nothing else may ask the server for a response.
+    pub fn rt_strays(&self, turn: &GatedTurn) -> Vec<RtResponse> {
+        use lk_agents_voice::trace::GateStep;
+        let replies: std::collections::BTreeSet<u64> =
+            self.gated_turns().iter().flat_map(|t| self.rt_reply_speeches(t)).collect();
+        let openings: std::collections::BTreeSet<u64> = (self.0.journal().iter())
+            .filter_map(|(_, step)| match step {
+                Step::Gate(GateStep::OpeningBypass { speech }) => Some(speech.0),
+                _ => None,
+            })
+            .collect();
+        (self.rt_responses_answering(turn).into_iter())
+            .filter(|q| q.speech.is_none_or(|s| !replies.contains(&s) && !openings.contains(&s)))
+            .collect()
+    }
+
+    /// Whether the model behind realtime socket `socket` transcribes the user.
+    pub fn rt_transcribes(&self, socket: u32) -> bool {
+        self.0.rt_sent().iter().any(|(_, s, sent)| {
+            *s == socket && *sent == super::RtSent::Opened { transcribes: true }
+        })
+    }
+
+    /// The socket whose buffer the session committed for `turn`, as the fake server received it:
+    /// the first commit from the turn's commit until the host hears another turn completed or a
+    /// newer gated turn supersedes it. The server's transcript of that audio is the turn's item
+    /// when the socket's model transcribes.
+    pub fn audio_committed(&self, turn: &GatedTurn) -> Option<u32> {
+        let next_turn = self.0.host_view().events().into_iter().find_map(|(at, e)| match e {
+            SessionEvent::UserTurnCompleted(done)
+                if at > turn.committed && done.turn.0 != turn.turn =>
+            {
+                Some(at)
+            }
+            _ => None,
+        });
+        let until = turn.superseded.into_iter().chain(next_turn).min().unwrap_or(Observed::END);
+        (self.rt_commits_on().into_iter())
+            .find(|(at, _)| *at >= turn.committed && *at < until)
+            .map(|(_, socket)| socket)
+    }
+
+    /// Whether AMD sent `turn`'s words while its run was attached.
+    pub fn amd_sent_words(&self, turn: &GatedTurn) -> bool {
+        let Some(attached) = self.attachments().into_iter().find(|a| a.run == turn.run) else {
+            return false;
+        };
+        (self.sent_items().iter()).any(|(at, run, t, text)| {
+            *run == turn.run && *t == turn.turn && *at < attached.until() && !text.trim().is_empty()
+        })
+    }
+
     /// When the session committed a realtime socket's input buffer, in order.
     pub fn rt_commits(&self) -> Vec<Observed> {
+        self.rt_commits_on().into_iter().map(|(at, _)| at).collect()
+    }
+
+    /// When, and on which socket, the session committed a realtime input buffer, in order.
+    pub fn rt_commits_on(&self) -> Vec<(Observed, u32)> {
         (self.0.rt_sent().iter())
             .filter(|(_, _, sent)| *sent == super::RtSent::CommitAudio)
-            .map(|(at, ..)| *at)
+            .map(|(at, socket, _)| (*at, *socket))
             .collect()
     }
 
@@ -637,26 +745,6 @@ impl<'a> AmdView<'a> {
             }) if *t == TurnId(turn) => Some(*hook),
             _ => None,
         }
-    }
-
-    /// Whether the session committed the realtime server's audio buffer for `turn` at its commit:
-    /// the server's transcript of that audio is the turn's item, not one the session saves.
-    pub fn audio_committed(&self, turn: &GatedTurn) -> bool {
-        use lk_agents_abi::RealtimeCommandKind;
-        use lk_agents_voice::trace::RealtimeStep;
-        let until = turn.superseded.unwrap_or(Observed::END);
-        self.0.journal().iter().any(|(at, step)| {
-            *at >= turn.committed
-                && at.at_ms == turn.committed.at_ms
-                && *at < until
-                && matches!(
-                    step,
-                    Step::Realtime(RealtimeStep::Sent {
-                        kind: RealtimeCommandKind::CommitAudio,
-                        ..
-                    })
-                )
-        })
     }
 
     /// Whether the host answered `turn`'s customer hook with `StopResponse` or an error. Python

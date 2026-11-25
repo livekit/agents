@@ -3,12 +3,23 @@
 use super::{Observed, Recording};
 
 /// A command the session sent a realtime socket that the AMD rules judge: a response request with
-/// its per-response instructions, the session's tools, and the input buffer's commit and clear.
+/// its per-response instructions, a `say()`, the session's tools, and the input buffer's commit
+/// and clear; and the socket's opening, with whether its model transcribes the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RtSent {
+    /// The socket opened on a model that transcribes the user, or does not
+    /// (`capabilities.user_transcription`).
+    Opened {
+        transcribes: bool,
+    },
     Response {
         req_id: String,
         instructions: Option<String>,
+    },
+    /// `say()` spoken by the model itself.
+    Say {
+        req_id: String,
+        text: String,
     },
     Tools(Vec<String>),
     /// The session's own instructions (`UpdateInstructions`).
@@ -24,6 +35,7 @@ impl RtSent {
             C::GenerateReply(g) => {
                 RtSent::Response { req_id: g.req_id.clone(), instructions: g.instructions.clone() }
             }
+            C::Say(say) => RtSent::Say { req_id: say.req_id.clone(), text: say.text.clone() },
             C::UpdateTools(t) => RtSent::Tools(t.tools.iter().map(|t| t.name.clone()).collect()),
             C::UpdateInstructions(i) => RtSent::Instructions(i.instructions.clone()),
             C::CommitAudio(_) => RtSent::CommitAudio,
