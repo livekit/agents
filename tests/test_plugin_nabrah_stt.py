@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Coroutine
+import asyncio
+import time
+from collections.abc import AsyncIterator, Coroutine
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, stt
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIStatusError,
+    stt,
+)
 from livekit.plugins.nabrah.stt import STT, SpeechStream
 
 pytestmark = pytest.mark.unit
@@ -144,12 +152,245 @@ async def test_malformed_message_does_not_expose_provider_content(
     assert transcript not in caplog.text
 
 
-def test_stream_failure_is_not_retried_after_audio_is_consumed(stream: SpeechStream) -> None:
-    assert stream._stream_failure("failed").retryable is True
+async def test_mid_stream_failure_is_retryable(stream: SpeechStream) -> None:
+    """A socket that drops mid-utterance must not take the session's STT with it."""
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.receive = AsyncMock(return_value=MagicMock(type=aiohttp.WSMsgType.ERROR))
+    stream._audio_position = 12.5
 
-    stream._audio_position = 0.1
+    with pytest.raises(APIConnectionError) as exc_info:
+        await stream._recv_task(ws)
 
-    assert stream._stream_failure("failed").retryable is False
+    assert exc_info.value.retryable is True
+
+
+async def test_unexpected_close_after_audio_is_retryable(stream: SpeechStream) -> None:
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.receive = AsyncMock(return_value=MagicMock(type=aiohttp.WSMsgType.CLOSED))
+    stream._audio_position = 12.5
+    stream._input_done = False
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await stream._recv_task(ws)
+
+    assert exc_info.value.retryable is True
+
+
+def test_reset_clears_the_cursors_a_reconnect_would_misread(stream: SpeechStream) -> None:
+    """Flushed cursors index into one socket's cumulative stream."""
+    stream._process_message({"type": "transcript", "text": "مرحبا بكم.", "is_final": False})
+    stream._flush_eos()
+
+    assert stream._utt_flushed_chars > 0
+
+    stream._reset_connection_state()
+
+    assert stream._utt_flushed_clean == ""
+    assert stream._utt_flushed_chars == 0
+    assert stream._utt_flushed_words == 0
+    assert stream._utt_raw == ""
+    assert stream._utt_raw_seen == 0
+    assert stream._is_speaking is False
+
+
+def test_transcript_after_reconnect_is_not_truncated(stream: SpeechStream) -> None:
+    """The replayed utterance must not be sliced at the previous socket's cursor."""
+    stream._stt._end_of_turn_confirm_delay_seconds = None
+    stream._process_message({"type": "transcript", "text": "مرحبا بكم.", "is_final": False})
+    stream._flush_eos()
+
+    stream._reset_connection_state()
+    stream._process_message({"type": "transcript", "text": "مرحبا بكم", "is_final": False})
+
+    assert stream._current_text() == "مرحبا بكم"
+
+
+@asynccontextmanager
+async def _sending(stream: SpeechStream) -> AsyncIterator[MagicMock]:
+    """Run _send_task against a live input channel, as a real caller would."""
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_bytes = AsyncMock()
+    ws.send_str = AsyncMock()
+    task = asyncio.create_task(stream._send_task(ws))
+    try:
+        yield ws
+    finally:
+        if not stream._input_ch.closed:
+            stream._input_ch.close()
+        await task
+
+
+async def _settle() -> None:
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+
+async def test_flush_waits_for_the_recognizer_to_acknowledge_the_audio(
+    stream: SpeechStream,
+) -> None:
+    """Writing audio is not consuming it: committing on the spot closes an empty turn."""
+    stream._audio_position = 1.0
+    emitted: list[stt.SpeechEvent] = []
+
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        async with _sending(stream):
+            stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
+            await _settle()
+
+            assert stream._pending_flush_position == 1.0
+            assert not emitted
+
+            stream._process_message(
+                {"type": "transcript", "text": "مرحبا", "is_final": False, "audio_processed": 1.0}
+            )
+            stream._maybe_complete_flush()
+
+            finals = [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+            assert [e.alternatives[0].text for e in finals] == ["مرحبا"]
+            assert stream._pending_flush_position is None
+
+
+async def test_flush_does_not_commit_before_the_clock_catches_up(stream: SpeechStream) -> None:
+    stream._audio_position = 5.0
+    emitted: list[stt.SpeechEvent] = []
+
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        async with _sending(stream):
+            stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
+            await _settle()
+            stream._process_message(
+                {"type": "transcript", "text": "مرحبا", "is_final": False, "audio_processed": 1.0}
+            )
+            stream._maybe_complete_flush()
+
+            assert not [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+            assert stream._pending_flush_position == 5.0
+
+
+async def test_flush_commits_when_the_recognizer_never_acknowledges(
+    stream: SpeechStream,
+) -> None:
+    """A recognizer with nothing to say never moves the clock past the boundary."""
+    stream._audio_position = 5.0
+    stream._process_message(
+        {"type": "transcript", "text": "مرحبا", "is_final": False, "audio_processed": 1.0}
+    )
+    emitted: list[stt.SpeechEvent] = []
+
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        async with _sending(stream):
+            stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
+            await _settle()
+
+            assert not [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+
+            stream._pending_flush_deadline = time.monotonic() - 0.1
+            stream._maybe_complete_flush()
+
+            finals = [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+            assert [e.alternatives[0].text for e in finals] == ["مرحبا"]
+
+
+async def test_two_flushes_do_not_merge_into_one_segment(stream: SpeechStream) -> None:
+    """Overwriting the armed position would silently drop the first boundary."""
+    emitted: list[stt.SpeechEvent] = []
+
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        async with _sending(stream):
+            stream._audio_position = 1.0
+            stream._process_message(
+                {"type": "transcript", "text": "واحد", "is_final": False, "audio_processed": 1.0}
+            )
+            stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
+            await _settle()
+
+            # the second sentinel must force the outstanding boundary, not replace it
+            stream._audio_position = 2.0
+            stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
+            await _settle()
+
+            # `text` stays cumulative until an is_final, so the next payload
+            # extends the utterance rather than correcting it
+            stream._process_message(
+                {
+                    "type": "transcript",
+                    "text": "واحد اثنان",
+                    "is_final": False,
+                    "audio_processed": 2.0,
+                }
+            )
+            stream._maybe_complete_flush()
+
+    finals = [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["واحد", "اثنان"]
+
+
+async def test_teardown_does_not_cut_the_last_turn_short(stream: SpeechStream) -> None:
+    """end_input() is flush() + close(); eof and the finalizer draw that boundary."""
+    stream._audio_position = 1.0
+
+    async with _sending(stream):
+        stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
+        stream._input_ch.close()
+
+    assert stream._pending_flush_position is None
+    assert stream._pending_flush_deadline is None
+
+
+def test_reset_drops_a_flush_the_dead_socket_can_no_longer_acknowledge(
+    stream: SpeechStream,
+) -> None:
+    stream._pending_flush_position = 5.0
+    stream._pending_flush_deadline = time.monotonic() + 2.0
+
+    stream._reset_connection_state()
+
+    assert stream._pending_flush_position is None
+    assert stream._pending_flush_deadline is None
+
+
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [(401, False), (404, False), (429, True), (503, True)],
+)
+async def test_handshake_status_decides_retryability(
+    stream: SpeechStream, status: int, retryable: bool
+) -> None:
+    """Redialling a URL the server rejected outright only delays the real error."""
+    stream._session.ws_connect = MagicMock(  # type: ignore[method-assign]
+        side_effect=aiohttp.WSServerHandshakeError(
+            MagicMock(), (), status=status, message="rejected"
+        )
+    )
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await stream._connect_ws()
+
+    assert exc_info.value.status_code == status
+    assert exc_info.value.retryable is retryable
+
+
+async def test_an_unusable_url_fails_fast(stream: SpeechStream) -> None:
+    """No redial fixes a URL that cannot be parsed."""
+    stream._session.ws_connect = MagicMock(  # type: ignore[method-assign]
+        side_effect=aiohttp.InvalidURL("nabrah.invalid url")
+    )
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await stream._connect_ws()
+
+    assert exc_info.value.retryable is False
+
+
+async def test_transport_failure_stays_retryable(stream: SpeechStream) -> None:
+    stream._session.ws_connect = MagicMock(  # type: ignore[method-assign]
+        side_effect=aiohttp.ClientOSError("connection reset")
+    )
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await stream._connect_ws()
+
+    assert exc_info.value.retryable is True
 
 
 @pytest.mark.parametrize(
