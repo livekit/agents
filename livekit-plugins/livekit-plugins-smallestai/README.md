@@ -24,6 +24,10 @@ stt = smallestai.STT(language="en")
 
 # Automatic language detection across 39 languages
 stt = smallestai.STT(language="multi")
+
+# Pulse 2.0: streaming-only, English-only, with built-in end-of-turn
+# detection plus per-final emotion and gender
+stt = smallestai.STT(model="pulse-2")
 ```
 
 ### Text-to-Speech (Lightning TTS)
