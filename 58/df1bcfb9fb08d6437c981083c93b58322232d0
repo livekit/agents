@@ -1,0 +1,21 @@
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  s_e12de1a63688b1::t_19063f08208a2c 891-894
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_realtime_tests.rs
+  s_e12de1a63688b1::t_786fb6f55a64bf 1-669
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58df1bcfb9fb08d6437c981083c93b58322232d0",
+  "prompts": {},
+  "sessions": {
+    "s_e12de1a63688b1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_e12de1a63688b1",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
