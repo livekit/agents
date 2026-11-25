@@ -254,6 +254,24 @@ def test_init_recording_decides_the_job_output() -> None:
     ctx._hosted_output.decide.assert_called_once_with(logs=False, redaction=True)
 
 
+def test_init_recording_keeps_a_simulation_unredacted_for_project_redaction_alone() -> None:
+    ctx = MagicMock()
+    ctx._recording_initialized = False
+    ctx.job.enable_redaction = True
+    ctx.simulation_context.return_value = MagicMock()
+    ctx._info.url = "ws://localhost:7880"
+    JobContext.init_recording(ctx, {"logs": True})
+    ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=False)
+
+
+async def test_cleanup_keeps_a_simulation_unredacted_for_project_redaction_alone() -> None:
+    ctx = _cleanup_ctx()
+    ctx.job.enable_recording = True
+    ctx.job.enable_redaction = True
+    await JobContext._on_cleanup(ctx)
+    ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=False)
+
+
 def test_init_recording_decides_only_once() -> None:
     ctx = MagicMock()
     ctx._recording_initialized = True
@@ -271,7 +289,7 @@ async def test_cleanup_follows_the_job_when_no_session_decided(recording: bool) 
     ctx._telemetry_state = None
     ctx._handlers_with_filter = []
     ctx.job.enable_recording = recording
-    ctx.job.enable_redaction = True
+    ctx._redaction_enabled = True
     await JobContext._on_cleanup(ctx)
     ctx._hosted_output.decide.assert_called_once_with(logs=recording, redaction=True)
 
@@ -543,7 +561,7 @@ def _cleanup_ctx() -> MagicMock:
     ctx._early_log_handler = None
     ctx._telemetry_state = None
     ctx._handlers_with_filter = []
-    ctx.job.enable_redaction = False
+    ctx._redaction_enabled = False
     return ctx
 
 
