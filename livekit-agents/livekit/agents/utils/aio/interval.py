@@ -14,7 +14,7 @@ def _finish_fut(fut: asyncio.Future[Any]) -> None:
 class Interval:
     def __init__(self, interval: float) -> None:
         self._interval = interval
-        self._last_sleep = 0.0
+        self._last_sleep: float | None = None
         self._i = 0
         self._handler: asyncio.TimerHandle | None = None
         self._fut: asyncio.Future[Any] | None = None
@@ -31,7 +31,7 @@ class Interval:
     async def tick(self) -> int:
         loop = asyncio.get_event_loop()
 
-        if self._last_sleep:
+        if self._last_sleep is not None:
             self._fut = loop.create_future()
             delay = self._last_sleep - loop.time() + self._interval
             self._handler = loop.call_later(delay, _finish_fut, self._fut)
