@@ -1,0 +1,31 @@
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_bbb46b29e16294::t_c7d48bcb459828 273-326
+rust/crates/lk-agents-fuzz/src/rules/amd/adopted_request_matches.rs
+  s_bbb46b29e16294::t_e040ea480f5137 32-33,38-39,45-47
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_cleans_up.rs
+  s_bbb46b29e16294::t_46acdc22b07155 61-62,64-68
+rust/crates/lk-agents-fuzz/src/rules/amd/gate_settles.rs
+  s_bbb46b29e16294::t_e4c9c19be4db6b 68-75
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_bbb46b29e16294::t_f71ee10c94be07 2,39-41,44-46,105-107
+rust/crates/lk-agents-fuzz/tests/regressions/amd/detach.rs
+  s_bbb46b29e16294::t_58ab48829c0976 96-100
+rust/crates/lk-agents-fuzz/tests/regressions/amd/payload.rs
+  s_bbb46b29e16294::t_354d3645b345ac 10,26-31,33-34,37,184-194,203,205-206,225,256,258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "54a9352c912db04f9cbd8a6b872ae818131f0887",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
