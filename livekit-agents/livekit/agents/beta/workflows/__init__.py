@@ -7,7 +7,13 @@ from .name import GetNameResult, GetNameTask
 from .phone_number import GetPhoneNumberResult, GetPhoneNumberTask
 from .task_group import TaskCompletedEvent, TaskGroup, TaskGroupResult
 from .utils import WorkflowInstructions
-from .warm_transfer import TwilioConnectorWarmTransferTask, WarmTransferResult, WarmTransferTask
+from .warm_transfer import (
+    TwilioConnectorWarmTransferTask,
+    WarmTransferError,
+    WarmTransferFailure,
+    WarmTransferResult,
+    WarmTransferTask,
+)
 
 __all__ = [
     "GetEmailTask",
@@ -31,4 +37,6 @@ __all__ = [
     "WarmTransferTask",
     "TwilioConnectorWarmTransferTask",
     "WarmTransferResult",
+    "WarmTransferError",
+    "WarmTransferFailure",
 ]
