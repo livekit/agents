@@ -151,7 +151,7 @@ identifier, never content.
 | --- | --- | --- |
 | `service.name` | `livekit-agents` | Tells the framework apart from other senders |
 | `lk.productstats.framework.version` | `2.0.0` | Which versions are in use |
-| `lk.productstats.runtime.name` | `python` | The runtime the agent runs on: `python`, `node`, `bun` or `deno` |
+| `lk.productstats.runtime.name` | `python` | The runtime the agent runs on: `python`, `node` or `bun` |
 | `lk.productstats.runtime.version` | `3.12.4` | Which versions of each runtime to support |
 | `lk.productstats.os`, `lk.productstats.arch` | `linux`, `aarch64` | Which platforms to support |
 | `lk.productstats.runner.launch` | `start` | The command that started the process: `dev`, `console`, `simulation`, `start`, or `none` when no `lk agent` command ran |
