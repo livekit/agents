@@ -42,6 +42,7 @@ async def sink(
 ) -> AsyncIterator[tuple[ds.DataStreamAudioOutput, MagicMock]]:
     room = MagicMock()
     room.isconnected.return_value = True
+    room.remote_participants = {"avatar": MagicMock()}
     room.local_participant._rpc_handlers = {}
     room.local_participant.perform_rpc = AsyncMock(return_value="")
     writer = MagicMock(spec=rtc.ByteStreamWriter)
@@ -717,7 +718,7 @@ async def test_queued_trailer_still_wins_over_the_superseded_signal():
         await receiver.aclose()
 
 
-def _leave(room: MagicMock, identity: str) -> None:
+def _disconnected(room: MagicMock, identity: str) -> None:
     participant = MagicMock(spec=rtc.RemoteParticipant)
     participant.identity = identity
     for call in room.on.call_args_list:
@@ -725,7 +726,13 @@ def _leave(room: MagicMock, identity: str) -> None:
             call.args[1](participant)
 
 
-async def test_avatar_leave_finishes_flushed_segments_and_rejoin_recovers(
+def _leave(room: MagicMock, identity: str) -> None:
+    # like rtc.Room, drop the participant before emitting participant_disconnected
+    room.remote_participants.pop(identity, None)
+    _disconnected(room, identity)
+
+
+async def test_avatar_leave_finishes_flushed_segments_and_next_reply_plays_after_rejoin(
     sink: tuple[ds.DataStreamAudioOutput, MagicMock],
 ) -> None:
     leaf, room = sink
@@ -743,6 +750,7 @@ async def test_avatar_leave_finishes_flushed_segments_and_rejoin_recovers(
     assert leaf._pending_playback_count == output._pending_playback_count == 0
 
     # the avatar rejoins with the same identity and the next reply finishes normally
+    room.remote_participants["avatar"] = MagicMock()
     await output.capture_frame(_frame())
     output.flush()
     await asyncio.sleep(3.0)
@@ -772,6 +780,7 @@ async def test_avatar_leave_mid_segment_finishes_it_at_flush(
 
 async def test_avatar_leave_during_first_capture_releases_synchronizer(
     sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     leaf, room = sink
     sync = TranscriptSynchronizer(next_in_chain_audio=leaf, next_in_chain_text=FakeTextOutput())
@@ -797,6 +806,8 @@ async def test_avatar_leave_during_first_capture_releases_synchronizer(
         event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
         assert event.interrupted
         assert leaf._pending_playback_count == output._pending_playback_count == 0
+        # finished after the synchronizer's own flush(), so it rotates the segment once
+        assert "rotate_segment called while previous segment" not in caplog.text
     finally:
         gate.set()
         await asyncio.gather(capture_task, *leaf._tasks, return_exceptions=True)
@@ -816,6 +827,7 @@ async def test_clear_fallback_before_flush_finishes_open_segment_once(
     assert output._pending_playback_count == 0
 
     output.flush()
+    room.remote_participants["avatar"] = MagicMock()
     await output.capture_frame(_frame())
     output.flush()
     await asyncio.sleep(3.0)
@@ -824,3 +836,30 @@ async def test_clear_fallback_before_flush_finishes_open_segment_once(
     _finish(output)
     event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
     assert not event.interrupted
+
+
+async def test_reply_captured_while_the_avatar_is_gone_finishes_at_flush(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    output, room = sink
+    _leave(room, "avatar")
+
+    await output.capture_frame(_frame())
+    output.flush()
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    assert event.interrupted
+
+
+async def test_late_leave_after_rejoin_keeps_playout_pending(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    output, room = sink
+    await output.capture_frame(_frame())
+    output.flush()
+
+    # the old session's disconnect arrives after the avatar rejoined with the same identity
+    _disconnected(room, "avatar")
+    await asyncio.sleep(3.0)
+    assert output._pending_playback_count == 1
+    _finish(output)
+    await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)

@@ -298,6 +298,7 @@ async def test_output_finishes_the_segment_when_the_avatar_leaves_during_its_fir
         await entered.wait()
         participant = MagicMock(spec=rtc.RemoteParticipant)
         participant.identity = AVATAR
+        room.mock.remote_participants.pop(AVATAR)
         for call in room.mock.on.call_args_list:
             if call.args[0] == "participant_disconnected":
                 call.args[1](participant)

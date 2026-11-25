@@ -210,10 +210,18 @@ class DataStreamAudioOutput(AudioOutput):
         """``flush()`` without closing the stream, for subclasses that close it themselves."""
         super().flush()
         self._capturing = False
-        if self._finish_on_flush:
-            self._finish_on_flush = False
-            if self._pending_playback_count:  # unless a clear fallback already finished it
-                self.on_playback_finished(playback_position=self._pushed_duration, interrupted=True)
+        avatar_gone = self._destination_identity not in self._room.remote_participants
+        if self._pending_playback_count and (self._finish_on_flush or avatar_gone):
+            # on the next iteration, once the wrappers have finished their own flush()
+            asyncio.get_running_loop().call_soon(
+                self._finish_segments, self.captured_playout_segments, self._pushed_duration
+            )
+        self._finish_on_flush = False
+
+    def _finish_segments(self, segments: int, playback_position: float) -> None:
+        """Finish the pending segments up to ``segments``, as the avatar can't report them."""
+        for _ in range(self._pending_playback_count - (self.captured_playout_segments - segments)):
+            self.on_playback_finished(playback_position=playback_position, interrupted=True)
 
     def clear_buffer(self) -> None:
         if not self._started or not self._pending_playback_count:
@@ -307,7 +315,12 @@ class DataStreamAudioOutput(AudioOutput):
             self._room_connected_fut.set_result(None)
 
     def _handle_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
-        if participant.identity != self._destination_identity or not self._pending_playback_count:
+        if (
+            participant.identity != self._destination_identity
+            or not self._pending_playback_count
+            # a rejoined session already replaced it
+            or participant.identity in self._room.remote_participants
+        ):
             return
 
         logger.warning(
