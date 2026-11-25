@@ -4,7 +4,7 @@
 use super::harness::*;
 use super::*;
 use crate::agent_session::machine::activity::scheduling::SpeechKind;
-use crate::amd::{AmdObservation, DetachCancel, SpeechObservation, TurnEnd};
+use crate::amd::{AmdObservation, DetachCancel, SpeechObservation};
 
 const MESSAGE: &str = "Hi Sam, this is Alex from Acme. Please call me back.";
 const GREETING: &str = "Please leave a message after the tone.";
@@ -40,11 +40,10 @@ fn test_voicemail_sends_one_delivered_message_and_records_playback() {
 fn test_superseded_voicemail_reply_does_not_consume_the_stage_message() {
     let mut h = H::started(AmdOptions::default());
     let first = h.turn(GREETING, Category::MachineVm);
-    let speech = h.reply(first);
+    let speech = h.replied(first);
     h.silence_held(first);
     // a newer turn cancels the held reply
     let second = h.commit("Please leave your message.");
-    h.ended(first, TurnEnd::Superseded);
     h.speech(speech, SpeechObservation::Done { interrupted: true, failed: false });
 
     h.classify(second, Category::MachineVm);
@@ -93,7 +92,7 @@ fn test_voicemail_playback_is_recorded_by_its_handle() {
     for outcome in ["played", "interrupted", "failed", "truncated", "no_audio", "closed"] {
         let mut h = H::started(AmdOptions::default());
         let turn = h.turn(GREETING, Category::MachineVm);
-        let speech = h.reply(turn);
+        let speech = h.replied(turn);
         h.silence_held(turn);
         h.silence_released(turn);
         if outcome != "no_audio" {
@@ -132,7 +131,7 @@ fn test_voicemail_delivery_guard_survives_transitions_and_allows_retry() {
             let mut h = H::started(AmdOptions::default());
             let first = h.turn(GREETING, Category::MachineVm);
             assert_eq!(h.decision(first), voicemail(), "{case}");
-            let speech = h.reply(first);
+            let speech = h.replied(first);
             if let Some(bridge) = bridge {
                 h.turn("One moment.", bridge);
             }
@@ -169,7 +168,8 @@ fn test_a_corrected_voicemail_reply_moves_tracking_to_the_replacement() {
     // a correction remakes the unheard reply; the first speech's interrupted end is ignored
     let mut h = H::started(AmdOptions::default());
     let turn = h.turn(GREETING, Category::MachineVm);
-    let first = h.reply(turn);
+    let first = h.replied(turn);
+    // a correction remakes it: a new `ReplyCreated` with no turn end
     let replacement = h.reply(turn);
     h.speech(first, SpeechObservation::Done { interrupted: true, failed: false });
 
@@ -269,6 +269,7 @@ fn test_voicemail_idle_does_not_extend_the_hard_timeout() {
         AmdOptions { timeout: secs(3), voicemail_idle_timeout: secs(10), ..AmdOptions::default() };
     let mut h = H::started(options);
     let turn = h.turn(GREETING, Category::MachineVm);
+    h.replied(turn);
     h.silence_held(turn);
     h.advance(secs(3));
     // completion releases the held reply as an "AMD completed" allow (spec §10.3, §12.3)

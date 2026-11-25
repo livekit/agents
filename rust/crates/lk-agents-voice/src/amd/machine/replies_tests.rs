@@ -498,6 +498,27 @@ fn test_a_turn_before_listening_starts_gets_the_unbound_row() {
 }
 
 #[test]
+fn test_a_turn_the_gate_has_not_bound_gets_the_unbound_row() {
+    // the run is active, but the gate committed the turn before it applied `Activated`: the
+    // gate never holds for it, so AMD answers with the first row and keeps no turn
+    let mut h = H::started(AmdOptions::default());
+    let early = h.commit_with(Commit { unbound: true, ..Commit::text("hello") });
+    assert_eq!(h.decision(early), plain());
+    assert!(h.requests().is_empty());
+    assert!(h.predictions().is_empty());
+
+    let turn = h.commit("Please state your name.");
+    assert_eq!(h.request_for(turn).turn_id, 1, "an unbound turn takes no AMD turn id");
+    h.classify(turn, Category::MachineScreening);
+    assert_eq!(h.decision(turn), staged(DEFAULT_SCREENING_INSTRUCTIONS));
+    // the row still denies once replies are forbidden or the call waits
+    let waiting = h.turn("Please hold.", Category::Wait);
+    assert_eq!(h.decision(waiting), deny());
+    let early = h.commit_with(Commit { unbound: true, ..Commit::text("hello") });
+    assert_eq!(h.decision(early), deny());
+}
+
+#[test]
 fn test_a_turn_after_the_overall_deadline_completes_with_timeout() {
     let mut h = H::started(AmdOptions { timeout: secs(5), ..AmdOptions::default() });
     // the deadline passed but its timer has not fired yet

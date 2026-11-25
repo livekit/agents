@@ -31,7 +31,7 @@ use super::effects::{MenuRequest, TurnTranscript};
 use super::events::{AmdEvent, AmdReason, Category, IvrMenuOption, MenuObserved, Outcome};
 use super::events::{Prediction, Stage};
 use super::options::{AmdOptions, AmdOptionsError};
-use super::{AmdAnswer, AmdObservation, AmdRunId, DetachCancel, UserSpeechObservation};
+use super::{AmdAnswer, AmdObservation, AmdRunId, DetachCancel, TurnEnd, UserSpeechObservation};
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
 use lk_agents_abi::Ts;
@@ -167,6 +167,22 @@ struct Turn {
     decided: bool,
     /// Its reply shows its words in the classifier history; fixed at its decision.
     reply_words: bool,
+    /// It left the activity.
+    ended: bool,
+    /// It asked for no reply, or ended without one: its allowed reply is never held.
+    no_reply: bool,
+}
+
+/// `AmdObservation::TurnCommitted`, as the machine reads it.
+struct Committed {
+    turn: TurnId,
+    transcript: String,
+    eot_delay: Option<Duration>,
+    skip_reply: bool,
+    bound: bool,
+    speaking: bool,
+    agent: String,
+    at: Ts,
 }
 
 /// The pending classifier request.
@@ -238,6 +254,10 @@ struct SpeechClock {
     started_at: Option<Ts>,
     /// Speech since the last commit, not counting the open stretch.
     duration: Duration,
+    /// Where the participant's silence starts; `None` while they speak (`_speech_ended_at`).
+    ended_at: Option<Ts>,
+    /// A boundary came since the previous commit.
+    boundary_since_commit: bool,
 }
 
 /// One AMD run. See the module documentation.
@@ -272,7 +292,9 @@ pub struct Amd {
     timeouts: u32,
     speech: SpeechClock,
     agent_busy: bool,
-    /// The turn whose allowed reply waits for silence, until the session releases it.
+    /// The turn whose allowed reply waits for silence: set by its decision, cleared by the
+    /// session's `SilenceHold { held: false }` or by a turn end that prevents the reply.
+    /// `TurnEnded { Replied }` keeps it: the session enters the hold after that.
     held: Option<TurnId>,
     activated_at: Option<Ts>,
     overall_deadline: Option<Ts>,
@@ -378,12 +400,29 @@ impl Amd {
 
     fn observe(&mut self, now: Ts, observation: AmdObservation) {
         match observation {
-            AmdObservation::TurnCommitted { turn, transcript, speaking, agent, at, .. } => {
-                self.on_commit(now, turn, &transcript, speaking, &agent, at);
+            AmdObservation::TurnCommitted {
+                turn,
+                transcript,
+                eot_delay,
+                skip_reply,
+                bound,
+                speaking,
+                agent,
+                at,
+            } => {
+                let committed = Committed {
+                    turn,
+                    transcript,
+                    eot_delay,
+                    skip_reply,
+                    bound,
+                    speaking,
+                    agent,
+                    at,
+                };
+                self.on_commit(now, committed);
             }
-            AmdObservation::TurnEnded { turn, .. } => {
-                self.held.take_if(|held| *held == turn);
-            }
+            AmdObservation::TurnEnded { turn, how } => self.on_turn_ended(turn, how),
             AmdObservation::ReplyCreated { turn, speech } => self.on_reply_created(turn, speech),
             AmdObservation::Speech { speech, event, at } => self.on_speech(speech, event, at),
             AmdObservation::AgentBusy { busy, .. } => self.agent_busy = busy,
@@ -437,12 +476,16 @@ impl Amd {
             UserSpeechObservation::Started { at } => {
                 self.speech.speaking = true;
                 self.speech.started_at = Some(self.activated_at.map_or(at, |a| at.max(a)));
+                self.speech.ended_at = None;
+                self.speech.boundary_since_commit = true;
             }
             UserSpeechObservation::Ended { at } => {
                 self.speech.speaking = false;
                 if let Some(started) = self.speech.started_at.take() {
                     self.speech.duration += at.saturating_duration_since(started);
                 }
+                self.speech.ended_at = Some(at);
+                self.speech.boundary_since_commit = true;
             }
             UserSpeechObservation::Final { text, .. } => {
                 self.transcripts.push(Source::Session, &text, false);
@@ -452,29 +495,41 @@ impl Amd {
 
     // Turns.
 
-    fn on_commit(
-        &mut self,
-        now: Ts,
-        turn: TurnId,
-        committed: &str,
-        speaking: bool,
-        agent: &str,
-        at: Ts,
-    ) {
+    fn on_commit(&mut self, now: Ts, commit: Committed) {
         match self.lifecycle {
-            // Not bound to an AMD turn: the first row of the reply table.
-            Lifecycle::Pending => {
-                let decision = self.unbound_decision();
-                self.answer(AmdAnswer::ReplyDecided { run: self.run, turn, decision });
-                return;
-            }
             // `Detach` settles it.
-            Lifecycle::Finished(_) => return,
-            Lifecycle::Active => {}
+            Lifecycle::Finished(_) => {}
+            Lifecycle::Active if commit.bound => self.on_bound_commit(now, commit),
+            // Not bound to an AMD turn: the first row of the reply table. The gate tells, since a
+            // commit can reach it before it applies `Activated`.
+            Lifecycle::Pending | Lifecycle::Active => {
+                let decision = self.unbound_decision();
+                let turn = commit.turn;
+                self.answer(AmdAnswer::ReplyDecided { run: self.run, turn, decision });
+            }
         }
+    }
+
+    fn on_bound_commit(&mut self, now: Ts, commit: Committed) {
+        let Committed {
+            turn,
+            transcript: committed,
+            eot_delay,
+            skip_reply,
+            speaking,
+            agent,
+            at,
+            ..
+        } = commit;
         // The session cancelled the held reply when it committed this turn.
         self.held = None;
-        let (transcript, late) = self.transcripts.end_turn(committed);
+        if !speaking && !self.speech.boundary_since_commit {
+            // No boundary since the previous commit: the silence starts where the endpointing
+            // delay puts it.
+            self.speech.ended_at = Some(at.saturating_sub(eot_delay.unwrap_or_default()));
+        }
+        self.speech.boundary_since_commit = false;
+        let (transcript, late) = self.transcripts.end_turn(&committed);
         let mut speech_duration = std::mem::take(&mut self.speech.duration);
         if speaking && let Some(started) = self.speech.started_at {
             speech_duration += at.saturating_duration_since(started);
@@ -494,6 +549,8 @@ impl Amd {
                 awaiting_final: !has_text && late,
                 decided: false,
                 reply_words: false,
+                ended: false,
+                no_reply: skip_reply,
             },
         );
         self.latest = Some(turn);
@@ -521,6 +578,30 @@ impl Amd {
             let text = text.to_owned();
             self.answer(AmdAnswer::InsertUserItem { run: self.run, turn, text });
         }
+    }
+
+    /// A reply that will not play is not held. `Replied` keeps the hold: the session enters it
+    /// after the turn ends.
+    fn on_turn_ended(&mut self, turn: TurnId, how: TurnEnd) {
+        let replied = how == TurnEnd::Replied;
+        if !replied {
+            self.held.take_if(|held| *held == turn);
+        }
+        let Some(t) = self.turns.get_mut(&turn) else { return };
+        t.ended = true;
+        t.no_reply |= !replied;
+        self.prune_turns();
+    }
+
+    /// Forgets the ended turns older than the newest turn with a prediction. Nothing reads them
+    /// again unless a final or a request still waits on one.
+    fn prune_turns(&mut self) {
+        let predicted = self.turns.values().filter(|t| t.prediction.is_some()).map(|t| t.id);
+        let Some(newest) = predicted.max() else { return };
+        let request = self.request.as_ref().map(|r| r.turn);
+        self.turns.retain(|turn, t| {
+            t.id >= newest || !t.ended || t.awaiting_final || request == Some(*turn)
+        });
     }
 
     // Late AMD finals.
@@ -808,10 +889,19 @@ impl Amd {
         if self.uncertain >= self.options.max_uncertain_turns {
             self.finish(AmdReason::MaxUncertainTurns);
         }
+        // The timeout limit completes before the decision unless the reply would wait for
+        // silence (`_update_idle`): `Detach` then settles the turn.
+        if self.timeouts >= self.options.max_inference_timeouts
+            && self.request.is_none()
+            && !self.reply_would_hold(now)
+        {
+            self.finish(AmdReason::InferenceTimeout);
+        }
         for event in events {
             self.push(AmdEffect::Emit(AmdEvent::Prediction(event)));
         }
         self.decide();
+        self.prune_turns();
     }
 
     // Menus.

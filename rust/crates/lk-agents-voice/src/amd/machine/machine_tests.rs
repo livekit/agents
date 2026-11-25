@@ -395,32 +395,6 @@ fn a_newer_turn_with_text_cancels_the_request_and_its_result_is_stale() {
 }
 
 #[test]
-fn inference_timeouts_forget_wait_and_complete_once_nothing_is_held() {
-    let options = AmdOptions { max_inference_timeouts: 2, ..AmdOptions::default() };
-    let mut run = Run::active(options, setup());
-    run.turn("Leave a message.", Category::MachineVm);
-    run.turn("Please hold.", Category::Wait);
-    let (_, effects) = run.commit("still holding");
-    let req = request(&effects).unwrap();
-    run.advance(2000);
-    // A result at its deadline counts as a timeout.
-    let effects = run.step(In::Classified { req: req.req, result: ok(Category::Wait, 0) });
-    let p = &predictions(&effects)[0];
-    assert_eq!((p.category, p.reason), (Category::Uncertain, AmdReason::InferenceTimeout));
-    // `wait` is forgotten, so the voicemail reply is allowed and held for silence.
-    run.commit("");
-    let (t5, effects) = run.commit("Leave a message.");
-    let req = request(&effects).unwrap();
-    run.advance(2000);
-    let effects = run.step(In::Timeout(AmdTimer::Inference(req.req)));
-    assert_eq!(decision(&effects).map(|(turn, d)| (turn, d.allow)), Some((t5, true)));
-    assert_eq!(reason(&run), None, "the held reply delays completion");
-    let effects = run.observe(AmdObservation::SilenceHold { turn: t5, held: false, at: run.now });
-    assert_eq!(reason(&run), Some(AmdReason::InferenceTimeout));
-    assert!(detach(&effects).unwrap().0.allow);
-}
-
-#[test]
 fn an_inference_error_is_uncertain_and_keeps_the_likely_human_mark() {
     let mut run = Run::active(AmdOptions::default(), setup());
     run.turn("Press 1.", Category::MachineIvr);

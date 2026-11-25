@@ -72,11 +72,21 @@ pub(super) struct Commit {
     pub speaking: bool,
     pub agent: String,
     pub eot_delay: Option<Duration>,
+    pub skip_reply: bool,
+    /// The gate has not applied `Activated` yet, though the run may have activated.
+    pub unbound: bool,
 }
 
 impl Commit {
     pub(super) fn text(text: &str) -> Commit {
-        Commit { text: text.to_owned(), speaking: false, agent: AGENT.to_owned(), eot_delay: None }
+        Commit {
+            text: text.to_owned(),
+            speaking: false,
+            agent: AGENT.to_owned(),
+            eot_delay: None,
+            skip_reply: false,
+            unbound: false,
+        }
     }
 }
 
@@ -87,6 +97,8 @@ pub(super) struct H {
     pub log: Vec<(Ts, AmdEffect)>,
     /// Armed deadlines, in arming order.
     armed: Vec<(AmdTimer, Ts)>,
+    /// The gate applied `Activated`: it does so as soon as the run answers with it.
+    gate_active: bool,
     next_turn: u64,
     next_speech: u64,
     next_call: u64,
@@ -105,6 +117,7 @@ impl H {
             now: T0,
             log: Vec::new(),
             armed: Vec::new(),
+            gate_active: false,
             next_turn: 1,
             next_speech: 100,
             next_call: 1,
@@ -137,6 +150,7 @@ impl H {
                     self.armed.push((*timer, *at));
                 }
                 AmdEffect::ClearDeadline(timer) => self.armed.retain(|(t, _)| t != timer),
+                AmdEffect::Answer(AmdAnswer::Activated { .. }) => self.gate_active = true,
                 _ => {}
             }
             self.log.push((self.now, effect.clone()));
@@ -187,12 +201,13 @@ impl H {
     pub(super) fn commit_with(&mut self, commit: Commit) -> TurnId {
         let turn = TurnId(self.next_turn);
         self.next_turn += 1;
+        let bound = self.gate_active && !commit.unbound;
         self.observe(AmdObservation::TurnCommitted {
             turn,
             transcript: commit.text,
             eot_delay: commit.eot_delay,
-            skip_reply: false,
-            bound: true,
+            skip_reply: commit.skip_reply,
+            bound,
             speaking: commit.speaking,
             agent: commit.agent,
             at: self.now,
@@ -467,13 +482,20 @@ impl H {
         self.observe(AmdObservation::SilenceHold { turn, held: false, at: self.now });
     }
 
+    /// The session applies `turn`'s allowed decision as the gate does: the reply exists, the
+    /// turn ends with it, then the silence hold starts if the decision asks for one.
+    pub(super) fn replied(&mut self, turn: TurnId) -> SpeechId {
+        let speech = self.reply(turn);
+        self.ended(turn, TurnEnd::Replied);
+        speech
+    }
+
     /// `turn`'s allowed machine-stage reply waits for silence, then plays `text` to its end.
     pub(super) fn reply_after_silence(&mut self, turn: TurnId, text: &str) -> SpeechId {
-        let speech = self.reply(turn);
+        let speech = self.replied(turn);
         self.silence_held(turn);
         self.silence_released(turn);
         self.play(speech, text);
-        self.ended(turn, TurnEnd::Replied);
         speech
     }
 
@@ -484,9 +506,8 @@ impl H {
         if silence {
             return self.reply_after_silence(turn, text);
         }
-        let speech = self.reply(turn);
+        let speech = self.replied(turn);
         self.play(speech, text);
-        self.ended(turn, TurnEnd::Replied);
         speech
     }
 

@@ -32,10 +32,30 @@ impl Amd {
         if let Some(t) = self.turns.get_mut(&turn) {
             t.reply_words = words;
         }
-        if decision.allow && decision.silence.is_some() {
+        // A turn that asked for no reply, or ended without one, has no reply to hold.
+        let no_reply = self.turns.get(&turn).is_some_and(|t| t.no_reply);
+        if decision.allow && decision.silence.is_some() && !no_reply {
             self.held = Some(turn);
         }
         self.answer(AmdAnswer::ReplyDecided { run: self.run, turn, decision });
+    }
+
+    /// `_reply_held_at`: the latest turn's allowed reply would wait for silence now. The
+    /// participant speaks, or has been silent for less than the threshold.
+    pub(super) fn reply_would_hold(&self, now: Ts) -> bool {
+        let threshold = self.options.machine_silence_threshold;
+        let Some(t) = self.latest.and_then(|turn| self.turns.get(&turn)) else { return false };
+        if !self.active()
+            || threshold.is_zero()
+            || t.prediction.is_none()
+            || t.no_reply
+            || self.category == Category::Wait
+            || !self.stage.is_machine()
+        {
+            return false;
+        }
+        let speech = &self.speech;
+        speech.speaking || speech.ended_at.is_none_or(|ended| now < ended.saturating_add(threshold))
     }
 
     /// `_authorize_reply` for an active run, from the row after "AMD completed".

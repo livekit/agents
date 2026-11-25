@@ -929,3 +929,25 @@ fn test_speech_across_a_commit_is_split_at_the_commit() {
     let second = h.commit("the line.");
     assert_eq!(h.request_for(second).speech_duration, secs(1));
 }
+
+// The turn registry.
+
+/// An ended turn older than the newest prediction is forgotten. A turn still in the activity is
+/// kept until it ends.
+#[test]
+fn test_ended_turns_are_forgotten_once_a_newer_turn_has_a_prediction() {
+    let mut h = H::started(AmdOptions::default());
+    for _ in 0..4 {
+        let turn = h.turn("Please state your name.", Category::MachineScreening);
+        h.reply_played(turn, "This is Alex.");
+    }
+    assert_eq!(h.amd.turns.len(), 1, "only the latest turn");
+
+    // a turn in its hook is superseded by a newer one with text
+    let in_hook = h.commit("Hello?");
+    let newer = h.turn("Please state your name.", Category::MachineScreening);
+    assert!(h.amd.turns.contains_key(&in_hook), "it has not ended");
+    h.ended(in_hook, crate::amd::TurnEnd::Superseded);
+    assert!(!h.amd.turns.contains_key(&in_hook));
+    assert_eq!(h.amd.turns.keys().copied().collect::<Vec<_>>(), [newer]);
+}

@@ -155,6 +155,7 @@ fn test_completion_waits_for_detached_and_legs_closed() {
 fn test_session_close_completes_amd_and_releases_resources() {
     let mut h = H::started(AmdOptions::default());
     let turn = h.turn("Please state your name.", Category::MachineScreening);
+    h.replied(turn);
     h.silence_held(turn);
     h.step(In::Close);
     h.step(In::Close);
@@ -280,15 +281,19 @@ fn test_inference_timeout_limit_waits_for_silence_before_completion() {
         };
         let mut h = H::started(options);
         let first = h.turn("Please state your name.", Category::MachineScreening);
-        h.silence_held(first);
-        h.silence_released(first);
+        h.reply_after_silence(first, "This is Alex.");
         for n in 1..=limit {
             let turn = h.commit("hello");
             h.advance(ms(200));
             assert_eq!(h.last_prediction().reason, AmdReason::InferenceTimeout);
             assert_eq!(h.decision(turn), staged(DEFAULT_SCREENING_INSTRUCTIONS));
+            // the gate's order: the reply exists, the turn ends with it, then the hold starts
+            h.reply(turn);
+            assert!(h.detaches().is_empty(), "limit {limit}: turn {n}: reply created");
+            h.ended(turn, TurnEnd::Replied);
+            assert!(h.detaches().is_empty(), "limit {limit}: turn {n}: replied");
             h.silence_held(turn);
-            assert!(h.detaches().is_empty(), "limit {limit}: turn {n} is held");
+            assert!(h.detaches().is_empty(), "limit {limit}: turn {n}: held");
             h.advance(ms(700));
             h.silence_released(turn);
             assert_eq!(h.detaches().is_empty(), n < limit, "limit {limit}: turn {n} released");
@@ -296,6 +301,151 @@ fn test_inference_timeout_limit_waits_for_silence_before_completion() {
         assert_eq!(h.detach(), completed_with(plain(), DetachCancel::Keep));
         assert_eq!(h.outcome().reason, AmdReason::InferenceTimeout);
     }
+}
+
+/// At the limit, `_update_idle` completes before the turn's decision unless the reply would wait
+/// for silence (`_reply_held_at`): the participant speaks, or has been silent for less than the
+/// threshold. `Detach` then settles the turn with the "AMD completed" row, without stage
+/// instructions.
+#[test]
+fn test_the_timeout_limit_completes_before_deciding_unless_the_reply_would_wait() {
+    // (case, threshold, held)
+    for (case, threshold, held) in [
+        ("no threshold", Duration::ZERO, false),
+        ("silent long enough", SILENCE, false),
+        ("silent long enough by the eot delay", SILENCE, false),
+        ("silent too briefly", SILENCE, true),
+        ("speaking", SILENCE, true),
+    ] {
+        let options = AmdOptions {
+            inference_timeout: ms(200),
+            max_inference_timeouts: 1,
+            machine_silence_threshold: threshold,
+            ..AmdOptions::default()
+        };
+        let mut h = H::started(options);
+        let first = h.turn("Please state your name.", Category::MachineScreening);
+        h.reply_played(first, "This is Alex.");
+        h.advance(secs(1));
+        let mut commit = Commit::text("hello");
+        match case {
+            "silent long enough" => {
+                h.speech_started(h.now);
+                h.speech_ended(h.now);
+                h.advance(ms(1400));
+            }
+            // no boundary since the previous commit: the silence starts at the endpoint
+            "silent long enough by the eot delay" => commit.eot_delay = Some(ms(1400)),
+            "silent too briefly" => {
+                h.speech_started(h.now);
+                h.advance(ms(500));
+                h.speech_ended(h.now);
+            }
+            "speaking" => {
+                h.speech_started(h.now);
+                commit.speaking = true;
+            }
+            _ => {}
+        }
+        let turn = h.commit_with(commit);
+        h.advance(ms(200));
+        assert_eq!(h.last_prediction().reason, AmdReason::InferenceTimeout, "{case}");
+        if !held {
+            assert!(h.decisions(turn).is_empty(), "{case}: no decision before completion");
+            assert_eq!(h.detach(), completed_with(plain(), DetachCancel::Keep), "{case}");
+            assert_eq!(h.outcome().reason, AmdReason::InferenceTimeout, "{case}");
+            continue;
+        }
+        assert_eq!(h.decision(turn), staged(DEFAULT_SCREENING_INSTRUCTIONS), "{case}");
+        assert!(h.detaches().is_empty(), "{case}: the reply waits for silence");
+        h.replied(turn);
+        h.silence_held(turn);
+        assert!(h.detaches().is_empty(), "{case}: held");
+        h.silence_released(turn);
+        assert_eq!(h.detach(), completed_with(plain(), DetachCancel::Keep), "{case}");
+    }
+}
+
+/// A turn that asks for no reply, or ends without one, has no reply to hold: the idle timer and
+/// the timeout limit go on. The end can reach AMD before the prediction or after the decision.
+#[test]
+fn test_a_turn_without_a_reply_holds_nothing() {
+    use TurnEnd::*;
+    // (how the turn goes without a reply, whether the end comes after the decision)
+    for (how, after) in [
+        (Stopped, false),
+        (Stopped, true),
+        (Dropped, false),
+        (Dropped, true),
+        (SkipReply, false),
+        // the commit asked for no reply; the end has not reached AMD yet
+        (SkipReply, true),
+    ] {
+        let case = format!("{how:?}, after decision: {after}");
+        let skip_reply = how == SkipReply;
+        let end = |h: &mut H, turn| {
+            if how != SkipReply || !after {
+                h.ended(turn, how);
+            }
+        };
+
+        // the idle timer
+        let mut h = H::started(AmdOptions { idle_timeout: secs(1), ..AmdOptions::default() });
+        let first = h.turn("Please state your name.", Category::MachineScreening);
+        h.reply_played(first, "This is Alex.");
+        let turn = h.commit_with(Commit { skip_reply, ..Commit::text("Who is calling?") });
+        if !after {
+            end(&mut h, turn);
+        }
+        h.classify(turn, Category::MachineScreening);
+        if after {
+            end(&mut h, turn);
+        }
+        assert_eq!(h.armed(AmdTimer::Idle), Some(h.now.saturating_add(secs(1))), "{case}");
+        h.advance(secs(1));
+        assert_eq!(h.outcome().reason, AmdReason::IdleTimeout, "{case}");
+
+        // the timeout limit
+        let options = AmdOptions {
+            inference_timeout: ms(200),
+            max_inference_timeouts: 1,
+            ..AmdOptions::default()
+        };
+        let mut h = H::started(options);
+        let first = h.turn("Please state your name.", Category::MachineScreening);
+        h.reply_played(first, "This is Alex.");
+        let turn = h.commit_with(Commit { skip_reply, ..Commit::text("Who is calling?") });
+        if !after {
+            end(&mut h, turn);
+        }
+        h.advance(ms(200));
+        if after {
+            end(&mut h, turn);
+        }
+        assert_eq!(h.detaches().len(), 1, "{case}");
+        assert_eq!(h.outcome().reason, AmdReason::InferenceTimeout, "{case}");
+    }
+}
+
+/// `Denied` follows a denied decision and `Abandoned` the session's close: neither changes what
+/// AMD holds.
+#[test]
+fn test_denied_and_abandoned_turns_change_nothing_else() {
+    let mut h = H::started(AmdOptions { idle_timeout: secs(1), ..AmdOptions::default() });
+    let waiting = h.turn("Please hold.", Category::Wait);
+    assert_eq!(h.decision(waiting), deny());
+    h.ended(waiting, TurnEnd::Denied);
+    assert_eq!(h.armed(AmdTimer::Idle), None, "wait keeps the idle timer off");
+    let next = h.commit("Hello?");
+    assert_eq!(h.request_for(next).turn_id, 2);
+
+    // the close ends the turn in its hook, then reports `Detached`
+    h.ended(next, TurnEnd::Abandoned);
+    assert!(h.detaches().is_empty());
+    h.observe(AmdObservation::Detached { run: RUN });
+    assert_eq!(h.detach(), completed_with(deny(), DetachCancel::Keep));
+    h.step(In::LegsClosed);
+    assert_eq!(h.completions()[0].reason, AmdReason::Cancelled);
 }
 
 #[test]
@@ -310,17 +460,20 @@ fn test_valid_prediction_resets_timeout_budget_before_reply_is_allowed() {
     h.advance(ms(100));
     assert_eq!(h.decision(first), plain());
     let second = h.turn("Please state your name.", Category::MachineScreening);
+    h.replied(second);
     h.silence_held(second);
 
+    // the commit cancels the held reply
     let third = h.commit("hello");
-    h.ended(second, TurnEnd::Superseded);
     h.advance(ms(100));
+    h.replied(third);
     h.silence_held(third);
     h.silence_released(third);
     assert!(h.detaches().is_empty(), "the screening prediction reset the count");
 
     let fourth = h.commit("hello");
     h.advance(ms(100));
+    h.replied(fourth);
     h.silence_held(fourth);
     h.silence_released(fourth);
     assert_eq!(h.outcome().reason, AmdReason::InferenceTimeout);
@@ -417,12 +570,16 @@ fn test_classifier_that_ignores_cancellation_cannot_change_state() {
 fn test_late_human_cannot_replace_a_held_timeout() {
     let mut h = H::started(AmdOptions { inference_timeout: ms(200), ..AmdOptions::default() });
     let first = h.turn("Leave a message.", Category::MachineVm);
+    let speech = h.replied(first);
     h.silence_held(first);
     h.silence_released(first);
+    // the message was cut, so the next voicemail turn may try again
+    h.speech(speech, crate::amd::SpeechObservation::Done { interrupted: true, failed: false });
     let turn = h.commit("hello");
     let req = h.request_for(turn).req;
     h.advance(ms(200));
     assert_eq!(h.decision(turn), staged(DEFAULT_VOICEMAIL_INSTRUCTIONS));
+    h.replied(turn);
     h.silence_held(turn);
 
     h.respond(req, Ok(Classification { category: Category::Human, inference_duration: ms(250) }));
@@ -446,6 +603,7 @@ fn test_amd_enforces_overall_deadline_independently_of_fsm() {
             req = Some(h.request_for(turn).req);
             if pending != "classification" {
                 h.classify(turn, Category::MachineVm);
+                h.replied(turn);
                 h.silence_held(turn);
                 if pending == "speech" {
                     h.speech_started(h.now);
@@ -555,19 +713,24 @@ fn test_a_watched_speech_holds_the_idle_timer() {
 
 #[test]
 fn test_a_held_reply_holds_the_idle_timer_until_it_is_released() {
-    // held from the allowed decision until `SilenceHold { held: false }` or the turn ends
-    for release in ["silence", "ended"] {
+    // held from the allowed decision until `SilenceHold { held: false }`, or until a turn end
+    // that prevents the reply
+    for release in ["silence", "dropped"] {
         let mut h = H::started(AmdOptions { idle_timeout: secs(1), ..AmdOptions::default() });
         let turn = h.turn("Please state your name.", Category::MachineScreening);
         assert_eq!(h.armed(AmdTimer::Idle), None, "{release}");
         h.advance(secs(3));
         assert!(h.detaches().is_empty(), "{release}");
-        h.silence_held(turn);
-        assert_eq!(h.armed(AmdTimer::Idle), None, "{release}");
         if release == "silence" {
+            // `Replied` keeps the hold: the session enters it after the turn ends
+            h.replied(turn);
+            assert_eq!(h.armed(AmdTimer::Idle), None, "{release}");
+            h.silence_held(turn);
+            assert_eq!(h.armed(AmdTimer::Idle), None, "{release}");
             h.silence_released(turn);
         } else {
-            h.ended(turn, TurnEnd::Stopped);
+            // the scheduler refused the reply
+            h.ended(turn, TurnEnd::Dropped);
         }
         assert_eq!(h.armed(AmdTimer::Idle), Some(h.now.saturating_add(secs(1))), "{release}");
     }
