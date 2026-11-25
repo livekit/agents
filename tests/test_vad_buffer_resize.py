@@ -176,6 +176,11 @@ async def test_end_input_keeps_the_samples_short_of_an_inference_window(
     ends = [event for event in events if event.type == vad.VADEventType.END_OF_SPEECH]
     assert len(ends) == 1
     np.testing.assert_array_equal(ends[0].frames[0].data, samples)
+    duration = len(samples) / sample_rate
+    assert ends[0].timestamp == pytest.approx(duration)
+    assert ends[0].samples_index == round(duration * _SAMPLE_RATE)
+    assert ends[0].speech_duration == pytest.approx(duration)
+    assert ends[0].silence_duration == 0.0
 
 
 async def test_end_input_excludes_trailing_silence_from_the_speech_duration(
@@ -196,6 +201,39 @@ async def test_end_input_excludes_trailing_silence_from_the_speech_duration(
     assert [event.type for event in events] == [vad.VADEventType.END_OF_SPEECH]
     assert events[0].silence_duration == pytest.approx(0.032)
     assert events[0].speech_duration == pytest.approx(0.096)
+
+
+async def test_end_input_counts_a_partial_window_after_silence_as_silence(
+    vad_impl: inference_vad.VAD | silero_vad.VAD,
+) -> None:
+    """The input is read to its end, and the speech still ends where the silence began."""
+    vad_impl.update_options(min_silence_duration=0.064)
+    stream = vad_impl.stream()
+    try:
+        for value in (1, 2, 3, 0):
+            await _push_window(stream, value)
+
+        samples = np.zeros(160, dtype=np.int16)  # 10ms
+        stream.push_frame(
+            rtc.AudioFrame(
+                data=samples.tobytes(),
+                sample_rate=_SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=len(samples),
+            )
+        )
+        stream.end_input()
+        events = await _read_to_end(stream)
+    finally:
+        await stream.aclose()
+
+    assert [event.type for event in events] == [vad.VADEventType.END_OF_SPEECH]
+    event = events[0]
+    assert event.timestamp == pytest.approx(0.138)
+    assert event.samples_index == 4 * _WINDOW_SAMPLES + 160
+    assert event.silence_duration == pytest.approx(0.042)
+    assert event.speech_duration == pytest.approx(0.096)
+    assert event.timestamp - event.silence_duration == pytest.approx(0.096)
 
 
 async def test_end_input_adds_nothing_after_the_segment_already_closed(
@@ -252,6 +290,63 @@ async def test_stream_adapter_transcribes_speech_cut_off_by_the_end_of_input(
         stt.SpeechEventType.FINAL_TRANSCRIPT,
     ]
     assert events[2].alternatives[0].text == "hello"
+
+
+class _FlushSegmentVAD(vad.VAD):
+    def __init__(self) -> None:
+        super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
+
+    def stream(self) -> vad.VADStream:
+        return _FlushSegmentStream(self)
+
+
+class _FlushSegmentStream(vad.VADStream):
+    """Emits the pending segment on `flush()`; `end_input()` only closes the channel."""
+
+    def end_input(self) -> None:
+        self._input_ch.close()
+
+    async def _main_task(self) -> None:
+        frames: list[rtc.AudioFrame] = []
+        async for item in self._input_ch:
+            if isinstance(item, rtc.AudioFrame):
+                if not frames:
+                    self._emit(vad.VADEventType.START_OF_SPEECH, [])
+                frames.append(item)
+            elif frames:
+                self._emit(vad.VADEventType.END_OF_SPEECH, frames)
+                frames = []
+
+    def _emit(self, event_type: vad.VADEventType, frames: list[rtc.AudioFrame]) -> None:
+        self._event_ch.send_nowait(
+            vad.VADEvent(
+                type=event_type,
+                samples_index=0,
+                timestamp=0.0,
+                speech_duration=0.0,
+                silence_duration=0.0,
+                frames=frames,
+            )
+        )
+
+
+async def test_stream_adapter_flushes_a_vad_that_closes_its_segment_on_flush() -> None:
+    """Only a VAD that opts out loses the flush before the end of input."""
+    stream = stt.StreamAdapter(
+        stt=FakeSTT(fake_transcript="hello"), vad=_FlushSegmentVAD()
+    ).stream()
+    try:
+        stream.push_frame(_window(1))
+        stream.end_input()
+        events = await _read_to_end(stream)
+    finally:
+        await stream.aclose()
+
+    assert [event.type for event in events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.END_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
 
 
 @pytest.mark.parametrize("resize", ["shrink", "grow"])

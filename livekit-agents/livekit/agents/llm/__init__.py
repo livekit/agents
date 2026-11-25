@@ -14,6 +14,10 @@ from .chat_context import (
     ImageContent,
     MetricsReport,
 )
+from .decision_fallback_adapter import (
+    DecisionAvailabilityChangedEvent,
+    DecisionModelFallbackAdapter,
+)
 from .decisions import (
     Choice,
     ChoiceResult,
@@ -89,6 +93,7 @@ from .tool_context import (
     ToolFlag,
     ToolResult,
     Toolset,
+    ToolsetError,
     find_function_tools,
     function_tool,
     is_function_tool,
@@ -125,6 +130,7 @@ __all__ = [
     "ToolChoice",
     "Tool",
     "Toolset",
+    "ToolsetError",
     "is_function_tool",
     "function_tool",
     "find_function_tools",
@@ -156,7 +162,9 @@ __all__ = [
     "Decision",
     "DecisionCapabilities",
     "DecisionKind",
+    "DecisionAvailabilityChangedEvent",
     "DecisionModel",
+    "DecisionModelFallbackAdapter",
     "DecisionResponse",
     "DecisionResult",
     "Probability",

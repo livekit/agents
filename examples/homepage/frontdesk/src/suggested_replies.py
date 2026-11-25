@@ -80,7 +80,14 @@ class SuggestedReplies:
 
     def attach(self) -> SuggestedReplies:
         self._session.on("conversation_item_added", self._on_item)
+        self._room.local_participant.register_rpc_method("say", self._say)
         return self
+
+    async def _say(self, data: rtc.RpcInvocationData) -> str:
+        self._session.reset_away_timer()
+        await self._session.interrupt()
+        self._session.generate_reply(user_input=data.payload)
+        return "ok"
 
     def _on_item(self, ev: ConversationItemAddedEvent) -> None:
         item = ev.item

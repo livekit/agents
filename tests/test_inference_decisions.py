@@ -18,7 +18,7 @@ from aiohttp.test_utils import TestServer
 
 from livekit.agents import APIError, APIStatusError
 from livekit.agents.inference import DecisionModel
-from livekit.agents.inference._utils import HEADER_USER_AGENT
+from livekit.agents.inference._utils import HEADER_CLIENT_FEATURE, HEADER_USER_AGENT
 from livekit.agents.llm import ChatContext, decisions
 from livekit.agents.types import APIConnectOptions
 
@@ -169,6 +169,28 @@ async def test_request_targets_gateway_with_minted_token() -> None:
     assert response.output_tokens == 0
 
 
+async def test_extra_headers_go_out_below_the_sdk_headers_on_that_call_only() -> None:
+    headers: list[dict[str, str]] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        headers.append(dict(request.headers))
+        return web.json_response(response_body())
+
+    async with _gateway(handler) as (url, session):
+        model = _model(url, session)
+        await model.evaluate(
+            input="",
+            decisions=QUESTIONS,
+            extra_headers={HEADER_CLIENT_FEATURE: "AMD", HEADER_USER_AGENT: "caller"},
+        )
+        await model.evaluate(input="", decisions=QUESTIONS)
+
+    tagged, untagged = headers
+    assert tagged[HEADER_CLIENT_FEATURE] == "AMD"
+    assert tagged[HEADER_USER_AGENT].startswith("LiveKit Agents/")
+    assert HEADER_CLIENT_FEATURE not in untagged
+
+
 async def test_request_id_comes_from_gateway_header() -> None:
     async with _gateway(_json_handler(response_body())) as (url, session):
         response = await _model(url, session).evaluate(input="", decisions=QUESTIONS)
@@ -182,6 +204,46 @@ async def test_model_falls_back_to_configured_model() -> None:
         model = _model(url, session, model="livekit/clef-omni")
         response = await model.evaluate(input="", decisions=QUESTIONS)
     assert response.model == "livekit/clef-omni"
+
+
+@pytest.mark.parametrize(
+    ("fallback", "sent"),
+    [
+        ("typesafe/jev", [{"model": "typesafe/jev"}]),
+        (
+            ["typesafe/jev", "livekit/clef-omni"],
+            [{"model": "typesafe/jev"}, {"model": "livekit/clef-omni"}],
+        ),
+        ([], []),  # turns off the gateway's default fallback
+    ],
+)
+async def test_fallback_models_are_sent_to_the_gateway(
+    fallback: str | list[str], sent: list[dict[str, str]]
+) -> None:
+    captured: dict[str, Any] = {}
+    async with _gateway(_json_handler(response_body(), captured=captured)) as (url, session):
+        await _model(url, session, fallback=fallback).evaluate(input="", decisions=QUESTIONS)
+    assert captured["body"]["fallback"] == {"models": sent}
+
+
+@pytest.mark.parametrize(
+    ("body_model", "reported"), [("jev-1.13.0", "jev-1.13.0"), (None, "typesafe/jev")]
+)
+async def test_response_names_the_fallback_model_that_answered(
+    body_model: str | None, reported: str
+) -> None:
+    body = response_body()
+    if body_model is None:
+        del body["model"]
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response(
+            body, headers={"X-Livekit-Inference-Decisions-Model-Fallback": "typesafe/jev"}
+        )
+
+    async with _gateway(handler) as (url, session):
+        response = await _model(url, session).evaluate(input="", decisions=QUESTIONS)
+    assert response.model == reported
 
 
 async def test_positional_legend_is_accepted() -> None:

@@ -302,6 +302,9 @@ class VADStream(agents.vad.VADStream):
             if self._opts.max_buffered_speech > old_max_buffered_speech:
                 self._speech_buffer_max_reached = False
 
+    def _end_adapter_input(self) -> None:
+        self.end_input()  # closes the open segment, a flush would drop it
+
     @agents.utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         inference_f32_data = np.empty(self._model.window_size_samples, dtype=np.float32)
@@ -614,6 +617,15 @@ class VADStream(agents.vad.VADStream):
                 # the samples short of a full inference window still belong to this speech
                 assert self._speech_buffer is not None
                 tail = utils.combine_frames(input_frames).data
+                # the fraction of a sample already counted in the last window
+                tail_duration = (len(tail) - input_copy_remaining_fract) / self._input_sample_rate
+                pub_current_sample += round(tail_duration * self._model.sample_rate)
+                pub_timestamp += tail_duration
+                pub_speech_duration += tail_duration
+                if silence_threshold_duration > 0.0:
+                    # too short to classify, so it stays what the last window was
+                    silence_threshold_duration += tail_duration
+
                 tail = tail[: len(self._speech_buffer) - self._speech_buffer_index]
                 tail_end = self._speech_buffer_index + len(tail)
                 self._speech_buffer[self._speech_buffer_index : tail_end] = tail

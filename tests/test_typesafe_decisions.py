@@ -78,6 +78,15 @@ async def test_typesafe_api_uses_model_and_env_key(monkeypatch) -> None:
     assert response.provider == "typesafe"
 
 
+async def test_extra_headers_go_out_below_the_auth_header() -> None:
+    model, http = model_for(response_body())
+    await model.evaluate(
+        input="", decisions=QUESTIONS, extra_headers={"X-Feature": "test", "Authorization": "x"}
+    )
+    headers = http.post.call_args.kwargs["headers"]
+    assert (headers["X-Feature"], headers["Authorization"]) == ("test", "Bearer test-key")
+
+
 def test_missing_api_key_fails_at_construction(monkeypatch) -> None:
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)

@@ -6,9 +6,14 @@ import platform
 from collections.abc import Mapping
 from typing import Literal
 
+import aiohttp
+
 from livekit import api
 
-from ..utils.misc import shortuuid
+from .._exceptions import APIStatusError, create_api_error_from_http
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils.deprecation import deprecate_params
+from ..utils.misc import is_given, shortuuid
 from ..version import __version__
 
 InferenceClass = Literal["priority", "standard", "low"]
@@ -27,6 +32,42 @@ HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
+# Names the SDK feature that made a request (e.g. "AMD"). Absent on ordinary agent requests.
+HEADER_CLIENT_FEATURE = "X-LiveKit-Client-Feature"
+# set when a fallback model served a /v1/decisions request, to that model's id
+HEADER_DECISIONS_MODEL_FALLBACK = "X-LiveKit-Inference-Decisions-Model-Fallback"
+
+
+@deprecate_params(
+    {"provider": "Omit this argument to let LiveKit route requests and use fallback providers."},
+    target_date="March 1, 2027",
+)
+def _resolve_provider(*, provider: NotGivenOr[str | None] = NOT_GIVEN) -> str | None:
+    return provider if is_given(provider) else None
+
+
+def _terminal_denial(headers: Mapping[str, str] | None) -> bool:
+    # quota denials a retry cannot clear (out of credits, project suspended);
+    # httpx and aiohttp header maps are both case-insensitive
+    return (headers or {}).get("X-Should-Retry", "").strip().lower() == "false"
+
+
+def create_api_error_from_response(error: aiohttp.ClientResponseError) -> APIStatusError:
+    """Preserve quota details when a failed WebSocket upgrade hides its body."""
+    # UPDATE_ALL_INSTANCES(INFERENCE_QUOTA_ERROR_HEADERS): agent-gateway/pkg/http/header.go.
+    headers: Mapping[str, str] = error.headers or {}
+    message = headers.get("X-LiveKit-Inference-Quota-Message") or error.message
+    category = headers.get("X-LiveKit-Inference-Quota-Category")
+    result = create_api_error_from_http(
+        message,
+        status=error.status,
+        request_id=headers.get(HEADER_REQUEST_ID),
+        body={"category": category} if category else None,
+    )
+    if _terminal_denial(headers):
+        result.retryable = False
+    return result
+
 
 # Quota telemetry headers the inference gateway stamps on LLM completions
 # responses (including 429 rejections). RPM/TPM are per-minute rate limits;

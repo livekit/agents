@@ -116,13 +116,13 @@ class StreamAdapterWrapper(RecognizeStream):
             """forward input to vad"""
             async for input in self._input_ch:
                 if isinstance(input, self._FlushSentinel):
-                    # end_input flushes too: resetting the VAD then would drop the open utterance
+                    # the flush sent by end_input is left to _end_adapter_input
                     if not (self._input_ch.closed and self._input_ch.empty()):
                         vad_stream.flush()
                     continue
                 vad_stream.push_frame(input)
 
-            vad_stream.end_input()
+            vad_stream._end_adapter_input()
 
         async def _recognize() -> None:
             """recognize speech from vad"""
