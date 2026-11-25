@@ -25,12 +25,10 @@ The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is de
 - `VAD` (default) — Speechmatics runs its own VAD and closes turns itself (service-side
   endpointing). No `vad` is required. Pair it with `turn_detection="stt"` on the `AgentSession`,
   otherwise the session's own turn detector decides and Speechmatics' end-of-turn is ignored.
-- `EXTERNAL` — Speechmatics does not endpoint on its own. Turns close when the caller
-  calls `finalize()`. In practice you pass a `vad` to the plugin and its end-of-speech drives
-  `finalize()`; LiveKit does **not** call `finalize()` for you, and no VAD is auto-loaded. Without a
-  `vad` (and without calling `finalize()` yourself) turns never close, so nothing is finalized.
-  The session's own turn detector decides when the user's turn ends; `finalize()` only makes
-  Speechmatics flush what it has as a final segment.
+- `EXTERNAL` — Speechmatics does not endpoint on its own. The plugin's local VAD closes
+  turns; if no `vad` is passed, Silero is auto-loaded from `livekit-plugins-silero`. Pass
+  `vad=None` to let `AgentSession` flush the stream using its own VAD and turn detector,
+  or to drive `stream.flush()` / `STT.finalize()` yourself.
 
 The earlier `FIXED`, `ADAPTIVE` and `SMART_TURN` modes each selected one of the old engine's
 service-side endpointing strategies. Agent STT exposes a single one, so all three are deprecated

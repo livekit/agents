@@ -93,6 +93,7 @@ class DecisionModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         try:
             raw = await self._client.aio.decisions.with_raw_response.create(
@@ -101,6 +102,7 @@ class DecisionModel(llm.DecisionModel):
                 questions={name: _encode_question(d) for name, d in decisions.items()},
                 # The SDK defaults to v1, which has no decisions endpoint (a bare 404).
                 api_version="v1beta",
+                extra_headers=extra_headers,
                 timeout=conn_options.timeout,
             )
             decision = await raw.parse()

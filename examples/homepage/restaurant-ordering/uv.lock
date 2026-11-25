@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -604,7 +604,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1131,19 +1131,19 @@ wheels = [
 
 [[package]]
 name = "livekit-plugins-ai-coustics"
-version = "0.3.4"
+version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "livekit" },
     { name = "livekit-agents" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/97/7c6e850dfc29b66065a6e9df3d41fec764c81aca87d3b58f68efcd1ebc4f/livekit_plugins_ai_coustics-0.3.4.tar.gz", hash = "sha256:8999db1861b53a1afe1893a672ef8f905c59b8899cf46dda7399031bcee3dab2", size = 18826, upload-time = "2026-10-11T22:32:35.607Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/d7/c8db6ed1052160b43bd0c08750f13cbe8d0c20d8d181a7a54a1b33c40650/livekit_plugins_ai_coustics-0.3.5.tar.gz", hash = "sha256:75c023ce0eb632fea484bbed4fae830bd69954509f836a13bf831bacca1c1323", size = 19433, upload-time = "2026-10-19T23:09:21.252Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dd/cf/e6d7250b51af097cf1d9913e21f04844eb0f0e4ecf2ca9737c5840fcc670/livekit_plugins_ai_coustics-0.3.4-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:6ab62f8510cbf2c16c009a8d6c5801106610e445b8a9ddb87628215c38f30c6c", size = 70489818, upload-time = "2026-10-11T22:32:17.609Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/50/95c18c4ed8632660096493ce2f9e8942d8ffb7426f7882b6039187876f01/livekit_plugins_ai_coustics-0.3.4-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:947169bd5d8f3c4a32df35fe86387c82ab1417caaba1eca914b7c499f09a4fec", size = 70630487, upload-time = "2026-10-11T22:32:21.156Z" },
-    { url = "https://files.pythonhosted.org/packages/45/9b/7cf4089a8ab076bf901fac350065d50f6821be212f98d891a94436826bd8/livekit_plugins_ai_coustics-0.3.4-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:c99e9acc7173418ad92faf7d2a53580cc9bc9b8a4a2ece7994293ad287c8172c", size = 70342671, upload-time = "2026-10-11T22:32:24.878Z" },
-    { url = "https://files.pythonhosted.org/packages/6d/bf/d900d7dbc6bb6fbe34307ddf80045988e950ecf2268739b0e26826754407/livekit_plugins_ai_coustics-0.3.4-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:aa9571dfc67f5d6013579e777dd5a0f7d0dbd4ff3323f017d94494fb13343813", size = 70724692, upload-time = "2026-10-11T22:32:28.183Z" },
-    { url = "https://files.pythonhosted.org/packages/18/7c/57131654543f9b38bf4c3e6df281b7985783d5444deee4dcc4822af1a4dd/livekit_plugins_ai_coustics-0.3.4-cp310-abi3-win_amd64.whl", hash = "sha256:333869a86d960cb938f384231953e5f62ff973b14b5a7dd129509e877f7e5c62", size = 70303249, upload-time = "2026-10-11T22:32:31.861Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/b2/5fbd479f75116b990972b30622cafc2f43dab8b83470c71f8a9b01b9df85/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:e564991733e706217aaa27881519b484c43f9eadd5fdced51af0573247033d62", size = 70499448, upload-time = "2026-10-19T23:08:58.15Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/65/baf17fad9ce51b52094d0a234329dc89e4e74d968fccb85828e923884ae0/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b5d292a65c67b7b1da788ac1d5f5a52a82b5a4e1281e5fd5906504ef563a4044", size = 70642406, upload-time = "2026-10-19T23:09:03.332Z" },
+    { url = "https://files.pythonhosted.org/packages/75/7b/2a741357dc617c453252a3ae727333bbb81ae0655b16b8471604325690ee/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:173548c9fcf4fd874cfaabd274e9c762a90ccc768b9ac1f4619ba2825913b6f6", size = 70358207, upload-time = "2026-10-19T23:09:08.765Z" },
+    { url = "https://files.pythonhosted.org/packages/25/94/1825e84acfd721263c551aa49fd4738d94ab13953e1b68b9982b3e9fb99e/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1ce1564f1c23770273783e224c99c9080f142ceec47a6e3b31f4d97612057b59", size = 70735781, upload-time = "2026-10-19T23:09:13.479Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/7a/e90d6f1dc988b4fd7de331b4d818564577ec5ac8a563c34a51e873e95bd3/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-win_amd64.whl", hash = "sha256:93752673639300dc83f3bcf72d00cb8a8d29682fcb569dab88b8da1039d03be9", size = 70312999, upload-time = "2026-10-19T23:09:18.536Z" },
 ]
 
 [[package]]
@@ -2174,7 +2174,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", specifier = "~=1.8.11" },
-    { name = "livekit-plugins-ai-coustics", specifier = "~=0.3" },
+    { name = "livekit-plugins-ai-coustics", specifier = "~=0.3.5" },
     { name = "python-dotenv" },
 ]
 

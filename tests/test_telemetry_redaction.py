@@ -25,16 +25,30 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from yarl import URL
 
-from livekit.agents import Agent, AgentSession, APIStatusError, function_tool, llm, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIStatusError,
+    ToolResult,
+    function_tool,
+    llm,
+    utils,
+)
 from livekit.agents.telemetry import pii, trace_types, utils as telemetry_utils
 from livekit.agents.telemetry.traces import (
     _DynamicTracer,
     _install_pii_redaction,
     _TraceLevelLoggingHandler,
 )
-from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import (
+    ATTRIBUTE_REDACTION_ENABLED,
+    ATTRIBUTE_SIMULATION_ENABLED,
+    NOT_GIVEN,
+    NotGivenOr,
+)
 
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_realtime import FakeRealtimeModel, run_realtime_tool_turn
 
 pytestmark = pytest.mark.unit
 
@@ -64,7 +78,11 @@ _SAFE_ATTRS = {
 
 
 def _emit(
-    *, redaction: bool = False, exporter_first: bool = False, allow_pii: bool | None = None
+    *,
+    redaction: bool = False,
+    simulation: bool = False,
+    exporter_first: bool = False,
+    allow_pii: bool | None = None,
 ) -> InMemorySpanExporter:
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -78,6 +96,8 @@ def _emit(
     with provider.get_tracer(__name__).start_as_current_span("llm_request") as span:
         if redaction:
             span.set_attribute(ATTRIBUTE_REDACTION_ENABLED, True)
+        if simulation:
+            span.set_attribute(ATTRIBUTE_SIMULATION_ENABLED, True)
         span.set_attributes({**_PII_ATTRS, **_SAFE_ATTRS})
         span.add_event(trace_types.EVENT_GEN_AI_USER_MESSAGE, {"content": "my pin is 1234"})
         span.add_event("llm_started", {trace_types.ATTR_INSTRUCTIONS: "be brief", "n": 1})
@@ -129,6 +149,27 @@ def test_the_project_flag_withholds_pii_from_every_destination() -> None:
     assert pii.restore_pii(stripped) is stripped
 
 
+@pytest.mark.parametrize("allow_pii", [False, True])
+@pytest.mark.parametrize("redaction", [False, True])
+def test_simulation_content_follows_session_redaction(
+    allow_pii: bool,
+    redaction: bool,
+) -> None:
+    span = _emit(allow_pii=allow_pii, redaction=redaction, simulation=True).get_finished_spans()[0]
+    restored = pii.restore_pii(span)
+
+    if redaction:
+        assert not set(_PII_ATTRS) & set(restored.attributes or {})
+        assert trace_types.EVENT_GEN_AI_USER_MESSAGE not in {e.name for e in restored.events}
+        return
+
+    for key, value in _PII_ATTRS.items():
+        assert (restored.attributes or {})[key] == value
+    assert trace_types.EVENT_GEN_AI_USER_MESSAGE in {e.name for e in restored.events}
+    if not allow_pii:
+        assert not set(_PII_ATTRS) & set(span.attributes or {})
+
+
 def test_redaction_runs_ahead_of_an_exporter_attached_first() -> None:
     # an integrator attaches their Datadog/Langfuse exporter, then hands us the provider
     span = _emit(allow_pii=False, exporter_first=True).get_finished_spans()[0]
@@ -172,6 +213,30 @@ def test_logs_are_filtered_for_every_destination_when_redaction_is_enabled(
         "function": "get_weather",
         trace_types.ATTR_EXCEPTION_MESSAGE: telemetry_utils.REDACTED_EXCEPTION_MESSAGE,
     }
+
+
+@pytest.mark.parametrize("redaction", [False, True])
+def test_simulation_logs_follow_resolved_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+    redaction: bool,
+) -> None:
+    ctx = SimpleNamespace(_redaction_enabled=redaction, simulation_context=lambda: object())
+    monkeypatch.setattr("livekit.agents.job.get_job_context", lambda **_: ctx)
+    record = logging.makeLogRecord(
+        {
+            "msg": "user transcript",
+            "levelno": logging.INFO,
+            trace_types.ATTR_USER_TRANSCRIPT: "my pin is 1234",
+        }
+    )
+
+    translated = _TraceLevelLoggingHandler()._translate(record)
+    pii._PIIFilteringLogProcessor().on_emit(SimpleNamespace(log_record=translated))  # type: ignore[arg-type]
+
+    if redaction:
+        assert trace_types.ATTR_USER_TRANSCRIPT not in translated.attributes
+    else:
+        assert translated.attributes[trace_types.ATTR_USER_TRANSCRIPT] == "my pin is 1234"
 
 
 def test_exception_details_are_withheld_from_third_party_exporters() -> None:
@@ -623,14 +688,25 @@ def test_record_exception_omits_details_when_redacted() -> None:
     assert span.status.description == telemetry_utils.REDACTED_EXCEPTION_MESSAGE
 
 
-def test_record_exception_uses_resolved_redaction_state(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("redaction", [False, True])
+def test_record_exception_uses_resolved_redaction_state(
+    monkeypatch: pytest.MonkeyPatch, redaction: bool
+) -> None:
     span = _FakeSpan()
 
     def get_job_context(*, required: bool = True) -> SimpleNamespace:
-        return SimpleNamespace(_redaction_enabled=True)
+        return SimpleNamespace(
+            _redaction_enabled=redaction,
+            simulation_context=lambda: object(),
+        )
 
     monkeypatch.setattr("livekit.agents.job.get_job_context", get_job_context)
     _capture_exception(span, redacted=NOT_GIVEN)
+
+    if not redaction:
+        assert span.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == "secret transcript"
+        assert "secret transcript" in span.attributes[trace_types.ATTR_EXCEPTION_TRACE]
+        return
 
     assert span.recorded_exceptions == []
     assert span.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == (
@@ -970,3 +1046,75 @@ async def test_xai_tts_redacts_api_key_from_handshake_error() -> None:
         await tts._connect_ws(timeout=5.0, opts=tts._opts)
 
     _assert_redacted(exc_info.value)
+
+
+# realtime failures attach the provider's error as exc_info and keep it out of the log body:
+# redaction drops exception details from exported logs but cannot redact a body
+
+_PRIVATE_REALTIME_ERROR = "private provider response with credentials"
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("context_error", [None, llm.RealtimeError, RuntimeError])
+async def test_realtime_reply_failure_logs_the_error_outside_the_body(
+    caplog: pytest.LogCaptureFixture, context_error: type[Exception] | None
+) -> None:
+    model = FakeRealtimeModel()
+    error = (context_error or llm.RealtimeError)(_PRIVATE_REALTIME_ERROR)
+    async with AgentSession(llm=model) as session:
+        await session.start(Agent(instructions="Test"))
+        rt = model.active_session
+        if context_error is not None:
+            rt.update_error = error
+        handle = session.generate_reply(user_input="hello")
+
+        async def wait_for_reply() -> None:
+            while not handle.done() and not rt._reply_futs:
+                await asyncio.sleep(0)
+            if rt._reply_futs:
+                rt._reply_futs[-1].set_exception(error)
+            await handle
+
+        await asyncio.wait_for(wait_for_reply(), 2)
+        assert handle.exception() is error
+
+    records = [record for record in caplog.records if "failed to" in record.getMessage()]
+    assert len(records) == (2 if context_error is llm.RealtimeError else 1)
+    for record in records:
+        assert record.exc_info is not None and record.exc_info[1] is error
+        assert _PRIVATE_REALTIME_ERROR not in record.getMessage()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_realtime_tool_sync_failure_logs_the_error_outside_the_body(
+    caplog: pytest.LogCaptureFixture, interrupted: bool
+) -> None:
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="Test")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def lookup(self) -> ToolResult:
+            """Look something up."""
+            self.session._activity._rt_session.update_error = llm.RealtimeError(
+                _PRIVATE_REALTIME_ERROR
+            )
+            self.tool_executed.set()
+            return ToolResult("ok", reply_required=False)
+
+    agent = ToolAgent()
+    await run_realtime_tool_turn(agent, tool_executed=agent.tool_executed, interrupt=interrupted)
+    records = [record for record in caplog.records if "failed to" in record.getMessage()]
+    assert len(records) == 1
+    assert records[0].getMessage() == (
+        "failed to sync the tool results of an interrupted generation"
+        if interrupted
+        else "failed to update chat context before generating the function calls results"
+    )
+    exc_info = records[0].exc_info
+    assert exc_info is not None and isinstance(exc_info[1], llm.RealtimeError)
+    assert str(exc_info[1]) == _PRIVATE_REALTIME_ERROR

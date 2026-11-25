@@ -320,6 +320,7 @@ OpenAIModels = Literal[
 GoogleModels = Literal[
     "google/gemini-4-argon",
     "google/gemini-4-hydrogen",
+    "google/gemini-4-neon",
     "google/gemini-3.1-pro",
     "google/gemini-3-flash",
     "google/gemini-3.1-flash-lite",
@@ -585,6 +586,13 @@ class LLM(llm.LLM):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         extra.update(self._opts.extra_kwargs)
+        # a turn's headers win on a shared key; a new dict, as the stream stamps SDK headers on it
+        call_headers = extra_kwargs.get("extra_headers") if is_given(extra_kwargs) else None
+        model_headers = cast(
+            "Mapping[str, str] | None", self._opts.extra_kwargs.get("extra_headers")
+        )
+        if call_headers or model_headers:
+            extra["extra_headers"] = {**(model_headers or {}), **(call_headers or {})}
         if self._opts.reasoning_effort is not None:
             # a turn's own extra_kwargs override it, as on inference.responses.LLM
             turn = extra_kwargs if is_given(extra_kwargs) else {}
