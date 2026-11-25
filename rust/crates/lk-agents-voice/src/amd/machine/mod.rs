@@ -34,6 +34,7 @@ use super::options::{AmdOptions, AmdOptionsError};
 use super::{AmdAnswer, AmdObservation, AmdRunId, DetachCancel, TurnEnd, UserSpeechObservation};
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
+use crate::trace::AmdStep;
 use lk_agents_abi::Ts;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
@@ -300,7 +301,12 @@ pub struct Amd {
     overall_deadline: Option<Ts>,
     idle_deadline: Option<Ts>,
     last_req: u64,
+    /// The result that decides the next recorded prediction: its request and the category the
+    /// classifier answered, `None` for an error. Set only while that result is handled.
+    deciding: Option<(ReqId, Option<Category>)>,
     effects: Vec<AmdEffect>,
+    /// Steps for the executor's journal, taken with [`Amd::take_trace`].
+    trace: Vec<AmdStep>,
 }
 
 impl Amd {
@@ -343,7 +349,9 @@ impl Amd {
             overall_deadline: None,
             idle_deadline: None,
             last_req: 0,
+            deciding: None,
             effects: Vec::new(),
+            trace: Vec::new(),
         })
     }
 
@@ -353,6 +361,12 @@ impl Amd {
 
     pub fn lifecycle(&self) -> &Lifecycle {
         &self.lifecycle
+    }
+
+    /// The steps recorded since the last call, in order: bound turns, predictions with the
+    /// result that decided them, and the voicemail message played. The executor journals them.
+    pub fn take_trace(&mut self) -> Vec<AmdStep> {
+        std::mem::take(&mut self.trace)
     }
 
     /// Handles one input at `now` and returns its effects, in order.
@@ -554,6 +568,7 @@ impl Amd {
             },
         );
         self.latest = Some(turn);
+        self.trace.push(AmdStep::TurnBound { turn, has_text, late_wait: late });
         // The voicemail reservation belongs to the turn that was allowed the message.
         self.voicemail.reserved = None;
         // The newest commit takes over the wait; an older turn's own wait still runs out.
@@ -779,6 +794,7 @@ impl Amd {
         if late {
             return self.timeout_inference(now, request);
         }
+        self.deciding = Some((req, result.ok().map(|c| c.category)));
         match result {
             Err(_) => {
                 self.forget_category();
@@ -845,6 +861,8 @@ impl Amd {
         effect: Option<StageEffect>,
     ) {
         let (category, stage) = (self.category, self.stage);
+        let (source_req, raw) = self.deciding.take().map_or((None, None), |(r, c)| (Some(r), c));
+        let likely_human = self.likely_human;
         let Some(t) = self.turns.get_mut(&turn) else { return };
         let event = Prediction {
             turn_id: t.id,
@@ -863,9 +881,22 @@ impl Amd {
             self.last_prediction = Some(event.clone());
         }
         let mut events = vec![event.clone()];
+        let predicted = move |turn, raw, reason| AmdStep::Predicted {
+            turn,
+            source_req,
+            raw,
+            category,
+            stage,
+            reason,
+            likely_human,
+        };
+        self.trace.push(predicted(turn, raw, reason));
         // Empty turns committed during inference reuse its result, each with its own event. A
         // turn with text would have cancelled this request.
-        for later in self.turns.values_mut().filter(|t| t.id > turn_id && t.prediction.is_none()) {
+        for (later_turn, later) in
+            self.turns.iter_mut().filter(|(_, t)| t.id > turn_id && t.prediction.is_none())
+        {
+            self.trace.push(predicted(*later_turn, None, AmdReason::Reused));
             let reused = Prediction {
                 turn_id: later.id,
                 reason: AmdReason::Reused,

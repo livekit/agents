@@ -217,6 +217,7 @@ impl Amd {
             return;
         }
         self.voicemail.played = true;
+        self.trace.push(crate::trace::AmdStep::VoicemailPlayed);
         if self.stage == Stage::MachineVm {
             // The idle timer restarts, so a menu after the message can still arrive.
             self.clear_idle();
