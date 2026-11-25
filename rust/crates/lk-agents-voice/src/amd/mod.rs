@@ -14,6 +14,7 @@
 //! Attaching a run is a session command, [`AmdCommand::Attach`].
 
 use crate::agent_session::RequestId;
+pub use crate::agent_session::machine::activity::amd_gate::Hold;
 use crate::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind};
 use crate::audio_recognition::TurnId;
 use lk_agents_abi::Ts;

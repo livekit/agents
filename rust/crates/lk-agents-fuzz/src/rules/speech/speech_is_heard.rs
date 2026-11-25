@@ -309,6 +309,38 @@ fn last_quiet(journal: &[&(Observed, Step)]) -> Option<u64> {
 }
 
 /// What a still-silent speech waits on at `deadline`, if anything holds.
+/// The AMD gate held authorization at `deadline`, or released it within the bound before
+/// (proposal "DST": a speech waits legitimately while the gate holds it, and under
+/// `Hold::Silence` only until the fake VAD's ground truth shows the required silence).
+fn amd_holds(r: &Recording, made: u64, deadline: u64) -> bool {
+    use lk_agents_voice::amd::Hold;
+    use lk_agents_voice::trace::GateStep;
+    let mut last: Option<(u64, Option<Hold>)> = None;
+    for (at, step) in r.journal().iter().filter(|(at, _)| at.at_ms <= deadline) {
+        match step {
+            Step::Speech(SpeechStep::AuthorizationHeld(hold)) => last = Some((at.at_ms, Some(*hold))),
+            Step::Gate(GateStep::Detached { .. }) => last = Some((at.at_ms, None)),
+            _ => {}
+        }
+    }
+    match last {
+        Some((_, Some(Hold::Entry | Hold::Undecided { .. } | Hold::Denied { .. }))) => true,
+        Some((_, Some(Hold::Silence { needed, .. }))) => {
+            let needed = needed.as_millis() as u64;
+            // The detector's ground truth at the deadline: speaking, or silent since a boundary.
+            let boundaries = r.amd_view().vad_boundaries();
+            let last = boundaries.into_iter().rfind(|(_, _, seen)| seen.at_ms <= deadline);
+            match last {
+                Some((true, _, _)) => true,
+                Some((false, since, _)) => deadline < since + needed + BOUND_MS,
+                None => false,
+            }
+        }
+        Some((released, _)) => released >= made && deadline < released + BOUND_MS,
+        None => false,
+    }
+}
+
 fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'static str> {
     let before = |a: &Observed| a.at_ms <= deadline;
     // A model or voice open, or a node, that never answered once the speech was made: an
@@ -320,6 +352,9 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     });
     if hung_open {
         return Some("a provider open never answered");
+    }
+    if amd_holds(r, made, deadline) {
+        return Some("the AMD gate holds authorization");
     }
     // The audio output holding one of its frames: the speech waits on that output until it is cut.
     let output_held = r.faults().iter().any(|(at, site, fault)| {

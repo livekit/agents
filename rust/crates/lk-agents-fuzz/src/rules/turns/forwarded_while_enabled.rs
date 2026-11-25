@@ -102,6 +102,9 @@ impl Rule for ForwardedWhileEnabled {
             .map(|(at, ())| at)
             .collect();
         let unheard = push_to_talk_idle(r);
+        // An attached AMD run that is not active yet discards participant audio, from the step
+        // that attached it to the one that activated or detached it (spec §5.2).
+        let amd_discards = amd_discard_windows(r);
         for sent in inputs.accepted() {
             let Input::MicFrames { mic, chunks: Count(chunks) } = &sent.input else { continue };
             // Ignored outside a push-to-talk turn, or racing a turn's edge in its driver turn; its
@@ -116,7 +119,9 @@ impl Rule for ForwardedWhileEnabled {
                 pushed_at.entry((mic.nth, chunk)).or_default().push(sent.at);
                 // Nothing pushed while input was disabled or the microphone detached is owed to
                 // any stream.
-                if !audio_input.on_at(sent.at) {
+                if !audio_input.on_at(sent.at)
+                    || amd_discards.iter().any(|(from, to)| *from <= sent.at && sent.at < *to)
+                {
                     continue;
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
@@ -131,6 +136,7 @@ impl Rule for ForwardedWhileEnabled {
                     .into_iter()
                     .chain(detached)
                     .chain(dropped)
+                    .chain(amd_discards.iter().map(|(from, _)| *from).find(|from| *from > sent.at))
                     .min();
                 let frame = (mic.nth, chunk);
                 expect_reached(
@@ -150,6 +156,26 @@ impl Rule for ForwardedWhileEnabled {
         // A frame heard while input was disabled can only be one pushed earlier, while it was
         // enabled, still moving through the pump. Anything else got past a closed microphone.
         for heard in inference.frames_heard() {
+            // Pushed and heard inside one AMD discard window: it got past the discard.
+            for tag in heard.tags {
+                let Tag::Mic { mic, chunk } = *tag else { continue };
+                let Some(pushes) = pushed_at.get(&(mic, chunk)) else { continue };
+                let Some(pushed) = pushes.iter().rfind(|pushed| **pushed < heard.at) else {
+                    continue;
+                };
+                let window = amd_discards.iter().find(|(from, to)| *from <= heard.at && heard.at < *to);
+                check.expect_with(
+                    Subject::Resource(Kind::Mic, mic),
+                    window.is_none_or(|(from, _)| pushed < from),
+                    || {
+                        format!(
+                            "{:?} stream {} heard mic {mic} chunk {chunk} while AMD discarded \
+                             participant audio (seq {})",
+                            heard.kind, heard.stream, heard.at.seq
+                        )
+                    },
+                );
+            }
             if audio_input.on_at(heard.at) {
                 continue;
             }
@@ -390,4 +416,25 @@ fn forwarded_while_disabled() -> Recording {
         .then_act()
         .forwarded(Kind::Stt, 0, heard(0))
         .done()
+}
+
+/// When an attached AMD run discarded participant audio: from the session's `Attached` to its
+/// `Activated` or `Detached`, whichever came first.
+fn amd_discard_windows(r: &Recording) -> Vec<(Observed, Observed)> {
+    use lk_agents_voice::trace::GateStep;
+    let mut windows = Vec::new();
+    let mut open = None;
+    for (at, step) in r.journal() {
+        match step {
+            Step::Gate(GateStep::Attached { .. }) => open = Some(*at),
+            Step::Gate(GateStep::Activated { .. } | GateStep::Detached { .. }) => {
+                if let Some(from) = open.take() {
+                    windows.push((from, *at));
+                }
+            }
+            _ => {}
+        }
+    }
+    windows.extend(open.map(|from| (from, Observed::END)));
+    windows
 }
