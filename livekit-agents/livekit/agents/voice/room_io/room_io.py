@@ -303,6 +303,10 @@ class RoomIO:
 
         return self._participant_available_fut.result()
 
+    async def _wait_for_linked_participant(self) -> rtc.RemoteParticipant:
+        # shielded: a cancelled waiter must not cancel the link itself
+        return await asyncio.shield(self._participant_available_fut)
+
     @property
     def subscribed_fut(self) -> asyncio.Future[None] | None:
         if self._audio_output:

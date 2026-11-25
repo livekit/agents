@@ -625,6 +625,7 @@ class _ReplyTaskActivity(SimpleNamespace):
             _rt_session=rt_session,
             _rt_chat_ctx_lock=asyncio.Lock(),
             _authorization_allowed=authorization_allowed,
+            _wait_authorization_allowed=lambda speech_handle: authorization_allowed.wait(),
             _user_silence_event=user_silence,
             _rt_overlapping_speech_enabled=False,
             tools=[],

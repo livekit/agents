@@ -17,13 +17,16 @@
 Speech-to-text with Zoom Scribe: ``STT()`` streams over Scribe Live and
 ``STT(mode="fast")`` transcribes one utterance per request with Scribe Fast.
 
-See https://developers.zoom.us/docs/ai-services/scribe/ for more information.
+Speech-to-speech with Zoom Voice Agent: ``realtime.RealtimeModel()``.
+
+See https://developers.zoom.us/docs/ai-services/ for more information.
 """
 
+from . import realtime
 from .stt import STT, SpeechStream
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "__version__"]
+__all__ = ["STT", "SpeechStream", "realtime", "__version__"]
 
 from livekit.agents import Plugin
 
