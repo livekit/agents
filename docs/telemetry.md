@@ -261,20 +261,15 @@ conversation adds 1 to a counter the first time it uses that feature, and never 
 | `lk.product.agents.feature.model_switch` | changed a model while running: a different STT, TTS, LLM or realtime model than the one they started with |
 | `lk.product.agents.feature.language_switch` | heard the person change language: the STT reported a different language than earlier in the conversation |
 | `lk.product.agents.feature.background_audio` | played background audio |
-| `lk.product.agents.feature.voice_task` | ran a `VoiceTask` |
 
-The counters are independent: a call that used MCP and ran a `VoiceTask` adds 1 to each of
-those two, and nothing to the others.
+The counters are independent: a call that used MCP and `override_options` adds 1 to each
+of those two, and nothing to the others.
 
 `lk.product.agents.feature.model_switch` has one label, `lk.product.agents.model_switch.kind`:
 `stt`, `tts`, `llm` or `realtime`, the kind of model that changed. A call adds 1 for each
 kind it changed, so a call that swapped its TTS twice and its LLM once adds 1 under `tts`
 and 1 under `llm`. A switch counts however it is made: `update_options`,
 `override_options`, or an agent that brings its own model.
-
-`lk.product.agents.feature.voice_task` has one label, `lk.product.agents.voice_task`: the
-name of a prebuilt task (`GetEmailTask`, `GetDtmfTask`, `WarmTransfer`), or `custom` for
-any task an application defines. A call adds 1 for each different task it ran.
 
 **Never collected**
 
