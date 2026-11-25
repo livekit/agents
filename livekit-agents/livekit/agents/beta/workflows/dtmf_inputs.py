@@ -98,6 +98,15 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         )
 
         def _on_sip_dtmf_received(ev: rtc.SipDTMF) -> None:
+            room_io = self.session._room_io
+            linked = room_io.linked_participant if room_io else None
+            if (
+                linked is None
+                or ev.participant is None
+                or ev.participant.identity != linked.identity
+            ):
+                return
+
             if self._dtmf_reply_running:
                 return
 
