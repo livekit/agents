@@ -98,13 +98,17 @@ impl Rule for OnlyTheOpeningPlaysFirst {
                     || format!("the opening {speech} of run {} is a {kind:?}", attachment.run),
                 );
                 // A realtime model's own speech is the opening only if the session asked the
-                // server to say the text or to reply to the opening's instructions.
-                if kind == Some(SpeechKind::Realtime) {
-                    let opening = amd.rt_says_for(*speech)
-                        || amd.rt_responses().iter().any(|q| {
-                            q.speech == Some(*speech)
-                                && q.instructions.as_deref()
-                                    == Some(crate::fakes::amd::OPENING_INSTRUCTIONS)
+                // server to say the text or to reply to the opening's instructions. A request
+                // the close overtook before it left asked nothing.
+                let says = amd.rt_says_for(*speech);
+                let responses: Vec<_> = (amd.rt_responses().into_iter())
+                    .filter(|q| q.speech == Some(*speech))
+                    .collect();
+                if kind == Some(SpeechKind::Realtime) && (says || !responses.is_empty()) {
+                    let opening = says
+                        || responses.iter().any(|q| {
+                            q.instructions.as_deref()
+                                == Some(crate::fakes::amd::OPENING_INSTRUCTIONS)
                         });
                     check.expect_with(Subject::Speech(*speech), opening, || {
                         format!(
