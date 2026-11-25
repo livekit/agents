@@ -238,7 +238,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
     // client tool replies, and some STT (spec §5.1). A realtime call mostly detects turns on the
     // client, and AMD brings its own recogniser when the session has none; the rest are refused.
     // A model without its own transcription leaves the turn's words to the session's recogniser,
-    // or to AMD's `InsertUserItem` (spec §7.2).
+    // or, half the time with none, to AMD's `InsertUserItem` (spec §7.2).
     if rng.u8(0..100) < 10 {
         let realtime = setup.realtime.is_some();
         let mut client_side = false;
@@ -249,6 +249,9 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
                 server.duplex = false;
             }
             server.user_transcription = rng.bool();
+            if client_side && !server.user_transcription && rng.bool() {
+                setup.stt = false;
+            }
         }
         let mut amd = amd(rng, setup.stt, realtime);
         amd.own_stt |= client_side && !setup.stt;
