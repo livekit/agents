@@ -115,7 +115,8 @@ def extract_and_strip(
     pattern = re.compile(
         # leading space is part of the match so removing a tag can't double the separator
         LEADING_WS + "(?:"
-        # <tag .../>, or <tag ...> optionally followed by inner</tag>
+        # <tag .../>, or <tag ...> optionally followed by inner</tag>. attrs is lazy, so a "/"
+        # inside an attribute value stays in attrs: only "/>" closes the tag
         rf"<(?P<tag>{tag_pattern})\b(?P<attrs>[^>]*?)\s*"
         rf"(?:/\s*>|>(?:(?P<inner>.*?)</(?P=tag)\s*>)?)"
         # lone closing tag: </tag>

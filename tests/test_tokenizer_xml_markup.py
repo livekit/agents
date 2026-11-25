@@ -106,6 +106,14 @@ class TestExtractAndStrip:
         assert clean == "Glad. sorry"
         assert tags == [("emotion", "happy"), ("emotion", "sorry")]
 
+    @pytest.mark.parametrize("value", ["a/b", "x/"])
+    def test_slash_in_attribute_value_does_not_close_the_tag(self, value: str) -> None:
+        clean, tags = extract_and_strip(
+            f'<emotion value="{value}">sorry</emotion>', xml_tags=["emotion"]
+        )
+        assert clean == "sorry"
+        assert tags == [("emotion", "sorry")]
+
 
 # ===========================================================================
 # xAI dialect (mixed inline [..] + wrapping <..>)
