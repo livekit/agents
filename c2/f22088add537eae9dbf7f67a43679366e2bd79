@@ -1,0 +1,60 @@
+rust/crates/lk-agents-runtime/src/voice/session/shared.rs
+  s_bbb46b29e16294::t_1065e751949173 46-81,264-265
+rust/crates/lk-agents-runtime/src/voice/effects.rs
+  s_bbb46b29e16294::t_5564e2ff1d81b2 201
+rust/crates/lk-agents-runtime/src/voice/session/builder.rs
+  s_bbb46b29e16294::t_c8fead39c49833 205-206,283,566
+rust/crates/lk-agents-runtime/src/voice/session/mod.rs
+  s_bbb46b29e16294::t_612b8296dfe9ef 282-295
+rust/crates/lk-agents-voice/src/agent_session/closing.rs
+  s_bbb46b29e16294::t_9247e7cdf462d9 398-399
+rust/crates/lk-agents-voice/src/agent_session/commands.rs
+  s_bbb46b29e16294::t_dd6079b8871c8a 48-53,55-67,629
+  h_a827ab16c3c189 54
+rust/crates/lk-agents-voice/src/agent_session/effects.rs
+  s_bbb46b29e16294::t_992b355ec138f6 90-91
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  s_bbb46b29e16294::t_7c180af9b956ff 1,3-16
+  s_bbb46b29e16294::t_8a8db4f27b6750 17-20
+  h_a827ab16c3c189 2
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/mod.rs
+  s_bbb46b29e16294::t_d25855ee8b5d8e 15
+rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs
+  s_bbb46b29e16294::t_6de9c8e1a43e60 55
+rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs
+  s_bbb46b29e16294::t_323512ba2a48f8 629
+rust/crates/lk-agents-voice/src/amd.rs
+  s_bbb46b29e16294::t_4359071fa32c46 1,3-162
+  h_a827ab16c3c189 2
+rust/crates/lk-agents-voice/src/lib.rs
+  s_bbb46b29e16294::t_85a9816340368e 8
+rust/crates/lk-agents-voice/src/trace.rs
+  s_bbb46b29e16294::t_fbfa4390cb0709 31,57,687-704,1020,1055
+  h_a827ab16c3c189 686
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_tests.rs
+  s_bbb46b29e16294::t_7e0224947ef8a2 1,3-830
+  h_a827ab16c3c189 2,831-834
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_reply_tests.rs
+  h_a827ab16c3c189 1-539
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c2f22088add537eae9dbf7f67a43679366e2bd79",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  },
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
