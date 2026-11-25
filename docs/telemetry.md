@@ -198,7 +198,12 @@ people use.
   name loses its vendor prefix and its options: `deepgram/nova-3:en` is `deepgram` and
   `nova-3`. So one query compares a model across plugins and Inference.
 - Provider names come from one list in the framework, shared by Python and Node and
-  spelled as in your observability data.
+  spelled as LiveKit Inference spells them (`google`, `xai`). An endpoint that list does
+  not know is `unknown`: its host name is never sent.
+- A model name is the vendor's id as the application gave it, with nothing folded
+  together: a dated snapshot (`gpt-4o-mini-2024-07-18`) stays itself. Grouping snapshots
+  and aliases into one model is done where the statistics are read, never in the agent,
+  so it can be corrected for past data too.
 - A plugin id is the last part of the package name, the same in every language:
   `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram` in Node are
   both `deepgram`.
@@ -208,7 +213,7 @@ people use.
   an OpenAI-compatible plugin is always recorded under its own id.
 - The framework records these around every model; a plugin never does. A plugin written in
   Python is counted exactly like a built-in one, and cannot add, change or skip a
-  statistic. A plugin that does not report its provider or model appears as `unknown`.
+  statistic. A model that does not report its provider or name appears as `unknown`.
 
 Usage: the unit is the metric, and the kind of model is only a label.
 
