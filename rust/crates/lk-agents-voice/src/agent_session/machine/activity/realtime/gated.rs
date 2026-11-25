@@ -9,6 +9,7 @@
 //! tool from its first response until its speech ends, since a response request names no tools.
 
 use super::super::RealtimeActivity;
+use crate::agent::{Source, Visibility};
 use crate::agent_session::VoiceDriver;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::amd::AmdAttachRefused;
@@ -60,17 +61,30 @@ impl VoiceDriver {
         }
     }
 
-    /// Whether a gated turn's session STT words enter the record. A realtime server's own
-    /// transcript fills the user item, so only a model without user transcription takes the STT's
-    /// words, when there are some. A pipeline always does.
-    pub(crate) fn gated_turn_keeps_words(&self, info: &EndOfTurnInfo) -> bool {
-        let stt = self.activity.audio_recognition.stt_enabled() && !info.new_transcript.is_empty();
-        self.activity.realtime().is_none_or(|rt| !rt.capabilities.user_transcription && stt)
+    /// The user item of a turn the gate decided, whether it replies, is denied or is superseded:
+    /// the one owner of its words. A pipeline keeps the STT's words. On a realtime model the
+    /// server's transcript of the committed audio is the turn's item, so only a model without
+    /// user transcription keeps the session STT's words, when there are some; with no session
+    /// STT, AMD's `InsertUserItem` brings them. A realtime item stays off the wire: the server
+    /// holds the turn's audio.
+    pub(crate) fn commit_gated_turn_item(&mut self, info: &EndOfTurnInfo, text: Option<&str>) {
+        let transcribes = self.activity.realtime().map(|rt| rt.capabilities.user_transcription);
+        let words =
+            self.activity.audio_recognition.stt_enabled() && !info.new_transcript.is_empty();
+        if transcribes.is_some_and(|transcribes| transcribes || !words) {
+            return;
+        }
+        let user = self.user_turn_item(info, text);
+        if transcribes.is_some() {
+            self.session.chat_ctx.server_holds_audio(&user.id);
+        }
+        let source = Source::UserTurn { turn: info.turn_id };
+        self.commit_item(ChatItem::Message(user), source, Visibility::Both);
     }
 
     /// `InsertUserItem`: AMD's transcript of a turn, for a realtime model with neither user
-    /// transcription nor session STT, so the item is never added twice. It goes to the record
-    /// only: the server holds the turn's audio.
+    /// transcription nor session STT, so the item is never added twice. It goes to the agent's
+    /// view and history, not to the server, which holds the turn's audio.
     pub(crate) fn amd_insert_user_item(&mut self, turn: TurnId, text: String) -> bool {
         let stt = self.activity.audio_recognition.stt_enabled();
         let needed = self.activity.realtime().is_some_and(|rt| !rt.capabilities.user_transcription);
@@ -78,10 +92,10 @@ impl VoiceDriver {
             return false;
         }
         let id = self.user_input_item_id(turn);
+        self.session.chat_ctx.server_holds_audio(&id);
         let mut item = ChatMessage::text(id, Role::User, &text, self.step.wall());
         item.transcript_confidence = Some(0.0);
-        let source = crate::agent::Source::UserTurn { turn };
-        self.commit_item(ChatItem::Message(item), source, crate::agent::Visibility::Both);
+        self.commit_item(ChatItem::Message(item), Source::UserTurn { turn }, Visibility::Both);
         true
     }
 

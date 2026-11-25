@@ -9,7 +9,10 @@
 
 use super::*;
 use crate::agent_session::machine::activity::realtime::RealtimeWake;
-use crate::agent_session::{Command, Now, RequestId, Sent, SpeechCommand, TurnCommand, VoiceEvent};
+use crate::agent_session::{
+    ActivityCommand, Command, HookId, HookOutcome, Now, RequestId, Sent, SpeechCommand,
+    TurnCommand, VoiceEvent, VoiceHostEvent,
+};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::trace::Step;
 use lk_agents_abi::RealtimeCommand;
@@ -220,6 +223,41 @@ fn steps(effects: &[VoiceEffect]) -> impl Iterator<Item = &Step> {
         VoiceEffect::Journal(step) => Some(step.as_ref()),
         _ => None,
     })
+}
+
+/// `on_user_turn_completed` calls the host was asked for, oldest first.
+fn hooks(effects: &[VoiceEffect]) -> Vec<HookId> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::Host(VoiceHostEvent::Hook(call)) => Some(call.id()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The user messages of every context update the server was sent, by text.
+fn user_items_sent(effects: &[VoiceEffect]) -> Vec<String> {
+    sent(effects)
+        .into_iter()
+        .filter_map(|command| match command {
+            RealtimeCommand::UpdateChatCtx(update) => Some(update.chat_ctx.items.clone()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|item| item.as_message().cloned())
+        .filter(|message| message.role == lk_agents_abi::Role::User)
+        .filter_map(|message| message.raw_text_content())
+        .collect()
+}
+
+/// The agent's own view, as user message texts.
+fn agent_user_items(driver: &VoiceDriver) -> Vec<String> {
+    (driver.session.chat_ctx.agent_chat_ctx().items.iter())
+        .filter_map(|item| item.as_message())
+        .filter(|message| message.role == lk_agents_abi::Role::User)
+        .filter_map(|message| message.raw_text_content())
+        .collect()
 }
 
 fn user_items(driver: &VoiceDriver) -> Vec<String> {
@@ -675,6 +713,65 @@ fn the_user_item_comes_from_exactly_one_source() {
             AmdAnswer::InsertUserItem { run: RUN, turn: TurnId(1), text: "hi there".into() };
         answer(&mut driver, 60, insert);
         assert_eq!(user_items(&driver), ["hi there"], "allow={allow}");
+    }
+}
+
+// Catches: the turn's words AMD or the session STT added sent to the realtime server by a later
+// context update, although the server holds the turn as audio: the model hears the turn twice.
+// Python inserts them into the agent's context and history only (`detector.py`
+// `_add_realtime_transcript`, `agent_activity.py` `_user_turn_completed_impl`).
+#[test]
+fn the_turns_words_stay_off_the_realtime_wire() {
+    let untranscribed = Model { user_transcription: false, ..CLIENT_SIDE };
+    // AMD's transcript, with no session STT; then the session STT's words.
+    for (stt, words) in [(false, ""), (true, "hello?")] {
+        let mut driver = attached(untranscribed, stt);
+        end_of_turn(&mut driver, 0, info(1, words, stt));
+        let insert = AmdAnswer::InsertUserItem { run: RUN, turn: TurnId(1), text: "hello?".into() };
+        answer(&mut driver, 50, insert);
+        answer(&mut driver, 60, decide(1, ReplyDecision::deny()));
+        assert_eq!(user_items(&driver), ["hello?"], "in history (stt={stt})");
+        assert_eq!(agent_user_items(&driver), ["hello?"], "in the agent's context (stt={stt})");
+
+        // The host hands the agent's context back, as `update_chat_ctx` does.
+        let items = driver.session.chat_ctx.agent_chat_ctx().items;
+        let update = Command::Activity(ActivityCommand::UpdateChatCtx(items));
+        let effects = host(&mut driver, 100, update);
+        assert!(
+            sent(&effects).iter().any(|c| matches!(c, RealtimeCommand::UpdateChatCtx(_))),
+            "the update reaches the server: {effects:?}"
+        );
+        assert!(user_items_sent(&effects).is_empty(), "the server holds the audio (stt={stt})");
+        assert_eq!(agent_user_items(&driver), ["hello?"], "still in the agent's context");
+    }
+}
+
+// Catches: a gated turn superseded while its hook ran committing the session STT's words beside
+// the server's transcript, or an empty item whose id AMD's later `InsertUserItem` reuses. The
+// superseded turn keeps its words by the same rule as a denied or replied turn.
+#[test]
+fn a_turn_superseded_in_its_hook_keeps_its_words_by_the_gate_rule() {
+    let untranscribed = Model { user_transcription: false, ..CLIENT_SIDE };
+    // (model, session STT, the superseded turn's user items, then after AMD's insert)
+    let cases: [(Model, bool, &[&str], &[&str]); 3] = [
+        (CLIENT_SIDE, true, &[], &[]),
+        (untranscribed, true, &["is anyone there"], &["is anyone there"]),
+        (untranscribed, false, &[], &["is anyone there"]),
+    ];
+    for (model, stt, superseded, inserted) in cases {
+        let mut driver = attached(model, stt);
+        driver.activity.hook_bound = Some(Duration::from_secs(10));
+        let words = |text: &'static str| if stt { text } else { "" };
+        let effects = end_of_turn(&mut driver, 10, info(1, words("is anyone there"), stt));
+        let [first] = hooks(&effects)[..] else { panic!("turn 1's hook: {effects:?}") };
+        end_of_turn(&mut driver, 500, info(2, words("hello"), stt));
+        host(&mut driver, 600, Command::HookDone { id: first, outcome: HookOutcome::Returned });
+        let label = format!("transcription={}, stt={stt}", model.user_transcription);
+        assert_eq!(user_items(&driver), superseded, "{label}");
+        let insert =
+            AmdAnswer::InsertUserItem { run: RUN, turn: TurnId(1), text: "is anyone there".into() };
+        answer(&mut driver, 700, insert);
+        assert_eq!(user_items(&driver), inserted, "{label}");
     }
 }
 

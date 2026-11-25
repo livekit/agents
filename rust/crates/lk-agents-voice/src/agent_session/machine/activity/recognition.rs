@@ -709,8 +709,15 @@ impl VoiceDriver {
     }
 
     /// A turn a newer one arrived behind while its hook ran is outdated: its words are committed
-    /// with the hook's edits (none under `StopResponse`), and it is not answered.
-    fn supersede_turn(&mut self, info: EndOfTurnInfo, edits: Vec<crate::agent::TurnEdit>) {
+    /// with the hook's edits (none under `StopResponse`), and it is not answered. A turn the AMD
+    /// gate decided, or whose decision `Detach` settled, keeps its words by the gate's rule.
+    fn supersede_turn(
+        &mut self,
+        info: EndOfTurnInfo,
+        edits: Vec<crate::agent::TurnEdit>,
+        settled: bool,
+    ) {
+        let gated = settled || self.gating_run(info.turn_id).is_some();
         self.activity.last_turn = Some(info.turn_id);
         self.gate_turn_ended(info.turn_id, crate::amd::TurnEnd::Superseded);
         let mut text = None;
@@ -723,6 +730,9 @@ impl VoiceDriver {
                 crate::agent::TurnEdit::UpdateInstructions(_)
                 | crate::agent::TurnEdit::ReplaceItems(_) => {}
             }
+        }
+        if gated {
+            return self.commit_gated_turn_item(&info, text.as_deref());
         }
         let user = self.user_turn_item(&info, text.as_deref());
         self.commit_item(
@@ -747,7 +757,7 @@ impl VoiceDriver {
             return;
         }
         if !self.activity.waiting_turns.is_empty() {
-            self.supersede_turn(info, edits);
+            self.supersede_turn(info, edits, settled.is_some());
             return;
         }
         let mut applied = TurnEdits::default();

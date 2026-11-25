@@ -330,10 +330,8 @@ impl VoiceDriver {
         // a model without user transcription.
         if self.activity.realtime().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
-            if gate.is_some() && self.gated_turn_keeps_words(info) {
-                let user = self.user_turn_item(info, edits.user_text.as_deref());
-                let source = Source::UserTurn { turn: info.turn_id };
-                self.commit_item(ChatItem::Message(user), source, Visibility::Both);
+            if gate.is_some() {
+                self.commit_gated_turn_item(info, edits.user_text.as_deref());
             }
             // Its speech is announced now, so the metrics name it.
             let speech = self.realtime_user_turn(now, gate.map(|payload| payload.realtime()));

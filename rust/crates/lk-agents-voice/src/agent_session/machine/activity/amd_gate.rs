@@ -13,7 +13,6 @@
 //! - **Terminal**: `Detach` settles the pending turns, removes the gate and reports `Detached`.
 //!   Later commits are not gated, and a new run can attach.
 
-use crate::agent::{Source, Visibility};
 use crate::agent_session::effects::{Timer, VoiceEffect};
 use crate::agent_session::machine::activity::realtime::{GatedResponse, Request};
 use crate::agent_session::machine::activity::scheduling::{
@@ -632,7 +631,7 @@ impl VoiceDriver {
     }
 
     /// The attached run, when it gated `turn` and the turn has not ended.
-    fn gating_run(&self, turn: TurnId) -> Option<AmdRunId> {
+    pub(crate) fn gating_run(&self, turn: TurnId) -> Option<AmdRunId> {
         let gate = self.activity.gate.as_ref()?;
         gate.turns.contains(&turn).then_some(gate.run)
     }
@@ -669,11 +668,7 @@ impl VoiceDriver {
         if how != TurnEnd::Superseded {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
-        // A realtime server's transcript of the committed audio is the turn's item.
-        if self.gated_turn_keeps_words(&info) {
-            let user = self.user_turn_item(&info, edits.user_text.as_deref());
-            self.commit_item(ChatItem::Message(user), Source::UserTurn { turn }, Visibility::Both);
-        }
+        self.commit_gated_turn_item(&info, edits.user_text.as_deref());
         self.gate_turn_ended(turn, how);
     }
 

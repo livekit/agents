@@ -150,6 +150,9 @@ pub struct SessionChatCtx {
     unsaved: BTreeMap<String, u64>,
     /// The number of the last edit.
     edits: u64,
+    /// User items whose turn a realtime server holds as audio: the realtime projection leaves
+    /// them out, as it leaves out the server's own items.
+    server_audio: BTreeSet<String>,
 }
 
 impl SessionChatCtx {
@@ -208,6 +211,12 @@ impl SessionChatCtx {
     /// A save carries the record as it is now: the edits it carries, for its answer.
     pub(crate) fn saving(&self) -> u64 {
         self.edits
+    }
+
+    /// `id` stands in for a turn whose audio the realtime server holds: it stays in the agent's
+    /// view and history, and never goes to the server.
+    pub(crate) fn server_holds_audio(&mut self, id: &str) {
+        self.server_audio.insert(id.to_owned());
     }
 
     /// The save that carried the edits up to `edits` was answered: the thread holds them. Items
@@ -522,8 +531,8 @@ impl SessionChatCtx {
             .map(|c| c.item.id())
     }
 
-    /// A realtime server's mirror: the agent's view minus items the server created and minus agent
-    /// records.
+    /// A realtime server's mirror: the agent's view minus items the server created or holds as
+    /// audio, and minus agent records.
     pub fn for_realtime(&self) -> ChatContext {
         ChatContext::new(
             self.items
@@ -532,6 +541,7 @@ impl SessionChatCtx {
                     c.agent == self.agent
                         && c.visibility.model()
                         && !matches!(c.source, Source::Remote { .. })
+                        && !self.server_audio.contains(c.item.id())
                         && !matches!(
                             c.item,
                             ChatItem::AgentHandoff(_) | ChatItem::AgentConfigUpdate(_)
