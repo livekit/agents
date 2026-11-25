@@ -116,7 +116,11 @@ impl super::AgentActivity {
             interrupted: handle.interrupted(),
         });
         // Under the AMD gate, what counts is whether the server's detection runs: a realtime
-        // model without session STT drops a backchannel over agent speech (spec §5.3).
+        // model without session STT drops a backchannel over agent speech (spec §5.3). Python's
+        // `_rt_turn_detection_enabled` is that "enabled" value everywhere; ungated, this port
+        // still reads the model's capability, an existing divergence. The value also decides
+        // `cancel_false_interruption`, so under the gate a model whose server detection the
+        // session switched off cancels a pending false interruption at commit, as in Python.
         let rt_turn_detection = self.realtime_activity().is_some_and(|rt| match self.gate {
             Some(_) => rt.server_segments(),
             None => rt.session.capabilities.turn_detection,
@@ -461,7 +465,7 @@ impl VoiceDriver {
             TurnCommand::Commit { skip_reply } => {
                 self.record_trace(TurnStep::CommitRequested { skip_reply });
                 // A realtime turn the AMD gate decides goes through end of turn like any other.
-                let gated = self.activity.amd_attached() && !skip_reply;
+                let gated = self.activity.gates_commit(skip_reply);
                 if self.activity.realtime().is_some() && !gated {
                     // Nothing is pushed: a blank would re-send the context with a blank user turn.
                     if !skip_reply {
@@ -858,7 +862,7 @@ impl VoiceDriver {
         // A realtime session commits its server buffer itself, and only when the server does not
         // segment audio (a client commit of a server-segmented buffer is refused). A turn the AMD
         // gate decides commits it at end of turn instead, even with no session STT.
-        let gated = self.activity.amd_attached() && !skip_reply;
+        let gated = self.activity.gates_commit(skip_reply);
         if let Some(rt) = self.activity.realtime_activity().filter(|_| !gated) {
             let server_segments = rt.server_segments();
             if skip_reply {

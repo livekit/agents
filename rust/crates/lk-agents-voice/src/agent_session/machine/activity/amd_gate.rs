@@ -118,8 +118,6 @@ pub(crate) struct GatedReply {
 pub(crate) struct ReplyPayload {
     stage: Option<String>,
     toolset: Option<Arc<Toolset>>,
-    /// AMD's DTMF tool, when `toolset` offers it.
-    dtmf: Option<ToolSpec>,
     /// The request differs from a plain reply's: the reply never adopts the preemptive
     /// generation.
     changes_request: bool,
@@ -130,9 +128,9 @@ impl ReplyPayload {
         self.changes_request
     }
 
-    /// What a realtime reply's responses carry instead: the session's tools hold the DTMF tool.
+    /// What a realtime reply's responses carry: the session's tools hold the DTMF tool.
     pub(crate) fn realtime(&self) -> GatedResponse {
-        GatedResponse { instructions: self.stage.clone(), dtmf: self.dtmf.clone() }
+        GatedResponse { instructions: self.stage.clone(), toolset: self.toolset.clone() }
     }
 
     /// `spec` carrying the payload.
@@ -218,6 +216,12 @@ impl Gate {
 impl super::AgentActivity {
     pub(crate) fn amd_attached(&self) -> bool {
         self.gate.is_some()
+    }
+
+    /// A commit that asks for a reply while a run is attached goes through end of turn and the
+    /// gate, on a realtime model too.
+    pub(crate) fn gates_commit(&self, skip_reply: bool) -> bool {
+        self.amd_attached() && !skip_reply
     }
 }
 
@@ -652,7 +656,6 @@ impl VoiceDriver {
         });
         ReplyPayload {
             stage: decision.instructions.clone(),
-            dtmf: toolset.as_ref().and_then(|t| t.specs.last().cloned()),
             toolset,
             changes_request: decision.changes_request(),
         }

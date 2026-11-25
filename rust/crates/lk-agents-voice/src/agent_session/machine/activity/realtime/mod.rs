@@ -359,7 +359,8 @@ impl VoiceDriver {
                 Some(speech)
             }
             Request::UserTurn { gated, .. } => {
-                let (outside, tools) = (VoiceRunParticipation::Outside, self.gated_tools(gated));
+                let tools = gated.as_ref().and_then(|g| g.toolset.clone());
+                let outside = VoiceRunParticipation::Outside;
                 Some(self.start_realtime_speech(now, None, true, allow, true, outside, tools))
             }
         };

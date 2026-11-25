@@ -16,16 +16,28 @@ use crate::amd::AmdAttachRefused;
 use crate::audio_recognition::{EndOfTurnInfo, TurnId};
 use crate::tool_executor::Toolset;
 use lk_agents_abi::llm::realtime as rt;
-use lk_agents_abi::{ChatItem, ChatMessage, RealtimeCommand, Role, ToolSpec};
+use lk_agents_abi::{ChatItem, ChatMessage, RealtimeCommand, Role};
 use std::sync::Arc;
 
 /// What an AMD decision adds to its realtime reply's responses.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct GatedResponse {
     /// Stage instructions for the reply and its tool follow-ups.
     pub instructions: Option<String>,
-    /// AMD's DTMF tool, offered next to the agent's.
-    pub dtmf: Option<ToolSpec>,
+    /// The reply's tools when its decision allows DTMF: the agent's, with AMD's DTMF tool. The
+    /// speech runs them, and the server holds them while the speech's responses run.
+    pub toolset: Option<Arc<Toolset>>,
+}
+
+impl std::fmt::Debug for GatedResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tools = (self.toolset.as_ref())
+            .map(|t| t.specs.iter().map(|spec| spec.name.as_str()).collect::<Vec<_>>());
+        f.debug_struct("GatedResponse")
+            .field("instructions", &self.instructions)
+            .field("tools", &tools)
+            .finish()
+    }
 }
 
 impl RealtimeActivity {
@@ -99,14 +111,6 @@ impl VoiceDriver {
         true
     }
 
-    /// The tools a gated reply's speech runs: the agent's, with AMD's DTMF tool.
-    pub(super) fn gated_tools(&self, gated: &Option<GatedResponse>) -> Option<Arc<Toolset>> {
-        let dtmf = gated.as_ref()?.dtmf.as_ref()?;
-        let mut toolset = (*self.activity.advertised_toolset(&self.session.tools)).clone();
-        toolset.specs.push(dtmf.clone());
-        Some(Arc::new(toolset))
-    }
-
     /// A request goes on the wire. The server first gets the tools of the speech it answers: a
     /// gated reply's, or the agent's again.
     pub(super) fn rt_send_request(&mut self, cmd: RealtimeCommand) {
@@ -117,7 +121,7 @@ impl VoiceDriver {
             super::Request::ToolFollowUp { speech, .. } => Some(speech),
             _ => p.speech,
         });
-        let wanted = speech.filter(|s| t.gated.get(s).is_some_and(|g| g.dtmf.is_some()));
+        let wanted = speech.filter(|s| t.gated.get(s).is_some_and(|g| g.toolset.is_some()));
         if wanted != t.tools_for {
             self.set_server_tools(wanted);
         }
@@ -136,10 +140,9 @@ impl VoiceDriver {
     /// The agent's tools, or `speech`'s gated tools: the agent's with AMD's DTMF tool.
     fn set_server_tools(&mut self, speech: Option<SpeechId>) {
         let Some(rt) = self.activity.realtime_activity_mut() else { return };
-        let dtmf = speech.and_then(|s| rt.state.gated.get(&s)?.dtmf.clone());
-        rt.state.tools_for = speech.filter(|_| dtmf.is_some());
-        let mut tools = self.activity.toolset.specs.clone();
-        tools.extend(dtmf.filter(|tool| !tools.iter().any(|t| t.name == tool.name)));
+        let gated = speech.and_then(|s| rt.state.gated.get(&s)?.toolset.clone());
+        rt.state.tools_for = speech.filter(|_| gated.is_some());
+        let tools = gated.as_ref().unwrap_or(&self.activity.toolset).specs.clone();
         self.rt_send(RealtimeCommand::UpdateTools(rt::UpdateTools { tools }));
     }
 
