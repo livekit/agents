@@ -494,3 +494,32 @@ def test_voice_and_voice_id_are_exclusive():
         TTS(api_key="test-key", voice="narrator", voice_id="abc")
     with pytest.raises(ValueError, match="mutually exclusive"):
         TTS(api_key="test-key").update_options(voice="narrator", voice_id="abc")
+
+
+LOG = {"type": "log", "level": "warning", "message": "unused json_config keys: tmep"}
+
+
+@pytest.mark.parametrize("drain", [_drain, _drain_stream])
+async def test_server_log_frames_are_logged_at_their_level(drain, caplog):
+    import logging
+
+    tts, _, _ = _make_tts([READY, LOG, {**LOG, "level": "error", "message": "boom"}, AUDIO, EOS])
+
+    with caplog.at_level(logging.DEBUG, logger="livekit.plugins.gradium"):
+        await drain(tts, CONN_OPTS)
+
+    logged = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert (logging.WARNING, "Gradium warning: unused json_config keys: tmep") in logged
+    assert (logging.ERROR, "Gradium error: boom") in logged
+    assert not any("unknown message type" in message for _, message in logged)
+
+
+@pytest.mark.parametrize("drain", [_drain, _drain_stream])
+@pytest.mark.parametrize(
+    ("ctor", "expected"),
+    [({}, None), ({"log_level": "warning"}, "warning"), ({"log_level": "error"}, "error")],
+)
+async def test_setup_asks_for_server_logs_only_when_enabled(drain, ctor, expected):
+    tts, _, ws = _make_tts([READY, AUDIO, EOS], tts_kwargs=ctor)
+    await drain(tts, CONN_OPTS)
+    assert ws.sent[0].get("log_level") == expected

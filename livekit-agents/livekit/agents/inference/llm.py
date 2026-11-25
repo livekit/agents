@@ -39,6 +39,7 @@ from ._realtime_models import is_duplex_model, is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
+    _resolve_provider,
     create_access_token,
     extract_quota_usage,
     get_default_inference_url,
@@ -319,6 +320,7 @@ OpenAIModels = Literal[
 GoogleModels = Literal[
     "google/gemini-4-argon",
     "google/gemini-4-hydrogen",
+    "google/gemini-4-neon",
     "google/gemini-3.1-pro",
     "google/gemini-3-flash",
     "google/gemini-3.1-flash-lite",
@@ -408,7 +410,7 @@ class LLM(llm.LLM):
         self,
         model: LLMModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -419,6 +421,9 @@ class LLM(llm.LLM):
     ) -> None:
         """
         Args:
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
             prompt_cache_breakpoints: Send each :class:`llm.CacheBreakpoint` in the chat
                 context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` sends them
                 when :func:`supports_prompt_cache_breakpoints` accepts the current model;
@@ -442,7 +447,7 @@ class LLM(llm.LLM):
 
         self._opts = _LLMOptions(
             model=model,
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
@@ -581,6 +586,13 @@ class LLM(llm.LLM):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
         extra.update(self._opts.extra_kwargs)
+        # a turn's headers win on a shared key; a new dict, as the stream stamps SDK headers on it
+        call_headers = extra_kwargs.get("extra_headers") if is_given(extra_kwargs) else None
+        model_headers = cast(
+            "Mapping[str, str] | None", self._opts.extra_kwargs.get("extra_headers")
+        )
+        if call_headers or model_headers:
+            extra["extra_headers"] = {**(model_headers or {}), **(call_headers or {})}
         if self._opts.reasoning_effort is not None:
             # a turn's own extra_kwargs override it, as on inference.responses.LLM
             turn = extra_kwargs if is_given(extra_kwargs) else {}

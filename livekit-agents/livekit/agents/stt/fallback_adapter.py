@@ -359,6 +359,14 @@ class FallbackRecognizeStream(RecognizeStream):
         self._language = language
         self._fallback_adapter = stt
         self._recovering_streams: list[RecognizeStream] = []
+        self._main_stream: RecognizeStream | None = None
+
+    @property
+    def manual_flush(self) -> bool:
+        # the live child decides: its need is fixed at creation and outlives an option change
+        if self._main_stream is not None:
+            return self._main_stream.manual_flush
+        return super().manual_flush
 
     async def _run(self) -> None:
         start_time = time.time()
@@ -420,6 +428,7 @@ class FallbackRecognizeStream(RecognizeStream):
                             retry_interval=self._fallback_adapter._retry_interval,
                         ),
                     )
+                    self._main_stream = main_stream
                     main_stream._on_provider_progress = self._mark_provider_progress
                     _seed(main_stream)
 

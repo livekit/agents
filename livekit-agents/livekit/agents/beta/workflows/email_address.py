@@ -114,7 +114,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             raise ToolError(f"Invalid email address provided: {email}")
 
         self._current_email = email
-        separated_email = " ".join(email)
+        separated_email = " ".join(_SPOKEN_SYMBOLS.get(c, c) for c in email)
 
         if not self._confirmation_required(ctx):
             if not self.done():
@@ -177,6 +177,17 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 EMAIL_REGEX = (
     r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
 )
+
+# A lone symbol between spaced-out letters reads to TTS as punctuation (a "." is a
+# sentence pause), so every symbol EMAIL_REGEX allows is spelled as its spoken word.
+_SPOKEN_SYMBOLS = {
+    ".": "dot",
+    "@": "at",
+    "_": "underscore",
+    "-": "dash",
+    "+": "plus",
+    "%": "percent",
+}
 
 
 # instructions

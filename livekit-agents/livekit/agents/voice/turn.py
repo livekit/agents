@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, NamedTuple, Protocol, runtime_checkable
 
 from typing_extensions import TypedDict
 
@@ -17,6 +17,16 @@ from ..types import (
     NotGivenOr,
 )
 from ..utils import is_given
+from .speech_handle import SpeechHandle
+
+
+class CommitUserTurnResult(NamedTuple):
+    """The transcript and reply from an explicit user turn commit."""
+
+    transcript: str
+    """The audio transcript collected by the commit, or an empty string if unavailable."""
+    speech_handle: SpeechHandle | None
+    """The scheduled reply, if the commit produced one."""
 
 
 @dataclass
