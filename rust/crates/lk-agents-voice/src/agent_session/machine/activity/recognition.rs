@@ -373,9 +373,11 @@ impl VoiceDriver {
         self.force_interrupt_speech(now, reply, InterruptCause::Superseded);
         let interruptible = self.session.config.effective.turn.interruption.enabled();
         let stage = decision.as_ref().and_then(|decision| decision.instructions.clone());
+        let toolset = decision.as_ref().and_then(|decision| self.gate_toolset(decision));
         let speech = self.start_speech(
             now,
             SpeechSpec {
+                toolset,
                 // Replanning must recognize the corrected words before invoking the frontend;
                 // the previous verdict authorized only the earlier version of this same item.
                 new_message: Some(user),

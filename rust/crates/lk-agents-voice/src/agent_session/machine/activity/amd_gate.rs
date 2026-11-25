@@ -596,6 +596,25 @@ impl VoiceDriver {
         }
     }
 
+    /// The reply's tools under a decision that allows DTMF: the advertised ones plus AMD's
+    /// built-in `send_dtmf_events`, unless the agent already has a tool with that id. `None`
+    /// keeps the advertised tools.
+    pub(crate) fn gate_toolset(
+        &self,
+        decision: &ReplyDecision,
+    ) -> Option<std::sync::Arc<crate::tool_executor::Toolset>> {
+        if !decision.dtmf {
+            return None;
+        }
+        let advertised = self.activity.advertised_toolset(&self.session.tools);
+        if advertised.specs.iter().any(|spec| spec.name == crate::amd::SEND_DTMF_TOOL) {
+            return None;
+        }
+        let mut toolset = (*advertised).clone();
+        toolset.specs.push(crate::amd::send_dtmf_tool());
+        Some(std::sync::Arc::new(toolset))
+    }
+
     /// The gated reply `speech` is the gate's: the one a remake may replace.
     pub(crate) fn gate_reply_speech(&self, turn: TurnId) -> Option<SpeechId> {
         let gate = self.activity.gate.as_ref()?;

@@ -187,6 +187,27 @@ pub enum DetachCancel {
 /// The built-in tool AMD may add to a `machine-ivr` reply (spec §11.1).
 pub const SEND_DTMF_TOOL: &str = "send_dtmf_events";
 
+/// The declaration of AMD's built-in [`SEND_DTMF_TOOL`], as `livekit.agents.beta`'s
+/// `send_dtmf_events(events: list[DtmfEvent])` declares it. The host runs its body.
+pub fn send_dtmf_tool() -> lk_agents_abi::ToolSpec {
+    let keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "*", "#", "A", "B", "C", "D"];
+    lk_agents_abi::ToolSpec {
+        name: SEND_DTMF_TOOL.into(),
+        description: "Send a list of DTMF events to the telephony provider.\n\nCall when:\n- \
+                      User wants to send DTMF events"
+            .into(),
+        json_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "events": { "type": "array", "items": { "type": "string", "enum": keys } }
+            },
+            "required": ["events"],
+        }),
+        flags: Default::default(),
+        provider_tool: None,
+    }
+}
+
 /// Session commands for AMD. Producer: the host (step 5) or a test; handler: the session's gate.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 #[vocabulary(kind = AmdCommandKind)]

@@ -366,9 +366,11 @@ impl VoiceDriver {
             return Some(preemptive);
         }
         let stage = gate.and_then(|decision| decision.instructions.clone());
+        let toolset = gate.and_then(|decision| self.gate_toolset(decision));
         let speech = self.start_speech(
             now,
             SpeechSpec {
+                toolset,
                 new_message: Some(user),
                 chat_ctx,
                 turn: Some(info.turn_id),
