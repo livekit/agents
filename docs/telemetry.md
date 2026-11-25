@@ -249,37 +249,25 @@ One count per voice session, recorded when it starts, with the configuration it 
 
 **Feature usage**
 
-`lk.product.agents.feature.sessions` counts, for each feature, the conversations that used
-it. A conversation can use several features, or none:
+One counter per feature. Each counts the conversations that used the feature: a
+conversation adds 1 to a counter the first time it uses that feature, and never more than
+1, however often it uses it.
 
-- When a conversation ends, it adds 1 for each feature it used, whether it used that
-  feature once or a hundred times.
-- A call that used MCP and `override_options` adds 1 under `mcp` and 1 under
-  `override_options`. A call that used no listed feature adds nothing.
-- Dividing a feature's count by `lk.product.agents.sessions` gives the share of
-  conversations that use it.
-
-The feature is the label `lk.product.agents.feature`, one of:
-
-| Value | The conversation |
+| Metric | Counts the conversations that |
 | --- | --- |
-| `mcp` | ran an agent that has an MCP toolset |
-| `update_options` | called `session.update_options(...)` |
-| `override_options` | entered `session.override_options(...)` |
-| `realtime_model_switch` | changed its realtime model while running |
-| `background_audio` | played background audio |
+| `lk.product.agents.feature.mcp` | ran an agent that has an MCP toolset |
+| `lk.product.agents.feature.update_options` | called `session.update_options(...)` |
+| `lk.product.agents.feature.override_options` | entered `session.override_options(...)` |
+| `lk.product.agents.feature.realtime_model_switch` | changed their realtime model while running |
+| `lk.product.agents.feature.background_audio` | played background audio |
+| `lk.product.agents.feature.voice_task` | ran a `VoiceTask` |
 
-A feature that needs more than its name gets its own metric, counted by the same rule.
-There is one so far:
+The counters are independent: a call that used MCP and ran a `VoiceTask` adds 1 to each of
+those two, and nothing to the others.
 
-| Metric | Label | Counts |
-| --- | --- | --- |
-| `lk.product.agents.voice_task.sessions` | `lk.product.agents.voice_task` | Conversations that ran the task, 1 for each different task |
-
-`lk.product.agents.voice_task` is the name of a prebuilt task (`GetEmailTask`,
-`GetDtmfTask`, `WarmTransfer`), or `custom` for any task an application defines. A call
-that ran `GetEmailTask` twice and two of its own tasks adds 1 under `GetEmailTask` and 1
-under `custom`.
+`lk.product.agents.feature.voice_task` has one label, `lk.product.agents.voice_task`: the
+name of a prebuilt task (`GetEmailTask`, `GetDtmfTask`, `WarmTransfer`), or `custom` for
+any task an application defines. A call adds 1 for each different task it ran.
 
 **Never collected**
 
