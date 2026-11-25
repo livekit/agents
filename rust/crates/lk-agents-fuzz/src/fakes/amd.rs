@@ -155,6 +155,8 @@ pub struct AmdSetup {
     pub decision: bool,
     /// AMD has its own streaming recogniser: the stream it opens is `Detail::AmdStt`.
     pub own_stt: bool,
+    /// How long AMD's recogniser takes to open its stream.
+    pub stt_connect: Duration,
     /// Its models reach only LiveKit Inference.
     pub inference: bool,
     pub options: lk_agents_voice::amd::options::AmdOptions,
@@ -192,6 +194,7 @@ impl Default for AmdSetup {
         AmdSetup {
             decision: false,
             own_stt: false,
+            stt_connect: Duration::ZERO,
             inference: false,
             options: options(),
             participant: None,
@@ -218,8 +221,8 @@ pub fn config(
         Classifier::Llm(AmdModel::supplied(model, setup.inference))
     };
     let stt = setup.own_stt.then(|| {
-        let model =
-            super::FakeStt::for_amd(registry.clone(), stt_speech) as Arc<dyn lk_agents_abi::Stt>;
+        let model = super::FakeStt::for_amd(registry.clone(), setup.stt_connect, stt_speech)
+            as Arc<dyn lk_agents_abi::Stt>;
         AmdModel::supplied(model, setup.inference)
     });
     let once = lk_agents_abi::ApiConnectOptions {
@@ -261,6 +264,14 @@ fn provider_failure() -> lk_agents_abi::errors::ProviderError {
     lk_agents_abi::errors::ProviderError::Local(error)
 }
 
+fn timed_out() -> lk_agents_abi::errors::ProviderError {
+    let error = lk_agents_abi::errors::ApiError::new(
+        lk_agents_abi::errors::ErrorKind::Timeout,
+        "injected AMD model timeout",
+    );
+    lk_agents_abi::errors::ProviderError::Local(error)
+}
+
 fn crash() -> lk_agents_abi::errors::ProviderError {
     lk_agents_abi::errors::HostError::new("RuntimeError: injected AMD model bug").into()
 }
@@ -281,20 +292,32 @@ pub(super) fn deliver(answering: Answering, says: crate::input::AmdSays) -> bool
                 AmdSays::Garbled => "not JSON".into(),
                 AmdSays::Failed => return sender.send(Err(provider_failure())).is_ok(),
                 AmdSays::Crashed => return sender.send(Err(crash())).is_ok(),
+                AmdSays::TimedOut => return sender.send(Err(timed_out())).is_ok(),
+                // A valid category, in the wrong number of calls or the wrong tool.
+                AmdSays::TwoCalls | AmdSays::WrongTool => {
+                    serde_json::json!({ "category": "human" }).to_string()
+                }
                 category => {
                     let value = says_category(category).map_or("", |c| c.as_str());
                     serde_json::json!({ "category": value }).to_string()
                 }
             };
-            let call = lk_agents_abi::FunctionToolCall {
-                name: "record_result".into(),
-                arguments,
-                call_id: "call_amd".into(),
+            let call = |name: &str, id: &str| lk_agents_abi::FunctionToolCall {
+                name: name.into(),
+                arguments: arguments.clone(),
+                call_id: id.into(),
                 extra: None,
+            };
+            let tool_calls = match says {
+                AmdSays::TwoCalls => {
+                    vec![call("record_result", "call_amd"), call("record_result", "call_amd_2")]
+                }
+                AmdSays::WrongTool => vec![call("send_dtmf_events", "call_amd")],
+                _ => vec![call("record_result", "call_amd")],
             };
             let delta = lk_agents_abi::ChoiceDelta {
                 role: Some(lk_agents_abi::Role::Assistant),
-                tool_calls: vec![call],
+                tool_calls,
                 ..Default::default()
             };
             let chunk = lk_agents_abi::LlmChunk {
@@ -309,6 +332,7 @@ pub(super) fn deliver(answering: Answering, says: crate::input::AmdSays) -> bool
             let answer = match says {
                 AmdSays::Failed => Err(provider_failure()),
                 AmdSays::Crashed => Err(crash()),
+                AmdSays::TimedOut => Err(timed_out()),
                 category => Ok(says_category(category).map(|c| c.as_str().to_owned())),
             };
             reply.send(answer).is_ok()

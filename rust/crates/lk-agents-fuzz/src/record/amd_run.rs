@@ -274,7 +274,14 @@ pub fn says_category(says: AmdSays) -> Option<Category> {
         AmdSays::Unavailable => Category::MachineUnavailable,
         AmdSays::Wait => Category::Wait,
         AmdSays::Uncertain => Category::Uncertain,
-        AmdSays::Menu | AmdSays::NoMenu | AmdSays::Garbled | AmdSays::Failed | AmdSays::Crashed => {
+        AmdSays::Menu
+        | AmdSays::NoMenu
+        | AmdSays::Garbled
+        | AmdSays::Failed
+        | AmdSays::Crashed
+        | AmdSays::TwoCalls
+        | AmdSays::WrongTool
+        | AmdSays::TimedOut => {
             return None;
         }
     })

@@ -493,8 +493,9 @@ plain_enum! {
     /// call (an LLM) or a choice (a decision model) naming that category. `Menu` is a menu with
     /// two options and `NoMenu` one with none. `Garbled` is a call whose arguments do not
     /// validate (no choice, for a decision model); `Failed` a provider error; `Crashed` a failure
-    /// outside the provider taxonomy.
-    AmdSays { Human, Ivr, Screening, Voicemail, Unavailable, Wait, Uncertain, Menu, NoMenu, Garbled, Failed, Crashed }
+    /// outside the provider taxonomy. `TwoCalls` is two `record_result` calls, `WrongTool` one
+    /// call to another tool, and `TimedOut` a provider timeout (`APITimeoutError`).
+    AmdSays { Human, Ivr, Screening, Voicemail, Unavailable, Wait, Uncertain, Menu, NoMenu, Garbled, Failed, Crashed, TwoCalls, WrongTool, TimedOut }
 }
 plain_enum! {
     /// Which models a swap replaces.

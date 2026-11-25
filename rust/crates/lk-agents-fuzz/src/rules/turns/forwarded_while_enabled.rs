@@ -332,7 +332,7 @@ fn expect_reached(
             // stream closed before the turn that moves the frame (a recogniser failing) is owed
             // nothing (seed 149497). AMD's recogniser has a feed of its own, from activation to
             // completion, that the gate never silences: AMD's stories judge it.
-            let own_path = matches!(stream.detail(), Detail::PluginVad | Detail::AmdStt);
+            let own_path = matches!(stream.detail(), Detail::PluginVad | Detail::AmdStt { .. });
             if !stream.listening_throughout(pushed, moved_by) || own_path {
                 continue;
             }

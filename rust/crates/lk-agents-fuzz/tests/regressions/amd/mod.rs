@@ -3,6 +3,7 @@
 //! was asked to answer, with which instructions and tools, what was heard and when, and what the
 //! conversation saved. Every story also passes the run's contracts, the AMD rules included.
 
+mod callee;
 mod detach;
 mod executor;
 mod gate;

@@ -36,7 +36,7 @@ impl Call {
     fn amd_stream(&self) -> Ref<lk_agents_fuzz::input::Stt> {
         let live = self.run.record.live().of(Kind::Stt);
         let nth = (self.run.record.resources(Kind::Stt))
-            .filter(|r| *r.detail() == Detail::AmdStt && live.contains(&r.nth()))
+            .filter(|r| matches!(r.detail(), Detail::AmdStt { .. }) && live.contains(&r.nth()))
             .map(|r| r.nth())
             .last()
             .expect("AMD's recogniser is open");
@@ -268,6 +268,34 @@ fn a_garbled_answer_is_an_inference_error_and_the_turn_is_answered() {
     assert_eq!(call.heard_requests("hello who is this").len(), 1, "the reply is released");
     assert!(call.outcomes().is_empty(), "the run goes on");
     call.assert_clean();
+}
+
+/// Two `record_result` calls, a call to another tool, and a provider timeout each give an
+/// `inference_error` prediction, and the turn is answered. Python: `_structured_response`
+/// raises `ValueError` unless there is exactly one `record_result` call; `_classify` maps it and
+/// `APIError` (its timeout included) to `inference_error`.
+#[test]
+fn malformed_calls_and_a_timeout_are_inference_errors() {
+    for says in [AmdSays::TwoCalls, AmdSays::WrongTool, AmdSays::TimedOut] {
+        let call = Call::run(detecting(amd()), async |call| {
+            call.enter().await;
+            call.says("hello who is this").await;
+            call.classifier_says(says).await;
+            call.advance(100).await;
+            call.model_answers(LINE).await;
+            call.advance(3_000).await;
+        });
+        let predictions = call.predictions();
+        assert_eq!(predictions.len(), 1, "{says:?}");
+        assert_eq!(
+            (predictions[0].reason, predictions[0].category),
+            (AmdReason::InferenceError, Category::Uncertain),
+            "{says:?}"
+        );
+        assert_eq!(call.heard_requests("hello who is this").len(), 1, "{says:?}: answered");
+        assert!(call.outcomes().is_empty(), "{says:?}: the run goes on");
+        call.assert_clean();
+    }
 }
 
 /// A classifier failure outside the provider taxonomy ends the run with `internal_error`.
@@ -570,7 +598,7 @@ fn amds_stt_hears_the_person_while_the_session_stt_hears_silence() {
         call.advance(300).await;
     });
     let amd_stream = (call.run.record.resources(Kind::Stt))
-        .find(|r| *r.detail() == Detail::AmdStt)
+        .find(|r| matches!(r.detail(), Detail::AmdStt { .. }))
         .map(|r| r.nth())
         .expect("AMD's recogniser opened");
     let mic_frames = |stt: u32| {
@@ -796,15 +824,20 @@ fn a_decision_model_holds_a_wait_turn_and_reads_no_menu() {
     call.assert_clean();
 }
 
-/// A second run entered while one is attached is refused at the gate, and the first still runs
-/// and closes. Spec §5.1: one run at a time.
+/// A second run entered while one is attached is refused at the gate, and the first runs on: it
+/// classifies the next turn and completes on it, with one `amd_completed`. Spec §5.1: one run
+/// at a time; Python raises "amd is already active" and leaves the first run alone.
 #[test]
 fn a_second_run_is_refused_while_one_is_attached() {
     let call = Call::run(detecting(amd()), async |call| {
         call.enter().await;
         call.enter().await;
-        call.close_amd().await;
-        call.advance(1_000).await;
+        assert!(call.completions().is_empty(), "the refused entry completed nothing");
+        call.says("hello who is this").await;
+        call.classifier_says(AmdSays::Human).await;
+        call.advance(100).await;
+        call.model_answers(LINE).await;
+        call.advance(3_000).await;
     });
     let answers = call.run.record.amd_run().enter_answers().to_vec();
     assert_eq!(answers.len(), 2, "{answers:?}");
@@ -813,6 +846,98 @@ fn a_second_run_is_refused_while_one_is_attached() {
         matches!(s, lk_agents_voice::trace::Step::Gate(GateStep::AttachRefused { .. }))
     });
     assert!(refused, "the gate refused the second attach");
-    assert_eq!(call.the_outcome().reason, AmdReason::Cancelled);
+    let outcome = call.the_outcome();
+    assert_eq!((outcome.category, outcome.reason), (Stage::Human, AmdReason::Finished));
+    assert_eq!(call.completions(), vec![outcome]);
+    assert!(call.heard_reply("hello who is this").is_some(), "the turn was answered");
     call.assert_clean();
+}
+
+// AMD's own recogniser (spec §6).
+
+impl Call {
+    /// Which of the first microphone's frames AMD's recogniser heard, in the order it heard them.
+    fn amd_heard_chunks(&self) -> Vec<u16> {
+        let amd = (self.run.record.resources(Kind::Stt))
+            .find(|r| matches!(r.detail(), Detail::AmdStt { .. }))
+            .map(|r| r.nth())
+            .expect("AMD's recogniser opened");
+        (self.run.record.forwarded().iter())
+            .filter(|(_, kind, nth, _)| *kind == Kind::Stt && *nth == amd)
+            .flat_map(|(_, _, _, tags)| tags.iter().copied())
+            .filter_map(|tag| match tag {
+                Tag::Mic { chunk, .. } => Some(chunk),
+                _ => None,
+            })
+            // Every sample of a frame carries its tag: one entry per frame.
+            .fold(Vec::new(), |mut frames, chunk| {
+                if frames.last() != Some(&chunk) {
+                    frames.push(chunk);
+                }
+                frames
+            })
+    }
+}
+
+/// AMD's recogniser hears every frame from activation on, in order, though its stream opens
+/// later: the frames said while it opens, the real ones behind an uninterruptible speech
+/// included, reach it first. Frames from before activation do not. Python opens AMD's stream on
+/// the first frame and keeps that frame (`_stt.py` `push_audio`).
+#[test]
+fn amds_stt_hears_every_frame_from_activation_while_its_stream_opens() {
+    let opening = Duration::from_millis(800);
+    let setup = detecting(AmdSetup { own_stt: true, stt_connect: opening, ..amd() });
+    let call = Call::run(setup, async |call| {
+        // Queued before AMD attaches, it keeps its interruptibility: the session's recogniser
+        // hears silence while it plays.
+        call.send(Input::Say {
+            text: AgentText(MESSAGE.into()),
+            input: SayInput::Words,
+            allow: Some(false),
+            to_ctx: true,
+        })
+        .await;
+        call.advance(100).await;
+        let mic = Ref::new(*call.run.record.live().of(Kind::Mic).first().expect("a microphone"));
+        call.send(Input::MicFrames { mic, chunks: Count(5) }).await;
+        call.advance(100).await;
+        call.send(Input::AmdEnter {}).await;
+        call.advance(200).await;
+        assert!(call.run.record.amd_run().enter_answers().len() == 1, "entered");
+        assert!(
+            !(call.run.record.resources(Kind::Stt))
+                .any(|r| matches!(r.detail(), Detail::AmdStt { .. })),
+            "AMD's stream is still opening"
+        );
+        call.send(Input::MicFrames { mic, chunks: Count(10) }).await;
+        call.advance(1_000).await;
+        call.send(Input::MicFrames { mic, chunks: Count(5) }).await;
+        call.advance(300).await;
+    });
+    let accepted = (call.run.record.applied().iter())
+        .filter(|a| matches!(a.input, Input::MicFrames { .. }) && a.accepted)
+        .count();
+    assert_eq!(accepted, 3, "the person spoke before, while and after AMD's stream opened");
+    let heard = call.amd_heard_chunks();
+    assert_eq!(heard, (5..20).collect::<Vec<u16>>(), "every frame from activation, in order");
+}
+
+/// AMD's own recogniser carries AMD's client feature header on LiveKit Inference only, as the
+/// classifier's requests do. Python: `_stt.py` opens the stream with `client_feature_kwargs`.
+#[test]
+fn amds_stt_is_tagged_only_on_inference() {
+    for inference in [true, false] {
+        let setup = detecting(AmdSetup { own_stt: true, inference, ..amd() });
+        let call = Call::run(setup, async |call| {
+            call.enter().await;
+            call.advance(500).await;
+        });
+        let tagged = (call.run.record.resources(Kind::Stt))
+            .find_map(|r| match r.detail() {
+                Detail::AmdStt { tagged } => Some(*tagged),
+                _ => None,
+            })
+            .expect("AMD's recogniser opened");
+        assert_eq!(tagged, inference, "inference: {inference}");
+    }
 }

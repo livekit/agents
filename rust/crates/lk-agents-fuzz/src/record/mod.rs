@@ -199,8 +199,11 @@ pub enum Detail {
     },
     /// What AMD's executor asked one of its fake models, as the model received it.
     AmdAsk(Box<amd_run::Asked>),
-    /// AMD's own recogniser, apart from the session's.
-    AmdStt,
+    /// AMD's own recogniser, apart from the session's; `tagged` when its connections carry
+    /// AMD's client feature header (`X-LiveKit-Client-Feature: AMD`).
+    AmdStt {
+        tagged: bool,
+    },
     Tool {
         invocation_id: String,
         operation: u64,

@@ -50,10 +50,15 @@ impl FakeStt {
         Arc::new(FakeStt { registry, connect, detail: Detail::None, keyterms: true, reports })
     }
 
-    /// AMD's own recogniser: its streams open as `Detail::AmdStt`, apart from the session's.
-    pub fn for_amd(registry: Arc<Registry>, reports: SttSpeech) -> Arc<Self> {
-        let connect = std::time::Duration::ZERO;
-        Arc::new(FakeStt { registry, connect, detail: Detail::AmdStt, keyterms: false, reports })
+    /// AMD's own recogniser: its streams open as `Detail::AmdStt`, apart from the session's,
+    /// each `connect` after it was asked for.
+    pub fn for_amd(
+        registry: Arc<Registry>,
+        connect: std::time::Duration,
+        reports: SttSpeech,
+    ) -> Arc<Self> {
+        let detail = Detail::AmdStt { tagged: false };
+        Arc::new(FakeStt { registry, connect, detail, keyterms: false, reports })
     }
 }
 
@@ -77,6 +82,28 @@ impl Stt for FakeStt {
 
     fn failed(&self, _error: ProviderError, recoverable: bool) {
         self.registry.record_failed(Kind::Stt, recoverable);
+    }
+
+    /// As LiveKit Inference's does: a view whose streams carry the headers. Only AMD's own
+    /// recogniser records them, as whether the client feature tag is among them.
+    fn with_extra_headers(
+        &self,
+        headers: &std::collections::BTreeMap<String, String>,
+    ) -> Option<Arc<dyn Stt>> {
+        let detail = match self.detail {
+            Detail::AmdStt { tagged } => Detail::AmdStt {
+                tagged: tagged
+                    || headers.get("X-LiveKit-Client-Feature").map(String::as_str) == Some("AMD"),
+            },
+            ref other => other.clone(),
+        };
+        Some(Arc::new(FakeStt {
+            registry: self.registry.clone(),
+            connect: self.connect,
+            detail,
+            keyterms: self.keyterms,
+            reports: self.reports,
+        }))
     }
 
     fn capabilities(&self) -> SttCapabilities {
