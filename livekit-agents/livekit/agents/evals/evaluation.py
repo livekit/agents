@@ -38,10 +38,17 @@ class EvaluationResult:
     judgments: dict[str, JudgmentResult] = field(default_factory=dict)
     """Individual judgment results keyed by judge name."""
 
+    errors: dict[str, Exception] = field(default_factory=dict)
+    """Judges that raised instead of returning a verdict, keyed by judge name.
+
+    An errored judge counts as not passed, so a failing judge LLM can't make
+    the group look like it passed."""
+
     @property
     def score(self) -> float:
-        """Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0."""
-        if not self.judgments:
+        """Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0, error=0."""
+        count = len(self.judgments) + len(self.errors)
+        if not count:
             return 0.0
         total = 0.0
         for j in self.judgments.values():
@@ -49,12 +56,12 @@ class EvaluationResult:
                 total += 1.0
             elif j.uncertain:
                 total += 0.5
-        return total / len(self.judgments)
+        return total / count
 
     @property
     def all_passed(self) -> bool:
-        """True if all judgments passed. Maybes count as not passed."""
-        return all(j.passed for j in self.judgments.values())
+        """True if all judgments passed. Maybes and errors count as not passed."""
+        return not self.errors and all(j.passed for j in self.judgments.values())
 
     @property
     def any_passed(self) -> bool:
@@ -63,16 +70,17 @@ class EvaluationResult:
 
     @property
     def majority_passed(self) -> bool:
-        """True if more than half of the judgments passed."""
-        if not self.judgments:
+        """True if more than half of the judges passed. Errors count as not passed."""
+        count = len(self.judgments) + len(self.errors)
+        if not count:
             return True
         passed_count = sum(1 for j in self.judgments.values() if j.passed)
-        return passed_count > len(self.judgments) / 2
+        return passed_count > count / 2
 
     @property
     def none_failed(self) -> bool:
-        """True if no judgments explicitly failed. Maybes are allowed."""
-        return not any(j.failed for j in self.judgments.values())
+        """True if no judgments explicitly failed. Maybes are allowed, errors are not."""
+        return not self.errors and not any(j.failed for j in self.judgments.values())
 
 
 class JudgeGroup:
@@ -160,7 +168,7 @@ class JudgeGroup:
         from ..log import logger
 
         # Run all judges concurrently
-        async def run_judge(judge: Evaluator) -> tuple[str, JudgmentResult | BaseException]:
+        async def run_judge(judge: Evaluator) -> tuple[str, JudgmentResult | Exception]:
             try:
                 result = await judge.evaluate(
                     chat_ctx=chat_ctx,
@@ -174,13 +182,15 @@ class JudgeGroup:
 
         results = await asyncio.gather(*[run_judge(j) for j in self._judges])
 
-        # Filter out failed judges
         judgments: dict[str, JudgmentResult] = {}
+        errors: dict[str, Exception] = {}
         for name, result in results:
             if isinstance(result, JudgmentResult):
                 judgments[name] = result
+            else:
+                errors[name] = result
 
-        evaluation_result = EvaluationResult(judgments=judgments)
+        evaluation_result = EvaluationResult(judgments=judgments, errors=errors)
 
         if _evals_verbose:
             print("\n+ JudgeGroup evaluation results:")
