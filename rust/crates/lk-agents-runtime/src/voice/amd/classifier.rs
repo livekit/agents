@@ -16,7 +16,7 @@ use lk_agents_abi::{
 };
 use lk_agents_voice::amd::effects::{ClassifierItem, ClassifyRequest, MenuRequest};
 use lk_agents_voice::amd::events::{Category, IvrMenuOption};
-use lk_agents_voice::amd::machine::{Classification, ClassifyError, In, Menu};
+use lk_agents_voice::amd::machine::{Classification, ClassifyError, In, MAX_MENU_OPTIONS, Menu};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -94,7 +94,7 @@ fn menu_schema() -> serde_json::Value {
             "menu": { "title": "Menu", "type": "string" },
             "options": {
                 "items": { "$ref": "#/$defs/IVRMenuOption" },
-                "maxItems": lk_agents_voice::amd::machine::MAX_MENU_OPTIONS,
+                "maxItems": MAX_MENU_OPTIONS,
                 "title": "Options",
                 "type": "array",
             },
@@ -259,10 +259,13 @@ struct MenuOptionArgs {
     spoken_response: String,
 }
 
-/// The menu as answered; the machine refuses one with too many options, as Python's validation
-/// does.
+/// The menu as answered, or `None` when it fails `AMDIVRMenuResponse` validation: more than
+/// [`MAX_MENU_OPTIONS`] options (`max_length=20`) is invalid output, so it is never observed.
 fn parse_menu(arguments: &str) -> Option<Menu> {
     let args: MenuArgs = serde_json::from_str(arguments).ok()?;
+    if args.options.len() > MAX_MENU_OPTIONS {
+        return None;
+    }
     let options = (args.options.into_iter())
         .map(|o| IvrMenuOption { label: o.label, dtmf: o.dtmf, spoken_response: o.spoken_response })
         .collect();
