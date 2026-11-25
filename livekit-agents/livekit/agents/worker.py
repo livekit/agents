@@ -38,7 +38,7 @@ from google.protobuf.json_format import MessageToDict, MessageToJson
 from livekit import api, rtc
 from livekit.protocol import agent, agent_worker, models
 
-from . import ipc, telemetry, utils
+from . import _hosted_logs, ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .inference_runner import _InferenceRunner
 from .job import (
@@ -61,6 +61,9 @@ ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 1.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+WORKER_PING_INTERVAL = 1.0
+WORKER_PONG_TIMEOUT = 2.0
+WORKER_REGISTRATION_TIMEOUT = 10.0
 # how long a previously registered worker may stay disconnected (e.g. while it
 # reconnects after a websocket interruption) before the health check reports 503
 HEALTH_RECONNECT_GRACE_PERIOD = 30.0
@@ -587,6 +590,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._load_fnc is None:
                 self._load_fnc = _DefaultLoadCalc.get_load
 
+            if self._job_executor_type == JobExecutorType.THREAD and _hosted_logs.logs_handed_off():
+                _hosted_logs.install_thread_router()
+
             if self.worker_info.cloud_agents:
                 if self._load_fnc != _DefaultLoadCalc.get_load:
                     logger.warning(
@@ -799,6 +805,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._job_lifecycle_tasks.add(t)
                 t.add_done_callback(self._job_lifecycle_tasks.discard)
 
+            def _send_join_timing(
+                proc: ipc.job_executor.JobExecutor, timing: agent.JobJoinTiming
+            ) -> None:
+                t = self._loop.create_task(self._update_job_status(proc, join_timing=timing))
+                self._job_lifecycle_tasks.add(t)
+                t.add_done_callback(self._job_lifecycle_tasks.discard)
+
             if self._http_server is not None:
                 await self._http_server.start()
                 logger.info(
@@ -816,6 +829,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool.on("process_started", _update_job_status)
             self._proc_pool.on("process_closed", _update_job_status)
             self._proc_pool.on("process_job_launched", _update_job_status)
+            self._proc_pool.on("process_job_connected", _send_join_timing)
             await self._proc_pool.start()
 
             self._http_session = aiohttp.ClientSession(
@@ -1105,8 +1119,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         assert self._http_session is not None
 
         retry_count = 0
-        ws: aiohttp.ClientWebSocketResponse | None = None
         while not self._closed:
+            ws: aiohttp.ClientWebSocketResponse | None = None
             try:
                 self._connecting = True
                 join_jwt = (
@@ -1138,8 +1152,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     heartbeat=HEARTBEAT_INTERVAL,
                 )
 
-                retry_count = 0
-
                 # register the worker
                 req = agent.WorkerMessage()
                 req.register.type = self._server_type.value
@@ -1160,13 +1172,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 await ws.send_bytes(req.SerializeToString())
 
                 # wait for the register response before running this connection
-                first_msg_b = await ws.receive_bytes()
+                try:
+                    first_msg_b = await asyncio.wait_for(
+                        ws.receive_bytes(), timeout=WORKER_REGISTRATION_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    raise asyncio.TimeoutError("worker registration timed out") from None
                 msg = agent.ServerMessage()
                 msg.ParseFromString(first_msg_b)
 
                 if not msg.HasField("register"):
                     raise Exception("expected register response as first message")
 
+                retry_count = 0
                 self._handle_register(msg.register)
                 self._connecting = False
                 self._disconnected_at = None
@@ -1183,6 +1201,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             except Exception as e:
                 if self._closed:
                     break
+
+                if isinstance(e, asyncio.TimeoutError) and ws is not None:
+                    # A dead connection may never complete the close handshake.
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(ws.close(), timeout=1.0)
+                    ws = None
 
                 if retry_count >= self._max_retry:
                     self._connection_failed = True
@@ -1204,6 +1228,27 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         closing_ws = False
+        ping_timestamp = 0
+        pong_received = asyncio.Event()
+
+        async def _send_ping() -> None:
+            ping = agent.WorkerMessage(ping=agent.WorkerPing(timestamp=ping_timestamp))
+            await ws.send_bytes(ping.SerializeToString())
+            await pong_received.wait()
+
+        async def _ping_task() -> None:
+            nonlocal ping_timestamp
+            interval = utils.aio.interval(WORKER_PING_INTERVAL)
+            while True:
+                await interval.tick()
+                ping_timestamp = time.time_ns() // 1_000_000
+                pong_received.clear()
+                try:
+                    await asyncio.wait_for(_send_ping(), timeout=WORKER_PONG_TIMEOUT)
+                except asyncio.TimeoutError:
+                    raise asyncio.TimeoutError(
+                        "worker ping timed out waiting for LiveKit pong"
+                    ) from None
 
         async def _load_task() -> None:
             """periodically update worker status"""
@@ -1262,6 +1307,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._handle_availability(server_msg.availability)
                 elif which == "assignment":
                     self._handle_assignment(server_msg.assignment)
+                elif which == "pong" and server_msg.pong.last_timestamp == ping_timestamp:
+                    pong_received.set()
                 elif which == "termination":
                     user_task = self._loop.create_task(
                         self._handle_termination(server_msg.termination),
@@ -1271,6 +1318,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     user_task.add_done_callback(self._job_lifecycle_tasks.discard)
 
         tasks = [
+            asyncio.create_task(_ping_task()),
             asyncio.create_task(_load_task()),
             asyncio.create_task(_send_task()),
             asyncio.create_task(_recv_task()),
@@ -1323,7 +1371,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
         # receipt is now, not when the task gets to run: that delay is dispatch latency
-        task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
+        task = self._loop.create_task(
+            self._answer_availability(msg, received_at=time.time(), received_mono=time.monotonic())
+        )
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
@@ -1379,13 +1429,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._get_effective_load() < load_threshold
 
     async def _answer_availability(
-        self, msg: agent.AvailabilityRequest, *, received_at: float | None = None
+        self,
+        msg: agent.AvailabilityRequest,
+        *,
+        received_at: float | None = None,
+        received_mono: float | None = None,
     ) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
         if received_at is None:
             received_at = time.time()
+        if received_mono is None:
+            received_mono = time.monotonic()
         await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
@@ -1413,6 +1469,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             nonlocal answered
             answered = True
             accepted_at = time.time()
+            accepted_mono = time.monotonic()
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1452,6 +1509,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 received_at=received_at,
                 accepted_at=accepted_at,
                 assigned_at=time.time(),
+                received_mono=received_mono,
+                accepted_mono=accepted_mono,
+                assigned_mono=time.monotonic(),
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -1559,7 +1619,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         with contextlib.suppress(utils.aio.ChanClosed):
             await self._queue_msg(msg)
 
-    async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
+    async def _update_job_status(
+        self,
+        proc: ipc.job_executor.JobExecutor,
+        *,
+        join_timing: agent.JobJoinTiming | None = None,
+    ) -> None:
         job_info = proc.running_job
         if job_info is None:
             return
@@ -1572,7 +1637,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         elif proc.status == ipc.job_executor.JobStatus.RUNNING:
             status = agent.JobStatus.JS_RUNNING
 
-        update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
+        update = agent.UpdateJobStatus(
+            job_id=job_info.job.id, status=status, error="", join_timing=join_timing
+        )
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
 

@@ -145,55 +145,37 @@ class MockToolset2(Toolset):
         return [mock_tool_2, DummyProviderTool("provider1")]
 
 
+_P1, _P2, _P3 = (DummyProviderTool(f"provider{i}") for i in (1, 2, 3))
+
+
 class TestToolContext:
-    def test_equals_empty_contexts(self):
-        ctx1 = ToolContext.empty()
-        ctx2 = ToolContext.empty()
-        assert ctx1 == ctx2
-
-    def test_equals_same_tools(self):
-        ctx1 = ToolContext([mock_tool_1, mock_tool_2])
-        ctx2 = ToolContext([mock_tool_1, mock_tool_2])
-        assert ctx1 == ctx2
-
-    def test_equals_same_tools_different_order(self):
-        ctx1 = ToolContext([mock_tool_1, mock_tool_2])
-        ctx2 = ToolContext([mock_tool_2, mock_tool_1])
-        assert ctx1 == ctx2
-
-    def test_not_equals_different_tools(self):
-        ctx1 = ToolContext([mock_tool_1, mock_tool_2])
-        ctx2 = ToolContext([mock_tool_1, mock_tool_3])
-        assert ctx1 != ctx2
-
-    def test_not_equals_different_provider_tools(self):
-        provider1 = DummyProviderTool("provider1")
-        provider2 = DummyProviderTool("provider2")
-        provider3 = DummyProviderTool("provider3")
-
-        ctx1 = ToolContext([mock_tool_1, provider1, provider2])
-        ctx2 = ToolContext([mock_tool_1, provider1, provider3])
-        assert ctx1 != ctx2
-
-    def test_equals_different_provider_tools_order(self):
-        provider1 = DummyProviderTool("provider1")
-        provider2 = DummyProviderTool("provider2")
-
-        ctx1 = ToolContext([mock_tool_1, provider1, provider2])
-        ctx2 = ToolContext([mock_tool_1, provider2, provider1])
-        assert ctx1 == ctx2
-
-    def test_not_equals_missing_provider_tools(self):
-        provider1 = DummyProviderTool("provider1")
-
-        ctx1 = ToolContext([mock_tool_1, provider1])
-        ctx2 = ToolContext([mock_tool_1])
-        assert ctx1 != ctx2
+    @pytest.mark.parametrize(
+        ("left", "right", "equal"),
+        [
+            ([], [], True),
+            ([mock_tool_1, mock_tool_2], [mock_tool_1, mock_tool_2], True),
+            ([mock_tool_1, mock_tool_2], [mock_tool_2, mock_tool_1], True),
+            ([mock_tool_1, mock_tool_2], [mock_tool_1, mock_tool_3], False),
+            ([mock_tool_1, _P1, _P2], [mock_tool_1, _P1, _P3], False),
+            ([mock_tool_1, _P1, _P2], [mock_tool_1, _P2, _P1], True),
+            ([mock_tool_1, _P1], [mock_tool_1], False),
+        ],
+        ids=[
+            "empty",
+            "same-tools",
+            "order-insensitive",
+            "different-tools",
+            "different-provider-tools",
+            "provider-tools-order-insensitive",
+            "missing-provider-tool",
+        ],
+    )
+    def test_equality(self, left: list, right: list, equal: bool):
+        assert (ToolContext(left) == ToolContext(right)) is equal
 
     def test_copy_equals_original(self):
         ctx1 = ToolContext([mock_tool_1, mock_tool_2])
-        ctx2 = ctx1.copy()
-        assert ctx1 == ctx2
+        assert ctx1 == ctx1.copy()
 
     def test_openai_responses_raw_schema_does_not_mutate_tool_schema(self):
         ctx = ToolContext([raw_tool_1])
@@ -2276,6 +2258,7 @@ def _make_reply_session(speech: Any) -> Any:
     activity.scheduling_paused = False
     session.wait_for_idle = AsyncMock(return_value=activity)
     session.generate_reply = MagicMock(return_value=speech)
+    session.amd = None
     return session
 
 
@@ -2524,6 +2507,34 @@ class TestToolCallEvents:
         assert isinstance(completed, ToolReplyUpdated)
         assert completed.status == "completed"
         assert completed.update_ids == ["c5_update_1", "c5_final"]
+
+    @pytest.mark.asyncio
+    async def test_deferred_reply_is_dropped_while_amd_runs(self):
+        from livekit.agents.voice.events import RunContext, ToolReplyUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("step one")
+            return "all done"
+
+        import asyncio as _asyncio
+
+        session = _make_reply_session(_make_fake_speech())
+        # AMD rejects direct replies; its next reply sees the updates in the chat context
+        session.amd = object()
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c9", name="progress_tool")
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        session.generate_reply.assert_not_called()
+        assert not executor._pending_updates
+        assert not any(isinstance(i, ToolReplyUpdated) for i in _emitted_items(session))
 
     @pytest.mark.parametrize("reply_flags", [(False,), (True,), (False, True), (True, False)])
     @pytest.mark.parametrize(

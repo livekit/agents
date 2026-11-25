@@ -65,6 +65,7 @@ from opentelemetry.util.types import AttributeValue
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
+from .._hosted_logs import logs_handed_off
 from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
 from ..types import (
@@ -319,7 +320,11 @@ class _AuthRefreshingSession(requests.Session):
         if _upload_gate.disabled:
             return self._make_ok_response()
 
-        self.headers.update(self._header_provider())
+        # OTel passes OTEL_EXPORTER_OTLP_*HEADERS per request, and per-request headers beat
+        # session headers, so an app's Authorization (e.g. Langfuse) would replace the token
+        headers = requests.structures.CaseInsensitiveDict(kwargs.get("headers") or {})
+        headers.update(self._header_provider())
+        kwargs["headers"] = headers
         resp = super().request(*args, **kwargs)
         if _upload_gate.is_disabled_response(resp.status_code, resp.content):
             _upload_gate.disable()
@@ -973,7 +978,7 @@ class _CloudTelemetry:
                 self._ensure_log_pipeline(url)
                 if self._log_metadata_processor is not None:
                     self._log_metadata_processor.set_metadata(session_metadata)
-                if self._log_handler is not None:
+                if self._log_handler is not None and not logs_handed_off():
                     root = logging.getLogger()
                     if self._log_handler not in root.handlers:
                         root.addHandler(self._log_handler)
