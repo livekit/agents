@@ -624,6 +624,7 @@ impl VoiceRuntime {
             | AudioInputRouterCommand::CancelTurn
             | AudioInputRouterCommand::Abort(_)
             | AudioInputRouterCommand::EndTail
+            | AudioInputRouterCommand::HoldAmd(_)
             | AudioInputRouterCommand::ReportCensus => {}
         }
         let effects = self.forwarder.handle(command);
