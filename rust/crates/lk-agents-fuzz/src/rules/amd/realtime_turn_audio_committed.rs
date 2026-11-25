@@ -13,8 +13,9 @@ use crate::{
 // `wait` turn leaves no audio for the next allowed reply. Judged at the fake server: every gated
 // turn adds one buffer commit, and the commits of every turn up to a reply's own precede that
 // reply's response request. Commits are counted, not timed: the socket's queue keeps their
-// order but may lag the gate's commit. A turn the close or a lost connection overtook is not
-// judged.
+// order but may lag the gate's commit. Between a turn's own commit and its reply's request, only
+// another turn or a host commit adds one: a second commit there commits audio the turn did not
+// hold. A turn the close or a lost connection overtook is not judged.
 
 pub struct RealtimeTurnAudioCommitted;
 

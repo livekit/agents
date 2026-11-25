@@ -13,8 +13,9 @@ use crate::{
 // keeps it in every request, so the tool appearing outside a DTMF reply is judged only when no
 // request made outside one already carried it. A realtime response takes the session's tools, so
 // the session sets them to the decision's tools for the response and restores them after
-// (proposal, Realtime): every response asked for a DTMF reply finds the tool among the tools the
-// server last received, and every other response does not.
+// (proposal, Realtime): every response dispatched for a DTMF reply's speech finds the tool among
+// the tools the server last received, every other response does not, and once every DTMF reply's
+// speech ended the live socket's last tools lack it.
 
 pub struct DtmfOnlyWhenAllowed;
 
