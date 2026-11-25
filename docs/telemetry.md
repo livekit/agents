@@ -177,6 +177,23 @@ Each metric carries the same labels:
 | `lk.productstats.model.requests` | counter | Requests made to a model |
 | `lk.productstats.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
 | `lk.productstats.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
+| `lk.productstats.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
+| `lk.productstats.model.transcriptions` | counter | User turns an STT transcribed, by `lk.productstats.stt.final` |
+
+The two STT metrics carry two more labels, because the delay starts at the end of speech,
+which the STT does not always decide:
+
+| Label | Values |
+| --- | --- |
+| `lk.productstats.stt.speech_end` | who ended the speech: `vad` (the session's VAD) or `provider` (the STT detects speech itself) |
+| `lk.productstats.stt.final` | `after_speech_end`, or `before_speech_end` when the final transcript arrived first |
+
+- The delay is recorded only for `after_speech_end` turns. A final that arrives before the
+  end of speech has no delay to measure; it is counted, never recorded as zero.
+- Delays are compared only within one `speech_end` value, as medians and percentiles per
+  provider and model. A `vad` delay includes the VAD's silence window; a `provider` delay
+  includes the provider's own endpointing.
+- A turn whose end of speech was not detected records nothing.
 
 **Feature usage**
 
