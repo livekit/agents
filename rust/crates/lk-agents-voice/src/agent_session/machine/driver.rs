@@ -266,6 +266,7 @@ impl VoiceDriver {
             }
             self.issue_on_enter(now);
             self.count_voice_session();
+            self.count_agent_features();
             self.session_opened();
             self.settle_step()
         }
@@ -891,6 +892,8 @@ impl VoiceDriver {
         let mut session =
             VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
         session.expressive = initial.expressive;
+        let realtime = activity.realtime().map(|realtime| realtime.provider.clone());
+        session.features.started_on_realtime(realtime);
         let input = crate::agent_session::machine::activity::io::AgentInput::new(
             initial.sinks,
             initial.video_instance,

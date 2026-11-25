@@ -974,6 +974,7 @@ impl super::AgentActivity {
         let frame = toolset.agent.as_ref().map(|agent| agent.definition());
         let tools = offered_tool_infos(&toolset.specs, frame.map_or(&[], |frame| &frame.tools))?;
         Ok(AgentDefinition {
+            mcp: false,
             name: frame.map_or_else(|| self.agent.clone(), |d| d.name.clone()),
             // The session plans each request: the run renders no instructions.
             instructions: String::new(),

@@ -443,6 +443,7 @@ impl VoiceDriver {
             ActivityCommand::UpdateTools(toolset) => {
                 let tools = toolset.specs.len();
                 let (tools_added, tools_removed) = self.activity.update_tools(toolset);
+                self.count_agent_features();
                 if !tools_added.is_empty() || !tools_removed.is_empty() {
                     self.commit_config(None, tools_added, tools_removed);
                 }
@@ -818,6 +819,10 @@ impl AgentActivity {
 impl AgentActivity {
     pub(crate) fn agent_name(&self) -> &str {
         &self.agent
+    }
+    /// The language the STT last reported for the person's speech.
+    pub(crate) fn heard_language(&self) -> Option<lk_agents_abi::tokenize::language::LanguageCode> {
+        self.audio_recognition.last_language().cloned()
     }
     /// Whether a false interruption pauses the agent's speech and resumes it.
     pub(crate) fn resumes_false_interruptions(&self) -> bool {

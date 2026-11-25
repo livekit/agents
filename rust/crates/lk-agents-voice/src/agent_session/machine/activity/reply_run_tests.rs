@@ -107,6 +107,7 @@ fn shared_run_cleanup_deadline_wakes_voice_without_a_domain_timer() {
 
     let mut run = AgentRun::new(
         AgentDefinition {
+            mcp: false,
             name: "agent".into(),
             instructions: String::new(),
             dynamic_instructions: false,
@@ -205,6 +206,7 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
     );
     let run = AgentRun::new(
         AgentDefinition {
+            mcp: false,
             name: "agent".into(),
             instructions: String::new(),
             dynamic_instructions: false,
@@ -289,6 +291,7 @@ fn tool_reply(
     };
     let mut run = AgentRun::new(
         AgentDefinition {
+            mcp: false,
             name: "agent".into(),
             instructions: String::new(),
             dynamic_instructions: false,

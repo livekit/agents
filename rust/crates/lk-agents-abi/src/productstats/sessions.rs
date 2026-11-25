@@ -82,6 +82,13 @@ impl SessionFacts {
         self.mcp |= other.mcp;
     }
 
+    /// The session ended: its one count, and the MCP feature's when an agent of it had one. For a
+    /// session that counts its features nowhere else (a text request).
+    pub fn ended_with_features(self, entrypoint: Entrypoint) -> Vec<ProductStat> {
+        let mcp = self.mcp.then(|| ProductStat::of(&super::features::FeatureMcp, 1u64));
+        std::iter::once(self.ended(entrypoint)).chain(mcp).collect()
+    }
+
     /// The session ended: its one count.
     pub fn ended(self, entrypoint: Entrypoint) -> ProductStat {
         let topology = match (self.handoff, self.agent_as_tool) {

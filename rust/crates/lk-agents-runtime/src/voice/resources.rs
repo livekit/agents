@@ -150,7 +150,8 @@ impl Resources {
 
     pub fn register_tts(&self, tts: Arc<dyn Tts>) -> TtsRef {
         let (capabilities, num_channels) = (tts.capabilities(), tts.num_channels());
-        TtsRef { id: self.insert(Resource::Tts(tts)), capabilities, num_channels }
+        let provider = tts.id();
+        TtsRef { id: self.insert(Resource::Tts(tts)), provider, capabilities, num_channels }
     }
 
     pub fn register_realtime(

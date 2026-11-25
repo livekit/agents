@@ -331,9 +331,10 @@ impl Turn {
                             "the managed text execution ended without its cleanup receipt");
                     }
                     // One text request is one session, however it ended.
-                    lk_agents_telemetry::productstats::record(
-                        call.managed.session_facts().ended(Entrypoint::A2aSession),
-                    );
+                    let ended = call.managed.session_facts();
+                    for stat in ended.ended_with_features(Entrypoint::A2aSession) {
+                        lk_agents_telemetry::productstats::record(stat);
+                    }
                     let now = elapsed();
                     let Call { holder, run, lease, mut submitted, .. } = call;
                     if let (Ok(_), Some(submitted)) = (&answer, submitted.as_mut()) {

@@ -110,6 +110,8 @@ pub(crate) struct VoiceSessionState {
     pub(crate) user_turns: machine::activity::user_turn::UserTurns,
     /// What the session's agents did, which its product statistics report when it ends.
     pub(crate) facts: lk_agents_abi::productstats::sessions::SessionFacts,
+    /// The features the session already counted, and what it compares a switch against.
+    pub(crate) features: product_stats::Features,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -159,6 +161,7 @@ impl VoiceSessionState {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
         let cfg = config.effective();
+        let features = product_stats::Features::starting_with(&stt, &tts, &llm);
         VoiceSessionState {
             usage: Default::default(),
             requests: Default::default(),
@@ -200,6 +203,7 @@ impl VoiceSessionState {
             local_inputs: Default::default(),
             user_turns: Default::default(),
             facts: Default::default(),
+            features,
         }
     }
 

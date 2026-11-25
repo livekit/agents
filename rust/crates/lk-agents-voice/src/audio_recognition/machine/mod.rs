@@ -270,6 +270,11 @@ impl AudioRecognition {
         }
     }
 
+    /// The specific language the STT last reported, kept across turns.
+    pub(crate) fn last_language(&self) -> Option<&LanguageCode> {
+        self.last_language.as_ref()
+    }
+
     pub fn turn_detection_mode(&self) -> TurnDetectionMode {
         self.cfg.turn_detection_mode
     }

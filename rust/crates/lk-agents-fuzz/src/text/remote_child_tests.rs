@@ -382,6 +382,7 @@ async fn restart_with_input(
         };
         agents.push(TextSessionAgent {
             definition: AgentDefinition {
+                mcp: false,
                 name: name.into(),
                 instructions: String::new(),
                 dynamic_instructions: false,

@@ -231,6 +231,7 @@ impl VoiceDriver {
         llm: Maybe<Option<lk_agents_abi::resources::LlmRef>>,
         tts: Maybe<Option<lk_agents_abi::resources::TtsRef>>,
     ) {
+        self.count_models_installed(&stt, &tts, &llm);
         let effects = self.session.apply_providers(llm, tts);
         for effect in effects {
             self.record_effect(effect);

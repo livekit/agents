@@ -664,6 +664,71 @@
       "attributes": []
     },
     {
+      "id": "metric.lk.product.agents.feature.background_audio",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.background_audio",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions that played background audio.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.language_switch",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.language_switch",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions that heard the person change language.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.mcp",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.mcp",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions that ran an agent that has an MCP toolset.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.model_switch",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.model_switch",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions that changed a model while running, once for each kind they changed.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.feature.model_switch.kind",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.feature.override_options",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.override_options",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions that entered `session.override_options(...)`.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.update_options",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.update_options",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions that called `session.update_options(...)`.",
+      "attributes": []
+    },
+    {
       "id": "metric.lk.product.agents.model.audio_duration",
       "type": "metric",
       "metric_name": "lk.product.agents.model.audio_duration",

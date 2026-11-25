@@ -402,6 +402,11 @@ enum Resolved {
 }
 
 impl super::AgentActivity {
+    /// The active agent has an MCP toolset.
+    pub(crate) fn agent_has_mcp(&self) -> bool {
+        self.toolset.agent.as_ref().is_some_and(|agent| agent.definition().mcp)
+    }
+
     /// The active agent's tool of this name.
     pub(super) fn tool_info(&self, name: &str) -> Option<&lk_agents_abi::agent::FunctionToolInfo> {
         let tools = &self.toolset.agent.as_ref()?.definition().tools;

@@ -234,6 +234,8 @@ class AgentDefinition:
     tools: list[FunctionToolInfo]
     output: OutputSpec
     retries: Retries
+    mcp: bool = False
+    """The agent has an MCP toolset, which its session's product statistics report."""
 
 
 @dataclass(kw_only=True, slots=True)

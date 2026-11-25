@@ -999,6 +999,10 @@ class _core_SessionOwner:
         providers it changed restored. On a closed session the settings still release and the
         restore is refused (`SessionClosing`); there is nothing left to restore.
         """
+    def _core_background_audio(self) -> None:
+        """A background audio player started for this session: its product statistics count the
+        feature once.
+        """
     def resolved_options(self, legs: SessionLegs) -> ResolvedSessionOptions: ...
     async def aclose(self, reason: CloseReason | None = None, drain: bool = False) -> None:
         """Close the session for `reason`, the user's when `None`; `drain` lets queued speech finish."""

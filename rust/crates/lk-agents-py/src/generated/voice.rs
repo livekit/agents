@@ -4601,6 +4601,15 @@ impl CoreSessionOwner {
         Ok(())
     }
 
+    /// A background audio player started for this session: its product statistics count the
+    /// feature once.
+    #[pyo3(name = "_core_background_audio")]
+    fn background_audio(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::background_audio(&self.0));
+        Ok(())
+    }
+
     #[pyo3(signature = (legs))]
     fn resolved_options<'py>(
         &self,

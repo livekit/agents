@@ -3,6 +3,7 @@ use crate::recording::SessionRecorder;
 use crate::telemetry;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
+use lk_agents_abi::productstats::features::{Feature, SessionFeatures};
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure, SessionRecorder as _};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
@@ -109,6 +110,8 @@ type Opened = Option<Result<(), StartFailed>>;
 struct Inner {
     env: ProcessEnv,
     options: SessionOptions,
+    /// The options features the session already counted in its product statistics.
+    features: Mutex<SessionFeatures>,
     lifecycle: Mutex<OwnerLifecycle>,
     startup: OnceLock<Startup>,
     toolsets: OnceLock<Arc<dyn lk_agents_abi::llm::toolsets::ScopesPort>>,
@@ -156,6 +159,13 @@ struct Selection {
 }
 
 impl Inner {
+    /// The session used `feature`: counted the first time.
+    fn count_feature(&self, feature: Feature) {
+        if let Some(counted) = self.features.lock().used(feature) {
+            lk_agents_telemetry::productstats::record(counted);
+        }
+    }
+
     /// Reports and avatar item events share the running session's recording timeline.
     fn wall(&self) -> std::time::SystemTime {
         self.session.get().map_or_else(|| self.env.clock.wall(), |session| session.time.wall())
@@ -529,6 +539,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         Self(Arc::new(Inner {
             env: env.clone(),
             options,
+            features: Mutex::default(),
             lifecycle: Mutex::new(OwnerLifecycle::default()),
             startup: OnceLock::new(),
             toolsets: OnceLock::new(),
@@ -699,6 +710,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
         };
         validate_session_update(&update)?;
+        self.0.count_feature(Feature::UpdateOptions);
         if let Some(session) = self.0.session.get() {
             session.update_turn_options(update)?;
         } else {
@@ -721,6 +733,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             ..UpdateKwargs::default()
         };
         validate_session_update(&update)?;
+        self.0.count_feature(Feature::OverrideOptions);
         let layer = match self.0.session.get() {
             Some(session) => session.override_options(update)?,
             None => self.0.options.override_options(update),
@@ -733,6 +746,10 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             return Err(error);
         }
         Ok(layer)
+    }
+
+    fn background_audio(&self) {
+        self.0.count_feature(Feature::BackgroundAudio);
     }
 
     fn release_override(&self, layer: u64) -> Result<(), OptionsRefused> {

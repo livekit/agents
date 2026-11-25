@@ -5579,6 +5579,67 @@
       ]
     },
     {
+      "name": "lk.product.agents.feature.background_audio",
+      "brief": "Sessions that played background audio.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.product.agents.feature.language_switch",
+      "brief": "Sessions that heard the person change language.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.product.agents.feature.mcp",
+      "brief": "Sessions that ran an agent that has an MCP toolset.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.product.agents.feature.model_switch",
+      "brief": "Sessions that changed a model while running, once for each kind they changed.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.feature.model_switch.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.product.agents.feature.override_options",
+      "brief": "Sessions that entered `session.override_options(...)`.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.product.agents.feature.update_options",
+      "brief": "Sessions that called `session.update_options(...)`.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
       "name": "lk.product.agents.model.audio_duration",
       "brief": "Audio a model heard (an STT) or spoke (a TTS).",
       "kind": "counter",

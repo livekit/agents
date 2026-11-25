@@ -381,6 +381,7 @@ fn setup(
     let llm = Arc::new(ScriptedLlm { replies: Mutex::new(replies.into()), closed: closed.clone() });
     let host = FakeHost::new(body, registry.clone());
     let agent = AgentDefinition {
+        mcp: false,
         name: "scheduler".into(),
         instructions: "Book.".into(),
         dynamic_instructions: false,
@@ -694,6 +695,7 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
     };
     let host = FakeHost::new(Body::Returns, registry.clone());
     let definition = |tools: Vec<FunctionToolInfo>| AgentDefinition {
+        mcp: false,
         name: "scheduler".into(),
         instructions: "Book.".into(),
         dynamic_instructions: false,

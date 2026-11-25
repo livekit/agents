@@ -43,8 +43,12 @@ fn exact_realtime_output_without_tts_is_refused_before_generation_or_delivered_h
 fn exact_realtime_output_with_a_registered_tts_leg_uses_the_pipeline() {
     let mut driver = crate::agent_session::tests::realtime_driver();
     let tts = ResourceId(41);
-    driver.session.tts =
-        Some(TtsRef { id: tts, capabilities: Default::default(), num_channels: 1 });
+    driver.session.tts = Some(TtsRef {
+        id: tts,
+        provider: Default::default(),
+        capabilities: Default::default(),
+        num_channels: 1,
+    });
     driver.take_outbox();
     driver.say_exact(
         Ts::ZERO,

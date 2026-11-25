@@ -226,7 +226,9 @@ impl VoiceDriver {
         if self.hear_promoted(now, stream, &ev) {
             return;
         }
+        let language = self.activity.heard_language();
         let eff = self.activity.audio_recognition.on_stt_event(now, stream, &ev);
+        self.count_language(language);
         self.apply_recognition_effects(eff);
         // A waiting commit follows this final.
         if ev.kind == SpeechEventType::FinalTranscript

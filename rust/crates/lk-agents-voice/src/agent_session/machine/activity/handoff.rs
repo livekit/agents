@@ -405,6 +405,8 @@ impl VoiceDriver {
             toolset,
         );
         self.observe_experts();
+        self.count_agent_features();
+        self.count_models_installed(&stt, &tts, &llm);
         let effects = self.session.apply_providers(llm, tts);
         for effect in effects {
             self.record_effect(effect);

@@ -12,6 +12,7 @@ use crate::trace::InterruptCause;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
+use lk_agents_abi::productstats::features::SwitchedModel;
 use lk_agents_abi::resources::{RealtimeModelRef, RealtimeRef, ResourceId};
 use lk_agents_abi::voice::session::ModelSwapRefused;
 
@@ -116,6 +117,7 @@ impl VoiceDriver {
     /// owes its frame, which the switch's `update_agent` sends.
     pub(crate) fn swap_realtime_session(&mut self, opened: OpenedSession) {
         let OpenedSession { session, sink, model } = opened;
+        self.count_model_installed(SwitchedModel::Realtime, &model.provider);
         let Some(rt) = self.activity.realtime_activity_mut() else {
             return self.discard_realtime(session.id, sink);
         };

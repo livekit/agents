@@ -44,6 +44,7 @@ pub(super) fn string_tool(name: &str, parameter: &str) -> FunctionToolInfo {
 
 pub(super) fn agent(tools: Vec<FunctionToolInfo>, output: OutputSpec) -> AgentDefinition {
     AgentDefinition {
+        mcp: false,
         name: "scheduler".into(),
         instructions: "Book appointments.".into(),
         dynamic_instructions: false,

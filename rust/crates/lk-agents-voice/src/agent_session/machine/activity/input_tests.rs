@@ -62,6 +62,7 @@ fn proposed_remote_call() -> (VoiceDriver, SpeechId, ModelRequestId) {
         provider_tool: None,
     };
     let definition = AgentDefinition {
+        mcp: false,
         name: "desk".into(),
         instructions: String::new(),
         dynamic_instructions: false,

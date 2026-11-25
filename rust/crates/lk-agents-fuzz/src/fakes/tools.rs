@@ -91,6 +91,7 @@ impl FakeTools {
 /// `agent`'s voice frame over the fixture `tools`, hosted by a fresh [`FakeTools`].
 pub fn frame(registry: &Arc<Registry>, agent: &str, tools: &[String]) -> Arc<dyn AgentFrame> {
     let definition = AgentDefinition {
+        mcp: false,
         name: agent.to_owned(),
         instructions: String::new(),
         dynamic_instructions: false,

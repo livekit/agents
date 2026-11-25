@@ -9,6 +9,7 @@ use runner::Runner;
 // declaration uses. `lk-agents-codegen --check` refuses a declaration of this module that breaks
 // either rule.
 
+pub mod features;
 pub mod models;
 pub mod runner;
 pub mod sessions;

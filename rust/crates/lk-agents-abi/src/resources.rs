@@ -34,6 +34,8 @@ pub struct LlmRef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TtsRef {
     pub id: ResourceId,
+    /// The model registered, which a model switch is told by.
+    pub provider: ProviderId,
     pub capabilities: TtsCapabilities,
     pub num_channels: u16,
 }
