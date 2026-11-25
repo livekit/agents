@@ -4,8 +4,10 @@ import asyncio
 import base64
 import functools
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
+import types
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, TypeVar
+from urllib.parse import parse_qsl, urlsplit
 
 import aiohttp
 import pytest
@@ -237,16 +239,20 @@ class _SpeechServer:
         self.first_audio = asyncio.Event()
 
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await self.serve(ws, request.query, request.headers)
+        return ws
+
+    async def serve(self, ws: Any, query: Mapping[str, str], headers: Mapping[str, str]) -> None:
         index = len(self.connections)
         self.connections.append(
             {
-                "model": request.query.get("model", ""),
-                "authorization": request.headers.get("Authorization", ""),
-                "attribution": request.headers.get("X-Sprag-Integration", ""),
+                "model": query.get("model", ""),
+                "authorization": headers.get("Authorization", ""),
+                "attribution": headers.get("X-Sprag-Integration", ""),
             }
         )
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
         await ws.send_json({"type": "session.created", "session": {}})
         pending: list[str] = []
         waiting: asyncio.Queue[tuple[str, str, dict[str, str]]] = asyncio.Queue()
@@ -302,7 +308,6 @@ class _SpeechServer:
         speaker.cancel()
         self.closed_count += 1
         self.closed.set()
-        return ws
 
     async def _respond(
         self, ws: web.WebSocketResponse, behaviour: str, text: str, metadata: dict[str, str]
@@ -353,19 +358,91 @@ class _SpeechServer:
         return [text for _, text in self.spoken]
 
 
-@pytest.fixture
-async def speech() -> AsyncIterator[Callable[..., Awaitable[tuple[_SpeechServer, str]]]]:
-    servers: list[TestServer] = []
+class _MemorySocket:
+    """One end of an in-memory WebSocket, covering what the plugin and the fake server use."""
 
-    async def start(**kwargs: Any) -> tuple[_SpeechServer, str]:
+    def __init__(self) -> None:
+        self._inbox: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+        self.peer: _MemorySocket = self
+        self.close_code: int | None = None
+        self.closed = False
+
+    @classmethod
+    def pair(cls) -> tuple[_MemorySocket, _MemorySocket]:
+        client, server = cls(), cls()
+        client.peer, server.peer = server, client
+        return client, server
+
+    async def send_str(self, data: str) -> None:
+        if self.closed:
+            raise ConnectionResetError("the socket is closed")
+        self.peer._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, data, None))
+
+    async def send_json(self, data: Any) -> None:
+        await self.send_str(json.dumps(data))
+
+    async def receive(self, timeout: float | None = None) -> aiohttp.WSMessage:
+        return await asyncio.wait_for(self._inbox.get(), timeout)
+
+    async def close(self, *, code: int = 1000) -> bool:
+        if self.closed:
+            return False
+        for end in (self, self.peer):
+            end.closed = True
+            end.close_code = code
+        self.peer._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, code, ""))
+        self._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None))
+        return True
+
+    def __aiter__(self) -> _MemorySocket:
+        return self
+
+    async def __anext__(self) -> aiohttp.WSMessage:
+        msg = await self.receive()
+        if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED):
+            raise StopAsyncIteration
+        return msg
+
+
+class _MemorySession:
+    """Stands in for the aiohttp session: each ws_connect opens a socket to the fake server."""
+
+    def __init__(self, server: _SpeechServer, *, answers: bool = True) -> None:
+        self._server = server
+        self._answers = answers
+        self._serving: set[asyncio.Task[None]] = set()
+
+    async def ws_connect(
+        self, url: str, *, headers: Mapping[str, str], **kwargs: Any
+    ) -> _MemorySocket:
+        if not self._answers:
+            await asyncio.Event().wait()
+        client, server = _MemorySocket.pair()
+        query = dict(parse_qsl(urlsplit(url).query))
+        task = asyncio.create_task(self._server.serve(server, query, headers))
+        self._serving.add(task)
+        task.add_done_callback(self._serving.discard)
+        return client
+
+    async def aclose(self) -> None:
+        tasks = list(self._serving)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.fixture
+async def speech() -> AsyncIterator[Callable[..., tuple[_SpeechServer, Any]]]:
+    sessions: list[_MemorySession] = []
+
+    def start(*, answers: bool = True, **kwargs: Any) -> tuple[_SpeechServer, Any]:
         server = _SpeechServer(**kwargs)
-        test_server = await _serve({"/v1/audio/speech": server.handle})
-        servers.append(test_server)
-        return server, str(test_server.make_url("/v1"))
+        sessions.append(_MemorySession(server, answers=answers))
+        return server, sessions[-1]
 
     yield start
-    for test_server in servers:
-        await test_server.close()
+    for session in sessions:
+        await session.aclose()
 
 
 async def _speak(tts: TTS, *chunks: str, conn_options: APIConnectOptions = NO_RETRY) -> float:
@@ -383,12 +460,11 @@ async def _speak(tts: TTS, *chunks: str, conn_options: APIConnectOptions = NO_RE
     return duration
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_streams_one_response_per_sentence(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_streams_one_response_per_sentence(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         duration = await _speak(
             tts, "It is lovely to meet you today. ", "How has your ", "week been going so far?"
@@ -405,14 +481,16 @@ async def test_tts_streams_one_response_per_sentence(
 
 @bounded
 async def test_tts_connects_with_the_key_attribution_and_voice(
-    speech: Any, http: aiohttp.ClientSession
+    http: aiohttp.ClientSession,
 ) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, voice="serena", http_session=http)
+    server = _SpeechServer()
+    test_server = await _serve({"/v1/audio/speech": server.handle})
+    tts = TTS(base_url=str(test_server.make_url("/v1")), voice="serena", http_session=http)
     try:
         await _speak(tts, "Hello there.")
     finally:
         await tts.aclose()
+        await test_server.close()
 
     assert server.connections == [
         {"model": "chorus", "authorization": "Bearer test-key", "attribution": ATTRIBUTION}
@@ -420,10 +498,11 @@ async def test_tts_connects_with_the_key_attribution_and_voice(
     assert server.received[0]["session"]["audio"]["output"]["voice"] == "serena"
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_declares_its_sample_rate(speech: Any, http: aiohttp.ClientSession) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, sample_rate=16000, http_session=http)
+async def test_tts_declares_its_sample_rate(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(sample_rate=16000, http_session=session)
     try:
         duration = await _speak(tts, "Hello there.")
     finally:
@@ -435,12 +514,11 @@ async def test_tts_declares_its_sample_rate(speech: Any, http: aiohttp.ClientSes
     assert duration == pytest.approx(0.15, abs=0.01)
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_sends_each_sentence_without_waiting_for_the_last(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech(script={0: "slow"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_sends_each_sentence_without_waiting_for_the_last(speech: Any) -> None:
+    server, session = speech(script={0: "slow"})
+    tts = TTS(http_session=session)
     try:
         duration = await _speak(tts, "The first sentence is slow. ", "The second one waits.")
     finally:
@@ -452,12 +530,11 @@ async def test_tts_sends_each_sentence_without_waiting_for_the_last(
     assert len({m["segment_id"] for m in server.metadata}) == 1
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_ignores_audio_tagged_for_another_segment(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    _, base_url = await speech(script={0: "stale"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_ignores_audio_tagged_for_another_segment(speech: Any) -> None:
+    _, session = speech(script={0: "stale"})
+    tts = TTS(http_session=session)
     try:
         duration = await _speak(tts, "Only this sentence is heard.")
     finally:
@@ -466,12 +543,11 @@ async def test_tts_ignores_audio_tagged_for_another_segment(
     assert duration == pytest.approx(0.1, abs=0.01)
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_ignores_a_failure_tagged_for_another_segment(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    _, base_url = await speech(script={0: "stale:failed"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_ignores_a_failure_tagged_for_another_segment(speech: Any) -> None:
+    _, session = speech(script={0: "stale:failed"})
+    tts = TTS(http_session=session)
     try:
         duration = await _speak(tts, "Only this sentence is heard.")
     finally:
@@ -480,12 +556,11 @@ async def test_tts_ignores_a_failure_tagged_for_another_segment(
     assert duration == pytest.approx(0.1, abs=0.01)
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_reports_a_response_without_a_segment_tag(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech(script={0: "untagged"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_reports_a_response_without_a_segment_tag(speech: Any) -> None:
+    server, session = speech(script={0: "untagged"})
+    tts = TTS(http_session=session)
     try:
         with pytest.raises(APIStatusError, match="segment_id") as exc_info:
             await _speak(tts, "Hello there.", conn_options=ONE_RETRY)
@@ -496,12 +571,11 @@ async def test_tts_reports_a_response_without_a_segment_tag(
     assert len(server.connections) == 1
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_fails_the_turn_when_a_queued_sentence_is_refused(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech(script={0: "slow", 1: "error:response_queue_full"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_fails_the_turn_when_a_queued_sentence_is_refused(speech: Any) -> None:
+    server, session = speech(script={0: "slow", 1: "error:response_queue_full"})
+    tts = TTS(http_session=session)
     try:
         with pytest.raises(APIStatusError, match="response_queue_full") as exc_info:
             await _speak(
@@ -518,12 +592,11 @@ async def test_tts_fails_the_turn_when_a_queued_sentence_is_refused(
     assert len(server.connections) == 1
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_turn_after_an_interruption_uses_a_fresh_connection(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech(script={0: "hang"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_turn_after_an_interruption_uses_a_fresh_connection(speech: Any) -> None:
+    server, session = speech(script={0: "hang"})
+    tts = TTS(http_session=session)
     try:
         stream = tts.stream(conn_options=NO_RETRY)
         stream.push_text("The first sentence hangs. The second is queued.")
@@ -540,12 +613,11 @@ async def test_tts_turn_after_an_interruption_uses_a_fresh_connection(
     assert server.spoken[-1] == (1, "The next turn.")
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_waits_out_a_pause_between_sentences(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_waits_out_a_pause_between_sentences(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
     try:
         stream.push_text("The first sentence arrives at once. ")
@@ -563,12 +635,11 @@ async def test_tts_waits_out_a_pause_between_sentences(
     assert duration == pytest.approx(0.2, abs=0.01)
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_synthesize_speaks_the_whole_text(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_synthesize_speaks_the_whole_text(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         text = "This is the first sentence to speak. This is the second one."
         async with tts.synthesize(text, conn_options=NO_RETRY) as stream:
@@ -582,13 +653,12 @@ async def test_tts_synthesize_speaks_the_whole_text(
     assert not audio[len(PCM) * 2 :].strip(b"\x00")
 
 
+@pytest.mark.virtual_time
 @bounded
 @pytest.mark.parametrize("text", ["   ", ""])
-async def test_tts_blank_input_opens_no_connection(
-    speech: Any, http: aiohttp.ClientSession, text: str
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_blank_input_opens_no_connection(speech: Any, text: str) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         assert await _speak(tts, text) == 0.0
     finally:
@@ -596,12 +666,11 @@ async def test_tts_blank_input_opens_no_connection(
     assert server.connections == []
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_reuses_the_connection_across_turns(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_reuses_the_connection_across_turns(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         await _speak(tts, "First turn.")
         await _speak(tts, "Second turn.")
@@ -611,12 +680,11 @@ async def test_tts_reuses_the_connection_across_turns(
     assert server.spoken == [(0, "First turn."), (0, "Second turn.")]
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_voice_change_reconnects_with_the_new_voice(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, voice="wade", http_session=http)
+async def test_tts_voice_change_reconnects_with_the_new_voice(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(voice="wade", http_session=session)
     try:
         await _speak(tts, "First turn.")
         tts.update_options(voice="wade")
@@ -631,12 +699,11 @@ async def test_tts_voice_change_reconnects_with_the_new_voice(
     assert [u["session"]["audio"]["output"]["voice"] for u in updates] == ["wade", "serena"]
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_model_change_reconnects_with_the_new_model(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_model_change_reconnects_with_the_new_model(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         await _speak(tts, "First turn.")
         tts.update_options(model="chorus-next")
@@ -648,12 +715,11 @@ async def test_tts_model_change_reconnects_with_the_new_model(
     assert [c["model"] for c in server.connections] == ["chorus", "chorus-next"]
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_reports_connection_reuse_in_its_metrics(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    _, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_reports_connection_reuse_in_its_metrics(speech: Any) -> None:
+    _, session = speech()
+    tts = TTS(http_session=session)
     metrics: list[TTSMetrics] = []
     tts.on("metrics_collected", metrics.append)
     try:
@@ -668,12 +734,11 @@ async def test_tts_reports_connection_reuse_in_its_metrics(
     assert metrics[0].characters_count == len("First turn.")
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_prewarmed_connection_serves_the_first_turn(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_prewarmed_connection_serves_the_first_turn(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     metrics: list[TTSMetrics] = []
     tts.on("metrics_collected", metrics.append)
     try:
@@ -688,12 +753,11 @@ async def test_tts_prewarmed_connection_serves_the_first_turn(
     assert metrics[0].connection_reused
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_concurrent_streams_use_separate_connections(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_concurrent_streams_use_separate_connections(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         durations = await asyncio.gather(
             _speak(tts, "The first speaker."), _speak(tts, "The second speaker.")
@@ -709,13 +773,14 @@ async def test_tts_concurrent_streams_use_separate_connections(
     )
 
 
+@pytest.mark.virtual_time
 @bounded
 async def test_tts_replaces_an_idle_connection(
-    speech: Any, http: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+    speech: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sprag_tts, "IDLE_SOCKET_MAX_AGE", 0.3)
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         # each gap is shorter than the idle limit, though together they outlast it
         for turn in ("First turn.", "Second turn.", "Third turn."):
@@ -730,13 +795,17 @@ async def test_tts_replaces_an_idle_connection(
     await asyncio.wait_for(_until(lambda: server.closed_count == 2), timeout=2)
 
 
+@pytest.mark.virtual_time
 @bounded
 async def test_tts_replaces_a_connection_past_its_lifetime(
-    speech: Any, http: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+    speech: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sprag_tts, "SOCKET_MAX_LIFETIME", 1.0)
-    server, base_url = await speech()
-    tts = TTS(base_url=base_url, http_session=http)
+    # virtual time covers time.time but not the monotonic clock the lifetime is measured on
+    loop_clock = types.SimpleNamespace(monotonic=asyncio.get_running_loop().time)
+    monkeypatch.setattr(sprag_tts, "time", loop_clock)
+    server, session = speech()
+    tts = TTS(http_session=session)
     try:
         await _speak(tts, "First turn.")
         await _speak(tts, "Second turn.")
@@ -749,12 +818,11 @@ async def test_tts_replaces_a_connection_past_its_lifetime(
     assert [conn for conn, _ in server.spoken] == [0, 0, 1]
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_voice_change_mid_turn_applies_to_the_next_turn(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech(script={0: "slow"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_voice_change_mid_turn_applies_to_the_next_turn(speech: Any) -> None:
+    server, session = speech(script={0: "slow"})
+    tts = TTS(http_session=session)
     try:
         turn = asyncio.create_task(_speak(tts, "A slow first turn."))
         await server.first_audio.wait()
@@ -770,12 +838,11 @@ async def test_tts_voice_change_mid_turn_applies_to_the_next_turn(
     assert updates[-1]["session"]["audio"]["output"]["voice"] == "serena"
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_reports_a_refused_voice_without_retrying(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech(reject_voice=True)
-    tts = TTS(base_url=base_url, voice="nobody", http_session=http)
+async def test_tts_reports_a_refused_voice_without_retrying(speech: Any) -> None:
+    server, session = speech(reject_voice=True)
+    tts = TTS(voice="nobody", http_session=session)
     try:
         with pytest.raises(APIStatusError, match="unknown voice") as exc_info:
             await _speak(tts, "Hello.", conn_options=ONE_RETRY)
@@ -853,6 +920,7 @@ async def test_tts_retries_a_failed_handshake(http: aiohttp.ClientSession) -> No
     assert attempts == 2
 
 
+@pytest.mark.virtual_time
 @bounded
 @pytest.mark.parametrize(
     ("behaviour", "retryable"),
@@ -867,10 +935,10 @@ async def test_tts_retries_a_failed_handshake(http: aiohttp.ClientSession) -> No
     ],
 )
 async def test_tts_retries_only_transient_failures(
-    speech: Any, http: aiohttp.ClientSession, behaviour: str, retryable: bool
+    speech: Any, behaviour: str, retryable: bool
 ) -> None:
-    server, base_url = await speech(script={0: behaviour})
-    tts = TTS(base_url=base_url, http_session=http)
+    server, session = speech(script={0: behaviour})
+    tts = TTS(http_session=session)
     try:
         if retryable:
             duration = await _speak(tts, "Hello there.", conn_options=ONE_RETRY)
@@ -888,10 +956,11 @@ async def test_tts_retries_only_transient_failures(
         assert len(server.spoken) == 1
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_times_out_a_stalled_response(speech: Any, http: aiohttp.ClientSession) -> None:
-    server, base_url = await speech(script={0: "stall"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_times_out_a_stalled_response(speech: Any) -> None:
+    server, session = speech(script={0: "stall"})
+    tts = TTS(http_session=session)
     try:
         with pytest.raises(APITimeoutError):
             await _speak(tts, "Hello.", conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
@@ -899,20 +968,16 @@ async def test_tts_times_out_a_stalled_response(speech: Any, http: aiohttp.Clien
         await tts.aclose()
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_reports_a_handshake_that_never_answers(http: aiohttp.ClientSession) -> None:
-    async def never(request: web.Request) -> web.Response:
-        await asyncio.Event().wait()
-        raise AssertionError
-
-    test_server = await _serve({"/v1/audio/speech": never})
-    tts = TTS(base_url=str(test_server.make_url("/v1")), http_session=http)
+async def test_tts_reports_a_handshake_that_never_answers(speech: Any) -> None:
+    _, session = speech(answers=False)
+    tts = TTS(http_session=session)
     try:
         with pytest.raises(APIConnectionError) as exc_info:
             await _speak(tts, "Hello.", conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
     finally:
         await tts.aclose()
-        await test_server.close()
 
     assert exc_info.value.retryable
 
@@ -933,12 +998,11 @@ async def test_tts_reports_an_unreachable_server(http: aiohttp.ClientSession) ->
     assert not _holds(exc_info.value, "test-key")
 
 
+@pytest.mark.virtual_time
 @bounded
-async def test_tts_aclose_closes_idle_and_active_connections(
-    speech: Any, http: aiohttp.ClientSession
-) -> None:
-    server, base_url = await speech(script={2: "hang"})
-    tts = TTS(base_url=base_url, http_session=http)
+async def test_tts_aclose_closes_idle_and_active_connections(speech: Any) -> None:
+    server, session = speech(script={2: "hang"})
+    tts = TTS(http_session=session)
     await asyncio.gather(_speak(tts, "The first speaker."), _speak(tts, "The second speaker."))
     stream = tts.stream(conn_options=NO_RETRY)
     stream.push_text("A sentence still being spoken.")
