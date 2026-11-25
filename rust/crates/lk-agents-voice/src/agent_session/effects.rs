@@ -220,7 +220,7 @@ pub enum VoiceEffect {
         /// The speech's turn, which the rendering runs under; `None` once it ended.
         turn: Option<crate::telemetry::SpanContext>,
     },
-    /// What the reply gate tells the attached AMD run (`docs/proposals/amd.md`). Executed by the
+    /// What the reply gate tells the attached AMD run, in the order it happened. Executed by the
     /// AMD executor; dropped when none runs.
     Amd {
         run: crate::amd::AmdRunId,

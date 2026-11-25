@@ -1,4 +1,4 @@
-//! The session's AMD reply gate (`docs/proposals/amd.md`, "The session side").
+//! The session's AMD reply gate: it owns the hold, AMD owns only the policy.
 //!
 //! While an AMD run is attached, the session holds speech authorization by default and replies
 //! to a committed turn only on that turn's decision. It owns the live facts: which turn is the

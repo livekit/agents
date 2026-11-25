@@ -1,5 +1,5 @@
 //! Answering-machine detection (AMD): the protocol between the session's reply gate and an AMD
-//! run (`docs/proposals/amd.md`, "The protocol").
+//! run. Each direction is FIFO; every answer names its run and every decision its turn.
 //!
 //! The session and AMD talk only through effects and inputs, each direction FIFO:
 //!
