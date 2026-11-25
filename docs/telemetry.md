@@ -179,7 +179,10 @@ Each metric carries the same labels:
 | `lk.product.agents.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
 | `lk.product.agents.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
 | `lk.product.agents.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
-| `lk.product.agents.model.audio_duration` | counter, seconds | Audio sent to an STT. A streaming STT keeps one stream for a whole session, so its usage is the audio, not a count of streams |
+| `lk.product.agents.model.audio_duration` | counter, seconds | Audio a model handled: sent to an STT, or synthesized by a TTS. A streaming STT keeps one stream for a whole session, so this, not its request count, is its usage |
+| `lk.product.agents.model.characters` | counter | Characters sent to a TTS |
+| `lk.product.agents.model.input_tokens` | counter | Tokens sent to an LLM, realtime or duplex model, as the provider reports them |
+| `lk.product.agents.model.output_tokens` | counter | Tokens an LLM, realtime or duplex model produced, as the provider reports them |
 
 The transcription delay starts at the end of speech, which the STT does not always decide.
 So this metric alone is split by one extra label,
