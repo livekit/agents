@@ -106,7 +106,7 @@ Timing accuracy depends on what the TTS reports:
 | TTS | When the expression changes |
 |-----|-----------------------------|
 | Streaming TTS with word timings: Cartesia (`add_timestamps=True`, plugin default), Inworld (`timestamp_type="WORD"`), ElevenLabs v3/v4 (plugin), Rime (WebSocket), Speechify, Smallest.ai, Baseten (`word_timestamps=True`) | On the marked word |
-| Non-streaming TTS (Gemini, OpenAI, Hume) | At the start of the sentence |
+| Non-streaming TTS (Gemini, OpenAI) | At the start of the sentence |
 | Streaming TTS without word timings (Deepgram, xAI, or ElevenLabs, Fish Audio, and Gemini through Inference) | Before the first word only (later markers are ignored) |
 
 Provider notes:

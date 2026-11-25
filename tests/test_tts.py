@@ -36,7 +36,6 @@ from livekit.plugins import (
     elevenlabs,
     google,
     groq,
-    hume,
     inworld,
     lmnt,
     mistralai,
@@ -238,13 +237,6 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.sws.speechify.com:443",
         },
         id="speechify",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": hume.TTS(),
-            "proxy-upstream": "api.hume.ai:443",
-        },
-        id="hume",
     ),
     pytest.param(
         lambda: {
