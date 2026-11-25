@@ -1,0 +1,31 @@
+rust/crates/lk-agents-fuzz/src/rules/amd/one_prediction_per_turn.rs
+  s_1d5d36eac205ce::t_a68bc5435da222 1-98
+rust/crates/lk-agents-fuzz/src/rules/amd/stale_request_never_decides.rs
+  s_1d5d36eac205ce::t_ea585f4d64452d 1-192
+rust/crates/lk-agents-fuzz/src/rules/amd/amd_completes_once.rs
+  s_1d5d36eac205ce::t_0efceacb735c57 1-141
+rust/crates/lk-agents-fuzz/src/rules/amd/uncertain_and_wait_keep_the_stage.rs
+  s_1d5d36eac205ce::t_8e6b2759bab16c 1-89
+rust/crates/lk-agents-fuzz/src/rules/amd/decision_model_extracts_no_menu.rs
+  s_1d5d36eac205ce::t_930d5be2d8186c 1-83
+rust/crates/lk-agents-fuzz/src/rules/amd/one_voicemail_message.rs
+  s_1d5d36eac205ce::t_d18e5a48b7e796 1-123
+rust/crates/lk-agents-fuzz/src/rules/amd/likely_human_is_held_once.rs
+  s_1d5d36eac205ce::t_b8db7fbb98f196 1-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "85f684b084d75cab6c5059ad2a14cc6a9de9b441",
+  "prompts": {},
+  "sessions": {
+    "s_1d5d36eac205ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3101aab-cdcc-4f0b-a4f5-be4f92e4e4f7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
