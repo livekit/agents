@@ -237,6 +237,7 @@ async def test_stt_rejected_handshake_keeps_the_key_out_of_the_error(
             with pytest.raises(APIError) as streamed:
                 async for _ in stream:
                     pass
+            streamed_handshakes = handshakes
             # the stream re-raises inside the framework's own handlers, which replaces the
             # exception's context, so the connect step is checked where the error is built
             with pytest.raises(APIStatusError) as connected:
@@ -246,7 +247,7 @@ async def test_stt_rejected_handshake_keeps_the_key_out_of_the_error(
             await stt.aclose()
             await test_server.close()
 
-    assert handshakes == attempts + 1
+    assert streamed_handshakes == attempts
     assert connected.value.status_code == status
     assert not _holds(streamed.value, "test-key")
     assert not _holds(connected.value, "test-key")
@@ -353,9 +354,7 @@ class _SpeechServer:
         self.closed_count += 1
         self.closed.set()
 
-    async def _respond(
-        self, ws: web.WebSocketResponse, behaviour: str, text: str, metadata: dict[str, str]
-    ) -> None:
+    async def _respond(self, ws: Any, behaviour: str, text: str, metadata: dict[str, str]) -> None:
         kind, _, arg = behaviour.partition(":")
         assert kind in self.BEHAVIOURS, f"unknown behaviour {behaviour!r}"
         if kind == "close":
@@ -402,6 +401,9 @@ class _SpeechServer:
         return [text for _, text in self.spoken]
 
 
+_Socket = TypeVar("_Socket", bound="_MemorySocket")
+
+
 class _MemorySocket:
     """One end of an in-memory WebSocket, covering what the plugin and the fake server use."""
 
@@ -412,7 +414,7 @@ class _MemorySocket:
         self.closed = False
 
     @classmethod
-    def pair(cls) -> tuple[_MemorySocket, _MemorySocket]:
+    def pair(cls: type[_Socket]) -> tuple[_Socket, _Socket]:
         client, server = cls(), cls()
         client.peer, server.peer = server, client
         return client, server
@@ -770,16 +772,6 @@ async def test_tts_blank_input_opens_no_connection(speech: Any, text: str) -> No
     assert server.connections == []
 
 
-class _ChunkTokenizer(tokenize.SentenceTokenizer):
-    """Treats each pushed chunk as a sentence, blank chunks included."""
-
-    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        return [text]
-
-    def stream(self, *, language: str | None = None) -> tokenize.SentenceStream:
-        return _ChunkStream()
-
-
 class _ChunkStream(tokenize.SentenceStream):
     def push_text(self, text: str) -> None:
         self._event_ch.send_nowait(tokenize.TokenData(token=text))
@@ -792,6 +784,16 @@ class _ChunkStream(tokenize.SentenceStream):
 
     async def aclose(self) -> None:
         self._do_close()
+
+
+class _ChunkTokenizer(tokenize.SentenceTokenizer):
+    """Treats each pushed chunk as a sentence, blank chunks included."""
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return [text]
+
+    def stream(self, *, language: str | None = None) -> _ChunkStream:
+        return _ChunkStream()
 
 
 @pytest.mark.virtual_time
