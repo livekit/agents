@@ -79,26 +79,51 @@ def is_pii_attribute(key: str) -> bool:
     return key.startswith(trace_types.ATTR_GEN_AI_PROMPT_VARIABLE)
 
 
+def _filter_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return filter_attributes(value)
+    if isinstance(value, tuple):
+        return tuple(_filter_value(item) for item in value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_filter_value(item) for item in value]
+    return value
+
+
+def _value_contains_pii(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return _contains_pii(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_value_contains_pii(item) for item in value)
+    return False
+
+
 def filter_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
     if not attributes:
         return {}
 
     redacted: dict[str, Any] = {}
     for key, value in attributes.items():
-        if is_pii_attribute(key):
-            continue
-        if key == trace_types.ATTR_EXCEPTION_TRACE:
-            continue
-        if key == trace_types.ATTR_EXCEPTION_MESSAGE:
-            # `error.type` still names the class; only the free-form message goes
-            redacted[key] = REDACTED_EXCEPTION_MESSAGE
-            continue
-        redacted[key] = value
+        if isinstance(key, str):
+            if is_pii_attribute(key):
+                continue
+            if key == trace_types.ATTR_EXCEPTION_TRACE:
+                continue
+            if key == trace_types.ATTR_EXCEPTION_MESSAGE:
+                # `error.type` still names the class; only the free-form message goes
+                redacted[key] = REDACTED_EXCEPTION_MESSAGE
+                continue
+        redacted[key] = _filter_value(value)
     return redacted
 
 
 def _contains_pii(attributes: Mapping[str, Any] | None) -> bool:
-    return any(is_pii_attribute(k) or k in _REDACTED_EXCEPTION_ATTRIBUTES for k in attributes or ())
+    if not attributes:
+        return False
+    return any(
+        (isinstance(k, str) and (is_pii_attribute(k) or k in _REDACTED_EXCEPTION_ATTRIBUTES))
+        or _value_contains_pii(v)
+        for k, v in attributes.items()
+    )
 
 
 _RAW_ATTRIBUTES = "_lk_raw_attributes"
