@@ -43,7 +43,7 @@ use std::time::{Duration, SystemTime};
 pub const LATE_AMD_FINAL_WAIT: Duration = Duration::from_millis(300);
 /// Menu extraction stops before it goes stale (`_MENU_TIMEOUT`).
 pub const MENU_TIMEOUT: Duration = Duration::from_secs(5);
-/// At most this many options in an observed menu.
+/// At most this many options in an observed menu; a menu with more is not observed.
 pub const MAX_MENU_OPTIONS: usize = 20;
 
 /// What the run knows of its session and legs at attach.
@@ -824,9 +824,11 @@ impl Amd {
         self.push(AmdEffect::SetDeadline(AmdTimer::Menu(req), now.saturating_add(MENU_TIMEOUT)));
     }
 
+    /// `_menu_atask.cancel()`: stops the extraction in flight, if any.
     fn cancel_menu(&mut self) {
         if let Some(menu) = self.menu.take() {
             self.push(AmdEffect::ClearDeadline(AmdTimer::Menu(menu.req)));
+            self.push(AmdEffect::CancelMenu);
         }
     }
 
@@ -836,11 +838,15 @@ impl Amd {
         }
         let Some(wait) = self.menu.take_if(|wait| wait.req == req) else { return };
         self.push(AmdEffect::ClearDeadline(AmdTimer::Menu(req)));
-        let Some(Menu { menu, mut options }) = menu else { return };
-        if menu.is_empty() && options.is_empty() {
+        // A result at or after its deadline is late, as a classifier result is.
+        if now >= wait.started_at.saturating_add(MENU_TIMEOUT) {
             return;
         }
-        options.truncate(MAX_MENU_OPTIONS);
+        let Some(Menu { menu, options }) = menu else { return };
+        // More options fail the menu's validation (`_inference.py`): extraction failed.
+        if (menu.is_empty() && options.is_empty()) || options.len() > MAX_MENU_OPTIONS {
+            return;
+        }
         self.push(AmdEffect::Emit(AmdEvent::MenuObserved(MenuObserved {
             session_id: self.setup.session_id.clone(),
             turn_id: wait.turn_id,
@@ -878,8 +884,10 @@ impl Amd {
                 self.resolve_final(now, turn, None);
             }
             AmdTimer::Menu(req) => {
-                // Silent: a late menu is dropped.
-                self.menu.take_if(|wait| wait.req == req);
+                // Silent: the extraction stops and a late menu is dropped.
+                if self.menu.take_if(|wait| wait.req == req).is_some() {
+                    self.push(AmdEffect::CancelMenu);
+                }
             }
         }
     }

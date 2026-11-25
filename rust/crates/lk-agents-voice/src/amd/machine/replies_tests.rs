@@ -634,6 +634,7 @@ fn test_same_ivr_state_extracts_each_menu() {
     let menus = h.menu_requests();
     assert_eq!(menus.len(), 2);
     assert_ne!(menus[0].req, menus[1].req);
+    assert_eq!(h.cancelled_menus(), 1, "the second turn stops the first extraction");
     assert_eq!((menus[1].turn_id, menus[1].transcript.as_str()), (2, "Press 2 for support."));
 }
 
@@ -642,9 +643,10 @@ fn test_slow_menu_does_not_block_classification_or_next_turn() {
     let mut h = H::started(AmdOptions::default());
     h.turn("Press 1 for billing.", Category::MachineIvr);
     let req = h.menu_requests()[0].req;
-    // a newer turn with text makes the extraction stale
+    // a newer turn with text makes the extraction stale and stops it
     let next = h.commit("Hello?");
     assert_eq!(h.requests_for(next), 1);
+    assert_eq!(h.cancelled_menus(), 1);
     h.step(In::MenuExtracted {
         req,
         menu: Some(Menu { menu: "Billing".to_owned(), options: vec![] }),
@@ -658,6 +660,7 @@ fn test_an_empty_turn_does_not_cancel_the_menu() {
     h.turn("Press 1 for billing.", Category::MachineIvr);
     let req = h.menu_requests()[0].req;
     h.commit("");
+    assert_eq!(h.cancelled_menus(), 0);
     h.step(In::MenuExtracted {
         req,
         menu: Some(Menu { menu: "Billing".to_owned(), options: vec![] }),
@@ -701,20 +704,56 @@ fn test_only_a_non_empty_menu_is_observed() {
 fn test_a_menu_after_its_deadline_or_completion_is_dropped() {
     let menu = || Menu { menu: "Choose a department".to_owned(), options: vec![] };
 
-    let mut h = H::started(AmdOptions::default());
-    h.turn("Press 1 for billing.", Category::MachineIvr);
-    let req = h.menu_requests()[0].req;
-    h.advance(MENU_TIMEOUT);
-    h.step(In::MenuExtracted { req, menu: Some(menu()) });
-    assert!(h.menus().is_empty(), "after the deadline");
-    assert!(h.detaches().is_empty(), "a menu deadline is silent");
+    // at the deadline, the timer first or the result first
+    for timer_first in [true, false] {
+        let mut h = H::started(AmdOptions::default());
+        h.turn("Press 1 for billing.", Category::MachineIvr);
+        let req = h.menu_requests()[0].req;
+        if timer_first {
+            h.advance(MENU_TIMEOUT);
+            assert_eq!(h.cancelled_menus(), 1, "the deadline stops the extraction");
+        } else {
+            // the executor has not fired the timer yet
+            h.skip(MENU_TIMEOUT);
+        }
+        h.step(In::MenuExtracted { req, menu: Some(menu()) });
+        h.advance(secs(1));
+        assert!(h.menus().is_empty(), "timer first: {timer_first}");
+        assert_eq!(h.armed(AmdTimer::Menu(req)), None, "timer first: {timer_first}");
+        assert!(h.detaches().is_empty(), "a menu deadline is silent");
+    }
 
     let mut h = H::started(AmdOptions::default());
     h.turn("Press 1 for billing.", Category::MachineIvr);
     let req = h.menu_requests()[0].req;
     h.step(In::Close);
+    assert_eq!(h.cancelled_menus(), 1, "completion stops the extraction");
     h.step(In::MenuExtracted { req, menu: Some(menu()) });
     assert!(h.menus().is_empty(), "after completion");
+}
+
+/// The options model allows at most 20 options (`_inference.py`): a menu with more fails
+/// validation and is not observed.
+#[test]
+fn test_a_menu_with_more_than_twenty_options_is_not_observed() {
+    let option = |n: usize| IvrMenuOption {
+        label: format!("Option {n}"),
+        dtmf: n.to_string(),
+        ..IvrMenuOption::default()
+    };
+    for (count, observed) in [(MAX_MENU_OPTIONS, true), (MAX_MENU_OPTIONS + 1, false)] {
+        let mut h = H::started(AmdOptions::default());
+        h.turn("Press 1 for billing.", Category::MachineIvr);
+        let req = h.menu_requests()[0].req;
+        let options: Vec<_> = (1..=count).map(option).collect();
+        let menu = Menu { menu: "Choose a department".to_owned(), options: options.clone() };
+        h.step(In::MenuExtracted { req, menu: Some(menu) });
+        let menus = h.menus();
+        assert_eq!(menus.len(), usize::from(observed), "{count} options");
+        if observed {
+            assert_eq!(menus[0].options, options);
+        }
+    }
 }
 
 #[test]

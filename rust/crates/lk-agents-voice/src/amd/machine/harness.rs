@@ -374,6 +374,11 @@ impl H {
             .collect()
     }
 
+    /// How many times the menu leg was told to stop.
+    pub(super) fn cancelled_menus(&self) -> usize {
+        self.effects().filter(|e| matches!(e, AmdEffect::CancelMenu)).count()
+    }
+
     pub(super) fn menus(&self) -> Vec<MenuObserved> {
         self.events()
             .into_iter()

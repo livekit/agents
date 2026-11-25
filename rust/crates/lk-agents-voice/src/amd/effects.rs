@@ -22,6 +22,8 @@ pub enum AmdEffect {
     CancelClassify,
     /// Extract the menu from a `machine-ivr` turn; answer with `In::MenuExtracted`.
     ExtractMenu(MenuRequest),
+    /// Stop the menu extraction in flight; its result, if any, is stale.
+    CancelMenu,
     /// Replace the timer's deadline; it fires as `In::Timeout`.
     SetDeadline(AmdTimer, Ts),
     /// Remove the timer's deadline, if armed.
