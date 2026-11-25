@@ -931,3 +931,79 @@ fn a_realtime_opening_is_said_or_generated_by_the_model() {
     assert_eq!(asked[0].instructions.as_deref(), Some("Greet the callee."));
     assert_eq!(asked[0].tool_choice, Some(lk_agents_abi::ToolChoice::Forbidden));
 }
+
+// --- False interruptions (spec §5.3) ---
+
+// Catches: a gated realtime reply that the person's noise pauses never resuming, or cut as a
+// real interruption, when AMD forced interruptions on over a session that turned them off.
+// Python: `test_amd_preserves_false_interruption_resume` (a realtime model whose server detection
+// the session switched off, interruptions disabled, `min_words` 0).
+#[test]
+fn a_false_interruption_over_a_gated_realtime_reply_resumes_it() {
+    use crate::agent_session::machine::activity::false_interruption::AudioInterruptTrigger;
+    use crate::generation::GenEvent;
+    use lk_agents_abi::resources::{AudioOutputRef, ResourceId};
+    use lk_agents_abi::voice::events::AgentState;
+    use lk_agents_abi::voice::rtc::AudioOutputCapabilities;
+    let mut driver = rt_driver(CLIENT_SIDE, true);
+    driver.session.config.edit(|o, _| {
+        o.turn.interruption.enabled = Some(false);
+        o.turn.interruption.min_words = Some(0);
+    });
+    driver.set_outputs(|outputs| {
+        outputs.audio = Some(AudioOutputRef {
+            id: ResourceId(5),
+            label: "room".into(),
+            capabilities: AudioOutputCapabilities { pause: true },
+        });
+    });
+    attach(&mut driver, false).expect("a client-side realtime model is accepted");
+    answer(&mut driver, 0, AmdAnswer::Activated { run: RUN, opening: None });
+    let _ =
+        driver.activity.audio_recognition.set_turn_detection_mode(at(0), TurnDetectionMode::Vad);
+    end_of_turn(&mut driver, 0, info(1, "please state your name", true));
+    let staged =
+        ReplyDecision { instructions: Some("Say who you are.".into()), ..ReplyDecision::allow() };
+    let effects = answer(&mut driver, 100, decide(1, staged));
+    let [(_, speech)] = replies(&effects)[..] else { panic!("one reply: {effects:?}") };
+    let request = responses(&effects)[0].req_id.clone();
+    driver.on_realtime(
+        at(200),
+        RealtimeWake::Event(rt::Event::GenerationCreated(rt::GenerationCreated {
+            response_id: format!("resp_{request}"),
+            req_id: Some(request),
+        })),
+    );
+    driver.handle(None, now(200));
+    driver.on_generation(at(300), GenEvent::FirstFrame { speech });
+    driver.settle_step();
+    assert_eq!(driver.session.states.agent_state(), AgentState::Speaking);
+    assert!(
+        driver.activity.speech_scheduler.speech(speech).is_some_and(|s| s.allow_interruptions()),
+        "AMD forced the reply interruptible over the session's setting"
+    );
+    // Past the echo canceller's warm-up, so the person can interrupt.
+    driver.handle(None, now(5_000));
+    driver.take_outbox();
+
+    let trigger = AudioInterruptTrigger::VadThreshold {
+        duration: Duration::from_secs(1),
+        raw_silence: Duration::ZERO,
+    };
+    driver.interrupt_by_audio_activity(at(5_000), trigger);
+    driver.settle_step();
+    assert_eq!(driver.activity.paused_speech.paused_handle(), Some(speech), "paused, not cut");
+
+    let effects = run_until(&mut driver, 5_000, 30_000, 500);
+    let resumed: Vec<bool> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            VoiceEffect::Emit(SessionEvent::AgentFalseInterruption { resumed }) => Some(*resumed),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(resumed, [true], "{effects:?}");
+    assert_eq!(driver.session.states.agent_state(), AgentState::Speaking);
+    let handle = driver.activity.speech_scheduler.speech(speech).expect("the reply");
+    assert!(!handle.done() && !handle.interrupted(), "the reply plays on");
+}
