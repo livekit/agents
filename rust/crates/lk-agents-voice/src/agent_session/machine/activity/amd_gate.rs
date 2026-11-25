@@ -788,3 +788,7 @@ impl VoiceDriver {
         self.observe_amd(AmdObservation::AgentBusy { busy, at: now });
     }
 }
+
+#[cfg(test)]
+#[path = "amd_gate_tests.rs"]
+mod tests;
