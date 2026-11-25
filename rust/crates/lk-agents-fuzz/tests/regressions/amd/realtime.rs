@@ -351,6 +351,8 @@ fn a_manual_commit_replies_only_on_its_prediction() {
         let setup = Setup { turn: TurnMode::Manual, ..on_realtime(AmdSetup::default()) };
         let mut committed = 0;
         let mut classified = 0;
+        // The reply may be asked in the prediction's own millisecond: ordered by observation.
+        let mut predicted = lk_agents_fuzz::record::Observed::END;
         let call = Call::run(setup, async |call| {
             call.enter().await;
             call.speaks("Hello?", "").await;
@@ -363,13 +365,14 @@ fn a_manual_commit_replies_only_on_its_prediction() {
             call.send(commit).await;
             call.advance(200).await;
             classified = call.now_ms();
+            predicted = call.run.record.now();
             call.classifier_says(says).await;
             call.advance(4_000).await;
         });
         assert_eq!(call.classified(), vec!["Hello?".to_owned()], "{says:?}");
         let responses = call.responses();
         assert_eq!(responses.len(), replies, "{says:?}: {responses:?}");
-        assert!(responses.iter().all(|q| q.at.at_ms > classified && q.instructions.is_none()));
+        assert!(responses.iter().all(|q| q.at > predicted && q.instructions.is_none()));
         let commits = call.commits();
         assert!(
             commits.len() == 1 && commits[0] >= committed && commits[0] < classified,
@@ -422,20 +425,21 @@ fn a_manual_commit_without_session_stt_is_gated() {
 #[test]
 fn a_turn_commit_without_session_stt_is_gated() {
     let setup = Setup { turn: TurnMode::Manual, ..without_session_stt(true) };
-    let mut classified = 0;
+    // The reply may be asked in the prediction's own millisecond: ordered by observation.
+    let mut classified = lk_agents_fuzz::record::Observed::END;
     let call = Call::run(setup, async |call| {
         call.enter().await;
         call.speaks("", "Hello, who is this?").await;
         call.send(Input::CommitTurn { skip_reply: false }).await;
         call.advance(200).await;
-        classified = call.now_ms();
+        classified = call.run.record.now();
         call.classifier_says(AmdSays::Human).await;
         call.advance(4_000).await;
     });
     assert_eq!(call.classified(), vec!["Hello, who is this?".to_owned()]);
     let responses = call.responses();
     assert_eq!(responses.len(), 1, "{responses:?}");
-    assert!(responses[0].at.at_ms > classified, "{responses:?}");
+    assert!(responses[0].at > classified, "{responses:?}");
     assert_eq!(call.commits().len(), 1, "{:?}", call.commits());
     call.clean();
 }

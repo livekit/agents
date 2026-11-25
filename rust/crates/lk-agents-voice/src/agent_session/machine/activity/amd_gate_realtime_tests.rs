@@ -382,13 +382,15 @@ fn commit_user_turn_without_session_stt_goes_through_the_gate() {
         call: None,
     };
     let mut effects = host(&mut driver, 10, Command::Speech(commit));
-    effects.extend(driver.handle(None, now(10)));
+    // A manual commit ends the turn after the endpointing delay (`audio_recognition.py`
+    // `_run_eou_detection` sleeps `endpointing_delay` for the manual trigger too).
+    effects.extend(run_until(&mut driver, 10, 600, 10));
     let turns = committed(&effects);
     assert_eq!(turns.len(), 1, "one gated turn: {effects:?}");
     assert_eq!(buffer_commits(&effects), 1);
     assert!(responses(&effects).is_empty(), "no response before the decision");
 
-    let effects = answer(&mut driver, 20, decide(turns[0].0, ReplyDecision::allow()));
+    let effects = answer(&mut driver, 620, decide(turns[0].0, ReplyDecision::allow()));
     assert_eq!(responses(&effects).len(), 1);
     assert_eq!(buffer_commits(&effects), 0);
 }
@@ -399,13 +401,14 @@ fn the_turn_commit_command_goes_through_the_gate() {
     let mut driver = attached(CLIENT_SIDE, false);
     let mut effects =
         host(&mut driver, 10, Command::Turn(TurnCommand::Commit { skip_reply: false }));
-    effects.extend(driver.handle(None, now(10)));
+    // After the endpointing delay, as `commit_user_turn` (`audio_recognition.py`).
+    effects.extend(run_until(&mut driver, 10, 600, 10));
     let turns = committed(&effects);
     assert_eq!(turns.len(), 1, "one gated turn: {effects:?}");
     assert_eq!(buffer_commits(&effects), 1);
     assert!(responses(&effects).is_empty(), "no response before the decision");
 
-    let effects = answer(&mut driver, 20, decide(turns[0].0, ReplyDecision::allow()));
+    let effects = answer(&mut driver, 620, decide(turns[0].0, ReplyDecision::allow()));
     assert_eq!(responses(&effects).len(), 1);
 }
 
@@ -478,6 +481,8 @@ fn stage_instructions_ride_the_response_request_unchanged() {
     let asked = responses(&effects);
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0].instructions.as_deref(), Some(stage), "byte for byte");
+    let [(_, speech)] = replies(&effects)[..] else { panic!("one reply: {effects:?}") };
+    let request = asked[0].req_id.clone();
     assert!(
         !sent(&effects).iter().any(|c| matches!(c, RealtimeCommand::UpdateInstructions(_))),
         "the session's base instructions do not change"
@@ -490,6 +495,8 @@ fn stage_instructions_ride_the_response_request_unchanged() {
     assert!(!saved, "stage instructions never enter the record");
 
     // The next reply carries only its own decision's instructions.
+    // The server answers one response at a time: the first is done before the next is asked.
+    finish_response(&mut driver, 600, &request, speech);
     end_of_turn(&mut driver, 3000, info(2, "this is Bob", true));
     let effects = answer(&mut driver, 3100, decide(2, ReplyDecision::allow()));
     assert_eq!(
