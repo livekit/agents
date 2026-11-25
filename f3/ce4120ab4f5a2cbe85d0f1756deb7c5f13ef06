@@ -1,0 +1,19 @@
+rust/crates/lk-agents-fuzz/src/rules/turns/correction_replaces_the_words.rs
+  s_bbb46b29e16294::t_dd17566ca58b61 110-114,118,168-180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f3ce4120ab4f5a2cbe85d0f1756deb7c5f13ef06",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
