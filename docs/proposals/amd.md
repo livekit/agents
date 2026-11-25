@@ -414,12 +414,24 @@ until `Activated`.
 AMD's STT hears the participant's real frames. The session substitutes silence for
 its own STT and realtime input during AEC warmup and uninterruptible speech, but AMD,
 VAD and the interruption detector keep the real frame (`agent_activity.push_audio`).
-The removed tap fan-out provided this, so the port needs one participant-audio feed
-for the AMD leg, taken before the discard; its mechanism is an open question. If the
-AMD stream fails or will not open, the leg reports `SttFailed`: AMD closes it, ends
-every late-final wait at once, and uses session transcripts from then on (spec §6.3).
-This differs from Python on purpose. Python lets each wait run out, but no final can
-come. A blank final does not consume a turn's late-final wait.
+AMD's stream has its own slot on the audio router, `AudioChannel::Amd`. It is a raw
+channel on the real side of the gate, so it hears the room frame unconverted and is
+never substituted. The router drops every frame until the gate applies `Activated`,
+so AMD hears nothing from before activation, as the session does not.
+
+The stream opens when the run starts listening. Python opens it on the first frame
+and keeps that frame. Here the executor sends `HoldAmd(true)` to the router just
+before `Activated`, on the same queue. From then on, the router holds the channel's
+frames until the stream's sink is installed, and delivers them first. The hold counts
+media duration and keeps the last `AMD_BACKLOG` (30 s); beyond it the oldest frames
+go. `HoldAmd(false)` drops the hold when the stream fails before its sink is installed
+or the run stops. An Inference STT's connections, retries included, carry AMD's client
+feature header (`stream(extra_headers=...)`); another STT gets none.
+
+If the AMD stream fails or will not open, the leg reports `SttFailed`: AMD closes it,
+ends every late-final wait at once, and uses session transcripts from then on (spec
+§6.3). This differs from Python on purpose. Python lets each wait run out, but no
+final can come. A blank final does not consume a turn's late-final wait.
 
 ### Machine
 
@@ -574,7 +586,51 @@ The completed category is the stage, except that after a played voicemail messag
 `machine-unavailable` stage reports `previous_stage` (spec §12.2). `LegFailed`, or a
 failing prediction or menu listener in the host, completes with `internal_error`; a
 classifier `APIError`, invalid output or timeout gives an `inference_error`
-prediction instead (spec §8.4). A menu extraction failure is silent.
+prediction instead (spec §8.4). A menu extraction failure is silent. Python also
+treats a model's `ValueError` and `asyncio.TimeoutError` as `inference_error`. The
+core cannot tell those apart from other host errors, because a host error outside the
+API taxonomy carries only its class name. Here they end the run with
+`internal_error`.
+
+The callee leg reports `participant_disconnected` when the participant leaves, and
+also when the room disconnects or closes, during setup or later.
+
+### Runtime
+
+**Entry.** `enter()` checks the options and the STT, then hands the run to one task on
+the session's AMD task set. That task routes the run's observations, sends `Attach`,
+reads the answer and runs the executor. Observations are routed by run, so a refused
+second run never displaces the attached one. A refused run closes the models AMD
+created before `enter()` returns its error, as `__aenter__` does. A caller that stops
+waiting for `enter()` cancels the run's close token: if the session accepts the
+attach, the run completes at once with `cancelled`, and its models close. An entry
+that the task set refuses never sends `Attach`, and its models close as a cleanup on
+that task set.
+
+**Legs.** Each leg feeds the machine through `TaskSet::scoped_feeding`. A leg that
+dies reports its death as an input: `LegFailed` for the classifier, menu and callee
+legs, `SttFailed` for AMD's STT. This matches Python's `_on_task_done`, which ends
+the run with `internal_error`. At completion the executor asks every leg to stop. The
+callee leg closes its room events within the teardown bound, and AMD's STT closes its
+stream. The executor joins the legs, then closes each model AMD created, each close
+bounded by the teardown bound, then steps `LegsClosed`.
+
+**Session close.** After the session's loop ends, its close joins every AMD run's
+task within the teardown bound, as `_teardown_activity` awaits `amd.aclose()`. A run
+that misses the bound is cancelled and logged.
+
+**Queues.** Observations reach the executor on an unbounded channel: the session's
+loop never waits on AMD, and the executor reads them as it steps. Leg reports are
+bounded by their producers. The host's events queue holds `EVENTS_CAPACITY` (128)
+events; past that the newest is dropped and logged, and `execute()` still returns the
+outcome.
+
+**Decision model.** A decision model is the `DecisionModel` port: `choose(cx,
+ChoiceRequest)` makes one `evaluate` call with one `Choice` decision. The request
+carries the input (request state and transcript), the decision's name and prompt, the
+options in order without descriptions, the connection options and the extra headers.
+It returns the chosen option, or `None` when the response holds no choice. A decision
+model never extracts menus.
 
 ### Ported unchanged
 
@@ -585,10 +641,10 @@ test or story before the port is done:
 | Spec | Rules | Owner |
 | --- | --- | --- |
 | §4.1 | Options, defaults (`idle_timeout` 10 s, `voicemail_idle_timeout` 10 s, `timeout` 60 s, `inference_timeout` 2 s, `machine_silence_threshold` 1.5 s, `max_uncertain_turns` 3, `max_inference_timeouts` 3, `wait_until_answered` true, built-in stage instructions) and every `ValueError` | Python host and AMD constructor |
-| §4.1 | Model selection: auto models when credentials exist, else the session's; `None` inherits a non-realtime Agent LLM; a decision model must support `choice`; the source of each model is logged; `llm_conn_options`; the `AMD` feature header only on Inference requests | Runtime legs |
+| §4.1 | Model selection: auto models when credentials exist, else the session's; `None` inherits a non-realtime Agent LLM; a decision model must support `choice`; the source of each model is logged; `llm_conn_options`; the `AMD` feature header only on Inference requests and Inference STT connections | Runtime legs |
 | §4.3, §12.1 | Event fields: prediction (`speech_duration`, `delay`, `inference_duration`, `transcript`), completion (`voicemail_message_played`, `last_prediction`, `is_error`, the ten reasons), menu (`session_id`, `extraction_duration`). Turn ids are local to each run, start at 1 and may skip | `AmdEffect::Emit` |
 | §5.1 | Entry checks: session started, no handoff or `AgentTask` in flight, one run at a time, realtime needs per-response tools and client tool replies and some STT, opening text needs TTS or realtime `say()`, opening instructions need an LLM | Attach command |
-| §5.2 | Listening setup: 5 s track wait (`participant_missing`), `participant_disconnected` during setup or later, participant I/O links when no identity is given, no timeout on the SIP answer, overall deadline armed at activation | Callee leg and `In::Callee` |
+| §5.2 | Listening setup: 5 s track wait (`participant_missing`), `participant_disconnected` during setup or later, the participant the room I/O links when no identity is given (waited for within the same 5 s), no timeout on the SIP answer, overall deadline armed at activation | Callee leg and `In::Callee` |
 | §5.3 | Attached rules beyond the list above: `update_agent()` and inline `AgentTask` switches raise; a realtime model without session STT drops a backchannel over agent speech | Session |
 | §8.1 | Request contents: `stage`, `previous_prediction` (shown as "uncertain (likely human)" when marked), recommended list, `speech_duration`; the dual-transcript format; the decision-model transcript format; exactly one `record_result` call | Machine builds `ClassifyRequest`; leg renders it |
 | §10.6 | Opening: `opening_instructions` generate with `tool_choice = none`; a failed opening is logged and AMD keeps listening | Session, on `Activated` |
@@ -704,9 +760,6 @@ silence. The DST does not measure classifier accuracy, prompt quality, real STT 
 or the SIP answer path. Live simulations and room tests own those.
 
 ## Open questions
-
-- How AMD's STT leg receives the participant's frames before the session's
-  silence substitution, now that the tap fan-out is gone.
 
 - Whether the pending reply decision becomes visible in telemetry later, and as what
   span.
