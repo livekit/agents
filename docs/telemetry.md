@@ -180,12 +180,10 @@ Each metric carries the same labels:
 | `lk.productstats.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
 | `lk.productstats.model.audio_duration` | counter, seconds | Audio sent to an STT. A streaming STT keeps one stream for a whole session, so its usage is the audio, not a count of streams |
 
-The transcription delay carries one more label, because it starts at the end of speech,
-which the STT does not always decide:
-
-| Label | Values |
-| --- | --- |
-| `lk.productstats.stt.speech_end` | who ended the speech: `vad` (the session's VAD) or `provider` (the STT detects speech itself) |
+The transcription delay starts at the end of speech, which the STT does not always decide.
+So this metric alone is split by one extra label,
+`lk.productstats.model.transcription_delay.speech_end`: `vad` when the session's VAD ended
+the speech, `provider` when the STT detects speech itself.
 
 - A turn whose final transcript arrived before the end of speech has no delay to measure:
   it records nothing, never a zero. So does a turn whose end of speech was not detected.
