@@ -118,7 +118,7 @@ side is one module, `livekit/agents/telemetry.py`, of about 200 lines, over the 
 | --- | --- |
 | Provider | `_Span`, `_Tracer` and `_TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
-| Public functions | `configure`, `set_capture_content` and `diagnostics`, generated forwarding to `_core` (`public_telemetry`) |
+| Public functions | `configure` and `set_capture_content`, generated forwarding to `_core` (`public_telemetry`) |
 | Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation in the copied context a host call runs in, and capture), `_LoopMonitor` (the event loop's heartbeat; see [Event-loop stalls](#event-loop-stalls)) |
 | Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler`, recorded by room I/O, which intercepts the room's RPC calls and handlers |
 
@@ -316,10 +316,9 @@ byte charges) are synchronous functions in `lk_agents_core::telemetry::policy`;
 the exporter calls them once per record and destination.
 
 Queues are bounded by record count and retained bytes. A full queue drops the
-record and counts it; `diagnostics()` reports the counts. Export never blocks a
-session step, a tool call or the worker heartbeat, and an export failure never
-fails a conversation. Flush and shutdown share the job's cleanup deadline with
-the session report upload.
+record. Export never blocks a session step, a tool call or the worker
+heartbeat, and an export failure never fails a conversation. Flush and shutdown
+share the job's cleanup deadline with the session report upload.
 
 ## Span API
 
@@ -541,7 +540,7 @@ every record, as the `EverySpan` group and the identity stamp.
 | A span cannot drift from its entity | the entity owns it: moving or removing the entity moves the span |
 | A span ends once | `end` consumes it |
 | A span ends at all | `Drop` asserts it was ended (debug builds, so every test and the DST); the mistake fails at the line that dropped the entity |
-| Nothing ends silently at close | a session close removes each live entity through its own removal path with the `closed` outcome; nothing ends spans in bulk. `Trace::close` then sweeps whatever remains: a non-zero sweep fails the DST and is a warning plus `telemetry.diagnostics().swept_spans` in production |
+| Nothing ends silently at close | a session close removes each live entity through its own removal path with the `closed` outcome; nothing ends spans in bulk. `Trace::close` then sweeps whatever remains: a non-zero sweep fails the DST and is a warning in production |
 | A session's spans always reach the exporter | the session closes on every exit path before the job's final flush; DST rule `sessions_export_their_root` |
 | A child is opened only under a declared parent | `open_in` takes `&telemetry::ManualSpan<P>` with `P: ParentOf<D>`; `open` exists only for declarations whose parent is the session |
 | One clock | the runtime's injected clock, the voice core's `now` and the `Trace` anchor all come from the `ProcessEnv` clock, so a `ScopedSpan` nested under a sans-I/O span shares its timeline |
@@ -791,7 +790,7 @@ consumer can link a transcript row to its trace without matching timestamps.
 
 Queue bounds are sized so a session's end-of-session burst (every chat item,
 the usage summary and the evaluations) fits without dropping; records beyond the
-bound are dropped and counted, never truncated.
+bound are dropped, never truncated.
 
 ## Session report
 

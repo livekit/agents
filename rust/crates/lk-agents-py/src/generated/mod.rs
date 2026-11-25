@@ -22,7 +22,6 @@ pub mod llm;
 pub mod media;
 pub mod metrics;
 pub mod native_enums;
-pub mod productstats;
 pub mod recorder;
 pub mod records;
 pub mod session;
@@ -114,7 +113,6 @@ pub trait Implementations: 'static {
     type ProviderMetrics: ::lk_agents_abi::metrics::provider::ProviderMetrics;
     type LlmMetricState: ::lk_agents_abi::metrics::provider::LlmMetricState;
     type TtsMetricState: ::lk_agents_abi::metrics::provider::TtsMetricState;
-    type ProductStatsHost: ::lk_agents_abi::productstats::ProductStatsHost;
     type SessionRecorder: ::lk_agents_abi::recorder::SessionRecorder;
     type RemoteAgentView: ::lk_agents_abi::session::remote::RemoteAgentView<
             Task = Self::RemoteTaskView,
@@ -396,7 +394,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(metrics::stt_stream_metrics, m)?)?;
     m.add_class::<metrics::LlmMetricState>()?;
     m.add_class::<metrics::TtsMetricState>()?;
-    m.add_function(wrap_pyfunction!(productstats::_core_product_stats_plugin, m)?)?;
     m.add_class::<recorder::SessionRecorder>()?;
     m.add_class::<session::RemoteAgentState>()?;
     m.add_class::<session::RemoteContextState>()?;
@@ -421,8 +418,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::TelemetrySpan>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_install, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::configure, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::diagnostics, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_export, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::set_capture_content, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;

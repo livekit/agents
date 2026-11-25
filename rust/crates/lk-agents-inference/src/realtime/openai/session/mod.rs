@@ -1,9 +1,4 @@
 use crate::effects::RealtimeConnectionEffect;
-use lk_agents_abi::productstats::{
-    FailureType, Operation, ProviderFailures, ProviderLabels, ProviderReconnects, ProviderRequests,
-    ProviderRetries,
-};
-use lk_agents_telemetry::productstats;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -273,12 +268,6 @@ impl OpenAIRealtime {
         let azure = self.connect.azure.as_ref();
         let url = wire::process_base_url(&self.connect.base_url, &opts.model, azure);
         let label = self.label();
-        let id = lk_agents_abi::ProviderId {
-            label: label.clone(),
-            model: opts.model.clone(),
-            provider: self.provider(),
-        };
-        let stats = crate::telemetry::stat_labels(Operation::Realtime, &id);
         let machine = RealtimeMachine::new(self.dialect.clone(), opts, caps, self.ids.short(""))
             .with_response_timeout(self.connect.conn.read_timeout.map(Duration::from_secs_f64))
             .with_label(label.clone())
@@ -325,7 +314,6 @@ impl OpenAIRealtime {
             clock: self.clock.clone(),
             provider_label: self.dialect.provider_label,
             label,
-            stats,
             events: ev_tx,
             images: self.images.clone(),
             spawner: self.spawner.clone(),
@@ -467,8 +455,6 @@ struct Pump {
     clock: Arc<dyn Clock>,
     provider_label: &'static str,
     label: String,
-    /// The labels of the session's product statistics.
-    stats: ProviderLabels,
     events: super::queue::Delivery,
     images: Arc<dyn ImageResolver + Send + Sync>,
     spawner: Arc<dyn Spawner>,
@@ -487,7 +473,6 @@ impl Pump {
     }
 
     async fn run_loop(&self, mut commands: media_queue::AudioReceiver<Cmd>) {
-        productstats::measure(&ProviderRequests { provider: self.stats.clone() }, 1u64);
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
         let mut reconnect = false;
@@ -509,18 +494,10 @@ impl Pump {
                     }
                     RealtimeConnectionEffect::Retry { error, backoff } => {
                         let _ = backoff.announce(&self.label, &error);
-                        productstats::measure(
-                            &ProviderRetries { provider: self.stats.clone() },
-                            1u64,
-                        );
                         self.emit_error(error, true);
                         ControlFlow::Continue(())
                     }
                     RealtimeConnectionEffect::Reconnect { error } => {
-                        productstats::measure(
-                            &ProviderReconnects { provider: self.stats.clone() },
-                            1u64,
-                        );
                         let subject = &self.label;
                         lk_agents_core::request::retrying(
                             log::Level::Warn,
@@ -533,9 +510,6 @@ impl Pump {
                         ControlFlow::Continue(())
                     }
                     RealtimeConnectionEffect::Failed { error } => {
-                        let error_type = FailureType::of_api(&error);
-                        let provider = self.stats.clone();
-                        productstats::measure(&ProviderFailures { provider, error_type }, 1u64);
                         self.emit_error(error, false);
                         self.close().await;
                         ControlFlow::Break(())

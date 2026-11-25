@@ -237,15 +237,14 @@ impl VoiceDriver {
     }
 
     /// The runtime drops the session without its close (a cut-off loop): every span still open
-    /// ends as at a close and joins the outbox. `true` when the session was open.
-    pub fn abandon_spans(&mut self) -> bool {
+    /// ends as at a close and joins the outbox.
+    pub fn abandon_spans(&mut self) {
         if self.session.span.is_none() {
-            return false;
+            return;
         }
         log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice session ended without its close");
         self.close_spans();
         self.flush_spans();
-        true
     }
 
     /// Spans the session's close sweep ended because their owner never did: a bug.

@@ -6,7 +6,6 @@ pub(crate) mod metrics;
 pub mod proto;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::telemetry::record::{JobKey, KeyValues, Record, RecordSink, SpanRecord};
@@ -24,8 +23,7 @@ pub use destination::Limits;
 use destination::{App, AppSpan, Batch, Cloud, State, Take};
 use lk_agents_core::telemetry::policy::ContentPolicy;
 
-// Producers never block: each destination copies a record into a bounded queue, or drops and counts
-// it.
+// Producers never block: each destination copies a record into a bounded queue, or drops it.
 
 const SPAN_INTERVAL: Duration = Duration::from_secs(1);
 const METRIC_INTERVAL: Duration = Duration::from_secs(30);
@@ -50,41 +48,9 @@ impl Signal {
     }
 }
 
-/// What the exporter could not do, since the process started.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Diagnostics {
-    /// Records refused by a full queue or a metric cardinality limit, or abandoned at a deadline.
-    pub dropped: u64,
-    /// Records in requests the endpoint refused or that failed in transport.
-    pub failed: u64,
-    /// Configuration that could not apply: a second Cloud endpoint, a job opened twice, a
-    /// decision for a job that is not open.
-    pub conflicts: u64,
-    /// Job closes and shutdowns that reached their deadline before every record was sent.
-    pub incomplete_cleanup: u64,
-    /// Jobs whose project refused recording.
-    pub recording_disabled: u64,
-}
-
-#[derive(Default)]
-struct Counters {
-    dropped: AtomicU64,
-    failed: AtomicU64,
-    conflicts: AtomicU64,
-    incomplete_cleanup: AtomicU64,
-    recording_disabled: AtomicU64,
-}
-
-fn add(counter: &AtomicU64, n: usize) {
-    if n > 0 {
-        counter.fetch_add(n as u64, Ordering::Relaxed);
-    }
-}
-
 struct Shared {
     state: Mutex<State>,
     clock: Arc<dyn Clock>,
-    counters: Counters,
     /// Bumped when a queue fills a batch.
     wake: signal::Producer<()>,
     /// Exports in progress.
@@ -108,7 +74,6 @@ impl Exporter {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::new(process, limits)),
             clock,
-            counters: Counters::default(),
             wake: signal::signal(()).0,
             in_flight: signal::signal(0).0,
         });
@@ -125,14 +90,9 @@ impl Exporter {
         }
     }
 
-    /// Enables Cloud export. The first endpoint stays; a different one is a conflict.
+    /// Enables Cloud export. The first endpoint stays; a later one is ignored.
     pub fn configure_cloud(&self, endpoint: CloudEndpoint) {
-        let mut state = self.shared.state.lock();
-        match &state.cloud {
-            None => state.cloud = Some(endpoint),
-            Some(current) if *current == endpoint => {}
-            Some(_) => add(&self.shared.counters.conflicts, 1),
-        }
+        self.shared.state.lock().cloud.get_or_insert(endpoint);
     }
 
     /// Replaces the application endpoint for subsequent records; `None` disables it. What the
@@ -146,27 +106,20 @@ impl Exporter {
     /// [`Exporter::register_job`].
     pub fn open_job(&self, key: JobKey, identity: SessionIdentity) {
         let now = self.shared.wall_nanos();
-        if !self.shared.state.lock().open_job(key, identity, now) {
-            add(&self.shared.counters.conflicts, 1);
-        }
+        self.shared.state.lock().open_job(key, identity, now);
     }
 
     /// The job's Cloud recording decision: held spans are released or dropped with it.
     pub fn register_job(&self, key: &JobKey, recording: CloudRecording) {
         let now = self.shared.wall_nanos();
-        if !self.shared.state.lock().register_job(key, recording, now) {
-            add(&self.shared.counters.conflicts, 1);
-        }
+        self.shared.state.lock().register_job(key, recording, now);
     }
 
     /// Sends what the job has queued, its last metrics included, then forgets it. Bounded by
-    /// `limit`: what is not sent by then is dropped and counted.
+    /// `limit`: what is not sent by then is dropped.
     pub async fn close_job(&self, key: &JobKey, limit: Duration) {
-        let complete = self.flush(Some(key), limit).await;
-        add(&self.shared.counters.dropped, self.shared.state.lock().remove_job(key));
-        if !complete {
-            add(&self.shared.counters.incomplete_cleanup, 1);
-        }
+        self.flush(Some(key), limit).await;
+        self.shared.state.lock().remove_job(key);
     }
 
     /// Whether the job's project refused recording.
@@ -176,7 +129,6 @@ impl Exporter {
 
     /// Stops the job's Cloud export: another of its uploads found recording disabled.
     pub fn disable_job(&self, key: &JobKey) {
-        add(&self.shared.counters.recording_disabled, 1);
         self.shared.state.lock().disable_job(key);
     }
 
@@ -200,32 +152,16 @@ impl Exporter {
             }
             state.closed = true;
         }
-        let complete = self.flush(None, limit).await;
+        self.flush(None, limit).await;
         drop(self.task.lock().take());
-        if !complete {
-            add(&self.shared.counters.incomplete_cleanup, 1);
-        }
-    }
-
-    pub fn diagnostics(&self) -> Diagnostics {
-        let c = &self.shared.counters;
-        let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-        Diagnostics {
-            dropped: read(&c.dropped),
-            failed: read(&c.failed),
-            conflicts: read(&c.conflicts),
-            incomplete_cleanup: read(&c.incomplete_cleanup),
-            recording_disabled: read(&c.recording_disabled),
-        }
     }
 }
 
 impl RecordSink for Exporter {
     fn record(&self, record: Record) {
         let bytes = encode::charge(&record);
-        let admitted = self.shared.state.lock().record(record, bytes);
-        add(&self.shared.counters.dropped, admitted.dropped as usize);
-        if admitted.batch_ready {
+        let batch_ready = self.shared.state.lock().record(record, bytes);
+        if batch_ready {
             self.shared.wake.set(());
         }
     }
@@ -279,13 +215,11 @@ impl Shared {
         let _in_flight = InFlight(self);
         let mut complete = true;
         for batch in batches {
-            let records = batch.records();
             let limit = match deadline {
                 None => REQUEST_TIMEOUT,
                 Some(at) => at.saturating_duration_since(self.clock.now()).min(REQUEST_TIMEOUT),
             };
             if limit.is_zero() {
-                add(&self.counters.dropped, records);
                 complete = false;
                 continue;
             }
@@ -296,17 +230,14 @@ impl Shared {
             match timeout(&*self.clock, limit, self.export(batch)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(PostError::Disabled)) => {
-                    add(&self.counters.recording_disabled, 1);
                     if let Some(job) = job {
                         self.state.lock().disable_job(&job);
                     }
                 }
                 Ok(Err(error)) => {
-                    add(&self.counters.failed, records);
                     log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry export failed: {error}");
                 }
                 Err(_) => {
-                    add(&self.counters.failed, records);
                     complete &= deadline.is_none_or(|at| self.clock.now() < at);
                     log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry export timed out");
                 }

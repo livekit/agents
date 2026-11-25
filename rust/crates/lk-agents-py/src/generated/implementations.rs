@@ -71,7 +71,6 @@ impl super::Implementations for Selected {
     type ProviderMetrics = ::lk_agents_runtime::cores::ProviderMetrics;
     type LlmMetricState = ::lk_agents_runtime::cores::LlmMetricState;
     type TtsMetricState = ::lk_agents_runtime::cores::TtsMetricState;
-    type ProductStatsHost = ::lk_agents_runtime::telemetry::ProductStatsHost;
     type SessionRecorder = ::lk_agents_runtime::recording::SessionRecorder;
     type RemoteAgentView = ::lk_agents_runtime::storage::session_state::remote::RemoteAgent;
     type RemoteContextView = ::lk_agents_runtime::storage::session_state::remote::RemoteContext;
