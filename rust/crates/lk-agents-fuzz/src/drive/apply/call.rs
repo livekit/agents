@@ -85,6 +85,7 @@ impl Run {
             Input::AmdAttach { .. }
             | Input::AmdActivate { .. }
             | Input::AmdDecide { .. }
+            | Input::AmdDecideAhead { .. }
             | Input::AmdDetach { .. } => self.call_amd(input),
             _ => unreachable!("{input:?} is not a call"),
         };
@@ -578,6 +579,13 @@ impl Run {
                     decision: amd::decision(*verdict),
                 }
             }
+            Input::AmdDecideAhead { verdict } => AmdAnswer::ReplyDecided {
+                run,
+                turn: lk_agents_voice::audio_recognition::TurnId(
+                    self.record.amd_view().turn_ahead(run.0, Observed::END),
+                ),
+                decision: amd::decision(*verdict),
+            },
             Input::AmdDetach { category, forbid } => AmdAnswer::Detach {
                 run,
                 pending: amd::pending(*category, *forbid),

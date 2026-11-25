@@ -248,6 +248,10 @@ impl<'a> AmdView<'a> {
                         out.push(Answer::Decide { at: applied.at, run, turn, verdict: *verdict });
                     }
                 }
+                Input::AmdDecideAhead { verdict } if applied.accepted => {
+                    let turn = self.turn_ahead(run, applied.at);
+                    out.push(Answer::Decide { at: applied.at, run, turn, verdict: *verdict });
+                }
                 Input::AmdDetach { category, forbid } if applied.accepted => {
                     out.push(Answer::Detach {
                         at: applied.at,
@@ -260,6 +264,21 @@ impl<'a> AmdView<'a> {
             }
         }
         out
+    }
+
+    /// The turn after the latest one `run` observed before `before`: the one
+    /// [`Input::AmdDecideAhead`] names.
+    pub fn turn_ahead(&self, run: u64, before: Observed) -> u64 {
+        let latest = self
+            .0
+            .resources(Kind::AmdTurn)
+            .filter(|t| t.opened_at() < before)
+            .filter_map(|t| match t.detail() {
+                Detail::AmdTurn { run: r, turn } if *r == run => Some(*turn),
+                _ => None,
+            })
+            .max();
+        latest.unwrap_or(0) + 1
     }
 
     /// The answers that could decide `turn`: a decision naming it, or its run's detach, after

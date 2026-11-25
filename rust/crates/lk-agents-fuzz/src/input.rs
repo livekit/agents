@@ -678,6 +678,9 @@ inputs! {
     AmdActivate { opening: Option<AmdOpening> } never true;
     /// The run's decision for a turn it observed: the latest, or an older one the session drops.
     AmdDecide { turn: Ref<AmdTurn>, verdict: AmdVerdict } never true;
+    /// The attached run's decision for the turn after the latest it observed: one the session
+    /// has not committed, which it must drop.
+    AmdDecideAhead { verdict: AmdVerdict } never true;
     /// The run completes. `category` is its last category; it builds `pending` as the machine
     /// will: a `Wait` category or `forbid` denies, anything else allows with no instructions,
     /// DTMF or silence. `forbid` cancels every speech with no playout yet.
