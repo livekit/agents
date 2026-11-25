@@ -1,0 +1,39 @@
+rust/crates/lk-agents-fuzz/src/drive/apply/call.rs
+  s_1d5d36eac205ce::t_f2d9d5452fd40a 90,602-670
+rust/crates/lk-agents-fuzz/src/drive/apply/mod.rs
+  s_1d5d36eac205ce::t_fda842748644c9 586-589
+rust/crates/lk-agents-fuzz/src/drive/collect.rs
+  s_1d5d36eac205ce::t_eb4b844d9786be 385-389
+rust/crates/lk-agents-fuzz/src/drive/finish.rs
+  s_1d5d36eac205ce::t_76b8f1a3d9babf 19,22-24,29-33
+rust/crates/lk-agents-fuzz/src/drive/mod.rs
+  s_1d5d36eac205ce::t_b653a4d301cda6 737-742
+rust/crates/lk-agents-fuzz/src/drive/start.rs
+  s_1d5d36eac205ce::t_96995b21aebe45 418-420
+rust/crates/lk-agents-fuzz/src/fakes/mod.rs
+  s_1d5d36eac205ce::t_780f3be9437736 27
+rust/crates/lk-agents-fuzz/src/input.rs
+  s_1d5d36eac205ce::t_484ae11ed29bdd 462-470,495,697-711
+rust/crates/lk-agents-fuzz/src/fakes/amd_models.rs
+  s_1d5d36eac205ce::t_ccd13fa2947703 1-336
+rust/crates/lk-agents-fuzz/src/record/amd.rs
+  s_1d5d36eac205ce::t_94cea2f5511063 13,15,31-38,41,46-55,140-159,191-215,236-281,322,371,375-397
+rust/crates/lk-agents-fuzz/src/record/mod.rs
+  s_1d5d36eac205ce::t_3596fd617dd5f6 732-733
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8700da676bfab0f825b74ba9b6e79c979139f4c4",
+  "prompts": {},
+  "sessions": {
+    "s_1d5d36eac205ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3101aab-cdcc-4f0b-a4f5-be4f92e4e4f7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
