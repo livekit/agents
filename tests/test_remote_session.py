@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from livekit import rtc
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import AgentSessionUsage
 from livekit.agents.voice import remote_session as remote_session_module
@@ -445,6 +446,9 @@ async def test_aclose_flushes_the_response_of_an_inflight_request():
 def _fake_room(*, connected: bool = True, stream_error: Exception | None = None) -> MagicMock:
     room = MagicMock()
     room.isconnected = MagicMock(return_value=connected)
+    room.connection_state = (
+        rtc.ConnectionState.CONN_CONNECTED if connected else rtc.ConnectionState.CONN_DISCONNECTED
+    )
 
     async def _send_bytes(data, **kwargs):
         if stream_error is not None:
@@ -535,6 +539,68 @@ async def test_room_transport_sends_each_message_in_one_call():
 class _FailingTransport(PairedTransport):
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
         raise RuntimeError("transport is down")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnect_at", ["before_start", "before_send", "during_send"])
+async def test_event_writer_discards_notifications_while_room_disconnected(
+    caplog: pytest.LogCaptureFixture, disconnect_at: str
+) -> None:
+    """A deleted room cannot receive queued events, including an in-flight send."""
+    room = _fake_room()
+
+    async def disconnect(*args: object, **kwargs: object) -> None:
+        room.isconnected.return_value = False
+        room.connection_state = rtc.ConnectionState.CONN_DISCONNECTED
+        raise RuntimeError("room disconnected during send")
+
+    room.local_participant.send_bytes = AsyncMock(side_effect=disconnect)
+    host = SessionHost(RoomSessionTransport(room))
+    if disconnect_at == "before_start":
+        room.isconnected.return_value = False
+    await host.start()
+    if disconnect_at == "before_send":
+        room.isconnected.return_value = False
+    try:
+        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+            host._send_event(agent_pb.AgentSessionEvent())
+            host._send_event(agent_pb.AgentSessionEvent())
+            await asyncio.sleep(0)
+            host._send_event(agent_pb.AgentSessionEvent())
+            await asyncio.sleep(0)
+        assert host._event_ch.empty()
+        assert not [r for r in caplog.records if "failed to send session event" in r.message]
+        assert room.local_participant.send_bytes.await_count == int(disconnect_at == "during_send")
+    finally:
+        await host.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("connected_before", [False, True])
+async def test_event_writer_resumes_after_room_connects(
+    caplog: pytest.LogCaptureFixture, connected_before: bool
+) -> None:
+    """Initial connection and reconnection must keep event forwarding available."""
+    room = _fake_room(connected=False)
+    room.connection_state = (
+        rtc.ConnectionState.CONN_RECONNECTING
+        if connected_before
+        else rtc.ConnectionState.CONN_DISCONNECTED
+    )
+    room.local_participant.send_bytes = AsyncMock()
+    host = SessionHost(RoomSessionTransport(room))
+    await host.start()
+    try:
+        host._send_event(agent_pb.AgentSessionEvent())
+        await asyncio.sleep(0)
+        assert not [r for r in caplog.records if "failed to send session event" in r.message]
+        room.isconnected.return_value = True
+        room.connection_state = rtc.ConnectionState.CONN_CONNECTED
+        host._send_event(agent_pb.AgentSessionEvent())
+        await host.aclose()
+        room.local_participant.send_bytes.assert_awaited_once()
+    finally:
+        await host.aclose()
 
 
 @pytest.mark.asyncio
