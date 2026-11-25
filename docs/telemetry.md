@@ -169,7 +169,7 @@ Each metric carries the same labels:
 | Label | Values |
 | --- | --- |
 | `lk.product.agents.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
-| `lk.product.agents.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), or `custom` for any class outside a LiveKit plugin |
+| `lk.product.agents.model.plugin` | the code that runs: the plugin's id (`deepgram`, `openai`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
 | `lk.product.agents.model.provider` | the vendor that is called (`deepgram`, `cerebras`); a self-hosted endpoint is `other` |
 | `lk.product.agents.model.name` | the model's name as configured |
 
@@ -215,13 +215,15 @@ one plugin reaches several vendors:
 | The Deepgram plugin | `deepgram` | `deepgram` |
 | The OpenAI plugin pointed at Cerebras (`openai.LLM.with_cerebras()`) | `openai` | `cerebras` |
 | The OpenAI plugin pointed at a self-hosted endpoint | `openai` | `other` |
+| LiveKit Inference | `livekit-inference` | `livekit`; the vendor is in the model name (`deepgram/nova-3`) |
 
 The plugin says which code to maintain; the provider says which vendor people use.
 
-A model served by LiveKit Inference records no model usage here: LiveKit already has it
-from the Inference service. Only the `inference` models themselves are left out, by what
-they are, never by the code they share: an OpenAI-compatible plugin is always recorded,
-whichever endpoint it calls.
+A model served by LiveKit Inference is recorded like any other, under the plugin
+`livekit-inference`, so plugins and Inference compare in one place. The Inference service
+keeps its own usage records, and those, not these, are the ones billing uses. Only the
+`inference` models themselves get that plugin name, by what they are, never by the code
+they share: an OpenAI-compatible plugin is always recorded under its own id.
 
 The plugin id is the last part of the package name, lowercase with hyphens, the same in
 every language: `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram`
