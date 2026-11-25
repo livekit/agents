@@ -975,7 +975,7 @@ class LLM(llm.LLM):
         *,
         model: str,
         api_key: str | None = None,
-        base_url: str = "https://inference.us-west.modal.direct/v1",
+        base_url: str | None = None,
         client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
@@ -990,8 +990,8 @@ class LLM(llm.LLM):
         Create a new instance of a Modal LLM.
 
         ``model`` is the endpoint hostname, e.g. ``my-endpoint.us-west.modal.direct``.
-        ``base_url`` defaults to the shared inference gateway and can be set to a
-        dedicated Endpoint or self-hosted server URL.
+        ``base_url`` defaults to the shared inference gateway in the hostname's region
+        and can be set to a dedicated Endpoint or self-hosted server URL.
 
         ``api_key`` must be set to your Modal proxy token, either using the argument or
         by setting the ``MODAL_PROXY_TOKEN`` environmental variable (or the
@@ -1005,6 +1005,10 @@ class LLM(llm.LLM):
             token_secret = os.environ.get("MODAL_PROXY_TOKEN_SECRET")
             if token_id and token_secret:
                 api_key = f"{token_id}.{token_secret}"
+
+        if base_url is None:
+            region = model.split(".")[-3] if model.endswith(".modal.direct") else "us-west"
+            base_url = f"https://inference.{region}.modal.direct/v1"
 
         return LLM(
             model=model,
