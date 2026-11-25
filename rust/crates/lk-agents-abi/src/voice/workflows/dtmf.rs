@@ -15,6 +15,16 @@ pub enum ReceiveDtmfError {
     Room(String),
 }
 
+/// `send_dtmf_events` sent no key, or not every one. The model and the logs get one fixed
+/// message: the room's own error can carry provider data (`main`'s tool raises
+/// `ToolError("Failed to send DTMF events.") from None`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[crate::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]
+pub enum SendDtmfError {
+    #[error("Failed to send DTMF events.")]
+    Failed,
+}
+
 /// Runtime publication and collection of room keypad tones.
 #[crate::host(functions)]
 pub trait DtmfIo {
@@ -22,7 +32,7 @@ pub trait DtmfIo {
     async fn send_dtmf_events(
         room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,
         events: Vec<DtmfEvent>,
-    ) -> String;
+    ) -> Result<String, SendDtmfError>;
     #[host(function)]
     async fn receive_dtmf(
         room: std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>,

@@ -1,6 +1,6 @@
 use crate::telemetry;
 use lk_agents_voice::workflows::machine::dtmf::{
-    DtmfEvent, DtmfReception, DtmfSendError, ReceiveDtmfError, dtmf_event_to_code, dtmf_send_answer,
+    DtmfEvent, DtmfReception, ReceiveDtmfError, SendDtmfError, dtmf_event_to_code, dtmf_sent_answer,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,26 +9,23 @@ use std::time::Duration;
 pub const DTMF_PUBLISH_DELAY: Duration = Duration::from_millis(300);
 
 /// `send_dtmf_events(events)`: each key published as a keypad tone in `room`, 0.3 s apart; the
-/// answer to the model is [`dtmf_send_answer`]'s.
+/// answer to the model is [`dtmf_sent_answer`]'s. A room that is not connected, or a key it
+/// refused, is [`SendDtmfError::Failed`], without the room's own error.
 pub async fn send_dtmf_events(
     room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
     events: Vec<DtmfEvent>,
     clock: std::sync::Arc<dyn lk_agents_abi::Clock>,
-) -> String {
-    let outcome = async {
-        let room = room.rtc().ok_or(DtmfSendError::NotConnected)?;
-        for &event in &events {
-            let code = u32::from(dtmf_event_to_code(event));
-            room.local()
-                .publish_dtmf(&telemetry::Cx::NONE, code, event.as_str().to_owned())
-                .await
-                .map_err(|error| DtmfSendError::refused(event, error))?;
-            clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;
-        }
-        Ok(())
+) -> Result<String, SendDtmfError> {
+    let room = room.rtc().ok_or(SendDtmfError::Failed)?;
+    for &event in &events {
+        let code = u32::from(dtmf_event_to_code(event));
+        room.local()
+            .publish_dtmf(&telemetry::Cx::NONE, code, event.as_str().to_owned())
+            .await
+            .map_err(|_| SendDtmfError::Failed)?;
+        clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;
     }
-    .await;
-    dtmf_send_answer(&events, outcome)
+    Ok(dtmf_sent_answer(&events))
 }
 
 /// `receive_dtmf(room, num_digits, timeout, stop_event)`: the keys a SIP caller presses in
@@ -70,7 +67,7 @@ impl lk_agents_abi::voice::workflows::dtmf::DtmfIo for DtmfIo {
     async fn send_dtmf_events(
         room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         events: Vec<DtmfEvent>,
-    ) -> String {
+    ) -> Result<String, SendDtmfError> {
         let clock = room.clock();
         send_dtmf_events(room, events, clock).await
     }

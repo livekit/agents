@@ -62,45 +62,15 @@ pub fn dtmf_code(symbol: &str) -> Result<u8, UnknownDtmfSymbol> {
     parse(symbol).map(dtmf_event_to_code)
 }
 
-/// Why `send_dtmf_events` stopped before every key was published.
-#[derive(Debug)]
-pub enum DtmfSendError {
-    NotConnected,
-    /// The key the room refused to publish.
-    Key {
-        event: DtmfEvent,
-        error: String,
-    },
-}
-
-impl DtmfSendError {
-    /// The room's refusal of `event`, in the host's own words when the host raised it.
-    pub fn refused(event: DtmfEvent, error: lk_agents_abi::voice::rtc::RtcError) -> Self {
-        let error = match error {
-            lk_agents_abi::voice::rtc::RtcError::Host(host) => host.message,
-            other => other.to_string(),
-        };
-        DtmfSendError::Key { event, error }
-    }
-}
-
-/// What `send_dtmf_events` answers the model: the keys sent, or the first that failed and why.
-pub fn dtmf_send_answer(events: &[DtmfEvent], outcome: Result<(), DtmfSendError>) -> String {
-    match outcome {
-        Ok(()) => {
-            let keys: Vec<&str> = events.iter().map(|event| event.as_str()).collect();
-            format!("Successfully sent DTMF events: {}", keys.join(", "))
-        }
-        Err(DtmfSendError::NotConnected) => {
-            "Failed to send DTMF events: room is not connected".into()
-        }
-        Err(DtmfSendError::Key { event, error }) => {
-            format!("Failed to send DTMF event: {}. Error: {error}", event.as_str())
-        }
-    }
+/// What `send_dtmf_events` answers the model once every key was published. A key the room
+/// refused, or a room that is not connected, is [`SendDtmfError`] instead.
+pub fn dtmf_sent_answer(events: &[DtmfEvent]) -> String {
+    let keys: Vec<&str> = events.iter().map(|event| event.as_str()).collect();
+    format!("Successfully sent DTMF events: {}", keys.join(", "))
 }
 
 pub use lk_agents_abi::voice::workflows::dtmf::ReceiveDtmfError;
+pub use lk_agents_abi::voice::workflows::dtmf::SendDtmfError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DtmfAction {

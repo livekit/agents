@@ -5624,11 +5624,7 @@ pub fn send_dtmf_events<'py>(
             .collect::<PyResult<Vec<_>>>()
     })?;
     crate::py_calls::future_into_py(py, async move {
-        let out =
-            <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::send_dtmf_events(
-                room, events,
-            )
-            .await;
+        let out = <DtmfIoImpl as ::lk_agents_abi::voice::workflows::dtmf::DtmfIo>::send_dtmf_events(room, events).await.map_err(|e: ::lk_agents_abi::voice::workflows::dtmf::SendDtmfError| <::lk_agents_abi::voice::workflows::dtmf::SendDtmfError as crate::py_errors::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
     })
 }
@@ -14317,6 +14313,16 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::workflows::dtmf
                 ::std::string::ToString::to_string(self),
             ),
         }
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::workflows::dtmf::SendDtmfError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        crate::py_errors::host_exception(
+            "livekit.agents.llm.tool_context",
+            "ToolError",
+            ::std::string::ToString::to_string(self),
+        )
     }
 }
 
