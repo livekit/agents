@@ -296,8 +296,9 @@ impl<'a> AmdView<'a> {
         }
     }
 
-    /// Every `InsertUserItem` the session took, with its run, turn and words.
-    pub fn inserted_items(&self) -> Vec<(Observed, u64, u64, String)> {
+    /// Every `InsertUserItem` AMD sent, with its run, turn and words. AMD sends one for each turn
+    /// of a realtime run; the session decides whether it needs it.
+    pub fn sent_items(&self) -> Vec<(Observed, u64, u64, String)> {
         use lk_agents_voice::amd::AmdAnswer;
         let view = self.0.amd_run();
         let mut out = Vec::new();
@@ -310,6 +311,32 @@ impl<'a> AmdView<'a> {
         }
         out.sort_by_key(|(at, ..)| *at);
         out
+    }
+
+    /// The `InsertUserItem`s the session took: every one sent but those it dropped as not needed
+    /// (only an insertion is), each drop matched to the oldest insertion before it for the same
+    /// run and turn. Whether the session needed the words is judged on its own, by
+    /// `gated_turn_has_one_user_item`.
+    pub fn inserted_items(&self) -> Vec<(Observed, u64, u64, String)> {
+        use lk_agents_voice::trace::{AnswerDrop, GateStep};
+        let mut sent = self.sent_items();
+        for (at, step) in self.0.journal() {
+            let Step::Gate(GateStep::AnswerDropped {
+                run,
+                turn: Some(turn),
+                why: AnswerDrop::NotNeeded,
+            }) = step
+            else {
+                continue;
+            };
+            if let Some(i) = sent
+                .iter()
+                .position(|(sent_at, r, t, _)| sent_at <= at && *r == run.0 && *t == turn.0)
+            {
+                sent.remove(i);
+            }
+        }
+        sent
     }
 
     /// Every response request the session sent a realtime socket, in order.
