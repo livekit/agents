@@ -111,8 +111,18 @@ impl Rule for GateSettles {
 fn outcome(r: &Recording, turn: &GatedTurn, check: &mut Check) {
     let amd = r.amd_view();
     let requests = amd.requests_answering(turn);
-    let made: Vec<_> = requests.iter().filter(|q| !amd.preemptive(q)).collect();
-    let heard = requests.iter().filter_map(|q| amd.first_audio(q.speech?)).min();
+    // A realtime reply is the response the server was asked for in the turn's window, played as
+    // the speech the session reported for the turn.
+    let responses = amd.rt_responses_answering(turn);
+    let made = requests.iter().filter(|q| !amd.preemptive(q)).count() + responses.len();
+    let replied = amd.observed(turn.run).into_iter().filter_map(|(_, o)| match o {
+        AmdObservation::ReplyCreated { turn: t, speech } if t.0 == turn.turn => Some(speech.0),
+        _ => None,
+    });
+    let replied = replied.filter(|_| !responses.is_empty());
+    let heard = (requests.iter().filter_map(|q| amd.first_audio(q.speech?)))
+        .chain(replied.filter_map(|speech| amd.first_audio(speech)))
+        .min();
     // A turn with no words has none to keep, and a realtime turn's are the server's transcript of
     // the audio committed for it; `StopResponse` ignores the turn, as Python does
     // (`agent_activity.py`); a turn dropped behind a speech it could not interrupt keeps none.
@@ -135,12 +145,11 @@ fn outcome(r: &Recording, turn: &GatedTurn, check: &mut Check) {
     };
     // A turn that asked for no reply gets none, whatever AMD decided.
     if !answer.allows() || amd.skips_reply(turn.turn) {
-        check.expect_with(Subject::Session, kept && made.is_empty() && heard.is_none(), || {
+        check.expect_with(Subject::Session, kept && made == 0 && heard.is_none(), || {
             format!(
-                "turn {} was denied ({answer:?}) and kept={kept}, was asked {} times, heard at \
-                 {heard:?}",
-                turn.turn,
-                made.len()
+                "turn {} was denied ({answer:?}) and kept={kept}, was asked {made} times, heard \
+                 at {heard:?}",
+                turn.turn
             )
         });
         return;
@@ -153,11 +162,9 @@ fn outcome(r: &Recording, turn: &GatedTurn, check: &mut Check) {
     if !explained.model_owes || explained.otherwise {
         check.expect_with(Subject::Session, explained.otherwise, || {
             format!(
-                "turn {} was allowed ({answer:?}, applied at {} ms), asked {} times, and not \
-                 heard by {due} ms with nothing to explain it",
-                turn.turn,
-                applied.at_ms,
-                made.len()
+                "turn {} was allowed ({answer:?}, applied at {} ms), asked {made} times, and \
+                 not heard by {due} ms with nothing to explain it",
+                turn.turn, applied.at_ms
             )
         });
         return;
@@ -209,21 +216,17 @@ fn unheard_explained(
     requests: &[Request<'_>],
     due: u64,
 ) -> Explained {
-    use lk_agents_voice::trace::{GateStep, SpeechStep, Step};
+    use lk_agents_voice::trace::{SpeechStep, Step};
     let amd = r.amd_view();
     let after = |at: Observed| at > turn.committed && at.at_ms <= due;
     if amd.stopped(turn) || amd.dropped_unanswered(turn) {
         return Explained { otherwise: true, model_owes: false };
     }
-    // A newer turn's commit cancelled the reply while the gate still held it.
-    let refused = r.journal().iter().any(|(at, step)| {
-        after(*at)
-            && match step {
-                Step::Speech(SpeechStep::ScheduleRejected { .. }) => true,
-                Step::Gate(GateStep::Superseded { turn: t, speech: Some(_) }) => t.0 == turn.turn,
-                _ => false,
-            }
-    });
+    // A newer turn committed under the run cancels a reply the gate still held (spec §10.3).
+    let refused = turn.superseded.is_some_and(after)
+        || r.journal().iter().any(|(at, step)| {
+            after(*at) && matches!(step, Step::Speech(SpeechStep::ScheduleRejected { .. }))
+        });
     let faulted = r.faults().iter().any(|(at, _, _)| after(*at));
     let acted = r.applied().iter().filter(|a| a.accepted && after(a.at)).any(|a| {
         matches!(
@@ -267,8 +270,9 @@ fn unheard_explained(
         })
     };
     let model_owes = requests.iter().any(|q| r.live().has(Kind::Chat, q.chat) || !spoke(q.chat));
-    // A voice or a playout the case still owes.
-    let voice_owes = [Kind::Tts, Kind::Stream, Kind::Segment].into_iter().any(|kind| {
+    // A voice, a realtime response or a playout the case still owes.
+    let owed = [Kind::Tts, Kind::Stream, Kind::Segment, Kind::Generation];
+    let voice_owes = owed.into_iter().any(|kind| {
         r.opened().iter().any(|o| {
             o.kind == kind
                 && after(o.at)

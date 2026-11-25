@@ -23,7 +23,7 @@ impl Rule for AmdUserItemAddedOnce {
         id: "amd_user_item_added_once",
         guarantee: "A user transcript AMD inserts reaches the conversation exactly once, and \
                     never beside the turn's own words.",
-        examples: &[inserted_once],
+        examples: &[inserted_once, inserted_then_typed],
         counterexamples: &[inserted_but_dropped, inserted_twice, inserted_beside_the_words],
         probe: Some(an_untranscribed_turn),
     };
@@ -50,8 +50,19 @@ impl Rule for AmdUserItemAddedOnce {
                 continue;
             }
             let until = inserted.get(i + 1).map_or(Observed::END, |next| next.0);
-            let added: Vec<_> =
-                users.iter().filter(|(seen, _, t, _)| seen > at && *seen < until && t == text).collect();
+            // Text the host typed, or another turn's words, is not this turn's item even with the
+            // same words (`detector.py` `_add_realtime_transcript` inserts one item for the turn).
+            let for_turn = |source: &Source| match source {
+                Source::UserTyped => false,
+                Source::UserTurn { turn: TurnId(t) } => t == turn,
+                _ => true,
+            };
+            let added: Vec<_> = users
+                .iter()
+                .filter(|(seen, _, t, source)| {
+                    seen > at && *seen < until && t == text && for_turn(source)
+                })
+                .collect();
             check.expect_with(Subject::Session, added.len() == 1, || {
                 format!(
                     "AMD inserted {text:?} for turn {turn} at {} ms; the conversation added it \
@@ -104,6 +115,12 @@ fn item(a: Authored, id: &str, text: &str, source: Source) -> Authored {
 
 fn inserted_once() -> Recording {
     item(insert(turn()), "amd_1", WORDS, Source::HostCtx).done()
+}
+
+/// The host later types the same words: its own item, not a second copy.
+fn inserted_then_typed() -> Recording {
+    let a = item(insert(turn()), "amd_1", WORDS, Source::HostCtx);
+    item(a, "typed_1", WORDS, Source::UserTyped).done()
 }
 
 /// The gate drops the insertion, as a realtime session refused at attach would.

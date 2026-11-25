@@ -344,7 +344,9 @@ impl<'a> AmdView<'a> {
     }
 
     /// Where `turn`'s realtime reply may be asked for: from its commit to the next turn the host
-    /// heard committed, a newer gated turn, or a host `say()` or `generate_reply()`.
+    /// heard committed, a newer gated turn, the next buffer commit past the turn's own (a newer
+    /// turn, gated or not), or a host `say()`, `generate_reply()` or `run()` made while no run is
+    /// attached (the gate refuses them, spec §5.3).
     fn rt_window(&self, turn: &GatedTurn) -> Observed {
         let next_commit = self.0.host_view().events().into_iter().find_map(|(at, e)| match e {
             SessionEvent::UserTurnCompleted(done)
@@ -354,13 +356,24 @@ impl<'a> AmdView<'a> {
             }
             _ => None,
         });
+        let attachments = self.attachments();
+        let gated = |at: Observed| attachments.iter().any(|a| a.attached < at && at < a.until());
         let host_speech = self.0.applied().iter().find_map(|a| {
             (a.accepted
                 && a.at > turn.committed
-                && matches!(a.input, Input::Say { .. } | Input::GenerateReply { .. }))
+                && !gated(a.at)
+                && matches!(
+                    a.input,
+                    Input::Say { .. } | Input::GenerateReply { .. } | Input::Run { .. }
+                ))
             .then_some(a.at)
         });
-        [turn.superseded, next_commit, host_speech]
+        let mut later = self.rt_commits().into_iter().filter(|c| *c > turn.committed).peekable();
+        // The turn's own commit goes out in its commit's transition (`audio_committed`).
+        if later.peek().is_some_and(|c| c.at_ms == turn.committed.at_ms) {
+            later.next();
+        }
+        [turn.superseded, next_commit, later.next(), host_speech]
             .into_iter()
             .flatten()
             .min()
