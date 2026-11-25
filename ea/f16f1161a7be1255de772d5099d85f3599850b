@@ -1,0 +1,21 @@
+rust/crates/lk-agents-abi/src/voice/events.rs
+  s_7a5e37d73bcb3c::t_930b46464c2090 55-56
+rust/crates/lk-agents-voice/src/audio.rs
+  s_7a5e37d73bcb3c::t_1c2223a48da352 47,49-51,59,71,77,82-84,103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eaf16f1161a7be1255de772d5099d85f3599850b",
+  "prompts": {},
+  "sessions": {
+    "s_7a5e37d73bcb3c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7a5e37d73bcb3c",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
