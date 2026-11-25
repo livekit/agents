@@ -182,14 +182,14 @@ Each metric carries the same labels:
 
 The transcription delay starts at the end of speech, which the STT does not always decide.
 So this metric alone is split by one extra label,
-`lk.productstats.model.transcription_delay.speech_end`: `vad` when the session's VAD ended
-the speech, `provider` when the STT detects speech itself.
+`lk.productstats.model.transcription_delay.endpointing`: `vad` when the session's VAD ended
+the speech, `stt` when the STT detects the end of speech itself.
 
 - A turn whose final transcript arrived before the end of speech has no delay to measure:
   it records nothing, never a zero. So does a turn whose end of speech was not detected.
-- Delays are compared only within one `speech_end` value, as medians and percentiles per
-  provider and model. A `vad` delay includes the VAD's silence window; a `provider` delay
-  includes the provider's own endpointing.
+- Delays are compared only within one `endpointing` value, as medians and percentiles per
+  provider and model. A `vad` delay includes the VAD's silence window; an `stt` delay
+  includes the STT's own silence window.
 
 The plugin id is the last part of the package name, lowercase with hyphens, the same in
 every language: `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram`
