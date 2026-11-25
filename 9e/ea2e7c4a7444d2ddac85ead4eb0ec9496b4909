@@ -1,0 +1,31 @@
+rust/crates/lk-agents-voice/src/amd/machine/harness.rs
+  s_c9fa01ab24948b::t_6fea5f925d9102 75-77,82-89,100-101,120,153,204,209-210,485-492,495,509
+rust/crates/lk-agents-voice/src/amd/machine/limits_tests.rs
+  s_c9fa01ab24948b::t_e545d78bbfc396 158,284,290-294,296,306-450,463,466,469,476,573,576-577,582,606,716-718,725-729,732-733
+rust/crates/lk-agents-voice/src/amd/machine/mod.rs
+  s_c9fa01ab24948b::t_a16b4e33917a32 34,170-185,257-260,295-297,403-423,425,479-480,487-488,498,500-505,507,511-523,526-532,552-553,583-606,892-899,904
+rust/crates/lk-agents-voice/src/amd/machine/replies_tests.rs
+  s_c9fa01ab24948b::t_a4b64c0aae5bd3 500-520
+rust/crates/lk-agents-voice/src/amd/machine/reply.rs
+  s_c9fa01ab24948b::t_7157b94022278d 35-37,43-60
+rust/crates/lk-agents-voice/src/amd/machine/turns_tests.rs
+  s_c9fa01ab24948b::t_5642d4d10b4c33 932-953
+rust/crates/lk-agents-voice/src/amd/machine/voicemail_tests.rs
+  s_c9fa01ab24948b::t_5586ba524297f6 7,43,95,134,171-172,272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9eea2e7c4a7444d2ddac85ead4eb0ec9496b4909",
+  "prompts": {},
+  "sessions": {
+    "s_c9fa01ab24948b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16d4b070-3315-410b-8e32-1f2ab17907a1",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
