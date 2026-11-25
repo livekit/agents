@@ -235,7 +235,7 @@ pub enum Record {
 }
 
 /// Where producers send records. Recording never blocks or fails: a full queue drops the
-/// record and counts it.
+/// record.
 pub trait RecordSink: Send + Sync {
     fn record(&self, record: Record);
 }

@@ -185,12 +185,10 @@ from ._generated._core_telemetry import (
     Tagger as Tagger,
     TelemetrySpan as TelemetrySpan,
     _core_LoopWatch as _core_LoopWatch,
-    _core_telemetry_conflict as _core_telemetry_conflict,
     _core_telemetry_export as _core_telemetry_export,
     _core_telemetry_install as _core_telemetry_install,
     _core_telemetry_shutdown as _core_telemetry_shutdown,
     configure as configure,
-    diagnostics as diagnostics,
     session_report_json as session_report_json,
     set_capture_content as set_capture_content,
 )
