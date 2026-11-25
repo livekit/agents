@@ -144,9 +144,24 @@ class STT(stt.STT):
                     sock_connect=conn_options.timeout,
                 ),
             ) as response:
-                response_data = await response.json()
+                if response.status >= 400:
+                    raise APIStatusError(
+                        message=f"Clova STT request failed: {await response.text()}",
+                        status_code=response.status,
+                        request_id=None,
+                        body=None,
+                    )
+                response_data = await response.json(content_type=None)
                 end = time.time()
-                text = response_data.get("text")
+                if not isinstance(response_data, dict) or "error" in response_data:
+                    raise APIStatusError(
+                        message=f"Unexpected Clova STT response: {response_data}",
+                        status_code=response.status,
+                        request_id=None,
+                        body=response_data,
+                        retryable=False,
+                    )
+                text = response_data.get("text") or ""
                 confidence = response_data.get("confidence")
                 logger.info(
                     "clova stt result",
@@ -156,12 +171,16 @@ class STT(stt.STT):
                         "total_seconds": end - start,
                     },
                 )
-                if not text or "error" in response_data:
-                    raise ValueError(f"Unexpected response: {response_data}")
-                if confidence < self.threshold:
-                    raise ValueError(
-                        f"Confidence: {confidence} is bellow threshold {self.threshold}. Skipping."
+                # silence, noise, or a low-confidence result is not an error: return an
+                # empty final transcript so the VAD StreamAdapter simply skips it
+                if not text:
+                    return self._transcription_to_speech_event(text="", language=lang)
+                if confidence is not None and confidence < self.threshold:
+                    logger.debug(
+                        "clova stt result below confidence threshold, skipping",
+                        extra={"confidence": confidence, "threshold": self.threshold},
                     )
+                    return self._transcription_to_speech_event(text="", language=lang)
                 logger.info("clova stt final event", extra={"lk.pii.data": response_data})
                 return self._transcription_to_speech_event(text=text, language=lang)
 
@@ -178,7 +197,7 @@ class STT(stt.STT):
     def _transcription_to_speech_event(
         self,
         text: str,
-        event_type: SpeechEventType = stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        event_type: SpeechEventType = stt.SpeechEventType.FINAL_TRANSCRIPT,
         language: str | None = None,
     ) -> stt.SpeechEvent:
         return stt.SpeechEvent(
