@@ -48,6 +48,10 @@ def _classifier(category: str, reply: str = "Hi, this is Ada.") -> FakeLLM:
     return FakeLLM(answer)
 
 
+def _said(session: VoiceSession[Any]) -> list[str | None]:
+    return [i.text_content for i in session.history.items if i.type == "message"]
+
+
 def _session(model: llm.LLM, phrases: list[str]) -> tuple[VoiceSession[Any], FakeAudioInput]:
     session: VoiceSession[Any] = VoiceSession(
         vad=FakeVAD(),
@@ -315,10 +319,10 @@ async def test_an_ivr_reply_runs_the_dtmf_tool() -> None:
         await session.start(Agent(instructions="Reach sales."))
         async with AMD(session, llm=None, stt=None, machine_silence_threshold=0) as detector:
             audio.speak(0.4)
-            await until(lambda: executed, "the DTMF call ran")
+            await until(lambda: "Done." in _said(session), "the tool follow-up was said")
             assert detector.lifecycle is AMDLifecycle.ACTIVE, "an IVR stage keeps listening"
-        offered = [[t.id for t in tools] for tools in model.tools]
         # the IVR reply and its tool follow-up; never the classifier, menu or preemptive requests
+        offered = [[t.id for t in tools] for tools in model.tools]
         assert sum("send_dtmf_events" in ids for ids in offered) == 2
         [call] = executed[0].function_calls
         assert call.name == "send_dtmf_events"
