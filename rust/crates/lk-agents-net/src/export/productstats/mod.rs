@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::productstats::{DropReason, ExportDropped, ProductStatsResource, plugin_label};
-use lk_agents_abi::telemetry::decl::{Attrs as _, Label, MetricDecl};
+use lk_agents_abi::telemetry::decl::{self, Attrs as _, Label, MetricDecl};
 use lk_agents_abi::telemetry::record::{KeyValues, Measurement};
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
 use parking_lot::{Mutex, RwLock};
@@ -139,7 +139,7 @@ impl State {
     }
 }
 
-fn measurement<M: MetricDecl>(labels: &M, n: u64) -> Measurement {
+fn measurement<M: MetricDecl<Audience = decl::ProductStats>>(labels: &M, n: u64) -> Measurement {
     let mut out = KeyValues::new();
     labels.write(&mut out);
     Measurement {

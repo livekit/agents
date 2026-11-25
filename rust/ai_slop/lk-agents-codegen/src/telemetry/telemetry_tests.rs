@@ -294,6 +294,37 @@ fn product_statistics_hold_only_bounded_values() {
     }
 }
 
+// Catches: a customer declaration in `productstats` (exported to LiveKit) or a product statistic
+// declared elsewhere, either one recordable into the other audience's pipeline.
+#[test]
+fn product_statistics_live_in_productstats_and_nowhere_else() {
+    let read = |stats: &str, other: &str| {
+        let krate = Crate::from_files(
+            "abi",
+            &[
+                ("lib.rs", "pub mod telemetry; pub mod productstats; pub mod other;"),
+                ("telemetry/mod.rs", "pub mod decl; pub mod semconv;"),
+                ("telemetry/decl.rs", DECL),
+                ("telemetry/semconv.rs", SEMCONV),
+                ("productstats.rs", stats),
+                ("other.rs", other),
+            ],
+        )?;
+        telemetry::read(&krate)
+    };
+    let metric = |name: &str, audience: &str| {
+        format!(
+            "/// M.\n#[metric(name = \"lk.{name}\", kind = Counter, unit = \"1\"{audience})]\n#[derive(Attrs)]\npub struct M;"
+        )
+    };
+    let stats = ", audience = ProductStats";
+    read(&metric("productstats.m", stats), &metric("other.m", "")).unwrap();
+    let error = read(&metric("productstats.m", ""), "").err().expect("accepted");
+    assert!(error.contains("is `audience = ProductStats`"), "{error}");
+    let error = read("", &metric("other.m", stats)).err().expect("accepted");
+    assert!(error.contains("lives in `productstats`"), "{error}");
+}
+
 // Catches: an output missing a declaration or misreporting it, a dependency key redefined in
 // the Weaver registry, or the pins lost.
 #[test]

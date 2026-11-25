@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use lk_agents_abi::productstats::{ProviderLabels, STALL_SIGNATURE_FRAMES};
-use lk_agents_abi::telemetry::decl::{Label, MetricDecl, Number};
+use lk_agents_abi::telemetry::decl::{Label, MetricDecl, Number, ProductStats};
 use lk_agents_abi::telemetry::record::{KeyValues, Measurement, StackFrame};
 use parking_lot::RwLock;
 
@@ -42,8 +42,20 @@ pub fn enabled() -> bool {
     SINK.read().is_some()
 }
 
-/// Records one measurement of `M` under `labels`.
-pub fn record<M: MetricDecl>(labels: &M, value: impl Into<Number>) {
+/// Records one measurement of `M` under `labels`. Only a product statistic records here:
+///
+/// ```
+/// use lk_agents_abi::productstats::JobStarts;
+/// lk_agents_telemetry::productstats::record(&JobStarts, 1u64);
+/// ```
+///
+/// A customer instrument does not compile:
+///
+/// ```compile_fail,E0271
+/// use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
+/// lk_agents_telemetry::productstats::record(&WorkerProcessReadyDuration, 1.0);
+/// ```
+pub fn record<M: MetricDecl<Audience = ProductStats>>(labels: &M, value: impl Into<Number>) {
     let Some(sink) = SINK.read().clone() else { return };
     let mut out = KeyValues::new();
     labels.write(&mut out);
@@ -59,7 +71,7 @@ pub fn record<M: MetricDecl>(labels: &M, value: impl Into<Number>) {
 }
 
 /// Adds one to counter `M`.
-pub fn count<M: MetricDecl>(labels: &M) {
+pub fn count<M: MetricDecl<Audience = ProductStats>>(labels: &M) {
     record(labels, 1u64);
 }
 
