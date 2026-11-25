@@ -48,6 +48,7 @@ from .models import (
     ChatModels,
     CometAPIChatModels,
     DeepSeekChatModels,
+    MartLLMChatModels,
     NebiusChatModels,
     OctoChatModels,
     OpenRouterProviderPreferences,
@@ -629,6 +630,60 @@ class LLM(llm.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+        )
+
+    @staticmethod
+    def with_martllm(
+        *,
+        model: str | MartLLMChatModels = "openai/gpt-4.1-mini",
+        api_key: str | None = None,
+        base_url: str = "https://api.martllm.com/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of MartLLM LLM (OpenAI-compatible).
+
+        ``api_key`` must be set to your MartLLM API key, either using the argument or by setting
+        the ``MARTLLM_API_KEY`` environment variable.
+
+        MartLLM is a marketplace where third-party providers serve models behind one
+        OpenAI-compatible API. Model ids are provider-prefixed (for example
+        ``openai/gpt-4.1-mini``); the full list is at ``GET https://api.martllm.com/v1/models``.
+
+        Tool schemas are sent non-strict, because a request can be served by different
+        upstream providers and not all of them accept strict schemas.
+
+        Docs: https://martllm.com/docs/quickstart
+        """
+
+        api_key = api_key or os.environ.get("MARTLLM_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "MartLLM API key is required, either as argument or set MARTLLM_API_KEY environment variable"
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            _strict_tool_schema=False,
         )
 
     @staticmethod
