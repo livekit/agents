@@ -58,8 +58,14 @@ impl Rule for GateCleansUp {
                     _ => None,
                 });
                 let Some(item) = item else { continue };
+                // An adopted preemptive generation answers too: it asked before the commit, under
+                // its own item, with the same words (proposal "Preemptive generation").
                 let answered = amd.requests().into_iter().any(|q| {
-                    q.opened > *at && q.opened.at_ms <= due && q.last_user().is_some_and(|m| m.id == item)
+                    let fresh = q.opened > *at && q.last_user().is_some_and(|m| m.id == item);
+                    let adopted = amd.preemptive(&q)
+                        && q.last_user().is_some_and(|m| m.text == done.new_transcript)
+                        && q.speech.is_some_and(|s| amd.first_audio(s).is_some_and(|h| h > *at));
+                    q.opened.at_ms <= due && (fresh || adopted)
                 });
                 check.expect_with(Subject::Session, answered, || {
                     format!(

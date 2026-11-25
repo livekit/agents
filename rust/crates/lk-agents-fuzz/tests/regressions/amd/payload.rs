@@ -7,6 +7,7 @@ use lk_agents_fuzz::fakes::amd::STAGE;
 use lk_agents_fuzz::input::{
     AgentText, AmdVerdict, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
 };
+use lk_agents_fuzz::record::Kind;
 use lk_agents_voice::amd::SEND_DTMF_TOOL;
 
 const LINE: &str = "Hello, this is the clinic.";
@@ -22,17 +23,18 @@ fn stage_instructions_reach_the_reply_and_its_follow_up_and_are_never_saved() {
         call.says("you have reached the screener").await;
         call.decide(AmdVerdict::Stage).await;
         call.advance(50).await;
-        call.send(Input::LlmToolCall {
-            chat: Ref::new(0),
-            name: "lookup".into(),
-            args: ToolArgs("{}".into()),
-        })
-        .await;
-        call.send(Input::LlmEnd { chat: Ref::new(0) }).await;
+        // The reply's request, not the first one: the preemptive generation opened chat 0 and
+        // the staged decision discarded it (proposal "Preemptive generation").
+        let chat = Ref::new(*call.run.record.live().of(Kind::Chat).last().expect("the reply"));
+        call.send(Input::LlmToolCall { chat, name: "lookup".into(), args: ToolArgs("{}".into()) })
+            .await;
+        call.send(Input::LlmEnd { chat }).await;
         call.advance(50).await;
+        // A value, so the model is asked again: `Return` is a tool returning nothing, which
+        // ends the reply with no follow-up (`ToolOutcome::Nothing`).
         call.send(Input::ToolAnswered {
             tool: Ref::new(0),
-            answer: ToolAnswer::Return,
+            answer: ToolAnswer::Value,
             text: AgentText("found".into()),
         })
         .await;
@@ -179,8 +181,17 @@ fn a_plain_allow_adopts_the_preemptive_generation_and_a_staged_one_discards_it()
     }
 }
 
-/// "book a table" committed as an interim; its final reads "book a cable".
-async fn committed_as_interim(call: &mut Call) {
+/// A recogniser and manual turns, as `turns/correction.rs` sets them up.
+fn manual() -> Setup {
+    Setup { stt: true, turn: TurnMode::Manual, ..Setup::default() }
+}
+
+/// "book a table" committed as an interim; its final reads "book a cable". Returns when the
+/// commit was asked.
+// The commit lands after the endpointing delay, so this waits a second past `CommitTurn`, as
+// `turns/correction.rs` does: a final before the commit replaces the words instead of
+// correcting a committed turn.
+async fn committed_as_interim(call: &mut Call) -> u64 {
     call.send(Input::SttStart { stt: Ref::new(0) }).await;
     call.send(Input::SttInterim {
         utterance: Ref::new(0),
@@ -189,8 +200,10 @@ async fn committed_as_interim(call: &mut Call) {
     })
     .await;
     call.advance(100).await;
+    let asked = call.now_ms();
     call.send(Input::CommitTurn { skip_reply: false }).await;
-    call.advance(100).await;
+    call.advance(1_000).await;
+    asked
 }
 
 async fn corrected(call: &mut Call) {
@@ -209,7 +222,7 @@ async fn corrected(call: &mut Call) {
 #[test]
 fn a_correction_before_and_after_the_reply_exists() {
     for before in [true, false] {
-        let call = Call::run(Setup { stt: true, ..Setup::default() }, async |call| {
+        let call = Call::run(manual(), async |call| {
             call.attach(None).await;
             committed_as_interim(call).await;
             if before {
@@ -240,10 +253,9 @@ fn a_correction_before_and_after_the_reply_exists() {
 #[test]
 fn a_correction_while_the_voicemail_reply_is_held() {
     let mut committed = 0;
-    let call = Call::run(Setup { stt: true, ..Setup::default() }, async |call| {
+    let call = Call::run(manual(), async |call| {
         call.attach(None).await;
-        committed_as_interim(call).await;
-        committed = call.now_ms();
+        committed = committed_as_interim(call).await;
         call.decide(AmdVerdict::Silence).await;
         call.advance(50).await;
         corrected(call).await;

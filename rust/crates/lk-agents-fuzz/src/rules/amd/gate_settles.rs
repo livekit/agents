@@ -65,7 +65,14 @@ impl Rule for GateSettles {
                 }
                 _ => None,
             });
-            check.expect_with(Subject::Session, ended.is_some_and(|(at, _)| at.at_ms <= due), || {
+            // `Detached` is the run's last observation (proposal "Detach", step 5): a turn its
+            // detach settled ends after it, judged by its outcome below.
+            let detached = (amd.attachments().into_iter())
+                .find(|a| a.run == turn.run)
+                .and_then(|a| a.detached)
+                .is_some_and(|d| d.at_ms <= due && ended.is_none_or(|(at, _)| at > d));
+            let ended_in_time = ended.is_some_and(|(at, _)| at.at_ms <= due);
+            check.expect_with(Subject::Session, ended_in_time || detached, || {
                 format!(
                     "turn {} was answered or superseded at {} ms and had not ended by {due} ms \
                      ({ended:?})",

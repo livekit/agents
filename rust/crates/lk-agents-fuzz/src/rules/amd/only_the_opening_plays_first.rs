@@ -1,5 +1,5 @@
 use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
-use lk_agents_voice::events::SessionEvent;
+use lk_agents_voice::trace::{GateStep, Step};
 
 use crate::{
     authored::Authored,
@@ -27,7 +27,6 @@ impl Rule for OnlyTheOpeningPlaysFirst {
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let amd = r.amd_view();
-        let events = r.host_view().events();
         for attachment in amd.attachments() {
             let allowed = amd
                 .answers()
@@ -37,12 +36,14 @@ impl Rule for OnlyTheOpeningPlaysFirst {
                 .next()
                 .unwrap_or(Observed::END);
             let end = allowed.min(attachment.until());
+            // The opening is the speech the session let bypass the hold (the proposal's owner of
+            // invariant 15: "DST sink rule with `OpeningBypass`"). The session applies
+            // `Activated` after the driver has moved on, so no input window can pick it out.
             let opening = attachment.activated.and_then(|(activated, opening)| {
                 opening?;
-                let next = r.applied().iter().map(|a| a.at).find(|at| *at > activated)?;
-                events.iter().find_map(|(at, e)| match e {
-                    SessionEvent::SpeechCreated { speech, kind: SpeechKind::Say | SpeechKind::GenerateReply, .. }
-                        if *at > activated && *at < next =>
+                r.journal().iter().find_map(|(at, step)| match step {
+                    Step::Gate(GateStep::OpeningBypass { speech })
+                        if *at > activated && *at < attachment.until() =>
                     {
                         Some((activated, speech.0))
                     }
@@ -101,6 +102,9 @@ fn activated() -> Authored {
         .sent(Input::AmdAttach {})
         .sent(Input::AmdActivate { opening: Some(AmdOpening::Text) })
         .speech_created(5, SpeechKind::Say)
+        .journal(Step::Gate(GateStep::OpeningBypass {
+            speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(5),
+        }))
         .sent(Input::Advance { ms: Millis(1) })
 }
 

@@ -29,17 +29,22 @@ impl Rule for AdoptedRequestMatches {
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let amd = r.amd_view();
+        // An agent's own tool with that id is in every request (proposal "Reply payload: Tools").
+        let amds_dtmf = !amd.agent_declares(SEND_DTMF_TOOL);
         for turn in amd.gated_turns() {
             for request in amd.requests_answering(&turn).into_iter().filter(|q| amd.preemptive(q)) {
                 check.expect_with(
                     Subject::Resource(crate::record::Kind::Chat, request.chat),
-                    !request.carries(STAGE) && !request.tools.iter().any(|t| t == SEND_DTMF_TOOL),
+                    !request.carries(STAGE)
+                        && !(amds_dtmf && request.tools.iter().any(|t| t == SEND_DTMF_TOOL)),
                     || format!("preemptive request {} carries AMD's stage or DTMF", request.chat),
                 );
                 let Some(heard) = request.speech.and_then(|s| amd.first_audio(s)) else {
                     continue;
                 };
-                let allowed = amd.allowed_at(&turn);
+                // The decision applied, not the first one sent: a detach replaces a decision
+                // stored while the turn was in its hook (proposal "Detach", step 3).
+                let allowed = amd.deciding(&turn).filter(Answer::allows);
                 let plain = matches!(
                     allowed,
                     Some(Answer::Decide { verdict: AmdVerdict::Allow, .. } | Answer::Detach { .. })

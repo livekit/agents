@@ -270,6 +270,60 @@ impl<'a> AmdView<'a> {
         self.answers_for(turn).into_iter().find(Answer::allows)
     }
 
+    /// When the customer hook of `turn` returned: its commit when no hook ran for it, `None`
+    /// while it runs.
+    pub fn hook_returned(&self, turn: &GatedTurn) -> Option<Observed> {
+        use lk_agents_voice::agent_session::HookKind;
+        use lk_agents_voice::audio_recognition::TurnId;
+        use lk_agents_voice::trace::HandoffStep;
+        let mut issued = None;
+        for (at, step) in self.0.journal() {
+            match step {
+                Step::Handoff(HandoffStep::HookIssued {
+                    hook,
+                    kind: HookKind::OnUserTurnCompleted,
+                    turn: Some(t),
+                    ..
+                }) if *t == TurnId(turn.turn) && issued.is_none() => issued = Some(*hook),
+                Step::Handoff(HandoffStep::HookFinished { hook, .. }) if Some(*hook) == issued => {
+                    return Some(*at);
+                }
+                _ => {}
+            }
+        }
+        if issued.is_some() { None } else { Some(turn.committed) }
+    }
+
+    /// The answer that decided `turn`: its first decision, applied once both it and the hook's
+    /// return came, unless its run's detach came first and settled the turn with `pending`
+    /// (proposal "Detach", step 3: `pending` replaces a decision not applied yet).
+    pub fn deciding(&self, turn: &GatedTurn) -> Option<Answer> {
+        let answers = self.answers_for(turn);
+        let decide = answers.iter().find(|a| matches!(a, Answer::Decide { .. })).copied();
+        let detach = answers.iter().find(|a| matches!(a, Answer::Detach { .. })).copied();
+        let hook = self.hook_returned(turn);
+        let applied = decide.and_then(|d| hook.map(|h| d.at().max(h)));
+        match (applied, detach) {
+            (Some(applied), Some(detach)) if detach.at() < applied => Some(detach),
+            (None, Some(detach)) => Some(detach),
+            _ => decide,
+        }
+    }
+
+    /// Whether an agent declared a tool named `name` (its `AgentConfigUpdate`): then the tool in a
+    /// request is the agent's, not one AMD added.
+    pub fn agent_declares(&self, name: &str) -> bool {
+        self.0.host_view().events().iter().any(|(_, e)| match e {
+            SessionEvent::ConversationItemAdded { item, .. } => match &**item {
+                lk_agents_abi::ChatItem::AgentConfigUpdate(update) => {
+                    update.tools_added.iter().flatten().any(|t| t == name)
+                }
+                _ => false,
+            },
+            _ => false,
+        })
+    }
+
     /// Every model request, in order.
     pub fn requests(&self) -> Vec<Request<'a>> {
         self.0

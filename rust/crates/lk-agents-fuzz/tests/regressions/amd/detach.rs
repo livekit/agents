@@ -93,6 +93,11 @@ fn a_wait_turn_in_its_hook_is_never_answered() {
             call.advance(50).await;
             call.model_answers(LINE).await;
             call.advance(3_000).await;
+            if close {
+                // The close waits on the hosted `on_exit` it issued until the hook bound, as
+                // without AMD; past it, the close finishes and the streams it owes are closed.
+                call.advance(30_000).await;
+            }
         });
         assert!(call.unanswered("please hold"), "close={close}");
         assert!(call.saved_user_words().contains(&"please hold".to_string()), "close={close}");
