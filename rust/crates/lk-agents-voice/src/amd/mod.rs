@@ -140,7 +140,8 @@ pub enum AmdAnswer {
     /// The decision for a committed turn. It may arrive before or after the customer hook
     /// returns.
     ReplyDecided { run: AmdRunId, turn: TurnId, decision: ReplyDecision },
-    /// The transcript for a realtime model without user transcription (spec §7.2).
+    /// The transcript for a realtime model without user transcription and without session STT
+    /// (spec §7.2), also for an older turn's late final and a turn whose prediction was reused.
     InsertUserItem { run: AmdRunId, turn: TurnId, text: String },
     /// AMD completed. `pending` settles every turn committed under the gate whose decision is
     /// not applied yet.
@@ -219,9 +220,15 @@ pub enum AmdAttachRefused {
     HandoffInFlight,
     #[error("finish the AgentTask before entering AMD")]
     TaskRunning,
-    /// Realtime commit paths are not gated yet.
-    #[error("amd does not support realtime models yet")]
-    Realtime,
+    /// The realtime server detects turns and starts its replies itself, past the gate.
+    #[error("amd requires client-side turn detection with realtime models")]
+    RealtimeServerTurnDetection,
+    /// The realtime model cannot take a response's instructions and tools, or replies to tool
+    /// results on its own.
+    #[error(
+        "amd requires a realtime model with per-response tools and client-controlled tool replies"
+    )]
+    RealtimeTools,
     #[error("the session is closing")]
     Closing,
 }

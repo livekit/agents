@@ -482,6 +482,7 @@ impl VoiceDriver {
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateTools(
                         lk_agents_abi::UpdateTools { tools: self.activity.toolset.specs.clone() },
                     ));
+                    self.realtime_tools_reset();
                 }
                 self.record_trace(ToolStep::ToolsetUpdated { tools });
             }
@@ -627,6 +628,7 @@ impl VoiceDriver {
         self.rt_send(lk_agents_abi::RealtimeCommand::UpdateTools(lk_agents_abi::UpdateTools {
             tools: self.activity.toolset.specs.clone(),
         }));
+        self.realtime_tools_reset();
     }
 
     /// `AgentHandoff` is history-only; `AgentConfigUpdate` goes to the agent's context and history.

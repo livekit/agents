@@ -115,8 +115,12 @@ impl super::AgentActivity {
             allow_interruptions: handle.allow_interruptions(),
             interrupted: handle.interrupted(),
         });
-        let rt_turn_detection =
-            self.realtime().is_some_and(|session| session.capabilities.turn_detection);
+        // Under the AMD gate, what counts is whether the server's detection runs: a realtime
+        // model without session STT drops a backchannel over agent speech (spec §5.3).
+        let rt_turn_detection = self.realtime_activity().is_some_and(|rt| match self.gate {
+            Some(_) => rt.server_segments(),
+            None => rt.session.capabilities.turn_detection,
+        });
         let decision = decide_commit(&CommitInputs {
             // Scheduling stays paused through the close's hard edge.
             scheduling_paused: self.speech_scheduler.is_paused()
@@ -456,10 +460,12 @@ impl VoiceDriver {
         match cmd {
             TurnCommand::Commit { skip_reply } => {
                 self.record_trace(TurnStep::CommitRequested { skip_reply });
-                if self.activity.realtime().is_some() {
+                // A realtime turn the AMD gate decides goes through end of turn like any other.
+                let gated = self.activity.amd_attached() && !skip_reply;
+                if self.activity.realtime().is_some() && !gated {
                     // Nothing is pushed: a blank would re-send the context with a blank user turn.
                     if !skip_reply {
-                        self.realtime_user_turn(now);
+                        self.realtime_user_turn(now, None);
                     }
                     return;
                 }
@@ -840,10 +846,11 @@ impl VoiceDriver {
         call: Option<RequestId>,
     ) {
         // A realtime session commits its server buffer itself, and only when the server does not
-        // segment audio (a client commit of a server-segmented buffer is refused).
-        if let Some(rt) = self.activity.realtime_activity() {
-            let server_segments =
-                rt.session.capabilities.turn_detection && !rt.turn_detection_disabled;
+        // segment audio (a client commit of a server-segmented buffer is refused). A turn the AMD
+        // gate decides commits it at end of turn instead, even with no session STT.
+        let gated = self.activity.amd_attached() && !skip_reply;
+        if let Some(rt) = self.activity.realtime_activity().filter(|_| !gated) {
+            let server_segments = rt.server_segments();
             if skip_reply {
                 if let Some(rt) = self.activity.realtime_activity_mut() {
                     rt.heard.answered(now);
@@ -854,12 +861,15 @@ impl VoiceDriver {
                     ));
                 }
             } else {
-                self.realtime_user_turn(now);
+                self.realtime_user_turn(now, None);
             }
             skip_reply = true;
         }
         // Reads the configured recogniser, so a dead stream still waits the timeout.
         if !self.activity.audio_recognition.stt_enabled() || self.session.closing.is_some() {
+            if gated && self.activity.realtime().is_some() && self.session.closing.is_none() {
+                self.on_turn(now, TurnCommand::Commit { skip_reply });
+            }
             self.record_trace(TurnStep::CommitAnswered { transcript: String::new() });
             self.answer(call, Answer::Commit(Ok(String::new())));
             return;

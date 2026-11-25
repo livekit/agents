@@ -19,11 +19,13 @@ use lk_agents_core::usage::ModelKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+pub use gated::GatedResponse;
 pub(crate) use realtime_state::HeardInput;
 pub use realtime_state::response_id_of;
 use realtime_state::{Pending, Phase, Reuse, Route, Swap, bare_reply};
 pub use realtime_state::{RealtimeSessionState, Request, RequestKey, Settled};
 
+mod gated;
 mod model_swap;
 pub(crate) mod realtime_state;
 mod transcripts;
@@ -245,11 +247,15 @@ impl VoiceDriver {
         }
     }
 
-    /// Commits the input buffer when the server did not segment, and asks for the reply.
-    pub(crate) fn realtime_user_turn(&mut self, now: Ts) -> Option<SpeechId> {
-        let rt = self.activity.realtime_activity()?;
-        let server_segments = rt.session.capabilities.turn_detection && !rt.turn_detection_disabled;
-        let request = Request::UserTurn { commit_audio: !server_segments };
+    /// Commits the input buffer when the server did not segment, and asks for the reply. A turn
+    /// the AMD gate decided committed its audio at commit, and `gated` adds to its reply.
+    pub(crate) fn realtime_user_turn(
+        &mut self,
+        now: Ts,
+        gated: Option<GatedResponse>,
+    ) -> Option<SpeechId> {
+        let commit_audio = !self.activity.realtime_activity()?.server_segments() && gated.is_none();
+        let request = Request::UserTurn { commit_audio, gated };
         self.realtime_request(now, request, None, None, VoiceRunParticipation::Outside)
     }
 
@@ -283,7 +289,7 @@ impl VoiceDriver {
         if t.closing {
             // A turn's own actuation still goes out; a caller's request is refused, since its
             // handle would never finish.
-            if let Request::UserTurn { commit_audio } = &request {
+            if let Request::UserTurn { commit_audio, .. } = &request {
                 if *commit_audio {
                     self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}));
                 }
@@ -307,16 +313,20 @@ impl VoiceDriver {
                     tool_choice: tool_choice.clone().filter(|_| t.caps.per_response_tool_choice),
                 })
             }
-            Request::UserTurn { commit_audio } => {
+            Request::UserTurn { commit_audio, gated } => {
                 if *commit_audio {
                     self.rt_send(RealtimeCommand::CommitAudio(rt::CommitAudio {}));
                 }
-                bare_reply(&req_id)
+                let instructions = gated.as_ref().and_then(|g| g.instructions.clone());
+                let reply =
+                    rt::GenerateReply { req_id: req_id.clone(), instructions, tool_choice: None };
+                RealtimeCommand::GenerateReply(reply)
             }
-            Request::ToolFollowUp { tool_choice, .. } => {
+            // A gated reply's follow-ups keep its stage instructions.
+            Request::ToolFollowUp { speech, tool_choice, .. } => {
                 RealtimeCommand::GenerateReply(rt::GenerateReply {
                     req_id: req_id.clone(),
-                    instructions: None,
+                    instructions: t.gated.get(speech).and_then(|g| g.instructions.clone()),
                     tool_choice: tool_choice.clone().filter(|_| t.caps.per_response_tool_choice),
                 })
             }
@@ -335,20 +345,22 @@ impl VoiceDriver {
                     allow,
                     add,
                     voice_run,
+                    None,
                 ))
             }
             Request::GenerateReply { read_back, .. } => {
                 let asked = Some(call.take());
-                let speech = self.start_realtime_speech(now, asked, false, allow, true, voice_run);
+                let speech =
+                    self.start_realtime_speech(now, asked, false, allow, true, voice_run, None);
                 if *read_back {
                     let ev = crate::workflows::machine::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
                     self.dtmf_step(ev);
                 }
                 Some(speech)
             }
-            Request::UserTurn { .. } => {
-                let outside = VoiceRunParticipation::Outside;
-                Some(self.start_realtime_speech(now, None, true, allow, true, outside))
+            Request::UserTurn { gated, .. } => {
+                let (outside, tools) = (VoiceRunParticipation::Outside, self.gated_tools(gated));
+                Some(self.start_realtime_speech(now, None, true, allow, true, outside, tools))
             }
         };
         match speech {
@@ -359,6 +371,9 @@ impl VoiceDriver {
             }
             Some(speech) => {
                 let t = &mut self.activity.realtime_activity_mut()?.state;
+                if let Request::UserTurn { gated: Some(gated), .. } = &request {
+                    t.gated.insert(speech, gated.clone());
+                }
                 t.register(req_id, request, None, allow, Some(speech), Phase::Unsent(cmd));
                 Some(speech)
             }
@@ -387,7 +402,7 @@ impl VoiceDriver {
         if let Some(cmd) =
             self.activity.realtime_activity_mut().and_then(|rt| rt.state.send_or_queue(req_id))
         {
-            self.rt_send(cmd);
+            self.rt_send_request(cmd);
             self.set_deadline(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
         }
     }
@@ -398,7 +413,7 @@ impl VoiceDriver {
             return;
         }
         if let Some((cmd, key)) = rt.state.next_queued() {
-            self.rt_send(cmd);
+            self.rt_send_request(cmd);
             self.set_deadline(Timer::RealtimeRequest(key), now.saturating_add(REQUEST_TIMEOUT));
         }
     }
@@ -607,6 +622,7 @@ impl VoiceDriver {
                 allow_interruptions,
                 add_to_chat_ctx,
                 VoiceRunParticipation::Outside,
+                None,
             ),
         };
         if let Some(rt) = self.activity.realtime_activity_mut() {
@@ -619,6 +635,8 @@ impl VoiceDriver {
     }
 
     /// `asked`: the host command's call. `turn`: it answers a user turn the client committed.
+    /// `toolset`: the tools its responses offer in place of the agent's (AMD's DTMF tool).
+    #[allow(clippy::too_many_arguments, reason = "one argument per facet of the announced speech")]
     fn start_realtime_speech(
         &mut self,
         now: Ts,
@@ -627,6 +645,7 @@ impl VoiceDriver {
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         voice_run: VoiceRunParticipation,
+        toolset: Option<std::sync::Arc<crate::tool_executor::Toolset>>,
     ) -> SpeechId {
         let human = asked.is_none();
         // `allow_interruptions=false` holds only when the client owns replies; a self-replying
@@ -652,6 +671,7 @@ impl VoiceDriver {
             add_to_chat_ctx,
             host_asked: asked.is_some() || turn,
             host_speech: asked.as_ref().and_then(Option::as_ref).map(|c| c.speech),
+            toolset,
             ..SpeechSpec::new(SpeechKind::Realtime, source, allow)
         };
         let speech = self.start_speech(now, spec);
@@ -795,8 +815,10 @@ impl VoiceDriver {
         for key in t.requeue_all() {
             self.clear_deadline(Timer::RealtimeRequest(key));
         }
+        // While AMD is attached the swap regenerates nothing: AMD decides every reply.
+        let regenerate = regenerate && busy && !self.activity.amd_attached();
         let Some(rt) = self.activity.realtime_activity_mut() else { return };
-        rt.state.swap = Some(Swap { waiting, regenerate: regenerate && busy });
+        rt.state.swap = Some(Swap { waiting, regenerate });
         self.realtime_replay(now, None);
     }
 
@@ -1119,6 +1141,7 @@ impl VoiceDriver {
     }
 
     fn close_realtime_player(&mut self, speech: SpeechId) {
+        self.realtime_response_closed(speech);
         if self.activity.realtime_activity_mut().is_some_and(|rt| rt.players.remove(&speech)) {
             self.record_effect(crate::agent_session::effects::VoiceEffect::CloseRealtimePlayer(
                 speech,

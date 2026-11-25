@@ -326,11 +326,17 @@ impl VoiceDriver {
     ) -> Option<SpeechId> {
         self.activity.last_turn = Some(info.turn_id);
         // A realtime session answers from the audio it heard: the STT's words are neither sent
-        // nor kept; the server's own transcript fills the user item.
+        // nor kept; the server's own transcript fills the user item. A gated turn keeps them for
+        // a model without user transcription.
         if self.activity.realtime().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+            if gate.is_some() && self.gated_turn_keeps_words(info) {
+                let user = self.user_turn_item(info, edits.user_text.as_deref());
+                let source = Source::UserTurn { turn: info.turn_id };
+                self.commit_item(ChatItem::Message(user), source, Visibility::Both);
+            }
             // Its speech is announced now, so the metrics name it.
-            let speech = self.realtime_user_turn(now);
+            let speech = self.realtime_user_turn(now, gate.map(|payload| payload.realtime()));
             self.emit_eou_metrics(info, speech);
             return speech;
         }

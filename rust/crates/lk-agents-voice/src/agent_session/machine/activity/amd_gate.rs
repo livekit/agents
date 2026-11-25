@@ -15,8 +15,9 @@
 
 use crate::agent::{Source, Visibility};
 use crate::agent_session::effects::{Timer, VoiceEffect};
+use crate::agent_session::machine::activity::realtime::{GatedResponse, Request};
 use crate::agent_session::machine::activity::scheduling::{
-    PreemptiveDiscard, SpeechId, SpeechKind, Status,
+    PreemptiveDiscard, SpeechId, SpeechKind, Status, VoiceRunParticipation,
 };
 use crate::agent_session::machine::activity::speech::SpeechSpec;
 use crate::agent_session::options::{AgentSessionOptions, ConfigLayer};
@@ -118,6 +119,8 @@ pub(crate) struct GatedReply {
 pub(crate) struct ReplyPayload {
     stage: Option<String>,
     toolset: Option<Arc<Toolset>>,
+    /// AMD's DTMF tool, when `toolset` offers it.
+    dtmf: Option<ToolSpec>,
     /// The request differs from a plain reply's: the reply never adopts the preemptive
     /// generation.
     changes_request: bool,
@@ -126,6 +129,11 @@ pub(crate) struct ReplyPayload {
 impl ReplyPayload {
     pub(crate) fn changes_request(&self) -> bool {
         self.changes_request
+    }
+
+    /// What a realtime reply's responses carry instead: the session's tools hold the DTMF tool.
+    pub(crate) fn realtime(&self) -> GatedResponse {
+        GatedResponse { instructions: self.stage.clone(), dtmf: self.dtmf.clone() }
     }
 
     /// `spec` carrying the payload.
@@ -233,11 +241,8 @@ impl VoiceDriver {
             Some(AmdAttachRefused::HandoffInFlight)
         } else if self.activity.voice_tasks.running() {
             Some(AmdAttachRefused::TaskRunning)
-        // Realtime commit paths do not reach the gate.
-        } else if self.activity.realtime().is_some() {
-            Some(AmdAttachRefused::Realtime)
         } else {
-            None
+            self.realtime_amd_refusal()
         };
         if let Some(why) = refused {
             self.record_trace(GateStep::AttachRefused { run, why });
@@ -291,13 +296,12 @@ impl VoiceDriver {
         match answer {
             AmdAnswer::Activated { opening, .. } => self.amd_activated(now, opening),
             AmdAnswer::ReplyDecided { turn, decision, .. } => self.amd_decided(now, turn, decision),
-            // Only a realtime model without user transcription needs it, and realtime sessions
-            // are refused at attach.
-            AmdAnswer::InsertUserItem { turn, .. } => self.record_trace(GateStep::AnswerDropped {
-                run,
-                turn: Some(turn),
-                why: AnswerDrop::Unsupported,
-            }),
+            AmdAnswer::InsertUserItem { turn, text, .. } => {
+                if !self.amd_insert_user_item(turn, text) {
+                    let why = AnswerDrop::NotNeeded;
+                    self.record_trace(GateStep::AnswerDropped { run, turn: Some(turn), why });
+                }
+            }
             AmdAnswer::Detach { pending, cancel, .. } => self.amd_detach(now, pending, cancel),
         }
     }
@@ -321,28 +325,48 @@ impl VoiceDriver {
         if self.session.states.user_speaking() {
             return self.record_trace(GateStep::OpeningDropped { why: OpeningDrop::UserSpeaking });
         }
-        let spec = match opening {
+        let realtime = self.activity.realtime().is_some();
+        // The opening cannot call tools, and extends no voice run.
+        let forbidden = Some(lk_agents_abi::ToolChoice::Forbidden);
+        let outside = VoiceRunParticipation::Outside;
+        let speech = match opening {
+            // A realtime model with no TTS says it itself, if it can.
+            Opening::Text(text) if self.realtime_says() => {
+                let request = Request::Say { text, add_to_chat_ctx: true };
+                self.realtime_request(now, request, None, Some(true), outside)
+            }
             Opening::Text(_)
                 if self.session.tts.is_none() && self.session.outputs.plays_audio() =>
             {
                 return self.record_trace(GateStep::OpeningDropped { why: OpeningDrop::NoVoice });
             }
-            Opening::Instructions(_) if self.session.llm.is_none() => {
+            Opening::Instructions(_) if self.session.llm.is_none() && !realtime => {
                 return self.record_trace(GateStep::OpeningDropped { why: OpeningDrop::NoModel });
             }
-            Opening::Text(text) => SpeechSpec::new(SpeechKind::Say, ReplySource::Text(text), true),
-            // The opening cannot call tools.
-            Opening::Instructions(instructions) => SpeechSpec {
-                turn_instructions: Some(instructions),
-                tool_choice: Some(lk_agents_abi::ToolChoice::Forbidden),
-                ..SpeechSpec::new(SpeechKind::GenerateReply, ReplySource::Llm, true)
-            },
+            Opening::Text(text) => {
+                let spec = SpeechSpec::new(SpeechKind::Say, ReplySource::Text(text), true);
+                Some(self.start_speech(now, spec))
+            }
+            Opening::Instructions(instructions) if realtime => {
+                let (instructions, read_back) = (Some(instructions), false);
+                let request =
+                    Request::GenerateReply { instructions, tool_choice: forbidden, read_back };
+                self.realtime_request(now, request, None, Some(true), outside)
+            }
+            Opening::Instructions(instructions) => Some(self.start_speech(
+                now,
+                SpeechSpec {
+                    turn_instructions: Some(instructions),
+                    tool_choice: forbidden,
+                    ..SpeechSpec::new(SpeechKind::GenerateReply, ReplySource::Llm, true)
+                },
+            )),
         };
-        let speech = self.start_speech(now, spec);
         // A speech the scheduler refused is no opening.
-        if self.activity.speech_scheduler.status(speech) != Some(Status::Queued) {
+        let s = &self.activity.speech_scheduler;
+        let Some(speech) = speech.filter(|speech| s.status(*speech) == Some(Status::Queued)) else {
             return self.record_trace(GateStep::OpeningDropped { why: OpeningDrop::Refused });
-        }
+        };
         // Scheduling runs after this transition, so the bypass is in place before it.
         if let Some(gate) = self.activity.gate.as_mut() {
             gate.opening = Some(OpeningSpeech { speech, played: false });
@@ -516,9 +540,11 @@ impl VoiceDriver {
             at: now,
         });
         self.set_hold_for(now, turn, Hold::Undecided { turn });
-        // The commit interrupt does not wait for an older turn's hook.
+        // The commit interrupt does not wait for an older turn's hook. A realtime turn's audio is
+        // committed now, before its decision.
         if !info.skip_reply {
             self.interrupt_for_user_turn(now);
+            self.realtime_gate_commit();
         }
     }
 
@@ -620,6 +646,7 @@ impl VoiceDriver {
         });
         ReplyPayload {
             stage: decision.instructions.clone(),
+            dtmf: toolset.as_ref().and_then(|t| t.specs.last().cloned()),
             toolset,
             changes_request: decision.changes_request(),
         }
@@ -635,8 +662,11 @@ impl VoiceDriver {
         if how != TurnEnd::Superseded {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
         }
-        let user = self.user_turn_item(&info, edits.user_text.as_deref());
-        self.commit_item(ChatItem::Message(user), Source::UserTurn { turn }, Visibility::Both);
+        // A realtime server's transcript of the committed audio is the turn's item.
+        if self.gated_turn_keeps_words(&info) {
+            let user = self.user_turn_item(&info, edits.user_text.as_deref());
+            self.commit_item(ChatItem::Message(user), Source::UserTurn { turn }, Visibility::Both);
+        }
         self.gate_turn_ended(turn, how);
     }
 
@@ -887,3 +917,7 @@ mod tests;
 #[cfg(test)]
 #[path = "amd_gate_rule_tests.rs"]
 mod rule_tests;
+
+#[cfg(test)]
+#[path = "amd_gate_realtime_tests.rs"]
+mod realtime_tests;

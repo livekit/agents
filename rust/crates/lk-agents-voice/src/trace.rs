@@ -324,8 +324,9 @@ pub enum AnswerDrop {
     TurnEnded,
     /// `Activated` arrived twice.
     AlreadyActive,
-    /// The session does not take this answer yet: realtime sessions are refused at attach.
-    Unsupported,
+    /// The session has the turn's words already: from the realtime server's transcript or its
+    /// own STT. Only a realtime model with neither takes AMD's `InsertUserItem`.
+    NotNeeded,
 }
 
 /// Why the gate did not create the opening (spec §10.6).

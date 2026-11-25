@@ -33,7 +33,7 @@ const SILENCE: Duration = Duration::from_millis(1500);
 const STAGE: &str = "You reached a call screener. Say who you are and why you are calling.";
 
 /// The name the host gives AMD's built-in DTMF tool.
-const SEND_DTMF_TOOL: &str = "send_dtmf_events";
+pub(super) const SEND_DTMF_TOOL: &str = "send_dtmf_events";
 
 /// AMD's built-in DTMF tool, as a host declares it at attach.
 pub(super) fn dtmf_tool() -> lk_agents_abi::ToolSpec {
