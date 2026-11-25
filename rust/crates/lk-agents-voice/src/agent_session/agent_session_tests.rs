@@ -579,6 +579,35 @@ fn initial_session(
     now: Now,
 ) -> InitialSession {
     let legs = lk_agents_abi::voice::session_options::SessionLegs::none();
+    initial_session_on(legs, parts, hook_bound, now)
+}
+
+/// [`driver`] on a session given these legs, with its default options resolved over them.
+/// Its audio output pauses when `legs.sink_can_pause`.
+pub(crate) fn driver_on(legs: lk_agents_abi::voice::session_options::SessionLegs) -> VoiceDriver {
+    let audio = lk_agents_abi::resources::AudioOutputRef {
+        id: lk_agents_abi::resources::ResourceId(90),
+        label: "audio".into(),
+        capabilities: lk_agents_abi::voice::rtc::AudioOutputCapabilities {
+            pause: legs.sink_can_pause,
+        },
+    };
+    let parts = SessionParts {
+        agent: "agent".into(),
+        max_unrecoverable_errors: 3,
+        outputs: crate::agent_session::Outputs::new(Some(audio), None),
+        ..Default::default()
+    };
+    let now = Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH };
+    VoiceDriver::new(initial_session_on(legs, parts, None, now))
+}
+
+fn initial_session_on(
+    legs: lk_agents_abi::voice::session_options::SessionLegs,
+    parts: SessionParts,
+    hook_bound: Option<std::time::Duration>,
+    now: Now,
+) -> InitialSession {
     let config =
         crate::agent_session::machine::activity::DriverConfig::new(Default::default(), legs);
     let view = Arc::new(SessionView {

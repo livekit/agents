@@ -11,6 +11,7 @@ use runner::Runner;
 
 pub mod models;
 pub mod runner;
+pub mod sessions;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 

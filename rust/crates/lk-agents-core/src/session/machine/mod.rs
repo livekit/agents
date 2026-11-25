@@ -79,6 +79,7 @@ impl Session {
             phase: Phase::NotStarted,
             live: None,
             deferred_input_offers: BTreeMap::new(),
+            facts: Default::default(),
             usage: Ledger::default(),
             sequence: 0,
         })
@@ -626,6 +627,8 @@ impl Session {
             }
         }
         let run_effects = invocation.run.handle_with_running_tools(event, now, &running);
+        let called = invocation.run.session_facts();
+        self.facts.merge(called);
         self.run_effects(run_effects, now, effects);
     }
 
@@ -652,6 +655,7 @@ impl Session {
                 agent_run::AgentRunEffect::ToolExecute {
                     call, prepared, function_call, ..
                 } if invocation.children.contains_key(&call) => {
+                    self.facts.agent_as_tool = true;
                     self.execute_child(call, function_call, invocation_id, prepared, effects)
                 }
                 agent_run::AgentRunEffect::ToolExecute {
@@ -1036,6 +1040,12 @@ impl Session {
     /// The latest snapshot of the turn's usage: every local invocation it ran, once.
     pub fn routing_usage(&mut self, usage: &Usage) {
         self.usage.add(usage);
+    }
+
+    /// Whether this turn called a local agent or a `RemoteAgent` as a tool, for its session's
+    /// product statistics.
+    pub fn session_facts(&self) -> lk_agents_abi::productstats::sessions::SessionFacts {
+        self.facts
     }
 
     pub fn usage(&self) -> Usage {

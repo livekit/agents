@@ -402,6 +402,12 @@ enum Resolved {
 }
 
 impl super::AgentActivity {
+    /// The active agent's tool of this name.
+    pub(super) fn tool_info(&self, name: &str) -> Option<&lk_agents_abi::agent::FunctionToolInfo> {
+        let tools = &self.toolset.agent.as_ref()?.definition().tools;
+        tools.iter().find(|tool| tool.spec.name == name)
+    }
+
     pub(super) fn expert_tools(&self) -> Vec<ExpertTool> {
         let Some(agent) = &self.toolset.agent else {
             return Vec::new();

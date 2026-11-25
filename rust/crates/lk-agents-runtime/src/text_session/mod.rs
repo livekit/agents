@@ -586,6 +586,9 @@ impl Driver {
         input_requirements: Vec<RunInputRequirement>,
     ) {
         self.finished = true;
+        if let Some(crate::agent_run::output::Target::Handler(turn)) = &self.output_target {
+            turn.session_facts(self.session.session_facts());
+        }
         self.routing.take();
         self.pending.clear();
         self.releases.clear();

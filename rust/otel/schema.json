@@ -5955,6 +5955,102 @@
         40.96,
         81.92
       ]
+    },
+    {
+      "name": "lk.product.agents.sessions",
+      "brief": "Sessions, counted once each when the session ends.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.session.entrypoint",
+          "type": "string",
+          "required": true,
+          "members": [
+            "rtc_session",
+            "a2a_session"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.session.topology",
+          "type": "string",
+          "required": true,
+          "members": [
+            "single",
+            "handoff",
+            "agent_as_tool",
+            "both"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.session.delegation",
+          "type": "string",
+          "required": true,
+          "members": [
+            "none",
+            "remote"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "lk.product.agents.voice.sessions",
+      "brief": "Voice sessions, counted once each when the session starts, with what it starts with.",
+      "kind": "counter",
+      "unit": "{session}",
+      "registry": "agents",
+      "labels": [
+        {
+          "key": "lk.product.agents.voice.pipeline",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt_llm_tts",
+            "realtime",
+            "realtime_tts",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.voice.turn_detection",
+          "type": "string",
+          "required": true,
+          "members": [
+            "vad",
+            "stt",
+            "realtime_llm",
+            "manual",
+            "model"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.voice.interruption",
+          "type": "string",
+          "required": true,
+          "members": [
+            "adaptive",
+            "vad",
+            "off"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.voice.false_interruption",
+          "type": "string",
+          "required": true,
+          "members": [
+            "on",
+            "off"
+          ],
+          "label": true
+        }
+      ]
     }
   ],
   "records": [

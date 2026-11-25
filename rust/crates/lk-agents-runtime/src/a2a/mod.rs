@@ -8,6 +8,7 @@ use crate::telemetry;
 use handler::{Handler, Read};
 use lk_agents_abi::a2a::metadata::REASON_KEY;
 use lk_agents_abi::a2a::turn::Turn as TurnContract;
+use lk_agents_abi::productstats::sessions::Entrypoint;
 use lk_agents_abi::storage::thread::{TaskReason, TaskWrite};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, Spawner};
 use lk_agents_core::a2a::task::{
@@ -329,6 +330,10 @@ impl Turn {
                         log::warn!(target: lk_agents_abi::LOG_TARGET,
                             "the managed text execution ended without its cleanup receipt");
                     }
+                    // One text request is one session, however it ended.
+                    lk_agents_telemetry::productstats::record(
+                        call.managed.session_facts().ended(Entrypoint::A2aSession),
+                    );
                     let now = elapsed();
                     let Call { holder, run, lease, mut submitted, .. } = call;
                     if let (Ok(_), Some(submitted)) = (&answer, submitted.as_mut()) {

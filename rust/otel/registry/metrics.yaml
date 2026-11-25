@@ -882,6 +882,56 @@
           "requirement_level": "required"
         }
       ]
+    },
+    {
+      "id": "metric.lk.product.agents.sessions",
+      "type": "metric",
+      "metric_name": "lk.product.agents.sessions",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions, counted once each when the session ends.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.session.entrypoint",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.session.topology",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.session.delegation",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.voice.sessions",
+      "type": "metric",
+      "metric_name": "lk.product.agents.voice.sessions",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Voice sessions, counted once each when the session starts, with what it starts with.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.voice.pipeline",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.voice.turn_detection",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.voice.interruption",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.voice.false_interruption",
+          "requirement_level": "required"
+        }
+      ]
     }
   ]
 }

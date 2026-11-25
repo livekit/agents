@@ -163,6 +163,8 @@ enum Behavior {
     },
     /// `InputRequired("Could you send a photo?")` from `request_photo`, call `p1`.
     Ask,
+    /// Its runs did this (called a local agent or a `RemoteAgent` as a tool), then `"done"`.
+    Ran(lk_agents_abi::productstats::sessions::SessionFacts),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -206,11 +208,15 @@ impl TurnHost for Fake {
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         ctx: &'a TurnContext,
-        _turn: Arc<dyn HandlerPort>,
+        turn: Arc<dyn HandlerPort>,
         cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::a2a::turn::HandlerOutput, ProviderError>>
     {
         Box::pin(async move {
+            // Each run under the turn reports what it did when it ends.
+            if let Behavior::Ran(facts) = &self.behavior {
+                turn.session_facts(*facts);
+            }
             // cancelled as the host cancels its task: the run stops where it waits
             tokio::select! {
                 biased;
@@ -272,6 +278,7 @@ impl Fake {
         match &self.behavior {
             Behavior::Echo => Ok(text(&format!("reply to: {message_text}"))),
             Behavior::Text(t) => Ok(text(t)),
+            Behavior::Ran(_) => Ok(text("done")),
             Behavior::Counter => {
                 let n = ctx.state.as_ref().and_then(|s| s["verified"].as_i64()).unwrap_or(0) + 1;
                 Ok(HandlerOutput {
@@ -1111,5 +1118,38 @@ mod attachments {
         reopened.delete_thread(&created.thread_id).await.unwrap();
         reopened.close().await;
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+// Catches: a text request not counted as one session when it ends (or counted per run under it),
+// counted as a call, a handler that failed not counted, or the local agents and `RemoteAgent`s
+// its runs called as tools missing from its topology and delegation.
+#[tokio::test]
+async fn a_text_request_is_one_session_with_what_its_runs_called() {
+    use lk_agents_abi::productstats::sessions::SessionFacts;
+    let stats = lk_agents_telemetry::productstats::testkit::Capture::start();
+    let fx = Backend::Sqlite.fixture(None).await;
+    let thread = fx.thread().await;
+    let session = |topology: &str, delegation: &str| {
+        let labels = [
+            ("lk.product.agents.session.entrypoint", "a2a_session"),
+            ("lk.product.agents.session.topology", topology),
+            ("lk.product.agents.session.delegation", delegation),
+        ];
+        let labels = labels.map(|(k, v)| (k.to_owned(), v.to_owned())).to_vec();
+        ("lk.product.agents.sessions", labels, 1.0)
+    };
+    let called = SessionFacts { agent_as_tool: true, remote: true, ..SessionFacts::default() };
+    for (n, (behavior, counted)) in [
+        (Behavior::Echo, session("single", "none")),
+        (Behavior::Ran(called), session("agent_as_tool", "remote")),
+        (Behavior::Raise, session("single", "none")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let message = a2a("hello", &format!("m{n}"), None, None);
+        let _ = run_turn(&thread, message, None, Fake::new(behavior)).await;
+        assert_eq!(stats.take(), [counted]);
     }
 }

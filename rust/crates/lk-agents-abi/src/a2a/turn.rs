@@ -108,6 +108,10 @@ pub trait HandlerPort: std::any::Any + Send + Sync {
         None
     }
 
+    /// What a run under this turn did that its session's product statistics report. Only a
+    /// text request counts them: any other owner counts its own session.
+    fn session_facts(&self, _facts: crate::productstats::sessions::SessionFacts) {}
+
     fn retain_session(&self, _task: crate::OwnedTask) -> Result<(), StorageError> {
         Err(StorageError::Invalid("this handler has no live task owner".into()))
     }

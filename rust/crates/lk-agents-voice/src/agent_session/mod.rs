@@ -108,6 +108,8 @@ pub(crate) struct VoiceSessionState {
     pub(crate) local_inputs: machine::activity::local_input::LocalInputs,
     /// `start_user_turn()`'s turn; it outlives a handoff.
     pub(crate) user_turns: machine::activity::user_turn::UserTurns,
+    /// What the session's agents did, which its product statistics report when it ends.
+    pub(crate) facts: lk_agents_abi::productstats::sessions::SessionFacts,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -197,6 +199,7 @@ impl VoiceSessionState {
             experts: Default::default(),
             local_inputs: Default::default(),
             user_turns: Default::default(),
+            facts: Default::default(),
         }
     }
 

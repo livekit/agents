@@ -252,6 +252,208 @@
       ]
     },
     {
+      "id": "registry.livekit.agents.sessions",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats::sessions`.",
+      "attributes": [
+        {
+          "id": "lk.product.agents.session.delegation",
+          "type": {
+            "members": [
+              {
+                "id": "none",
+                "value": "none",
+                "brief": "none",
+                "stability": "development"
+              },
+              {
+                "id": "remote",
+                "value": "remote",
+                "brief": "remote",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Whether a `RemoteAgent` was called."
+        },
+        {
+          "id": "lk.product.agents.session.entrypoint",
+          "type": {
+            "members": [
+              {
+                "id": "rtc_session",
+                "value": "rtc_session",
+                "brief": "rtc_session",
+                "stability": "development"
+              },
+              {
+                "id": "a2a_session",
+                "value": "a2a_session",
+                "brief": "a2a_session",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "A call or a text request."
+        },
+        {
+          "id": "lk.product.agents.session.topology",
+          "type": {
+            "members": [
+              {
+                "id": "single",
+                "value": "single",
+                "brief": "single",
+                "stability": "development"
+              },
+              {
+                "id": "handoff",
+                "value": "handoff",
+                "brief": "handoff",
+                "stability": "development"
+              },
+              {
+                "id": "agent_as_tool",
+                "value": "agent_as_tool",
+                "brief": "agent_as_tool",
+                "stability": "development"
+              },
+              {
+                "id": "both",
+                "value": "both",
+                "brief": "both",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "One agent, a handoff, an agent as a tool, or both."
+        },
+        {
+          "id": "lk.product.agents.voice.false_interruption",
+          "type": {
+            "members": [
+              {
+                "id": "on",
+                "value": "on",
+                "brief": "on",
+                "stability": "development"
+              },
+              {
+                "id": "off",
+                "value": "off",
+                "brief": "off",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Whether a false interruption pauses the agent's speech and resumes it."
+        },
+        {
+          "id": "lk.product.agents.voice.interruption",
+          "type": {
+            "members": [
+              {
+                "id": "adaptive",
+                "value": "adaptive",
+                "brief": "adaptive",
+                "stability": "development"
+              },
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              },
+              {
+                "id": "off",
+                "value": "off",
+                "brief": "off",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "How the session decides that the person is interrupting."
+        },
+        {
+          "id": "lk.product.agents.voice.pipeline",
+          "type": {
+            "members": [
+              {
+                "id": "stt_llm_tts",
+                "value": "stt_llm_tts",
+                "brief": "stt_llm_tts",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "realtime_tts",
+                "value": "realtime_tts",
+                "brief": "realtime_tts",
+                "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The models the session runs on."
+        },
+        {
+          "id": "lk.product.agents.voice.turn_detection",
+          "type": {
+            "members": [
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              },
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "realtime_llm",
+                "value": "realtime_llm",
+                "brief": "realtime_llm",
+                "stability": "development"
+              },
+              {
+                "id": "manual",
+                "value": "manual",
+                "brief": "manual",
+                "stability": "development"
+              },
+              {
+                "id": "model",
+                "value": "model",
+                "brief": "model",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "What ends the person's turn."
+        }
+      ]
+    },
+    {
       "id": "registry.livekit.agents.health",
       "type": "attribute_group",
       "brief": "Attributes declared in `lk_agents_abi::telemetry::health`.",
