@@ -155,8 +155,9 @@ pub enum AmdAnswer {
     /// The decision for a committed turn. It may arrive before or after the customer
     /// hook returns.
     ReplyDecided { run: AmdRunId, turn: TurnId, decision: ReplyDecision },
-    /// The transcript for a realtime model without user transcription (spec §7.2),
-    /// also for an older turn's late final and a turn whose prediction was reused.
+    /// The transcript for a realtime model without user transcription and without
+    /// session STT (spec §7.2), also for an older turn's late final and a turn whose
+    /// prediction was reused. The session adds it to the chat record only.
     InsertUserItem { run: AmdRunId, turn: TurnId, text: String },
     /// AMD completed. `pending` settles every turn committed under the gate whose
     /// decision is not applied yet: the `wait` and "AMD completed" rows of spec §10.1.
@@ -180,7 +181,9 @@ Attaching AMD is a session command, as entering any other mode is. It installs t
 gate for the run, sets the rules in
 [Session rules while attached](#session-rules-while-attached) and starts the hold.
 `AmdCommand::Attach` carries the `ToolSpec` of AMD's built-in `send_dtmf_events`, as the
-host declares it. The core does not keep its own copy of the schema.
+host declares it. The core does not keep its own copy of the schema. It also carries
+`amd_stt`, which says whether the run has its own STT. The session needs it for the
+realtime entry check in [Realtime](#realtime).
 
 ## The session side
 
@@ -341,24 +344,53 @@ These need no answer from AMD:
 
 ### Realtime
 
-AMD refuses a realtime model with server-side turn detection at entry (spec §5.1),
-because server-initiated replies never reach the gate. With client-side detection,
-both realtime commit paths currently skip it: `on_turn(Commit)` calls
-`realtime_user_turn` and returns, and `commit_user_turn` forces `skip_reply` and
+The session checks a realtime model at attach, in `detector.py`'s order (spec §5.1).
+Each check has its own `AmdAttachRefused` reason:
+
+1. `RealtimeServerTurnDetection`: the server detects turns. Server-initiated replies
+   never reach the gate. A model whose server detection the session switched off is
+   client-side.
+2. `RealtimeTools`: the model cannot take per-response tools, or it replies to tool
+   results on its own.
+3. `RealtimeNoStt`: the session has no STT and the run has none (`amd_stt`). AMD
+   would have nothing to classify.
+
+All three are session refusals, as the handoff and task checks are. The runtime
+reports AMD's STT in `Attach` and does not check it again.
+
+Without the gate, both realtime commit paths skip `on_end_of_turn`: `on_turn(Commit)`
+calls `realtime_user_turn` and returns, and `commit_user_turn` forces `skip_reply` and
 returns early when session STT is disabled. With the gate attached and `!skip_reply`:
 
 - the session commits the server audio buffer at commit, before the decision, as
   Python does, so a denied `wait` turn leaves no audio for the next allowed reply
 - the turn goes through `on_end_of_turn`, even with no session STT; its classifier
-  text then comes from AMD's late final (spec §6.2)
+  text then comes from AMD's late final (spec §6.2). A manual commit still waits the
+  endpointing delay, as `_run_eou_detection` does
 - `reply_to_turn` sends the response request once, after an allowed decision. The
   request is sent at authorization, so a reply held for silence starts generating
-  after it, as spec §10.3 requires
-- the request carries the decision's instructions, and the session tools are updated
-  to the decision's tools for the response and restored after it, since
-  `SpeechSpec.toolset` alone does not reach the server
-- `InsertUserItem` is sent only for a model without user transcription and without
-  session STT, so the item is never added twice
+  after it, as spec §10.3 requires. The server takes one response at a time, so the
+  request may leave after an older response settles
+- the request carries the decision's stage instructions, passed through unchanged.
+  The reply's tool follow-ups carry them too
+- a decision that allows DTMF sets the session tools to the agent's tools plus
+  `send_dtmf_events` with `UpdateTools`, before the reply's first request, because
+  `SpeechSpec.toolset` alone does not reach the server. The agent's tools come back
+  when the reply's speech ends, after its last tool follow-up. Python sends the tools
+  with each response instead; the result on the server is the same
+- the session keeps a gated turn's STT words only for a model without user
+  transcription. Otherwise the server's transcript of the committed audio is the
+  turn's item
+- AMD sends `InsertUserItem` only for a model without user transcription and without
+  session STT, so the item is never added twice. The session adds it to the chat
+  record and emits `conversation_item_added`, as `_add_realtime_transcript` does. It
+  does not send it to the server, which holds the turn's audio already. In any other
+  case the session drops it as `NotNeeded`
+
+The opening also works on a realtime model (spec §10.6). Opening text uses the model's
+`say()` when it supports it and the session has no TTS. Opening instructions ask the
+model for a reply with `tool_choice = none`. Both bypass the hold like a pipeline
+opening.
 
 ### Reply payload
 
@@ -393,6 +425,12 @@ The gate's presence gates these, so DST rules read the same flag (spec §5.3): s
 except the opening, cancel handoffs, skip `on_user_turn_exceeded`, drop deferred tool
 replies, do not regenerate after a realtime fallback swap, and discard participant audio
 until `Activated`.
+
+- **Realtime backchannels.** A realtime model without session STT drops a backchannel
+  over agent speech instead of committing it (spec §5.3). While the gate is attached,
+  the session asks whether the server's turn detection runs, not whether the model
+  has it. A model whose server detection the session switched off then drops the
+  backchannel too. Without the gate the check is unchanged.
 
 - **Interruptions.** AMD's requirement is laid over every option layer while the run is
   attached, so a host `override_options` entered during AMD does not turn interruptions
@@ -643,7 +681,7 @@ test or story before the port is done:
 | §4.1 | Options, defaults (`idle_timeout` 10 s, `voicemail_idle_timeout` 10 s, `timeout` 60 s, `inference_timeout` 2 s, `machine_silence_threshold` 1.5 s, `max_uncertain_turns` 3, `max_inference_timeouts` 3, `wait_until_answered` true, built-in stage instructions) and every `ValueError` | Python host and AMD constructor |
 | §4.1 | Model selection: auto models when credentials exist, else the session's; `None` inherits a non-realtime Agent LLM; a decision model must support `choice`; the source of each model is logged; `llm_conn_options`; the `AMD` feature header only on Inference requests and Inference STT connections | Runtime legs |
 | §4.3, §12.1 | Event fields: prediction (`speech_duration`, `delay`, `inference_duration`, `transcript`), completion (`voicemail_message_played`, `last_prediction`, `is_error`, the ten reasons), menu (`session_id`, `extraction_duration`). Turn ids are local to each run, start at 1 and may skip | `AmdEffect::Emit` |
-| §5.1 | Entry checks: session started, no handoff or `AgentTask` in flight, one run at a time, realtime needs per-response tools and client tool replies and some STT, opening text needs TTS or realtime `say()`, opening instructions need an LLM | Attach command |
+| §5.1 | Entry checks: session started, no handoff or `AgentTask` in flight, one run at a time, realtime needs client-side turn detection, per-response tools and client tool replies, and session STT or AMD STT, opening text needs TTS or realtime `say()`, opening instructions need an LLM | Attach command (`amd_stt`) |
 | §5.2 | Listening setup: 5 s track wait (`participant_missing`), `participant_disconnected` during setup or later, the participant the room I/O links when no identity is given (waited for within the same 5 s), no timeout on the SIP answer, overall deadline armed at activation | Callee leg and `In::Callee` |
 | §5.3 | Attached rules beyond the list above: `update_agent()` and inline `AgentTask` switches raise; a realtime model without session STT drops a backchannel over agent speech | Session |
 | §8.1 | Request contents: `stage`, `previous_prediction` (shown as "uncertain (likely human)" when marked), recommended list, `speech_duration`; the dual-transcript format; the decision-model transcript format; exactly one `record_result` call | Machine builds `ClassifyRequest`; leg renders it |
