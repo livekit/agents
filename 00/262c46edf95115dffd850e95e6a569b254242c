@@ -1,0 +1,21 @@
+rust/crates/lk-agents-fuzz/tests/regressions/amd/realtime.rs
+  s_97503950a071fd::t_1b70a0c839abf1 354-355,368,375,428-429,435,442
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_realtime_tests.rs
+  s_97503950a071fd::t_2c582467186d6d 385-387,393,404-405,411,484-485,498-499
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "00262c46edf95115dffd850e95e6a569b254242c",
+  "prompts": {},
+  "sessions": {
+    "s_97503950a071fd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30a71d06-c812-45d8-9c68-e3f3e0e98f93",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
