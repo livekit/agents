@@ -45,7 +45,10 @@ impl Rule for GateCleansUp {
                 if *at < detached || *at > next {
                     continue;
                 }
-                let due = at.at_ms + BOUND_MS;
+                // Measured from the turn's customer hook, which waits for older turns' hooks:
+                // no bound on the session covers customer code.
+                let Some(from) = amd.hook_returned_for(done.turn.0, *at) else { continue };
+                let due = from.at_ms + BOUND_MS;
                 if r.now().at_ms < due || r.close_begun().is_some_and(|c| c.at_ms <= due) {
                     continue;
                 }

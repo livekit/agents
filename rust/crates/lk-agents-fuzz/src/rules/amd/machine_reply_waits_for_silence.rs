@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use lk_agents_voice::trace::{SpeechStep, Step};
+
 use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
@@ -49,15 +51,28 @@ impl Rule for MachineReplyWaitsForSilence {
                     check.expect(Subject::Speech(speech), heard > decided, "heard before its decision");
                     continue;
                 }
-                let since = amd.silent_since(heard);
+                // Judged when the gate let the reply go: speech after that release goes through
+                // ordinary interruption, and a false interruption's resume may play it sooner, as
+                // in Python (`detector.py` `_update_idle` resumes authorization once, then leaves
+                // the reply to the session).
+                let let_go = r
+                    .journal()
+                    .iter()
+                    .find(|(at, step)| {
+                        *at > decided
+                            && matches!(step, Step::Speech(SpeechStep::Authorized { speech: s })
+                                if s.0 == speech)
+                    })
+                    .map_or(heard, |(at, _)| (*at).min(heard));
+                let since = amd.silent_since(let_go);
                 check.expect_with(
                     Subject::Speech(speech),
-                    since.is_some_and(|boundary| heard.at_ms >= boundary + threshold),
+                    since.is_some_and(|boundary| let_go.at_ms >= boundary + threshold),
                     || {
                         format!(
-                            "turn {}'s reply was heard at {} ms; the participant was silent \
+                            "turn {}'s reply was let go at {} ms; the participant was silent \
                              since {since:?} ms, short of {threshold} ms",
-                            turn.turn, heard.at_ms
+                            turn.turn, let_go.at_ms
                         )
                     },
                 );

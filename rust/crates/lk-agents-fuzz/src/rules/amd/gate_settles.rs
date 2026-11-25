@@ -1,7 +1,5 @@
-use lk_agents_voice::agent_session::HookKind;
 use lk_agents_voice::amd::{AmdObservation, TurnEnd};
 use lk_agents_voice::audio_recognition::TurnId;
-use lk_agents_voice::trace::{HandoffStep, Step};
 
 use crate::{
     authored::Authored,
@@ -54,7 +52,10 @@ impl Rule for GateSettles {
                 (None, Some(s)) => s,
                 (None, None) => continue,
             };
-            let Some(from) = past_hook(r, turn.committed, from) else { continue };
+            // Past the turn's own customer hook, which is issued only once every older turn's
+            // hook returned: no bound on the session covers customer code.
+            let Some(hook) = amd.hook_returned(&turn) else { continue };
+            let from = from.max(hook);
             let due = from.at_ms + BOUND_MS;
             if r.now().at_ms < due || r.close_begun().is_some_and(|c| c.at_ms <= due) {
                 continue;
@@ -81,7 +82,12 @@ impl Rule for GateSettles {
             });
             let replied = !amd.requests_answering(&turn).is_empty();
             let kept = turn.item_id.is_some();
-            check.expect_with(Subject::Session, replied || kept, || {
+            // `StopResponse` ignores the turn, as Python does (`agent_activity.py`).
+            let stopped = amd.stopped(&turn);
+            // Dropped behind a speech it could not interrupt, or while scheduling was paused: an
+            // exit with no reply (proposal "Turn exits").
+            let dropped = amd.dropped_unanswered(&turn);
+            check.expect_with(Subject::Session, replied || kept || stopped || dropped, || {
                 format!(
                     "turn {} ended ({ended:?}) with neither a reply nor its words saved",
                     turn.turn
@@ -102,24 +108,6 @@ impl Rule for GateSettles {
 /// is recorded before it.
 fn next_input(r: &Recording, at: Observed) -> Observed {
     r.applied().iter().map(|a| a.at).find(|seen| *seen > at).unwrap_or(Observed::END)
-}
-
-/// `from`, or the end of the turn's customer hook when that came later; `None` while the hook
-/// has not returned, which no bound on the session covers.
-fn past_hook(r: &Recording, committed: Observed, from: Observed) -> Option<Observed> {
-    let mut issued = None;
-    for (at, step) in r.journal().iter().filter(|(at, _)| *at > committed) {
-        match step {
-            Step::Handoff(HandoffStep::HookIssued {
-                hook, kind: HookKind::OnUserTurnCompleted, ..
-            }) if issued.is_none() => issued = Some(*hook),
-            Step::Handoff(HandoffStep::HookFinished { hook, .. }) if Some(*hook) == issued => {
-                return Some(from.max(*at));
-            }
-            _ => {}
-        }
-    }
-    if issued.is_some() { None } else { Some(from) }
 }
 
 fn turn() -> Authored {

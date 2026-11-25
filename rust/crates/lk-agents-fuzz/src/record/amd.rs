@@ -9,6 +9,7 @@
 //! ignores the gate is still judged.
 
 use lk_agents_abi::Role;
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
 use lk_agents_voice::amd::{AmdObservation, AmdRunId};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{Step, TurnStep};
@@ -134,7 +135,9 @@ impl<'a> AmdView<'a> {
             match &applied.input {
                 Input::AmdAttach {} => {
                     run += 1;
-                    if applied.accepted {
+                    // A refused attach (a handoff in flight, a task running, a realtime model,
+                    // the close) installs no gate (spec §5.1 entry checks).
+                    if applied.accepted && !self.attach_refused(run) {
                         let detached = self.0.amd().iter().find_map(|(at, _, o)| match o {
                             AmdObservation::Detached { run: r } if r.0 == run => Some(*at),
                             _ => None,
@@ -166,6 +169,14 @@ impl<'a> AmdView<'a> {
             }
         }
         out
+    }
+
+    /// Whether the session refused run `run`'s attach.
+    fn attach_refused(&self, run: u64) -> bool {
+        use lk_agents_voice::trace::GateStep;
+        self.0.journal().iter().any(|(_, step)| {
+            matches!(step, Step::Gate(GateStep::AttachRefused { run: r, .. }) if r.0 == run)
+        })
     }
 
     /// The run attached at `at`, if any.
@@ -273,25 +284,88 @@ impl<'a> AmdView<'a> {
     /// When the customer hook of `turn` returned: its commit when no hook ran for it, `None`
     /// while it runs.
     pub fn hook_returned(&self, turn: &GatedTurn) -> Option<Observed> {
+        self.hook_returned_for(turn.turn, turn.committed)
+    }
+
+    /// [`Self::hook_returned`] for any turn, gated or not, committed at `committed`: the end of
+    /// its own hook, or, when it never got one, of every older turn's hook still running at its
+    /// commit, which it waited behind. `None` while one of those runs.
+    pub fn hook_returned_for(&self, turn: u64, committed: Observed) -> Option<Observed> {
         use lk_agents_voice::agent_session::HookKind;
-        use lk_agents_voice::audio_recognition::TurnId;
         use lk_agents_voice::trace::HandoffStep;
-        let mut issued = None;
+        let mut own = None;
+        let mut older: Vec<lk_agents_voice::agent_session::HookId> = Vec::new();
+        let mut finished = std::collections::BTreeMap::new();
         for (at, step) in self.0.journal() {
             match step {
+                Step::Handoff(HandoffStep::HookFinished { hook, .. }) => {
+                    finished.entry(*hook).or_insert(*at);
+                }
                 Step::Handoff(HandoffStep::HookIssued {
                     hook,
                     kind: HookKind::OnUserTurnCompleted,
-                    turn: Some(t),
                     ..
-                }) if *t == TurnId(turn.turn) && issued.is_none() => issued = Some(*hook),
-                Step::Handoff(HandoffStep::HookFinished { hook, .. }) if Some(*hook) == issued => {
-                    return Some(*at);
+                }) if own.is_none() => {
+                    if self.turn_hook(step, turn).is_some() {
+                        own = Some(*hook);
+                    } else if *at < committed {
+                        older.push(*hook);
+                    }
                 }
                 _ => {}
             }
         }
-        if issued.is_some() { None } else { Some(turn.committed) }
+        if let Some(own) = own {
+            return finished.get(&own).copied();
+        }
+        let mut until = committed;
+        for hook in older {
+            match finished.get(&hook) {
+                Some(at) if *at < committed => {}
+                Some(at) => until = until.max(*at),
+                None => return None,
+            }
+        }
+        Some(until)
+    }
+
+    /// The `on_user_turn_completed` call `step` issues for `turn`, if it is one.
+    fn turn_hook(&self, step: &Step, turn: u64) -> Option<lk_agents_voice::agent_session::HookId> {
+        use lk_agents_voice::agent_session::HookKind;
+        use lk_agents_voice::audio_recognition::TurnId;
+        use lk_agents_voice::trace::HandoffStep;
+        match step {
+            Step::Handoff(HandoffStep::HookIssued {
+                hook,
+                kind: HookKind::OnUserTurnCompleted,
+                turn: Some(t),
+                ..
+            }) if *t == TurnId(turn) => Some(*hook),
+            _ => None,
+        }
+    }
+
+    /// Whether the host answered `turn`'s customer hook with `StopResponse` or an error. Python
+    /// ignores such a turn: it keeps neither a reply nor its words (`agent_activity.py`, "ignore
+    /// this turn", and the `except Exception` after it).
+    pub fn stopped(&self, turn: &GatedTurn) -> bool {
+        use crate::input::HookAnswer;
+        let Some(hook) =
+            self.0.journal().iter().find_map(|(_, step)| self.turn_hook(step, turn.turn))
+        else {
+            return false;
+        };
+        let Some(nth) = self.0.resources(Kind::Hook).find(|o| o.id() == super::Id::Hook(hook))
+        else {
+            return false;
+        };
+        let nth = nth.nth();
+        self.0.applied().iter().any(|a| {
+            a.accepted
+                && matches!(&a.input, Input::HookDone {
+                    hook, answer: HookAnswer::TurnStop | HookAnswer::Failed, ..
+                } if hook.nth == nth)
+        })
     }
 
     /// The answer that decided `turn`: its first decision, applied once both it and the hook's
@@ -341,8 +415,9 @@ impl<'a> AmdView<'a> {
             .collect()
     }
 
-    /// The requests that answer `turn`: their last user message is its saved item, or, for a
-    /// preemptive generation made before the commit, its words.
+    /// The requests that answer `turn`: the newest user turn item in them is its saved item, or,
+    /// for a preemptive generation made before the commit, their last user message is its words.
+    // The newest turn item, not the last user message: a storage partition's text can follow it.
     pub fn requests_answering(&self, turn: &GatedTurn) -> Vec<Request<'a>> {
         let previous = self
             .gated_turns()
@@ -351,14 +426,56 @@ impl<'a> AmdView<'a> {
             .map(|t| t.committed)
             .next_back()
             .unwrap_or(Observed::at(0, 0));
+        let turn_items = self.turn_items();
         self.requests()
             .into_iter()
             .filter(|r| {
-                let Some(user) = r.last_user() else { return false };
-                if turn.item_id.as_deref() == Some(user.id.as_str()) {
-                    return true;
+                // A host `generate_reply` or the opening answers no turn, even when the turn's
+                // words are the newest in its context.
+                let kind = r.speech.and_then(|s| self.0.host_view().speech(s).kind());
+                if kind
+                    .is_some_and(|k| !matches!(k, SpeechKind::TurnReply | SpeechKind::Preemptive))
+                {
+                    return false;
                 }
-                self.preemptive(r) && user.text == turn.words && r.opened > previous
+                let Some(user) = r.last_user() else { return false };
+                // A preemptive generation's own words are not a turn item yet: older turns'
+                // items before them say nothing about which turn it answers.
+                if self.preemptive(r) {
+                    return user.text == turn.words && r.opened > previous;
+                }
+                let newest_turn = r.messages.iter().rev().find(|m| turn_items.contains(&m.id));
+                newest_turn.is_some_and(|m| turn.item_id.as_deref() == Some(m.id.as_str()))
+            })
+            .collect()
+    }
+
+    /// Whether the session dropped `turn` with no reply, behind a speech it could not interrupt or
+    /// while scheduling was paused: its diagnostic names the turn's words (proposal "Turn exits":
+    /// the uninterruptible drop; "paused scheduling" among `reply_follows_decision`'s refusals).
+    pub fn dropped_unanswered(&self, turn: &GatedTurn) -> bool {
+        use lk_agents_voice::events::diagnostics;
+        self.0.host_view().events().iter().any(|(at, e)| match e {
+            SessionEvent::Diagnostic(d) => {
+                *at > turn.committed
+                    && [diagnostics::UNINTERRUPTIBLE_SPEECH, diagnostics::SCHEDULING_PAUSED]
+                        .contains(&d.message)
+                    && d.fields.iter().any(|(_, value)| *value == turn.words)
+            }
+            _ => false,
+        })
+    }
+
+    /// The id of every user item a committed turn saved.
+    fn turn_items(&self) -> std::collections::BTreeSet<String> {
+        (self.0.host_view().events().iter())
+            .filter_map(|(_, e)| match e {
+                SessionEvent::ConversationItemAdded {
+                    item,
+                    source: lk_agents_voice::agent::Source::UserTurn { .. },
+                    ..
+                } => item.as_message().map(|m| m.id.clone()),
+                _ => None,
             })
             .collect()
     }
