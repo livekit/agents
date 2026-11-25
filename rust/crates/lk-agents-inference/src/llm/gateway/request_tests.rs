@@ -98,7 +98,7 @@ fn the_calls_inference_class_overrides_the_jobs() {
 fn a_provider_key_request_is_plain_chat_completions() {
     let opts = LlmOptions {
         base_url: "https://api.example.com/v1".into(),
-        auth: Auth::ProviderKey("sk".into()),
+        auth: Auth::ProviderKey { key: "sk".into(), vendor: None },
         provider: Some("openai".into()),
         strict_tools: false,
         extra_kwargs: [

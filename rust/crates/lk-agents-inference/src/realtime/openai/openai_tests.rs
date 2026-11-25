@@ -883,7 +883,7 @@ fn closing_releases_the_in_flight_turn_and_every_waiting_caller() {
 #[test]
 fn a_finished_response_reports_its_realtime_metrics() {
     use lk_agents_abi::metrics::base::AgentMetrics;
-    let mut m = machine(OPENAI).with_provider("api.openai.com".into());
+    let mut m = machine(OPENAI).with_provider("openai".into());
     m.open(at(0));
     recv(&mut m, at(1), response_created("r1", None));
     let audio = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 480]);
@@ -927,7 +927,7 @@ fn a_finished_response_reports_its_realtime_metrics() {
     assert_eq!((t.input_audio_tokens, t.cache_read_tokens), (Some(4), Some(2)));
     assert_eq!((t.output_audio_tokens, t.cache_read_audio_tokens), (Some(15), None));
     let md = r.metadata.as_ref().unwrap();
-    assert_eq!(md.model_provider.as_deref(), Some("api.openai.com"));
+    assert_eq!(md.model_provider.as_deref(), Some("openai"));
 }
 
 // Catches: the input transcription's billed usage dropped (no `STTMetrics`), or named by the
@@ -935,7 +935,7 @@ fn a_finished_response_reports_its_realtime_metrics() {
 #[test]
 fn a_transcription_with_usage_reports_stt_metrics() {
     use lk_agents_abi::metrics::base::AgentMetrics;
-    let mut m = machine(OPENAI).with_provider("api.openai.com".into());
+    let mut m = machine(OPENAI).with_provider("openai".into());
     m.open(at(0));
     let step = recv(
         &mut m,

@@ -90,6 +90,7 @@ class LLM(openai.responses.LLM):
             reasoning=reasoning,
             timeout=timeout,
             max_output_tokens=max_output_tokens,
+            _provider="Perplexity",
         )
         self._perplexity_client = client
 

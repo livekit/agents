@@ -240,6 +240,7 @@ class LLM(llm.LLM):
             reasoning_effort=effective_reasoning_effort,
             extra_headers=merged_headers,
             extra_body=filtered_body if filtered_body else NOT_GIVEN,
+            _provider="Sarvam",
         )
 
         self._client.on("error", lambda ev: self.emit("error", ev))
@@ -294,7 +295,9 @@ class LLM(llm.LLM):
         self._client.update_options(
             model=new_model,
             endpoint=ProviderEndpoint(
-                base_url=_resolve_base_url(new_model), api_key=self._sarvam_api_key
+                base_url=_resolve_base_url(new_model),
+                api_key=self._sarvam_api_key,
+                provider="Sarvam",
             ),
         )
 

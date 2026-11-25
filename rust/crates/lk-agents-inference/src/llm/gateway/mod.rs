@@ -144,7 +144,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         let (base_url, auth, strict_tools, body) = match endpoint {
             Some(e) => (
                 e.base_url,
-                Auth::ProviderKey(e.api_key),
+                Auth::ProviderKey { key: e.api_key, vendor: e.provider },
                 e.strict_tool_schema,
                 BodyEncoding { msgpack: e.msgpack_body, gzip: e.gzip_body },
             ),
@@ -198,7 +198,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             }
             if let Some(e) = endpoint {
                 opts.base_url = e.base_url;
-                opts.auth = Auth::ProviderKey(e.api_key);
+                opts.auth = Auth::ProviderKey { key: e.api_key, vendor: e.provider };
                 opts.strict_tools = e.strict_tool_schema;
                 opts.body = BodyEncoding { msgpack: e.msgpack_body, gzip: e.gzip_body };
             }
@@ -253,13 +253,9 @@ impl Llm for GatewayLlm {
         lk_agents_abi::ProviderId {
             label: self.label(),
             model: self.model(),
-            provider: match self.options() {
-                LlmOptions { auth: Auth::Gateway { .. }, .. } => "livekit".into(),
-                // the provider's host, as the Python plugins name it
-                LlmOptions { base_url, .. } => url::Url::parse(&base_url)
-                    .ok()
-                    .and_then(|url| url.host_str().map(str::to_owned))
-                    .unwrap_or(base_url),
+            provider: match self.options().auth {
+                Auth::Gateway { .. } => "livekit".into(),
+                Auth::ProviderKey { vendor, .. } => vendor.unwrap_or_else(|| "unknown".into()),
             },
         }
     }
@@ -272,7 +268,7 @@ impl Llm for GatewayLlm {
         };
         let headers = match opts.auth {
             Auth::Gateway { .. } => gateway_headers(cx, None, None, &bearer),
-            Auth::ProviderKey(_) => {
+            Auth::ProviderKey { .. } => {
                 let mut headers = Headers::new();
                 headers.insert("Authorization", format!("Bearer {bearer}"));
                 headers

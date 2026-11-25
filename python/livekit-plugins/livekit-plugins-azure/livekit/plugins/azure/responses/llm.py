@@ -70,6 +70,7 @@ class LLM(openai.responses.LLM):
             tool_choice=tool_choice,
             reasoning=reasoning,
             max_output_tokens=max_output_tokens,
+            _provider="azure_openai",
         )
         self._azure_client = azure_client
 

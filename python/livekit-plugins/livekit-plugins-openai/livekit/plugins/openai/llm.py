@@ -46,7 +46,7 @@ from .models import (
     XAIChatModels,
     supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider, get_base_url
+from .utils import AsyncAzureADTokenProvider, get_base_url, vendor
 
 if TYPE_CHECKING:
     import httpx2 as httpx
@@ -109,6 +109,7 @@ class LLM(inference.LLM):
         _strict_tool_schema: bool = True,
         _gzip_body: bool = False,
         _msgpack_body: bool = False,
+        _provider: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -143,22 +144,23 @@ class LLM(inference.LLM):
             extra_headers=extra_headers,
             extra_query=extra_query,
         )
-        self._base_url = base_url if is_given(base_url) else get_base_url(None)
+        self._provider = vendor(_provider, own_endpoint=is_given(base_url))
         super().__init__(
             model,
             extra_kwargs=options,
             endpoint=ProviderEndpoint(
-                base_url=self._base_url,
+                base_url=base_url if is_given(base_url) else get_base_url(None),
                 api_key=key,
                 strict_tool_schema=_strict_tool_schema,
                 gzip_body=_gzip_body,
                 msgpack_body=_msgpack_body,
+                provider=self._provider,
             ),
         )
 
     @property
     def provider(self) -> str:
-        return urlparse(self._base_url).netloc
+        return self._provider
 
     @staticmethod
     def with_azure(
@@ -270,6 +272,7 @@ class LLM(inference.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             _strict_tool_schema=False,
+            _provider="cerebras",
         )
 
     @staticmethod
@@ -313,6 +316,7 @@ class LLM(inference.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             _strict_tool_schema=False,
+            _provider="sambanova",
         )
 
     @staticmethod
@@ -355,6 +359,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="FireworksAI",
         )
 
     @staticmethod
@@ -397,6 +402,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="xAI",
         )
 
     @staticmethod
@@ -465,6 +471,7 @@ class LLM(inference.LLM):
             top_p=top_p,
             extra_body=or_body,
             extra_headers=default_headers,
+            _provider="openrouter",
         )
 
     @staticmethod
@@ -507,6 +514,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="deepseek",
         )
 
     @staticmethod
@@ -555,6 +563,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="cometapi",
         )
 
     @staticmethod
@@ -597,6 +606,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="octoai",
         )
 
     @staticmethod
@@ -627,6 +637,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="ollama",
         )
 
     @staticmethod
@@ -669,6 +680,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="ovhcloud",
         )
 
     @staticmethod
@@ -711,6 +723,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="Perplexity",
         )
 
     @staticmethod
@@ -753,6 +766,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="together",
         )
 
     @staticmethod
@@ -795,6 +809,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="telnyx",
         )
 
     @staticmethod
@@ -837,6 +852,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
+            _provider="nebius",
         )
 
     @staticmethod
@@ -879,6 +895,7 @@ class LLM(inference.LLM):
             temperature=NOT_GIVEN,
             parallel_tool_calls=NOT_GIVEN,
             tool_choice=NOT_GIVEN,
+            _provider="letta",
         )
 
 
@@ -907,7 +924,7 @@ class _AzureLLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return self._client.base_url.netloc.decode("utf-8")
+        return "azure_openai"
 
     async def aclose(self) -> None:
         await super().aclose()

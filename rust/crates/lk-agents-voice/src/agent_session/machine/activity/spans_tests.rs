@@ -218,7 +218,7 @@ fn reply(user: Option<lk_agents_abi::MetricsReport>) -> Reply {
         llm: Some(lk_agents_abi::ProviderId {
             label: "openai.LLM".into(),
             model: "gpt-4o".into(),
-            provider: "api.openai.com".into(),
+            provider: "openai".into(),
         }),
     }
 }
@@ -641,7 +641,7 @@ fn an_interrupted_reply_records_its_wait_cause_and_playout() {
     assert!((v - 0.4).abs() < 1e-9, "{v}");
     assert_eq!(
         m.labels,
-        [("model_provider".into(), st("api.openai.com")), ("model_name".into(), st("gpt-4o"))]
+        [("model_provider".into(), st("openai")), ("model_name".into(), st("gpt-4o"))]
     );
 }
 

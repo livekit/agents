@@ -72,6 +72,7 @@ class LLM(OpenAILLM):
             _strict_tool_schema=False,
             _gzip_body=gzip_compression,
             _msgpack_body=msgpack_encoding,
+            _provider="cerebras",
         )
 
 

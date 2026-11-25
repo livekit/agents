@@ -35,8 +35,8 @@ have no `update_options` of their own. Their typed forms:
 
 `inference.LLM(model, provider=, inference_class=, endpoint=)` takes the provider the
 gateway routes to (the gateway picks by default), the `InferenceClass` of its requests, and a
-`ProviderEndpoint(base_url=, api_key=)`: an OpenAI-compatible provider called directly with
-its own key in place of the gateway. Its stream is a `GatewayLLMStream`.
+`ProviderEndpoint(base_url=, api_key=, provider=)`: an OpenAI-compatible provider called directly
+with its own key in place of the gateway, reported under the vendor name `provider=` gives. Its stream is a `GatewayLLMStream`.
 `inference.STT(model=, vad=)` takes an optional model: left out or `"auto"`
 (`AutoModels`), the gateway picks. `vad=` is a VAD whose end of speech finalizes the transcript,
 for Speechmatics and OpenAI. Its stream is a `SpeechStream`.
@@ -193,6 +193,13 @@ the core's client with the provider's own key and no LiveKit header, not on the
 `openai` SDK. Its instance options are the request's kwargs; a call's
 `tool_choice`, `parallel_tool_calls` and `response_format` override them, so the
 framework can forbid tools on a turn.
+
+A model's `provider` is its vendor's name, declared by its class or constructor, and never the
+endpoint's host: one vendor has one name whichever plugin reaches it
+(`openai.LLM.with_x_ai()` and `livekit.plugins.xai` both report `xAI`), and Azure OpenAI is
+`azure_openai`. An OpenAI or Anthropic model given a `base_url` or a client without a vendor
+reports `"unknown"`. Telemetry spells a vendor the OpenTelemetry GenAI registry names as the
+registry does (`x_ai`, `azure.ai.openai`).
 
 An STT or TTS declares every fact fixed at construction in its `STTCapabilities` or
 `TTSCapabilities`, passed to the base constructor (`super().__init__(capabilities=...)`);
