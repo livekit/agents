@@ -52,6 +52,8 @@ pub enum Leg {
     Realtime,
     Eot,
     Interruption,
+    /// AMD's own STT, which hears the participant's real frames.
+    Amd,
     Keyterms,
     AudioIn,
     VideoIn,
