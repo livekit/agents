@@ -69,18 +69,18 @@ pub(crate) struct RequestStats<'a> {
 
 impl RequestStats<'_> {
     pub fn record(self) {
-        use lk_agents_telemetry::productstats::{count, record};
+        use lk_agents_telemetry::productstats::measure;
         let provider = self.labels;
-        count(&ProviderRequests { provider: provider.clone() });
+        measure(&ProviderRequests { provider: provider.clone() }, 1u64);
         if self.retries > 0 {
-            record(&ProviderRetries { provider: provider.clone() }, u64::from(self.retries));
+            measure(&ProviderRetries { provider: provider.clone() }, u64::from(self.retries));
         }
         if let Some(error) = self.failure {
             let error_type = FailureType::of(error);
-            count(&ProviderFailures { provider: provider.clone(), error_type });
+            measure(&ProviderFailures { provider: provider.clone(), error_type }, 1u64);
         }
         if let Some(seconds) = self.duration {
-            record(&ProviderDuration { provider }, seconds);
+            measure(&ProviderDuration { provider }, seconds);
         }
     }
 }
@@ -288,7 +288,7 @@ impl LlmTrace {
         let labels = stat_labels(Operation::Llm, &self.id);
         if let Some(at) = self.first_chunk {
             let ttft = ProviderTtft { provider: labels.clone() };
-            lk_agents_telemetry::productstats::record(&ttft, seconds(self.started, at));
+            lk_agents_telemetry::productstats::measure(&ttft, seconds(self.started, at));
         }
         RequestStats {
             labels,
@@ -515,7 +515,7 @@ impl TtsTrace {
             let labels = stat_labels(Operation::Tts, &self.id);
             if let Some(ttfb) = metrics.and_then(|m| m.ttfb).filter(|t| *t >= 0.0) {
                 let ttfb_labels = ProviderTtfb { provider: labels.clone() };
-                lk_agents_telemetry::productstats::record(&ttfb_labels, ttfb);
+                lk_agents_telemetry::productstats::measure(&ttfb_labels, ttfb);
             }
             RequestStats {
                 labels,

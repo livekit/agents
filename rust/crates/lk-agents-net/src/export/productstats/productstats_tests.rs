@@ -41,7 +41,7 @@ fn llm() -> ProviderLabels {
     lk_agents_telemetry::productstats::provider(Operation::Llm, "openai", "gpt-4o")
 }
 
-fn record<M: MetricDecl<Audience = decl::ProductStats>>(
+fn measure<M: MetricDecl<Audience = decl::ProductStats>>(
     stats: &ProductStats,
     labels: &M,
     n: impl Into<lk_agents_abi::telemetry::record::Number>,
@@ -120,20 +120,20 @@ async fn an_export_carries_only_declared_product_statistics_keys() {
     plugin("livekit.plugins.openai", "1.2.3");
     plugin("my_company.secret_plugin", "0.1");
     stats.configure(Some(destination(&url)));
-    record(&stats, &ProviderRequests { provider: llm() }, 2u64);
-    record(
+    measure(&stats, &ProviderRequests { provider: llm() }, 2u64);
+    measure(
         &stats,
         &ProviderFailures { provider: llm(), error_type: FailureType::ApiStatusError },
         1u64,
     );
-    record(&stats, &ProviderTtft { provider: llm() }, 0.3);
+    measure(&stats, &ProviderTtft { provider: llm() }, 0.3);
     let stack = [lk_agents_abi::telemetry::record::StackFrame {
         function: "requests_get".into(),
         file: "/home/someone/app.py".into(),
         line: 9,
     }];
     let signature = lk_agents_telemetry::productstats::stall_signature(Some(&stack));
-    record(&stats, &EventLoopStalls { signature }, 1u64);
+    measure(&stats, &EventLoopStalls { signature }, 1u64);
     assert!(stats.flush(LIMIT).await);
     let requests = received(&mut rx);
     assert_eq!(requests.len(), 1);
@@ -223,10 +223,10 @@ async fn only_livekit_cloud_receives_product_statistics() {
     assert_eq!(Destination::cloud("wss://p.livekit.cloud", "", ""), None);
     let (url, mut rx) = endpoint(ok).await;
     let stats = stats();
-    record(&stats, &ProviderRequests { provider: llm() }, 1u64);
+    measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
     assert!(stats.flush(LIMIT).await);
     stats.configure(None);
-    record(&stats, &ProviderRequests { provider: llm() }, 1u64);
+    measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
     assert!(stats.flush(LIMIT).await);
     stats.configure(Some(destination(&url)));
     assert!(stats.flush(LIMIT).await);
@@ -242,7 +242,7 @@ async fn drops_are_counted_and_exported_next() {
     let (url, mut rx) = endpoint(ok).await;
     let stats = stats();
     for _ in 0..2 {
-        record(&stats, &ProviderRequests { provider: llm() }, 1u64);
+        measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
         assert!(stats.flush(LIMIT).await, "a window waits for a credential");
     }
     stats.configure(Some(destination(&refusing)));
@@ -277,7 +277,7 @@ async fn a_customer_observability_refusal_leaves_product_statistics_on() {
     stats.configure(Some(destination(&url)));
     for _ in 0..2 {
         customer.record(counter(Some("AJ_1"), 1));
-        record(&stats, &ProviderRequests { provider: llm() }, 1u64);
+        measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
         customer.flush(None, LIMIT).await;
         assert!(stats.flush(LIMIT).await);
     }

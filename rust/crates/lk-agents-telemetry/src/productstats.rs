@@ -46,16 +46,16 @@ pub fn enabled() -> bool {
 ///
 /// ```
 /// use lk_agents_abi::productstats::JobStarts;
-/// lk_agents_telemetry::productstats::record(&JobStarts, 1u64);
+/// lk_agents_telemetry::productstats::measure(&JobStarts, 1u64);
 /// ```
 ///
 /// A customer instrument does not compile:
 ///
 /// ```compile_fail,E0271
 /// use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
-/// lk_agents_telemetry::productstats::record(&WorkerProcessReadyDuration, 1.0);
+/// lk_agents_telemetry::productstats::measure(&WorkerProcessReadyDuration, 1.0);
 /// ```
-pub fn record<M: MetricDecl<Audience = ProductStats>>(labels: &M, value: impl Into<Number>) {
+pub fn measure<M: MetricDecl<Audience = ProductStats>>(labels: &M, value: impl Into<Number>) {
     let Some(sink) = SINK.read().clone() else { return };
     let mut out = KeyValues::new();
     labels.write(&mut out);
@@ -68,11 +68,6 @@ pub fn record<M: MetricDecl<Audience = ProductStats>>(labels: &M, value: impl In
         labels: out,
         job: None,
     });
-}
-
-/// Adds one to counter `M`.
-pub fn count<M: MetricDecl<Audience = ProductStats>>(labels: &M) {
-    record(labels, 1u64);
 }
 
 /// The labels of a provider statistic; an empty provider or model is `unknown`.

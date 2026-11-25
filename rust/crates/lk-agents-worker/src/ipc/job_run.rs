@@ -240,7 +240,7 @@ impl Inner {
             (None, true) => JobOutcome::Cancelled,
             (None, false) => JobOutcome::Ok,
         };
-        lk_agents_telemetry::productstats::count(&JobEnds { outcome });
+        lk_agents_telemetry::productstats::measure(&JobEnds { outcome }, 1u64);
         if let Some(job) = self.job.get() {
             lk_agents_net::job_identity::close(&job.key);
         }

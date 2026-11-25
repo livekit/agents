@@ -682,7 +682,7 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
             && let Some(provider) = chain.entries[previous].stat_labels()
         {
             let fallback = lk_agents_abi::productstats::ProviderFallbacks { provider };
-            lk_agents_telemetry::productstats::count(&fallback);
+            lk_agents_telemetry::productstats::measure(&fallback, 1u64);
         }
         let attempt_id = chain.attempts.fetch_add(1, Ordering::Relaxed) + 1;
         chain.select(index, attempt_id);
