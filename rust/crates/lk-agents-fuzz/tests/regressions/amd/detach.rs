@@ -1,4 +1,4 @@
-//! Completion (proposal "Detach", steps 1-5; spec §12.3).
+//! Completion (spec §12.3).
 
 use super::{Call, listening};
 use lk_agents_fuzz::drive::Setup;
@@ -14,7 +14,7 @@ fn hooked() -> Setup {
     Setup { hook_bound_ms: Some(30_000), ..listening() }
 }
 
-/// Proposal story: completion into a stage the application handles while a reply is generating
+/// Completion into a stage the application handles while a reply is generating
 /// but not yet playing cancels it. Python: `test_cancel_pending_speech_includes_preemptive_and_queued_speech`.
 #[test]
 fn completion_into_a_handled_stage_cancels_a_generating_reply() {
@@ -32,7 +32,7 @@ fn completion_into_a_handled_stage_cancels_a_generating_reply() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal story: completion after a decision is stored but before it is applied replaces it
+/// Completion after a decision is stored but before it is applied replaces it
 /// with the "AMD completed" row: the reply loses its stage instructions.
 #[test]
 fn completion_replaces_a_stored_decision() {
@@ -52,7 +52,7 @@ fn completion_replaces_a_stored_decision() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal story: a voicemail box hanging up while the message plays: the message keeps
+/// A voicemail box hanging up while the message plays: the message keeps
 /// playing (`_cancel_pending_speeches` keeps a playing speech). Python:
 /// `test_late_unavailable_does_not_cancel_reply`.
 #[test]
@@ -75,7 +75,7 @@ fn a_voicemail_message_keeps_playing_when_the_box_hangs_up() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal story: a `wait` turn in its hook at completion, and at `aclose()`. Python:
+/// A `wait` turn in its hook at completion, and at `aclose()`. Python:
 /// `test_wait_does_not_block_completion_or_allow_a_reply_afterward`.
 #[test]
 fn a_wait_turn_in_its_hook_is_never_answered() {
@@ -105,7 +105,7 @@ fn a_wait_turn_in_its_hook_is_never_answered() {
     }
 }
 
-/// Proposal story: a `machine-ivr` stage followed by a direct `human` completion, with an agent
+/// A `machine-ivr` stage followed by a direct `human` completion, with an agent
 /// that sets `allow_interruptions=False`. AMD forces interruptions on while attached and
 /// restores them at detach; the IVR reply offers the DTMF tool, the human's reply does not.
 #[test]
@@ -144,5 +144,35 @@ fn ivr_then_human_with_an_uninterruptible_agent() {
     assert_eq!(human[0].offers(lk_agents_fuzz::fakes::amd::SEND_DTMF_TOOL), 0);
     assert!(!human[0].carries(STAGE), "no human instructions after a plain completion");
     assert_eq!(interruptible("hello this is Sam"), Some(false), "restored at detach");
+    assert!(call.failures().is_empty(), "{:?}", call.failures());
+}
+
+/// A draining close ends the run as its completion would: a greeting queued before AMD, behind
+/// one already playing, and held at the head plays during the drain (spec §12.3), and the run
+/// hears `Detached`. Python: `test_a_greeting_queued_before_amd_is_in_the_history_when_it_plays`,
+/// closed instead of completed.
+#[test]
+fn a_draining_close_plays_the_held_greeting() {
+    let say = |text: &str| Input::Say {
+        text: lk_agents_fuzz::input::AgentText(text.into()),
+        input: lk_agents_fuzz::input::SayInput::Words,
+        allow: None,
+        to_ctx: true,
+    };
+    let mut closed = 0;
+    let call = Call::run(listening(), async |call| {
+        call.send(say("Hi.")).await;
+        call.send(say(LINE)).await;
+        call.attach(None).await;
+        call.advance(3_000).await;
+        closed = call.now_ms();
+        call.send(Input::Close { drain: true }).await;
+        call.advance(3_000).await;
+    });
+    let said: Vec<u64> = call.run.record.host_view().speeches().into_iter().map(|s| s.id).collect();
+    let [_, greeting] = said[..] else { panic!("two greetings: {said:?}") };
+    let heard = call.heard(Some(greeting)).expect("the drain plays the held greeting");
+    assert!(heard >= closed, "held until the close, heard at {heard} ms");
+    assert!(call.detached_at().is_some(), "the run hears its gate released");
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }

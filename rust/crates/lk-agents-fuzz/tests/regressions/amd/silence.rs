@@ -1,4 +1,4 @@
-//! The silence hold (proposal "Silence"; spec §10.3; invariant 7). Times are the fake VAD's
+//! The silence hold (spec §10.3; invariant 7). Times are the fake VAD's
 //! ground truth: the person stops speaking when the case reports the detector's end of speech.
 
 use super::{Call, listening};
@@ -29,7 +29,7 @@ fn a_machine_reply_is_generated_during_the_hold_and_heard_after_it() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal stories: participant speech that restarts during the hold without a commit, and
+/// Participant speech that restarts during the hold without a commit, and
 /// silence that expires, speech that restarts and ends, then the stale expiry. Python:
 /// `test_resumed_speech_extends_the_hold_for_a_generated_reply`.
 #[test]
@@ -59,7 +59,7 @@ fn speech_that_restarts_during_the_hold_rearms_it() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal story: completion during a silence hold releases the held reply at once, for every
+/// Completion during a silence hold releases the held reply at once, for every
 /// reason. Python: `test_completion_cancels_silence_wait_and_releases_the_held_reply`.
 #[test]
 fn completion_during_a_silence_hold_releases_it() {

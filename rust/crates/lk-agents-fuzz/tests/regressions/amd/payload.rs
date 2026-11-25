@@ -1,4 +1,4 @@
-//! What an allowed reply carries (proposal "Reply payload"): stage instructions, the DTMF tool,
+//! What an allowed reply carries: stage instructions, the DTMF tool,
 //! preemptive adoption and corrections.
 
 use super::{Call, listening};
@@ -24,7 +24,7 @@ fn stage_instructions_reach_the_reply_and_its_follow_up_and_are_never_saved() {
         call.decide(AmdVerdict::Stage).await;
         call.advance(50).await;
         // The reply's request, not the first one: the preemptive generation opened chat 0 and
-        // the staged decision discarded it (proposal "Preemptive generation").
+        // the staged decision discarded it.
         let chat = Ref::new(*call.run.record.live().of(Kind::Chat).last().expect("the reply"));
         call.send(Input::LlmToolCall { chat, name: "lookup".into(), args: ToolArgs("{}".into()) })
             .await;
@@ -91,7 +91,7 @@ fn an_ivr_reply_offers_the_dtmf_tool_once() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal story: an agent that defines its own `send_dtmf_events`, across IVR entry and exit:
+/// An agent that defines its own `send_dtmf_events`, across IVR entry and exit:
 /// its own tool is kept, never doubled.
 #[test]
 fn an_agents_own_dtmf_tool_is_kept() {
@@ -147,7 +147,7 @@ async fn says_with_preflight(call: &mut Call, words: &str) {
     call.advance(1_000).await;
 }
 
-/// Proposal story: a direct human answer adopts its preemptive generation, and a screening reply
+/// A direct human answer adopts its preemptive generation, and a screening reply
 /// discards it. Python: `test_preemptive_generation_commits_only_the_accepted_reply`.
 #[test]
 fn a_plain_allow_adopts_the_preemptive_generation_and_a_staged_one_discards_it() {
@@ -216,7 +216,7 @@ async fn corrected(call: &mut Call) {
     call.advance(50).await;
 }
 
-/// Proposal story: a correction before and after the reply exists. Before, the reply answers the
+/// A correction before and after the reply exists. Before, the reply answers the
 /// corrected words; after, while unheard, the reply is made again from them, under the same
 /// decision.
 #[test]
@@ -248,7 +248,7 @@ fn a_correction_before_and_after_the_reply_exists() {
     }
 }
 
-/// Proposal story: a correction while the voicemail reply is held: the replacement keeps the
+/// A correction while the voicemail reply is held: the replacement keeps the
 /// hold, and is heard only after the silence.
 #[test]
 fn a_correction_while_the_voicemail_reply_is_held() {
@@ -270,5 +270,28 @@ fn a_correction_while_the_voicemail_reply_is_held() {
     // (`detector.py:708`).
     assert!(heard >= committed + 1_500 - 200, "heard at {heard} ms, committed near {committed} ms");
     assert_eq!(call.heard_reply("book a table"), None);
+    assert!(call.failures().is_empty(), "{:?}", call.failures());
+}
+
+/// A correction after completion, while the reply AMD allowed is still unheard: the reply is
+/// made again under the same decision, its stage instructions included.
+#[test]
+fn a_correction_after_completion_keeps_the_decision() {
+    let call = Call::run(manual(), async |call| {
+        call.attach(None).await;
+        committed_as_interim(call).await;
+        call.decide(AmdVerdict::Silence).await;
+        call.advance(50).await;
+        call.detach(AmdVerdict::Silence, false).await;
+        call.advance(50).await;
+        corrected(call).await;
+        call.model_answers(LINE).await;
+        call.advance(3_000).await;
+    });
+    assert_eq!(call.heard_reply("book a table"), None);
+    let fixed = call.made("book a cable");
+    assert_eq!(fixed.len(), 1, "{fixed:?}");
+    assert!(fixed[0].carries(STAGE), "the replacement keeps the decision's instructions");
+    assert!(call.heard(fixed[0].speech).is_some());
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }

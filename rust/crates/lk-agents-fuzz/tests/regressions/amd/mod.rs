@@ -1,6 +1,5 @@
-//! The AMD reply gate, driven by the scripted AMD answerer (the AMD proposal, "DST":
-//! "Authored stories"). Each story names the proposal's story or the `tests/test_amd.py`
-//! scenario on `main` it ports, and asserts what the caller would notice: which words the model
+//! The AMD reply gate, driven by the scripted AMD answerer. Each story names the
+//! `tests/test_amd.py` scenario on `main` it ports, if any, and asserts what the caller would notice: which words the model
 //! was asked to answer, with which instructions and tools, what was heard and when, and what the
 //! conversation saved. Every story also passes the run's contracts, the AMD rules included.
 

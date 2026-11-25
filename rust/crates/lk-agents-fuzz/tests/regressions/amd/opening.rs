@@ -1,4 +1,4 @@
-//! Activation and the opening (proposal "Activation and the opening"; spec §10.6; invariant 15).
+//! Activation and the opening (spec §10.6; invariant 15).
 
 use super::{Call, listening};
 use lk_agents_fuzz::fakes::amd::{OPENING_INSTRUCTIONS, OPENING_TEXT};
@@ -65,7 +65,7 @@ fn opening_instructions_generate_the_opening() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal story: participant speech starting right after `Activated`, before the opening's
+/// Participant speech starting right after `Activated`, before the opening's
 /// first playout, cancels it; speech already under way when AMD attached drops it (audio is
 /// discarded while AMD is pending, spec §5.2, so that is the only speech at activation). Python:
 /// `test_participant_speech_before_the_opening_plays_cancels_it`.
@@ -108,8 +108,7 @@ fn speech_before_the_opening_plays_cancels_it() {
     }
 }
 
-/// `say()` and `generate_reply()` from the host are refused while AMD is attached (proposal
-/// "Session rules while attached").
+/// `say()` and `generate_reply()` from the host are refused while AMD is attached.
 #[test]
 fn host_speech_is_refused_while_attached() {
     let call = Call::run(listening(), async |call| {

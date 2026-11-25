@@ -1,4 +1,4 @@
-//! Holds, keyed decisions, supersession and the customer hook (proposal "Transitions").
+//! Holds, keyed decisions, supersession and the customer hook.
 
 use super::{Call, listening};
 use lk_agents_fuzz::drive::Setup;
@@ -95,7 +95,7 @@ fn hooked() -> Setup {
     Setup { hook_bound_ms: Some(30_000), ..listening() }
 }
 
-/// Proposal story: a decision that arrives before the customer hook returns applies when it
+/// A decision that arrives before the customer hook returns applies when it
 /// returns.
 #[test]
 fn a_decision_before_the_hook_returns() {
@@ -114,7 +114,7 @@ fn a_decision_before_the_hook_returns() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Proposal story: completion while a turn is in its customer hook, for a human (the "AMD
+/// Completion while a turn is in its customer hook, for a human (the "AMD
 /// completed" row allows) and for a stage the application handles (forbids). `Detached` does not
 /// wait for the hook. Python: `test_terminal_result_completes_once_and_releases_turn_hooks`.
 #[test]
@@ -137,7 +137,7 @@ fn completion_while_a_turn_is_in_its_hook() {
     }
 }
 
-/// Proposal story: a second run attaches while the first run's turn is still in its hook. The old
+/// A second run attaches while the first run's turn is still in its hook. The old
 /// turn keeps the decision its run settled; the new run gates only its own turns.
 #[test]
 fn a_second_attach_while_the_old_turn_is_in_its_hook() {
@@ -159,8 +159,8 @@ fn a_second_attach_while_the_old_turn_is_in_its_hook() {
         call.model_answers(LINE).await;
         call.advance(3_000).await;
     });
-    // Whether the second run's entry hold also holds this reply is left open by the proposal
-    // ("apply it without a gate"): only its creation is asserted.
+    // The settled decision applies without a gate; whether the second run's entry hold also
+    // holds this reply is not a rule, so only its creation is asserted.
     assert!(!call.asked("hello").is_empty(), "the old turn replies, as its run settled it");
     assert_eq!(call.heard_requests("are you there").len(), 1);
     let second_saw_the_old_turn = call.run.record.amd().iter().any(|(_, run, o)| {
@@ -170,8 +170,7 @@ fn a_second_attach_while_the_old_turn_is_in_its_hook() {
     assert!(call.failures().is_empty(), "{:?}", call.failures());
 }
 
-/// Every exit reports `TurnEnded`: here a reply, a denial and a supersession (proposal "Turn
-/// exits").
+/// Every exit reports `TurnEnded`: here a reply, a denial and a supersession.
 #[test]
 fn every_turn_reports_how_it_ended() {
     let call = Call::run(listening(), async |call| {
