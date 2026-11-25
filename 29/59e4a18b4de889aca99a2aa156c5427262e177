@@ -1,0 +1,61 @@
+rust/crates/lk-agents-fuzz/src/drive/apply/call.rs
+  s_cb75f101a73c76::t_7a9899e0675f4d 560-561
+rust/crates/lk-agents-fuzz/src/fakes/amd.rs
+  s_cb75f101a73c76::t_785b6e5ba1e8b3 18-41
+rust/crates/lk-agents-fuzz/src/rules/amd/adopted_request_matches.rs
+  s_cb75f101a73c76::t_f6a051630175f6 2
+rust/crates/lk-agents-fuzz/src/rules/amd/dtmf_only_when_allowed.rs
+  s_cb75f101a73c76::t_68993ea8b04f90 1
+rust/crates/lk-agents-voice/src/agent_session/closing.rs
+  s_cb75f101a73c76::t_46994335acedc6 95-97
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_reply_tests.rs
+  s_cb75f101a73c76::t_6e5375459a484b 234-250
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_rule_tests.rs
+  s_cb75f101a73c76::t_0f781bc054bdfb 20,35-52,143,862-866
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/speech.rs
+  s_cb75f101a73c76::t_bcb6cf3329141e 44-46,80,318-319,325,343,368-384,469
+rust/crates/lk-agents-voice/src/trace.rs
+  s_cb75f101a73c76::t_edb61645597738 319-320,336-337
+rust/crates/lk-agents-fuzz/tests/regressions/amd/detach.rs
+  s_cb75f101a73c76::t_a1c4680f4d8ffc 139,144
+rust/crates/lk-agents-fuzz/tests/regressions/amd/payload.rs
+  s_cb75f101a73c76::t_c48ddbb51c9387 6
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  s_cb75f101a73c76::t_88ccb65671e773 18-22,30-31,34,36,62,65,67-68,81-98,107-109,112-143,152,159,176-194,196,200,204-207,221-223,227,236,246,249-250,253,294-295,324,333-339,341-345,358-359,361-364,367,372,374-375,382,386-387,389-393,395-408,411,414,422-432,478-480,482-483,503-505,517,524,532,534-535,539,542-544,546,549-552,557-558,568,576-577,588-589,600-626,642-643,649-652,661-668,674-675,678,680-686,718-719,721-722,769-772,871
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_lifecycle_tests.rs
+  s_cb75f101a73c76::t_b85472a91113ac 1-237
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate_tests.rs
+  s_cb75f101a73c76::t_0a240786e35c30 43-51,258-266
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/handoff.rs
+  s_cb75f101a73c76::t_69bf932136dfb9 309
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/hooks.rs
+  s_cb75f101a73c76::t_eb8a4e4ca19c74 156,170,333,335
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/mod.rs
+  s_cb75f101a73c76::t_a2206ce5c7f561 161-163,333-335,360-369,375-382,416,848
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/recognition.rs
+  s_cb75f101a73c76::t_d2b9641e29fc3f 27-28,39-40,361-362,364,371,378-390,625,677,698,701,730,736,738,779
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/reply_run.rs
+  s_cb75f101a73c76::t_7f2eb0127fee42 291
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/tools.rs
+  s_cb75f101a73c76::t_fd821c43604320 602-604,715-720,766-769
+rust/crates/lk-agents-voice/src/amd/mod.rs
+  s_cb75f101a73c76::t_509227ce6f1c34 186,191-194,206
+rust/crates/lk-agents-voice/src/generation/mod.rs
+  s_cb75f101a73c76::t_78433916fe0085 645-654,663,808
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2959e4a18b4de889aca99a2aa156c5427262e177",
+  "prompts": {},
+  "sessions": {
+    "s_cb75f101a73c76": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "10a2f328-88a9-4c90-a4fd-599f7ead4732",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
