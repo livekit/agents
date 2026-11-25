@@ -643,6 +643,54 @@ fn a_dtmf_reply_sets_the_session_tools_for_its_response_and_restores_them() {
     );
 }
 
+// Catches: a DTMF reply whose model called no tool leaving AMD's tool on the server once its
+// speech is done. Such a reply ends with no player report, so only the speech's end restores the
+// agent's tools (survey seed 1472).
+#[test]
+fn a_dtmf_reply_without_a_tool_call_restores_the_tools_when_its_speech_ends() {
+    let mut driver = attached(CLIENT_SIDE, true);
+    end_of_turn(&mut driver, 0, info(1, "press one for sales", true));
+    let ivr = ReplyDecision { dtmf: true, ..ReplyDecision::allow() };
+    let effects = answer(&mut driver, 100, decide(1, ivr));
+    let [(_, speech)] = replies(&effects)[..] else { panic!("one reply: {effects:?}") };
+    let request = responses(&effects)[0].req_id.clone();
+    let mut effects = Vec::new();
+    for event in [
+        rt::Event::GenerationCreated(rt::GenerationCreated {
+            response_id: "resp_1".into(),
+            req_id: Some(request),
+        }),
+        rt::Event::GenerationDone(rt::GenerationDone {
+            response_id: "resp_1".into(),
+            status: rt::GenerationStatus::Completed,
+            usage: Default::default(),
+        }),
+    ] {
+        driver.on_realtime(at(200), RealtimeWake::Event(event));
+        effects.extend(driver.handle(None, now(200)));
+    }
+    assert!(tool_updates(&effects).is_empty(), "the reply still runs: {effects:?}");
+    // The speech's generation ends on its own: no `PlayerEnded`, no `ToolsDone`.
+    let outcome = crate::generation::TurnOutcome {
+        forwarded_text: String::new(),
+        assistant_message: None,
+        cut_at: None,
+    };
+    let done = crate::generation::GenEvent::Done {
+        speech,
+        outcome: Box::new(outcome),
+        interrupted: false,
+    };
+    driver.on_generation(at(600), done);
+    effects.extend(driver.handle(None, now(600)));
+    effects.extend(run_until(&mut driver, 600, 1500, 50));
+    assert_eq!(
+        tool_updates(&effects).last().map(Vec::as_slice),
+        Some([].as_slice()),
+        "the agent's tools come back when the speech ends: {effects:?}"
+    );
+}
+
 // Catches: a reply whose decision does not allow DTMF offered AMD's tool, or the session tools
 // touched for it.
 #[test]

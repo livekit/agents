@@ -1164,6 +1164,9 @@ impl VoiceDriver {
         self.storage_speech_released(now, speech);
         self.speech_finished(now, speech);
         self.voice_task_speech_released(now, speech);
+        // A gated realtime reply's tools leave the server once its speech is done: a reply with
+        // no tool call ends with no player report.
+        self.realtime_response_closed(speech);
         // A realtime session swapped meanwhile gets its frame once what it cut is released.
         self.realtime_replay(now, Some(speech));
     }

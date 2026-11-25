@@ -133,7 +133,7 @@ impl VoiceDriver {
     }
 
     /// The speech's responses are over: its tools leave the server.
-    pub(super) fn realtime_response_closed(&mut self, speech: SpeechId) {
+    pub(crate) fn realtime_response_closed(&mut self, speech: SpeechId) {
         let Some(rt) = self.activity.realtime_activity_mut() else { return };
         rt.state.gated.remove(&speech);
         if rt.state.tools_for == Some(speech) {
