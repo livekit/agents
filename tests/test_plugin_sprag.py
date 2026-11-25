@@ -20,6 +20,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIStatusError,
     APITimeoutError,
+    tokenize,
 )
 from livekit.agents.metrics import TTSMetrics
 from livekit.agents.utils import http_context
@@ -664,6 +665,46 @@ async def test_tts_blank_input_opens_no_connection(speech: Any, text: str) -> No
     finally:
         await tts.aclose()
     assert server.connections == []
+
+
+class _ChunkTokenizer(tokenize.SentenceTokenizer):
+    """Treats each pushed chunk as a sentence, blank chunks included."""
+
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        return [text]
+
+    def stream(self, *, language: str | None = None) -> tokenize.SentenceStream:
+        return _ChunkStream()
+
+
+class _ChunkStream(tokenize.SentenceStream):
+    def push_text(self, text: str) -> None:
+        self._event_ch.send_nowait(tokenize.TokenData(token=text))
+
+    def flush(self) -> None:
+        pass
+
+    def end_input(self) -> None:
+        self._do_close()
+
+    async def aclose(self) -> None:
+        self._do_close()
+
+
+@pytest.mark.virtual_time
+@bounded
+async def test_tts_skips_blank_sentences_from_a_custom_tokenizer(speech: Any) -> None:
+    server, session = speech()
+    tts = TTS(tokenizer=_ChunkTokenizer(), http_session=session)
+    try:
+        assert await _speak(tts, "  ", "\n") == 0.0
+        assert server.connections == []
+        duration = await _speak(tts, "  ", "Hello there.", "\t", "How are you?")
+    finally:
+        await tts.aclose()
+
+    assert server.texts == ["Hello there.", "How are you?"]
+    assert duration == pytest.approx(0.2, abs=0.01)
 
 
 @pytest.mark.virtual_time

@@ -317,7 +317,8 @@ class SynthesizeStream(tts.SynthesizeStream):
     ) -> None:
         segment_id = utils.shortuuid()
         output_emitter.start_segment(segment_id=segment_id)
-        sentences = (sentence.token async for sentence in input_stream)
+        # a custom tokenizer can emit whitespace-only sentences; none should become a request
+        sentences = (sentence.token async for sentence in input_stream if sentence.token.strip())
         first = await anext(sentences, None)
         if first is None:
             output_emitter.end_segment()
