@@ -23,6 +23,7 @@ from openai.types.beta.realtime.transcription_session_update_param import (
     SessionTurnDetection,
 )
 
+from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.openai import STT as OpenAISTT
 
@@ -78,4 +79,19 @@ class STT(OpenAISTT):
         url = f"{base_url}/audio/transcriptions?{urlencode({'model': self._opts.model})}"
         headers = {"Authorization": f"Bearer {self._client.api_key}", **ATTRIBUTION_HEADERS}
         session = self._ensure_session()
-        return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        # the failure is raised outside the except blocks: aiohttp's RequestInfo carries the
+        # request headers, so an exception left in the chain would expose the API key
+        rejected: tuple[str, int] | None = None
+        failure: str | None = None
+        try:
+            return await asyncio.wait_for(session.ws_connect(url, headers=headers), timeout)
+        except asyncio.TimeoutError:
+            failure = "timed out"
+        except aiohttp.ClientResponseError as e:
+            rejected = (e.message, e.status)
+        except Exception as e:
+            failure = type(e).__name__
+        if rejected is not None:
+            message, status = rejected
+            raise APIStatusError(message=message, status_code=status, request_id=None, body=None)
+        raise APIConnectionError(f"failed to connect to Sprag ({failure})")

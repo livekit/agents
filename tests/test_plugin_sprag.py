@@ -18,6 +18,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -207,6 +208,48 @@ async def test_stt_realtime_opens_a_transcription_session() -> None:
     turn_detection = session["audio"]["input"]["turn_detection"]
     assert turn_detection["type"] == "server_vad"
     assert turn_detection["silence_duration_ms"] == 200
+
+
+@bounded
+@pytest.mark.parametrize(("status", "attempts"), [(403, 1), (503, 2)])
+async def test_stt_rejected_handshake_keeps_the_key_out_of_the_error(
+    status: int, attempts: int
+) -> None:
+    handshakes = 0
+
+    async def reject(request: web.Request) -> web.Response:
+        nonlocal handshakes
+        handshakes += 1
+        return web.Response(status=status, text="refused")
+
+    test_server = await _serve({"/v1/audio/transcriptions": reject})
+    async with http_context.open():
+        stt = STT(base_url=str(test_server.make_url("/v1")))
+        stream = stt.stream(conn_options=ONE_RETRY)
+        try:
+            silence = b"\x00\x00" * 480
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=silence, sample_rate=24000, num_channels=1, samples_per_channel=480
+                )
+            )
+            stream.end_input()
+            with pytest.raises(APIError) as streamed:
+                async for _ in stream:
+                    pass
+            # the stream re-raises inside the framework's own handlers, which replaces the
+            # exception's context, so the connect step is checked where the error is built
+            with pytest.raises(APIStatusError) as connected:
+                await stt._connect_ws(timeout=5)
+        finally:
+            await stream.aclose()
+            await stt.aclose()
+            await test_server.close()
+
+    assert handshakes == attempts + 1
+    assert connected.value.status_code == status
+    assert not _holds(streamed.value, "test-key")
+    assert not _holds(connected.value, "test-key")
 
 
 # -- TTS against a fake speech session ---------------------------------------------------
