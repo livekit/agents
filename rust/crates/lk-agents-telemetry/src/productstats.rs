@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use lk_agents_abi::productstats::{ProviderLabels, STALL_SIGNATURE_FRAMES};
-use lk_agents_abi::telemetry::decl::{Label, MetricDecl, Number, ProductStats};
-use lk_agents_abi::telemetry::record::{KeyValues, Measurement, StackFrame};
+use lk_agents_abi::telemetry::decl::{MetricDecl, Number, ProductStats};
+use lk_agents_abi::telemetry::record::{KeyValues, Measurement};
 use parking_lot::RwLock;
 
 // The process's one product statistics recorder: every measurement point records here, never a
@@ -45,8 +44,8 @@ pub fn enabled() -> bool {
 /// Records one measurement of `M` under `labels`. Only a product statistic records here:
 ///
 /// ```
-/// use lk_agents_abi::productstats::JobStarts;
-/// lk_agents_telemetry::productstats::measure(&JobStarts, 1u64);
+/// use lk_agents_abi::productstats::testkit::TestDuration;
+/// lk_agents_telemetry::productstats::measure(&TestDuration, 1.0);
 /// ```
 ///
 /// A customer instrument does not compile:
@@ -68,25 +67,4 @@ pub fn measure<M: MetricDecl<Audience = ProductStats>>(labels: &M, value: impl I
         labels: out,
         job: None,
     });
-}
-
-/// The labels of a provider statistic; an empty provider or model is `unknown`.
-pub fn provider(
-    operation: lk_agents_abi::productstats::Operation,
-    provider: &str,
-    model: &str,
-) -> ProviderLabels {
-    let known = |v: &str| Label(if v.is_empty() { "unknown".to_owned() } else { v.to_owned() });
-    ProviderLabels { operation, provider: known(provider), model: known(model) }
-}
-
-/// A stall's signature: the function names of its innermost frames, innermost first.
-pub fn stall_signature(stack: Option<&[StackFrame]>) -> Label {
-    let names: Vec<&str> = stack
-        .unwrap_or_default()
-        .iter()
-        .take(STALL_SIGNATURE_FRAMES)
-        .map(|frame| frame.function.as_str())
-        .collect();
-    Label(if names.is_empty() { "unknown".to_owned() } else { names.join(" < ") })
 }

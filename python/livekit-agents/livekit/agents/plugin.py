@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 import threading
 
-from . import _core
-
 
 class Plugin:
     """A provider package, registered on import with ``Plugin.register_plugin(...)``."""
@@ -28,7 +26,6 @@ class Plugin:
         if threading.current_thread() != threading.main_thread():
             raise RuntimeError("Plugins must be registered on the main thread")
         cls.registered_plugins.append(plugin)
-        _core._core_product_stats_plugin(plugin.package, plugin.version)
 
     @property
     def package(self) -> str:

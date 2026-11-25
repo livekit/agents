@@ -1,4 +1,3 @@
-use lk_agents_abi::productstats::EventLoopStalls;
 use lk_agents_abi::telemetry::decl::Seconds;
 use lk_agents_abi::telemetry::errors::{ErrorType, Failure};
 use lk_agents_abi::telemetry::instruments::EventLoopBlockedDuration;
@@ -40,8 +39,6 @@ pub fn event_loop_blocked(
         BlockingSeverity::Warning
     };
     telemetry::measure(cx, &EventLoopBlockedDuration { severity }, duration.as_secs_f64());
-    let signature = telemetry::productstats::stall_signature(stack.as_deref());
-    telemetry::productstats::measure(&EventLoopStalls { signature }, 1u64);
     let now = cx.now_nanos();
     let suppressed = {
         let RateLimit { sent, suppressed } = &mut *blocked.0.lock();

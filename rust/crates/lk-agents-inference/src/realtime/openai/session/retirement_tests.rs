@@ -67,7 +67,6 @@ fn pump() -> (Pump, Arc<Shared>, queue::EventReceiver) {
         clock,
         provider_label: "openai",
         label: "cleanup".into(),
-        stats: lk_agents_telemetry::productstats::provider(Operation::Realtime, "openai", "test"),
         events,
         images: Arc::new(NoImages),
         spawner: Arc::new(TokioSpawner::current()),

@@ -549,9 +549,15 @@ fn module_path(attrs: &[syn::Attribute]) -> Result<Option<String>, String> {
     Err("a module's #[path] is a string literal".into())
 }
 
+/// `#[cfg(test)]`, or `#[cfg(any(test, ..))]`: a crate's fixtures for other crates' tests.
 fn test_only(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg") && a.parse_args::<syn::Ident>().is_ok_and(|i| i == "test")
+    type Any = syn::punctuated::Punctuated<syn::Meta, syn::Token![,]>;
+    attrs.iter().filter(|a| a.path().is_ident("cfg")).any(|a| match a.parse_args() {
+        Ok(syn::Meta::Path(cfg)) => cfg.is_ident("test"),
+        Ok(syn::Meta::List(any)) if any.path.is_ident("any") => any
+            .parse_args_with(Any::parse_terminated)
+            .is_ok_and(|all| all.iter().any(|cfg| cfg.path().is_ident("test"))),
+        _ => false,
     })
 }
 

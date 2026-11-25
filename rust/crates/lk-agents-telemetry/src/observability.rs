@@ -246,8 +246,8 @@ pub fn event_at<D: SpanDecl + HasEvent<E>, E: EventDecl>(
 /// A product statistic does not compile:
 ///
 /// ```compile_fail,E0271
-/// use lk_agents_abi::productstats::JobStarts;
-/// lk_agents_telemetry::measure(&lk_agents_telemetry::Cx::NONE, &JobStarts, 1u64);
+/// use lk_agents_abi::productstats::testkit::TestDuration;
+/// lk_agents_telemetry::measure(&lk_agents_telemetry::Cx::NONE, &TestDuration, 1.0);
 /// ```
 pub fn measure<M: MetricDecl<Audience = Observability>>(
     cx: &Cx,

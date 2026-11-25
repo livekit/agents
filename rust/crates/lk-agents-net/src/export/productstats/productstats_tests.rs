@@ -1,11 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::productstats::{
-    EventLoopStalls, FailureType, Operation, ProviderFailures, ProviderLabels, ProviderRequests,
-    ProviderTtft,
-};
-use lk_agents_abi::telemetry::record::RecordSink as _;
+use lk_agents_abi::productstats::testkit::{TestCounts, TestDuration};
+use lk_agents_abi::telemetry::decl::{self, MetricDecl};
+use lk_agents_abi::telemetry::record::{Number, RecordSink as _};
 use lk_agents_abi::telemetry::runner::{Launch, Runner, RunnerKind};
 use lk_agents_telemetry::productstats::Sink as _;
 
@@ -22,7 +20,6 @@ const LIMIT: Duration = Duration::from_secs(5);
 
 fn stats() -> ProductStats {
     let resource = ProductStatsResource {
-        plugins: Vec::new(),
         runner: Runner { launch: Launch::Start, kind: RunnerKind::Production },
         ..super::resource("2.0.0", Some("3.12.4"))
     };
@@ -37,18 +34,26 @@ fn destination(url: &str) -> Destination {
     Destination { base_url: url.to_owned(), api_key: "key".into(), api_secret: "secret".into() }
 }
 
-fn llm() -> ProviderLabels {
-    lk_agents_telemetry::productstats::provider(Operation::Llm, "openai", "gpt-4o")
+fn counts(label: &str) -> TestCounts {
+    TestCounts { label: Label(label.to_owned()) }
 }
 
 fn measure<M: MetricDecl<Audience = decl::ProductStats>>(
     stats: &ProductStats,
     labels: &M,
-    n: impl Into<lk_agents_abi::telemetry::record::Number>,
+    value: impl Into<Number>,
 ) {
-    let mut m = measurement(labels, 0);
-    m.value = n.into();
-    stats.record(m);
+    let mut out = KeyValues::new();
+    labels.write(&mut out);
+    stats.record(Measurement {
+        instrument: M::NAME,
+        kind: M::KIND,
+        unit: M::UNIT,
+        bounds: M::BOUNDS,
+        value: value.into(),
+        labels: out,
+        job: None,
+    });
 }
 
 fn string(value: &Option<super::super::otlp::proto::common::v1::AnyValue>) -> &str {
@@ -117,23 +122,10 @@ fn values(request: &ExportMetricsServiceRequest) -> Vec<Point> {
 async fn an_export_carries_only_declared_product_statistics_keys() {
     let (url, mut rx) = endpoint(ok).await;
     let stats = stats();
-    plugin("livekit.plugins.openai", "1.2.3");
-    plugin("my_company.secret_plugin", "0.1");
     stats.configure(Some(destination(&url)));
-    measure(&stats, &ProviderRequests { provider: llm() }, 2u64);
-    measure(
-        &stats,
-        &ProviderFailures { provider: llm(), error_type: FailureType::ApiStatusError },
-        1u64,
-    );
-    measure(&stats, &ProviderTtft { provider: llm() }, 0.3);
-    let stack = [lk_agents_abi::telemetry::record::StackFrame {
-        function: "requests_get".into(),
-        file: "/home/someone/app.py".into(),
-        line: 9,
-    }];
-    let signature = lk_agents_telemetry::productstats::stall_signature(Some(&stack));
-    measure(&stats, &EventLoopStalls { signature }, 1u64);
+    measure(&stats, &counts("a"), 2u64);
+    measure(&stats, &counts("b"), 1u64);
+    measure(&stats, &TestDuration, 0.3);
     assert!(stats.flush(LIMIT).await);
     let requests = received(&mut rx);
     assert_eq!(requests.len(), 1);
@@ -147,19 +139,12 @@ async fn an_export_carries_only_declared_product_statistics_keys() {
             "lk.productstats.arch",
             "lk.productstats.framework.version",
             "lk.productstats.os",
-            "lk.productstats.plugins",
             "lk.productstats.python.version",
             "lk.productstats.runner.kind",
             "lk.productstats.runner.launch",
             "service.name",
         ]
     );
-    let plugins = resource.attributes.iter().find(|kv| kv.key == "lk.productstats.plugins");
-    let plugins = match plugins.and_then(|kv| kv.value.as_ref()?.value.as_ref()) {
-        Some(Any::ArrayValue(a)) => a.values.iter().map(|v| string(&Some(v.clone())).to_owned()),
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(plugins.collect::<Vec<_>>(), ["livekit.plugins.openai==1.2.3"]);
     let values = values(&request);
     for (name, labels, _) in &values {
         assert!(name.starts_with("lk.productstats."), "{name}");
@@ -167,42 +152,15 @@ async fn an_export_carries_only_declared_product_statistics_keys() {
             assert!(key.starts_with("lk.productstats.") && !key.starts_with("lk.pii."), "{key}");
         }
     }
-    let provider = |extra: &[(&str, &str)]| {
-        let mut labels: Vec<(String, String)> = [
-            ("lk.productstats.operation", "llm"),
-            ("lk.productstats.provider", "openai"),
-            ("lk.productstats.model", "gpt-4o"),
-        ]
-        .iter()
-        .chain(extra)
-        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect();
-        labels.sort();
-        labels
-    };
-    let mut sorted: Vec<_> = values
-        .into_iter()
-        .map(|(n, mut l, v)| {
-            l.sort();
-            (n, l, v)
-        })
-        .collect();
+    let label = |v: &str| vec![("lk.productstats.test.label".to_owned(), v.to_owned())];
+    let mut sorted = values;
     sorted.sort();
     assert_eq!(
         sorted,
         [
-            (
-                "lk.productstats.event_loop.stalls".to_owned(),
-                vec![("lk.productstats.stall.signature".to_owned(), "requests_get".to_owned())],
-                1
-            ),
-            (
-                "lk.productstats.provider.failures".to_owned(),
-                provider(&[("lk.productstats.error.type", "api_status_error")]),
-                1
-            ),
-            ("lk.productstats.provider.requests".to_owned(), provider(&[]), 2),
-            ("lk.productstats.provider.ttft".to_owned(), provider(&[]), 1),
+            ("lk.productstats.test.counts".to_owned(), label("a"), 2),
+            ("lk.productstats.test.counts".to_owned(), label("b"), 1),
+            ("lk.productstats.test.duration".to_owned(), vec![], 1),
         ]
     );
     assert!(stats.flush(LIMIT).await);
@@ -223,42 +181,38 @@ async fn only_livekit_cloud_receives_product_statistics() {
     assert_eq!(Destination::cloud("wss://p.livekit.cloud", "", ""), None);
     let (url, mut rx) = endpoint(ok).await;
     let stats = stats();
-    measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
+    measure(&stats, &counts("a"), 1u64);
     assert!(stats.flush(LIMIT).await);
     stats.configure(None);
-    measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
+    measure(&stats, &counts("a"), 1u64);
     assert!(stats.flush(LIMIT).await);
     stats.configure(Some(destination(&url)));
     assert!(stats.flush(LIMIT).await);
     assert!(received(&mut rx).is_empty());
 }
 
-// Catches: a window lost silently while no credential exists, more than one window held, or a
-// refused export's points not reported on the next export.
+// Catches: a process with nothing recorded posting an empty export (its resource alone), or the
+// window recorded before the credential arrived never sent, or more than one window held.
 #[tokio::test]
-async fn drops_are_counted_and_exported_next() {
-    let refuse = |_: &str| Some((503, &b"busy"[..]));
-    let (refusing, mut refused_rx) = endpoint(refuse).await;
+async fn an_idle_process_sends_nothing_and_a_waiting_window_is_sent_once_configured() {
     let (url, mut rx) = endpoint(ok).await;
     let stats = stats();
-    for _ in 0..2 {
-        measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
+    stats.configure(Some(destination(&url)));
+    assert!(stats.flush(LIMIT).await);
+    stats.shutdown(LIMIT).await;
+    assert!(received(&mut rx).is_empty(), "no data point, no request");
+
+    let stats = self::stats();
+    for label in ["replaced", "held"] {
+        measure(&stats, &counts(label), 1u64);
         assert!(stats.flush(LIMIT).await, "a window waits for a credential");
     }
-    stats.configure(Some(destination(&refusing)));
-    assert!(stats.flush(LIMIT).await);
-    assert_eq!(received(&mut refused_rx).len(), 1);
     stats.configure(Some(destination(&url)));
     assert!(stats.flush(LIMIT).await);
     let requests = received(&mut rx);
     assert_eq!(requests.len(), 1);
-    let dropped: Vec<_> = values(&decode(&requests[0]))
-        .into_iter()
-        .filter(|(name, ..)| name == ExportDropped::NAME)
-        .map(|(_, labels, v)| (labels[0].1.clone(), v))
-        .collect();
-    // The first window was replaced while waiting; the second (with that drop) was refused.
-    assert_eq!(dropped, [("refused".to_owned(), 2)]);
+    let labels: Vec<_> = values(&decode(&requests[0])).into_iter().map(|(_, l, _)| l).collect();
+    assert_eq!(labels, [[("lk.productstats.test.label".to_owned(), "held".to_owned())]]);
 }
 
 // Catches: the customer's observability refusal (or its project's recording disabled) stopping
@@ -277,7 +231,7 @@ async fn a_customer_observability_refusal_leaves_product_statistics_on() {
     stats.configure(Some(destination(&url)));
     for _ in 0..2 {
         customer.record(counter(Some("AJ_1"), 1));
-        measure(&stats, &ProviderRequests { provider: llm() }, 1u64);
+        measure(&stats, &counts("a"), 1u64);
         customer.flush(None, LIMIT).await;
         assert!(stats.flush(LIMIT).await);
     }

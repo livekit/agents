@@ -110,14 +110,6 @@ pub trait Telemetry {
         #[host(kw, default = None)] allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError>;
 
-    /// The process's export counters.
-    #[host(function, name = "diagnostics", path = "livekit.agents.telemetry")]
-    fn _core_telemetry_diagnostics() -> TelemetryDiagnostics;
-
-    /// Counts a configuration conflict the host found (a tracer provider it cannot bridge).
-    #[host(function)]
-    fn _core_telemetry_conflict();
-
     /// Records a span the application's OpenTelemetry SDK ended (the bridge of an SDK provider),
     /// counted on `job`'s sessions.
     #[host(function)]
@@ -223,24 +215,6 @@ pub enum StatusCode {
     Unset,
     Ok,
     Error,
-}
-
-/// The process's export counters.
-#[crate::host(record(module = "telemetry", emit))]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TelemetryDiagnostics {
-    /// Records refused by a full queue or a metric cardinality limit, or abandoned at a deadline.
-    pub dropped: u64,
-    /// Records in requests the endpoint refused or that failed in transport.
-    pub failed: u64,
-    /// Configuration that could not apply.
-    pub conflicts: u64,
-    /// Job closes and shutdowns that reached their deadline before every record was sent.
-    pub incomplete_cleanup: u64,
-    /// Spans a voice session's close ended because their owner never did (a framework bug).
-    pub swept_spans: u64,
-    /// Voice sessions dropped without their close; their open spans were ended and exported.
-    pub abandoned_sessions: u64,
 }
 
 /// A `configure` argument out of its domain.

@@ -363,7 +363,6 @@ async fn the_records_are_flushed_before_the_upload() {
     assert_eq!(rx.recv().await.unwrap().path, "/observability/logs/otlp/v0");
     assert!(exporter.job_disabled(&key));
     assert!(rx.try_recv().is_err());
-    assert_eq!(exporter.diagnostics().recording_disabled, 1);
 }
 
 // Catches: the job's profile missing from the upload, sent under another name or type, or put

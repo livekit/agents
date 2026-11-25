@@ -1,4 +1,3 @@
-use lk_agents_abi::productstats::{JobEnds, JobOutcome};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -52,8 +51,6 @@ struct State {
     recording: Option<telemetry::RecordingOptions>,
     /// `ctx.add_shutdown_callback`'s, in order.
     shutdown_callbacks: Vec<ShutdownCallback>,
-    /// The entrypoint was cancelled rather than returning.
-    cancelled: bool,
 }
 
 enum ShutdownCallback {
@@ -235,12 +232,6 @@ impl Inner {
         } else {
             telemetry::end(span, ());
         }
-        let outcome = match (&failure, self.state.lock().cancelled) {
-            (Some(_), _) => JobOutcome::Failed,
-            (None, true) => JobOutcome::Cancelled,
-            (None, false) => JobOutcome::Ok,
-        };
-        lk_agents_telemetry::productstats::measure(&JobEnds { outcome }, 1u64);
         if let Some(job) = self.job.get() {
             lk_agents_net::job_identity::close(&job.key);
         }
@@ -297,7 +288,6 @@ impl Inner {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, "cancelling the entrypoint failed: {error}");
             }
             telemetry::event(root, telemetry::EntrypointCancelled);
-            self.state.lock().cancelled = true;
         }
         self.close_session(host, cx, shutdown.cx()).await;
         self.run_session_end(host, cx, shutdown.cx()).await;
@@ -320,7 +310,6 @@ impl Inner {
         match settled {
             Err(e) if cancelled(&e) => {
                 telemetry::event(root, telemetry::EntrypointCancelled);
-                self.state.lock().cancelled = true;
                 None
             }
             Err(e) => {

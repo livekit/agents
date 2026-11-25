@@ -25,7 +25,7 @@ To expose and call your application, read [server entrypoints](server.md) and
 | [agents.md](agents.md) | Agent configuration, RunContext, execution, output contracts, history, lifecycle hooks, and streaming |
 | [tools.md](tools.md) | Tool declaration, toolsets/MCP, approvals, human input, errors and local/remote tool configuration |
 | [models.md](models.md) | Model strings and the inference catalog, realtime options, connection options and pools, the HTTP/WebSocket client, timeouts, errors, retries, provider streams, and the plugin-author contract |
-| [telemetry.md](telemetry.md) | Exporting to your backend, application spans, distributed traces, content and PII, LiveKit Cloud recording, Prometheus, and diagnostics |
+| [telemetry.md](telemetry.md) | Exporting to your backend, application spans, distributed traces, content and PII, LiveKit Cloud recording, and Prometheus |
 | [usage.md](usage.md) | Usage snapshots, token and billing units, accounting scope, measurement availability, and performance metrics |
 | [context.md](context.md) | Runtime dependencies, persisted field declarations, context scopes, and schema evolution |
 | [persistence.md](persistence.md) | Explicit load/save, session binding and snapshots, durability, transactions, and concurrent updates |

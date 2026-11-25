@@ -3,14 +3,9 @@
 
 from __future__ import annotations
 
-from .._core import (
-    configure as configure,
-    diagnostics as diagnostics,
-    set_capture_content as set_capture_content,
-)
+from .._core import configure as configure, set_capture_content as set_capture_content
 
 __all__: list[str] = [
     "configure",
-    "diagnostics",
     "set_capture_content",
 ]
