@@ -998,9 +998,9 @@ class LLM(llm.LLM):
         ``MODAL_PROXY_TOKEN_ID`` and ``MODAL_PROXY_TOKEN_SECRET`` pair).
         """
 
-        if api_key is None:
+        if not api_key:
             api_key = os.environ.get("MODAL_PROXY_TOKEN")
-        if api_key is None:
+        if not api_key:
             token_id = os.environ.get("MODAL_PROXY_TOKEN_ID")
             token_secret = os.environ.get("MODAL_PROXY_TOKEN_SECRET")
             if token_id and token_secret:
