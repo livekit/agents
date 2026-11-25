@@ -7,7 +7,7 @@ use crate::{
     record::{Kind, Recording, amd::Answer},
 };
 
-// Spec §14 invariant 9, the AMD proposal "Reply payload: Tools": AMD's built-in
+// Spec §14 invariant 9: AMD's built-in
 // `send_dtmf_events` is offered once in a reply whose decision set `dtmf`, and in no other
 // request, a preemptive generation included. An agent that defines its own tool with that id
 // keeps it in every request, so the tool appearing outside a DTMF reply is judged only when no

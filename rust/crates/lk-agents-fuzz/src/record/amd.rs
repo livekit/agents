@@ -221,7 +221,7 @@ impl<'a> AmdView<'a> {
 
     /// Whether the end of turn the host heard at `at` asked for a reply: the verdict journalled
     /// just before it.
-    fn replies(&self, at: Observed) -> bool {
+    pub fn replies(&self, at: Observed) -> bool {
         self.0
             .journal()
             .iter()
@@ -350,9 +350,13 @@ impl<'a> AmdView<'a> {
     /// ignores such a turn: it keeps neither a reply nor its words (`agent_activity.py`, "ignore
     /// this turn", and the `except Exception` after it).
     pub fn stopped(&self, turn: &GatedTurn) -> bool {
+        self.stopped_turn(turn.turn)
+    }
+
+    /// [`Self::stopped`] for any turn, gated or not.
+    pub fn stopped_turn(&self, turn: u64) -> bool {
         use crate::input::HookAnswer;
-        let Some(hook) =
-            self.0.journal().iter().find_map(|(_, step)| self.turn_hook(step, turn.turn))
+        let Some(hook) = self.0.journal().iter().find_map(|(_, step)| self.turn_hook(step, turn))
         else {
             return false;
         };
@@ -370,9 +374,9 @@ impl<'a> AmdView<'a> {
     }
 
     /// The answer that decided `turn`, which rules about a decision's payload (stage, silence,
-    /// DTMF) must read rather than the first one sent: its first decision, applied once both it and the hook's
-    /// return came, unless its run's detach came first and settled the turn with `pending`
-    /// (proposal "Detach", step 3: `pending` replaces a decision not applied yet).
+    /// DTMF) must read rather than the first one sent: its first decision, applied once both it
+    /// and the hook's return came, unless its run's detach came first and settled the turn with
+    /// `pending`, which replaces a decision not applied yet.
     pub fn deciding(&self, turn: &GatedTurn) -> Option<Answer> {
         let answers = self.answers_for(turn);
         let decide = answers.iter().find(|a| matches!(a, Answer::Decide { .. })).copied();
@@ -386,18 +390,44 @@ impl<'a> AmdView<'a> {
         }
     }
 
-    /// Whether an agent declared a tool named `name` (its `AgentConfigUpdate`): then the tool in a
-    /// request is the agent's, not one AMD added.
-    pub fn agent_declares(&self, name: &str) -> bool {
-        self.0.host_view().events().iter().any(|(_, e)| match e {
+    /// When an agent first declared a tool named `name` (its `AgentConfigUpdate`): from then on
+    /// the tool in a request is the agent's, not one AMD added.
+    pub fn agent_declared_at(&self, name: &str) -> Option<Observed> {
+        self.0.host_view().events().iter().find_map(|(at, e)| match e {
             SessionEvent::ConversationItemAdded { item, .. } => match &**item {
                 lk_agents_abi::ChatItem::AgentConfigUpdate(update) => {
-                    update.tools_added.iter().flatten().any(|t| t == name)
+                    update.tools_added.iter().flatten().any(|t| t == name).then_some(*at)
                 }
-                _ => false,
+                _ => None,
             },
-            _ => false,
+            _ => None,
         })
+    }
+
+    /// The deciding answer of `turn` and when the session could apply it: once both it and the
+    /// turn's customer hook were in. `None` while the hook runs, with no deciding answer, or when
+    /// a newer turn superseded the turn first.
+    pub fn applied(&self, turn: &GatedTurn) -> Option<(Answer, Observed)> {
+        let answer = self.deciding(turn)?;
+        let at = answer.at().max(self.hook_returned(turn)?);
+        turn.superseded.is_none_or(|s| at < s).then_some((answer, at))
+    }
+
+    /// Whether the run was listening when `turn` committed: only then does its decision move the
+    /// hold.
+    pub fn bound(&self, turn: &GatedTurn) -> bool {
+        self.attachments()
+            .into_iter()
+            .find(|a| a.run == turn.run)
+            .and_then(|a| a.activated)
+            .is_some_and(|(activated, _)| activated < turn.committed)
+    }
+
+    /// The gated turn a request for `speech` answers, if any.
+    pub fn turn_of_speech(&self, speech: u64) -> Option<GatedTurn> {
+        self.gated_turns()
+            .into_iter()
+            .find(|turn| self.requests_answering(turn).iter().any(|q| q.speech == Some(speech)))
     }
 
     /// Every model request, in order.
@@ -444,7 +474,9 @@ impl<'a> AmdView<'a> {
                 // A preemptive generation's own words are not a turn item yet: older turns'
                 // items before them say nothing about which turn it answers.
                 if self.preemptive(r) {
-                    return user.text == turn.words && r.opened > previous;
+                    return user.text == turn.words
+                        && r.opened > previous
+                        && r.opened < turn.committed;
                 }
                 let newest_turn = r.messages.iter().rev().find(|m| turn_items.contains(&m.id));
                 newest_turn.is_some_and(|m| turn.item_id.as_deref() == Some(m.id.as_str()))
@@ -453,16 +485,20 @@ impl<'a> AmdView<'a> {
     }
 
     /// Whether the session dropped `turn` with no reply, behind a speech it could not interrupt or
-    /// while scheduling was paused: its diagnostic names the turn's words (proposal "Turn exits":
-    /// the uninterruptible drop; "paused scheduling" among `reply_follows_decision`'s refusals).
+    /// while scheduling was paused: its diagnostic names the turn's words.
     pub fn dropped_unanswered(&self, turn: &GatedTurn) -> bool {
+        self.dropped_words(&turn.words, turn.committed)
+    }
+
+    /// [`Self::dropped_unanswered`] for any turn's `words`, committed at `committed`.
+    pub fn dropped_words(&self, words: &str, committed: Observed) -> bool {
         use lk_agents_voice::events::diagnostics;
         self.0.host_view().events().iter().any(|(at, e)| match e {
             SessionEvent::Diagnostic(d) => {
-                *at > turn.committed
+                *at > committed
                     && [diagnostics::UNINTERRUPTIBLE_SPEECH, diagnostics::SCHEDULING_PAUSED]
                         .contains(&d.message)
-                    && d.fields.iter().any(|(_, value)| *value == turn.words)
+                    && d.fields.iter().any(|(_, value)| *value == words)
             }
             _ => false,
         })

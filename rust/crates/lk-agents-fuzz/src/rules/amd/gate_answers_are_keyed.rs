@@ -7,7 +7,7 @@ use crate::{
     record::{Kind, Recording, amd::Answer},
 };
 
-// the AMD proposal, protocol rule 2: the session applies a decision only to the latest
+// Every answer is keyed: the session applies a decision only to the latest
 // committed turn of the current run; every other answer is dropped, and journalled as
 // `AnswerDropped`. The outcome is judged first: a stale decision never answers its turn.
 
@@ -40,7 +40,11 @@ impl Rule for GateAnswersAreKeyed {
                     .requests_answering(named)
                     .into_iter()
                     .filter(|q| !amd.preemptive(q))
-                    .find(|q| q.opened > at && amd.allowed_at(named).is_none_or(|a| a.at() >= at));
+                    // Asked before any answer of its own allowed it: a decision for a turn the
+                    // session had not committed is no allow for it once it commits.
+                    .find(|q| {
+                        q.opened > at && amd.allowed_at(named).is_none_or(|a| q.opened < a.at())
+                    });
                 check.expect_with(
                     Subject::Resource(Kind::AmdTurn, turn as u32),
                     answered_after.is_none(),

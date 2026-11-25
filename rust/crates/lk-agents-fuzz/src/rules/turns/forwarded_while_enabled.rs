@@ -24,7 +24,7 @@ impl Rule for ForwardedWhileEnabled {
         id: "forwarded_while_enabled",
         guarantee: "Every microphone frame pushed while audio input was enabled reached every open STT and VAD stream; none reached a stream while input was disabled.",
         examples: &[reaches_both_legs, late_delivery_after_disable, crossed_a_recogniser_swap],
-        counterexamples: &[stt_never_heard, forwarded_while_disabled],
+        counterexamples: &[stt_never_heard, forwarded_while_disabled, discarded_then_delivered],
         probe: None,
     };
 
@@ -156,22 +156,31 @@ impl Rule for ForwardedWhileEnabled {
         // A frame heard while input was disabled can only be one pushed earlier, while it was
         // enabled, still moving through the pump. Anything else got past a closed microphone.
         for heard in inference.frames_heard() {
-            // Pushed and heard inside one AMD discard window: it got past the discard.
+            // Pushed inside an AMD discard window and heard, then or after it closed: it got
+            // past the discard. A frame pushed in the instant the run started listening may cross
+            // the enable in the pump. Only a stream fed frame by frame is judged after the window:
+            // the turn and interruption detectors read audio they buffered before it.
             for tag in heard.tags {
                 let Tag::Mic { mic, chunk } = *tag else { continue };
                 let Some(pushes) = pushed_at.get(&(mic, chunk)) else { continue };
                 let Some(pushed) = pushes.iter().rfind(|pushed| **pushed < heard.at) else {
                     continue;
                 };
-                let window = amd_discards.iter().find(|(from, to)| *from <= heard.at && heard.at < *to);
+                let fed = matches!(heard.kind, Kind::Stt | Kind::Vad);
+                let window = amd_discards.iter().find(|(from, to)| {
+                    from <= pushed
+                        && pushed < to
+                        && (heard.at < *to || (fed && pushed.at_ms < to.at_ms))
+                });
                 check.expect_with(
                     Subject::Resource(Kind::Mic, mic),
-                    window.is_none_or(|(from, _)| pushed < from),
+                    window.is_none(),
                     || {
                         format!(
-                            "{:?} stream {} heard mic {mic} chunk {chunk} while AMD discarded \
-                             participant audio (seq {})",
-                            heard.kind, heard.stream, heard.at.seq
+                            "{:?} stream {} heard mic {mic} chunk {chunk} (seq {}, {} ms), pushed \
+                             at seq {} ({} ms) while AMD discarded participant audio ({window:?})",
+                            heard.kind, heard.stream, heard.at.seq, heard.at.at_ms, pushed.seq,
+                            pushed.at_ms
                         )
                     },
                 );
@@ -408,6 +417,22 @@ fn stt_never_heard() -> Recording {
 }
 
 /// Input disabled and applied, a frame pushed after, and the recognition stream heard it anyway.
+/// A frame pushed while an attached AMD run discarded participant audio, delivered once it
+/// started listening.
+fn discarded_then_delivered() -> Recording {
+    use lk_agents_voice::amd::AmdRunId;
+    use lk_agents_voice::trace::GateStep;
+    mic_stt_vad()
+        .journal(Step::Gate(GateStep::Attached { run: AmdRunId(1) }))
+        .then_act()
+        .sent(frames(1))
+        .then_act()
+        .journal(Step::Gate(GateStep::Activated { run: AmdRunId(1) }))
+        .then_act()
+        .forwarded(Kind::Stt, 0, heard(0))
+        .done()
+}
+
 fn forwarded_while_disabled() -> Recording {
     mic_stt_vad()
         .sent(audio_input(false))

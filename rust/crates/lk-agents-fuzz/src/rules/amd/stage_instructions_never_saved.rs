@@ -8,7 +8,7 @@ use crate::{
     record::{Kind, Recording, StorageStep, amd::Answer},
 };
 
-// Spec §14 invariant 8, the AMD proposal "Reply payload: Stage instructions": stage
+// Spec §14 invariant 8: stage
 // instructions reach every request of the reply they were decided for, its tool follow-ups
 // included (spec §10.2), and never the conversation the session records or saves.
 

@@ -7,7 +7,7 @@ use crate::{
 
 use lk_agents_voice::amd::AmdObservation;
 
-// the AMD proposal, "Detach" and "Completion": the session applies `Detach`, removes the
+// The session applies `Detach`, removes the
 // gate and sends `Detached` at once, so AMD's completion never waits for customer code. A
 // session that never acknowledges fails here.
 

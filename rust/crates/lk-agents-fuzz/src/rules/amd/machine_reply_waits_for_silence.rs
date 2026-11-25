@@ -10,7 +10,7 @@ use crate::{
     record::{Recording, amd::Answer},
 };
 
-// Spec §14 invariant 7, the AMD proposal "Silence": a machine-stage reply never plays before
+// Spec §14 invariant 7: a machine-stage reply never plays before
 // the participant has been silent for `machine_silence_threshold`. Silence is read from the fake
 // VAD's ground truth -- the boundaries the case reported, backdated by what it said it measured --
 // not from the session's or AMD's view. A detach releases the hold (spec §10.3).
@@ -23,7 +23,7 @@ impl Rule for MachineReplyWaitsForSilence {
         guarantee: "A reply AMD allowed after silence is first heard only once the participant \
                     has been silent for the threshold, unless AMD completed first.",
         examples: &[heard_after_the_silence, released_by_detach],
-        counterexamples: &[heard_inside_the_silence, heard_while_speaking],
+        counterexamples: &[heard_inside_the_silence, heard_while_speaking, let_go_before_the_detach],
         probe: Some(a_voicemail_greeting),
     };
 
@@ -46,11 +46,6 @@ impl Rule for MachineReplyWaitsForSilence {
                 amd.requests_answering(&turn).iter().filter_map(|q| q.speech).collect();
             for speech in speeches {
                 let Some(heard) = amd.first_audio(speech) else { continue };
-                // Completion frees the held reply at once (spec §10.3): heard after it.
-                if released.is_some_and(|d| d < heard) {
-                    check.expect(Subject::Speech(speech), heard > decided, "heard before its decision");
-                    continue;
-                }
                 // Judged when the gate let the reply go: speech after that release goes through
                 // ordinary interruption, and a false interruption's resume may play it sooner, as
                 // in Python (`detector.py` `_update_idle` resumes authorization once, then leaves
@@ -64,6 +59,12 @@ impl Rule for MachineReplyWaitsForSilence {
                                 if s.0 == speech)
                     })
                     .map_or(heard, |(at, _)| (*at).min(heard));
+                // Completion frees the held reply at once (spec §10.3): a reply let go after it
+                // owes no silence.
+                if released.is_some_and(|d| d < let_go) {
+                    check.expect(Subject::Speech(speech), heard > decided, "heard before its decision");
+                    continue;
+                }
                 let since = amd.silent_since(let_go);
                 check.expect_with(
                     Subject::Speech(speech),
@@ -105,6 +106,19 @@ fn released_by_detach() -> Recording {
 
 fn heard_inside_the_silence() -> Recording {
     held(0).later(500).pushed(10).done()
+}
+
+/// Let go inside the silence and heard only after a later detach: the detach did not release
+/// it.
+fn let_go_before_the_detach() -> Recording {
+    held(0)
+        .later(500)
+        .journal(Step::Speech(SpeechStep::Authorized {
+            speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(10),
+        }))
+        .sent(Input::AmdDetach { category: AmdVerdict::Silence, forbid: false })
+        .pushed(10)
+        .done()
 }
 
 fn heard_while_speaking() -> Recording {

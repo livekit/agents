@@ -9,7 +9,7 @@ use crate::{
     record::{Recording, amd::Answer},
 };
 
-// the AMD proposal, "Reply payload: Preemptive generation": an allowed reply adopts the
+// An allowed reply adopts the
 // preemptive generation only when the decision adds no instructions and no DTMF, so the request
 // that was heard equals the one a new generation would have sent. A preemptive generation never
 // carries AMD's DTMF tool.
@@ -29,10 +29,11 @@ impl Rule for AdoptedRequestMatches {
 
     fn on_complete(r: &Recording, check: &mut Check) {
         let amd = r.amd_view();
-        // An agent's own tool with that id is in every request (proposal "Reply payload: Tools").
-        let amds_dtmf = !amd.agent_declares(SEND_DTMF_TOOL);
+        // Once an agent declares its own tool with that id, the tool is in every request after.
+        let declared = amd.agent_declared_at(SEND_DTMF_TOOL);
         for turn in amd.gated_turns() {
             for request in amd.requests_answering(&turn).into_iter().filter(|q| amd.preemptive(q)) {
+                let amds_dtmf = declared.is_none_or(|at| request.opened < at);
                 check.expect_with(
                     Subject::Resource(crate::record::Kind::Chat, request.chat),
                     !request.carries(STAGE)
@@ -43,7 +44,7 @@ impl Rule for AdoptedRequestMatches {
                     continue;
                 };
                 // The decision applied, not the first one sent: a detach replaces a decision
-                // stored while the turn was in its hook (proposal "Detach", step 3).
+                // stored while the turn was in its hook.
                 let allowed = amd.deciding(&turn).filter(Answer::allows);
                 let plain = matches!(
                     allowed,

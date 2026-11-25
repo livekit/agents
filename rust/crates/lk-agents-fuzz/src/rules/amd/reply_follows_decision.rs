@@ -7,7 +7,7 @@ use crate::{
     record::{Kind, Recording},
 };
 
-// the AMD proposal, "DST": a turn committed under the gate replies only after an allowed
+// A turn committed under the gate replies only after an allowed
 // decision for it, from `ReplyDecided` or `Detach`. A denied turn yields no reply, an allowed one
 // at most one. It also owns spec §14 invariants 3 (`wait` never replies) and 13 (a
 // customer-handled stage never replies, including turns `Detach` settles): the scripted

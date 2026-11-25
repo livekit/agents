@@ -308,27 +308,37 @@ fn last_quiet(journal: &[&(Observed, Step)]) -> Option<u64> {
     })
 }
 
-/// What a still-silent speech waits on at `deadline`, if anything holds.
-/// The AMD gate held authorization at `deadline`, or released it within the bound before
-/// (proposal "DST": a speech waits legitimately while the gate holds it, and under
-/// `Hold::Silence` only until the fake VAD's ground truth shows the required silence).
-fn amd_holds(r: &Recording, made: u64, deadline: u64) -> bool {
+/// The AMD gate held `speech` at `deadline`, or released it within the bound before. Only a
+/// speech the hold applies to waits on it: never the opening, which bypasses it; a turn's reply
+/// with an allow applied to its bound turn only under `Hold::Silence`, until the fake VAD's
+/// ground truth shows the required silence; any other speech while the hold is not open.
+fn amd_holds(r: &Recording, speech: u64, made: u64, deadline: u64) -> bool {
     use lk_agents_voice::amd::Hold;
     use lk_agents_voice::trace::GateStep;
     let mut last: Option<(u64, Option<Hold>)> = None;
+    let mut opening = false;
     for (at, step) in r.journal().iter().filter(|(at, _)| at.at_ms <= deadline) {
         match step {
             Step::Speech(SpeechStep::AuthorizationHeld(hold)) => last = Some((at.at_ms, Some(*hold))),
             Step::Gate(GateStep::Detached { .. }) => last = Some((at.at_ms, None)),
+            Step::Gate(GateStep::OpeningBypass { speech: s }) if s.0 == speech => opening = true,
             _ => {}
         }
     }
+    if opening {
+        return false;
+    }
+    let amd = r.amd_view();
+    let allowed = amd.turn_of_speech(speech).is_some_and(|turn| {
+        amd.bound(&turn)
+            && amd.applied(&turn).is_some_and(|(answer, at)| answer.allows() && at.at_ms <= deadline)
+    });
     match last {
-        Some((_, Some(Hold::Entry | Hold::Undecided { .. } | Hold::Denied { .. }))) => true,
-        Some((_, Some(Hold::Silence { needed, .. }))) => {
+        Some((_, Some(Hold::Entry | Hold::Undecided { .. } | Hold::Denied { .. }))) => !allowed,
+        Some((_, Some(Hold::Silence { needed, .. }))) if allowed => {
             let needed = needed.as_millis() as u64;
             // The detector's ground truth at the deadline: speaking, or silent since a boundary.
-            let boundaries = r.amd_view().vad_boundaries();
+            let boundaries = amd.vad_boundaries();
             let last = boundaries.into_iter().rfind(|(_, _, seen)| seen.at_ms <= deadline);
             match last {
                 Some((true, _, _)) => true,
@@ -336,11 +346,13 @@ fn amd_holds(r: &Recording, made: u64, deadline: u64) -> bool {
                 None => false,
             }
         }
+        Some((_, Some(Hold::Silence { .. }))) => true,
         Some((released, _)) => released >= made && deadline < released + BOUND_MS,
         None => false,
     }
 }
 
+/// What a still-silent speech waits on at `deadline`, if anything holds.
 fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'static str> {
     let before = |a: &Observed| a.at_ms <= deadline;
     // A model or voice open, or a node, that never answered once the speech was made: an
@@ -353,7 +365,7 @@ fn waits_on(r: &Recording, speech: u64, made: u64, deadline: u64) -> Option<&'st
     if hung_open {
         return Some("a provider open never answered");
     }
-    if amd_holds(r, made, deadline) {
+    if amd_holds(r, speech, made, deadline) {
         return Some("the AMD gate holds authorization");
     }
     // The audio output holding one of its frames: the speech waits on that output until it is cut.

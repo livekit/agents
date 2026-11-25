@@ -1,5 +1,5 @@
-//! The scripted AMD answerer's side of the reply gate's protocol (the AMD proposal, "DST":
-//! "Scripted AMD"). Until the AMD machine exists, these are the answers a run's AMD sends: the
+//! The scripted AMD answerer's side of the reply gate's protocol. Until the AMD machine
+//! exists, these are the answers a run's AMD sends: the
 //! spec §10.1 rows a verdict stands for, and `Detach.pending` built as the machine will build it.
 
 use std::time::Duration;
@@ -55,7 +55,7 @@ pub fn decision(verdict: AmdVerdict) -> ReplyDecision {
     }
 }
 
-/// `Detach.pending`, as the machine builds it (proposal "Detach", step 3): a `wait` category or
+/// `Detach.pending`, as the machine builds it: a `wait` category or
 /// replies forbidden deny; anything else allows with no instructions, silence or DTMF.
 pub fn pending(category: AmdVerdict, forbid: bool) -> ReplyDecision {
     if forbid || category == AmdVerdict::Wait {

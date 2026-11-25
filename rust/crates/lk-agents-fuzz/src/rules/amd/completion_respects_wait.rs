@@ -5,7 +5,7 @@ use crate::{
     record::{Kind, Recording, amd::Answer},
 };
 
-// the AMD proposal, "DST" and "Detach" step 3: no turn whose AMD category at completion is
+// No turn whose AMD category at completion is
 // `wait` gets a reply from `Detach`. `pending` replaces any decision the session has not applied
 // yet, including one stored for a turn still in its customer hook, so an earlier allow stored
 // for that turn must not answer it.
