@@ -573,6 +573,57 @@ fn test_a_greeting_queued_before_amd_is_in_the_history_when_it_plays() {
     );
 }
 
+/// A speech already playing at attach is watched, but its words started before AMD's entry: they
+/// stay out of the history (Python's `_started_at` filter).
+#[test]
+fn test_a_speech_playing_at_attach_stays_out_of_the_history() {
+    let mut h = H::new(AmdOptions::default());
+    let greeting = h.new_speech();
+    let playing =
+        SpeechObservation::Created { kind: SpeechKind::Say, add_to_chat_ctx: true, playing: true };
+    h.speech(greeting, playing);
+    h.busy(true);
+    h.step(In::Callee(Callee::Answered));
+
+    h.turn("hello", Category::Uncertain);
+    h.advance(ms(100));
+    h.play(greeting, "Hi, this is Alex.");
+    h.busy(false);
+    h.advance(ms(100));
+    let turn = h.commit("Who is this?");
+
+    assert_eq!(
+        messages(&h.request_for(turn)),
+        vec![("user", "hello".to_owned()), ("user", "Who is this?".to_owned())]
+    );
+}
+
+/// A preemptive generation a turn adopts is that turn's reply: its words follow the turn's
+/// decision.
+#[test]
+fn test_an_adopted_preemptive_generation_is_the_turn_reply() {
+    let mut h = H::started(AmdOptions::default());
+    let turn = h.commit("Hello?");
+    let preemptive = h.created(SpeechKind::Preemptive);
+    h.classify(turn, Category::Uncertain);
+    assert_eq!(h.decision(turn), plain());
+    // a plain reply adopts it
+    h.observe(AmdObservation::ReplyCreated { turn, speech: preemptive });
+    h.ended(turn, crate::amd::TurnEnd::Replied);
+    h.play(preemptive, "Hi, this is Alex.");
+    h.advance(ms(100));
+    let next = h.commit("Who is this?");
+
+    assert_eq!(
+        messages(&h.request_for(next)),
+        vec![
+            ("user", "Hello?".to_owned()),
+            ("assistant", AGENT_REPLY.to_owned()),
+            ("user", "Who is this?".to_owned()),
+        ]
+    );
+}
+
 #[test]
 fn test_a_speech_outside_the_chat_context_has_no_history_entry() {
     // spec §8.2: the session does not record a reply created with `add_to_chat_ctx=False`
@@ -928,6 +979,74 @@ fn test_speech_across_a_commit_is_split_at_the_commit() {
     h.advance(secs(1));
     let second = h.commit("the line.");
     assert_eq!(h.request_for(second).speech_duration, secs(1));
+}
+
+// Realtime transcripts (spec §7.2).
+
+/// Ports `test_external_stt_preserves_history_without_native_transcription`: a realtime model
+/// without user transcription and without session STT gets each turn's transcript from AMD, once,
+/// before the decision and whatever the prediction. With session STT the session commits the
+/// transcript itself, so the host sets no `insert_user_items`.
+#[test]
+fn test_external_stt_preserves_history_without_native_transcription() {
+    use Category::*;
+    for source in ["session", "amd", "amd late", "both"] {
+        for category in [Wait, MachineUnavailable, Human] {
+            let case = format!("{source}, {category:?}");
+            let amd_only = source.starts_with("amd");
+            let setup = AmdSetup {
+                session_stt: !amd_only,
+                amd_stt: source != "session",
+                insert_user_items: amd_only,
+                ..setup()
+            };
+            let mut h = H::started_with(AmdOptions::default(), setup);
+            if source == "amd" {
+                h.amd_final("AMD transcript.");
+            }
+            let committed = if amd_only { "" } else { "Session transcript." };
+            let turn = h.commit(committed);
+            if source == "amd late" {
+                h.advance(ms(100));
+                h.amd_final("AMD transcript.");
+            }
+            if source == "both" {
+                // no AMD final comes: the request goes after the wait
+                h.advance(LATE_AMD_FINAL_WAIT);
+            }
+            let inserted = |h: &H| -> Vec<AmdAnswer> {
+                (h.answers().into_iter())
+                    .filter(|a| matches!(a, AmdAnswer::InsertUserItem { .. }))
+                    .collect()
+            };
+            let expected = if amd_only {
+                let text = "AMD transcript.".to_owned();
+                vec![AmdAnswer::InsertUserItem { run: RUN, turn, text }]
+            } else {
+                vec![]
+            };
+            assert_eq!(inserted(&h), expected, "{case}");
+            assert!(h.decisions(turn).is_empty(), "{case}: inserted before the decision");
+            h.classify(turn, category);
+            assert_eq!(inserted(&h), expected, "{case}: once");
+        }
+    }
+}
+
+/// Ports `test_suppressed_reply_keeps_only_the_realtime_transcript`: a model that transcribes
+/// the participant itself gets no transcript from AMD, even when the reply is suppressed.
+#[test]
+fn test_suppressed_reply_keeps_only_the_realtime_transcript() {
+    for category in [Category::Wait, Category::MachineUnavailable] {
+        let setup = AmdSetup { session_stt: false, insert_user_items: false, ..setup() };
+        let mut h = H::started_with(AmdOptions::default(), setup);
+        let turn = h.commit("hello");
+        h.classify(turn, category);
+        assert!(!h.allowed(turn), "{category:?}");
+        let inserted =
+            h.answers().into_iter().any(|a| matches!(a, AmdAnswer::InsertUserItem { .. }));
+        assert!(!inserted, "{category:?}");
+    }
 }
 
 // The turn registry.

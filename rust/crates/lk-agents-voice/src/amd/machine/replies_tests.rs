@@ -534,12 +534,11 @@ fn test_a_turn_after_the_overall_deadline_completes_with_timeout() {
 fn test_a_turn_under_another_agent_completes_with_agent_changed() {
     let mut h = H::started(AmdOptions::default());
     let turn = h.commit_with(Commit { agent: "transfer".to_owned(), ..Commit::text("hello") });
-    if h.requests_for(turn) > 0 {
-        h.classify(turn, Category::MachineScreening);
-    }
-    assert!(!h.allowed(turn));
-    let AmdAnswer::Detach { pending, .. } = h.detach() else { unreachable!() };
-    assert!(!pending.allow, "the turn under another agent is denied");
+    // the turn is classified first: Python finds the change while it waits for the prediction
+    h.classify(turn, Category::MachineScreening);
+    assert_eq!(h.predictions().len(), 1);
+    assert!(h.decisions(turn).is_empty());
+    assert_eq!(h.detach(), completed_with(deny(), DetachCancel::Keep));
     let outcome = h.outcome();
     assert_eq!(outcome.reason, AmdReason::AgentChanged);
     assert!(outcome.is_error());
