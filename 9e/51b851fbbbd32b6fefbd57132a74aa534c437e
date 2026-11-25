@@ -1,0 +1,20 @@
+rust/crates/lk-agents-voice/src/agent_session/commands.rs
+  h_a827ab16c3c189 54
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  h_a827ab16c3c189 2
+rust/crates/lk-agents-voice/src/amd.rs
+  h_a827ab16c3c189 2
+rust/crates/lk-agents-voice/src/trace.rs
+  h_a827ab16c3c189 686
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9e51b851fbbbd32b6fefbd57132a74aa534c437e",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
