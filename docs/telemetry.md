@@ -229,7 +229,7 @@ One count per conversation, recorded when it ends: a call (`rtc_session`) or a t
 | Label | Values |
 | --- | --- |
 | `lk.product.agents.session.entrypoint` | `rtc_session`, `a2a_session` |
-| `lk.product.agents.session.agents` | `single`: one agent for the whole conversation; `handoff`: one agent replaced another; `agent_as_tool`: a local agent was called as a tool; `handoff+agent_as_tool`: both |
+| `lk.product.agents.session.topology` | `single`: one agent for the whole conversation; `handoff`: one agent replaced another; `agent_as_tool`: a local agent was called as a tool; `handoff+agent_as_tool`: both |
 | `lk.product.agents.session.delegation` | `none`: everything ran in this process; `remote`: a `RemoteAgent` was called |
 
 **Voice configuration**
