@@ -18,10 +18,10 @@ def test_default_model_is_s2_1_pro():
 
 
 def test_model_variants_accepted():
-    """s1, s2-pro, and s2.1-pro are all accepted."""
+    """s1, s2-pro, s2.1-pro, and drama-3 are all accepted."""
     from livekit.plugins.fishaudio import TTS
 
-    for model in ("s1", "s2-pro", "s2.1-pro"):
+    for model in ("s1", "s2-pro", "s2.1-pro", "drama-3"):
         assert TTS(api_key="test-key", model=model).model == model
 
 

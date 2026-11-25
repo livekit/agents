@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import json
+import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
 import aiohttp
 from openai.types.realtime import (
     AudioTranscription,
+    ConversationItemAdded,
+    ConversationItemCreateEvent,
+    ConversationItemDeletedEvent,
+    ConversationItemDeleteEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
+    InputAudioBufferSpeechStartedEvent,
     NoiseReductionType,
     RealtimeAudioInputTurnDetection,
     RealtimeReasoning,
+    ResponseAudioDeltaEvent,
+    ResponseCreatedEvent,
+    ResponseTextDeltaEvent,
 )
 from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
@@ -19,11 +32,13 @@ from livekit.agents import llm
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
+    _resolve_provider,
     create_access_token,
     get_default_inference_url,
     get_inference_headers,
     resolve_credentials,
 )
+from livekit.agents.log import logger
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -36,7 +51,15 @@ from ...llm._realtime.openai import (
     DEFAULT_VOICE,
     RealtimeModel as _RealtimeModel,
     RealtimeSession as _RealtimeSession,
+    _DiscardedGeneration,
 )
+from .._realtime_models import DEPRECATED_REALTIME_MODELS, RealtimeModels, is_duplex_model
+
+# a gateway that is shutting down asks the session to reconnect elsewhere at a quiet point
+HEADER_HANDOFF_PROTOCOL = "X-LiveKit-Handoff-Protocol"
+# how long a committed user turn may wait for its response before the session counts as quiet
+_HANDOFF_RESPONSE_GRACE = 1.5
+_HANDOFF_POLL_INTERVAL = 0.02
 
 _XAI_DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(model="grok-transcribe")
 _XAI_DEFAULT_TURN_DETECTION = ServerVad(
@@ -54,7 +77,7 @@ class _InferenceOptions:
     provider: str | None
     api_key: str
     api_secret: str
-    inference_class: InferenceClass | None
+    is_xai: bool = False
 
 
 class RealtimeModel(_RealtimeModel):
@@ -62,13 +85,13 @@ class RealtimeModel(_RealtimeModel):
 
     def __init__(
         self,
-        model: str,
+        model: RealtimeModels | str,
         *,
-        provider: str | None = None,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
-        inference_class: InferenceClass | None = None,
+        inference_class: NotGivenOr[InferenceClass | None] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
@@ -85,12 +108,28 @@ class RealtimeModel(_RealtimeModel):
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """
+        Args:
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
+        """
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-realtime'")
+        if is_duplex_model(model):
+            raise ValueError(f"{model} is a duplex model; use inference.DuplexModel")
+        if replacement := DEPRECATED_REALTIME_MODELS.get(model):
+            logger.warning(f"{model} is deprecated, use {replacement} instead")
+        if is_given(inference_class):
+            logger.warning(
+                "inference_class is deprecated and will be removed in v2.0. "
+                "It has no effect on realtime sessions."
+            )
 
         resolved_api_key, resolved_api_secret = resolve_credentials(api_key, api_secret)
 
         is_xai = model.startswith("xai/")
+        is_google = model.startswith("google/")
         resolved_voice = voice if is_given(voice) else "eve" if is_xai else DEFAULT_VOICE
         resolved_transcription = input_audio_transcription
         resolved_turn_detection = turn_detection
@@ -126,11 +165,15 @@ class RealtimeModel(_RealtimeModel):
         self._opts.api_version = None
         if is_xai:
             self._capabilities.can_disable_turn_detection = can_disable_turn_detection
+        if is_google:
+            # Gemini Live takes manual turns as activity markers, not commits, so it
+            # keeps its own turn detection, as the google plugin does.
+            self._capabilities.can_disable_turn_detection = False
         self._inference_opts = _InferenceOptions(
-            provider=provider,
+            provider=_resolve_provider(provider=provider),
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
-            inference_class=inference_class,
+            is_xai=is_xai,
         )
         self._provider_label = "LiveKit Inference Realtime"
 
@@ -150,6 +193,13 @@ class RealtimeModel(_RealtimeModel):
 
 
 class RealtimeSession(_RealtimeSession):
+    # the base __init__ resets the input turn state before the subclass body runs
+    _is_xai: bool = False
+    _pending_transcription: ConversationItemInputAudioTranscriptionCompletedEvent | None = None
+    _response_spoke: bool = False
+    _user_speaking: bool = False
+    _speech_stopped_at: float | None = None
+
     def __init__(
         self,
         realtime_model: RealtimeModel,
@@ -157,15 +207,112 @@ class RealtimeSession(_RealtimeSession):
         turn_detection_disabled: bool = False,
     ) -> None:
         self._inference_model = realtime_model
+        self._is_xai = realtime_model._inference_opts.is_xai
+        self._handoff_id: str | None = None
+        self._handoff_task: asyncio.Task[None] | None = None
         super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
+        self.on("openai_server_event_received", self._watch_handoff)
+        self.on("session_reconnected", lambda _: self._cancel_handoff())
+
+    def _reset_input_turn_state(self) -> None:
+        if self._is_xai:
+            self._flush_input_transcription()
+        super()._reset_input_turn_state()
+        self._response_spoke = False
+        self._user_speaking = False
+        self._speech_stopped_at = None
+        self._pending_input_transcriptions: set[str] = set()
+
+    async def aclose(self) -> None:
+        self._cancel_handoff()
+        if self._is_xai:
+            self._flush_input_transcription()
+        await super().aclose()
+
+    def _watch_handoff(self, event: dict[str, Any]) -> None:
+        kind = event.get("type")
+        if kind == "input_audio_buffer.speech_started":
+            self._user_speaking = True
+            self._speech_stopped_at = None
+        elif kind == "input_audio_buffer.speech_stopped":
+            self._user_speaking = False
+            self._speech_stopped_at = time.monotonic()
+            if self._opts.input_audio_transcription is not None and (
+                item_id := event.get("item_id")
+            ):
+                self._pending_input_transcriptions.add(item_id)
+        elif kind == "input_audio_buffer.committed":
+            if self._opts.input_audio_transcription is not None and (
+                item_id := event.get("item_id")
+            ):
+                self._pending_input_transcriptions.add(item_id)
+        elif kind in (
+            "conversation.item.input_audio_transcription.completed",
+            "conversation.item.input_audio_transcription.failed",
+        ):
+            if event.get("status") != "in_progress":
+                self._pending_input_transcriptions.discard(event.get("item_id", ""))
+        elif kind == "response.created":
+            self._speech_stopped_at = None
+        elif kind == "session.handoff.request" and self._handoff_task is None:
+            self._handoff_id = str(event.get("handoff_id", ""))
+            self._schedule_handoff()
+
+    def _schedule_handoff(self) -> None:
+        self._handoff_task = asyncio.create_task(
+            self._handoff_when_quiet(), name="RealtimeSession._handoff_when_quiet"
+        )
+
+    def _handoff_quiet(self) -> bool:
+        done = getattr(self._current_generation, "_done_fut", None)
+        if done is not None and not done.done():
+            return False
+        if any(not fut.done() for fut in self._response_created_futures.values()):
+            return False
+        if self._user_speaking or self._pending_input_transcriptions:
+            return False
+        stopped = self._speech_stopped_at
+        return stopped is None or time.monotonic() - stopped >= _HANDOFF_RESPONSE_GRACE
+
+    async def _handoff_when_quiet(self) -> None:
+        while not self._handoff_quiet():
+            await asyncio.sleep(_HANDOFF_POLL_INTERVAL)
+        self._recycle_requested.set()
+
+    def _cancel_handoff(self) -> None:
+        if self._handoff_task is not None and not self._handoff_task.done():
+            self._handoff_task.cancel()
+        self._handoff_task = None
+
+    async def _before_recycle(self, ws_conn: aiohttp.ClientWebSocketResponse) -> bool:
+        if self._handoff_quiet():
+            if self._handoff_id is None:
+                return True
+            handoff_id, self._handoff_id = self._handoff_id, None
+            with contextlib.suppress(aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    ws_conn.send_str(
+                        json.dumps({"type": "session.handoff.complete", "handoff_id": handoff_id})
+                    ),
+                    timeout=self._opts.conn_options.timeout,
+                )
+            # The reader can receive another turn while the acknowledgement is in flight.
+            if self._handoff_quiet():
+                return True
+        if not self._closing:
+            self._schedule_handoff()
+        return False
 
     def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
         opts = self._inference_model._inference_opts
         url, _ = super()._create_ws_url_and_headers()
-        headers = get_inference_headers(inference_class=opts.inference_class)
+        headers = get_inference_headers()
         headers["Authorization"] = f"Bearer {create_access_token(opts.api_key, opts.api_secret)}"
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
+        # without server turn detection the session cannot see a quiet point to hand off at
+        if self._opts.turn_detection is not None:
+            headers[HEADER_HANDOFF_PROTOCOL] = "1"
         return url, headers
 
     def _wrap_session_update(self, event_id: str, session: Any) -> dict[str, Any]:
@@ -180,14 +327,131 @@ class RealtimeSession(_RealtimeSession):
             session_payload.pop("model", None)
         return event
 
+    def _create_update_chat_ctx_events(
+        self, chat_ctx: llm.ChatContext
+    ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
+        pending = self._pending_transcription if self._is_xai else None
+        node = self._remote_chat_ctx.get(pending.item_id) if pending else None
+        if node is not None and chat_ctx.get_by_id(node.item.id) is None:
+            chat_ctx = chat_ctx.copy()
+            index, previous = 0, node._prev
+            while previous is not None:
+                if (at := chat_ctx.index_by_id(previous.item.id)) is not None:
+                    index = at + 1
+                    break
+                previous = previous._prev
+            chat_ctx.items.insert(index, node.item.model_copy())
+        return super()._create_update_chat_ctx_events(chat_ctx)
+
+    def _discard_abandoned_response(self) -> None:
+        generation = self._current_generation
+        if (
+            generation is None
+            or self._response_spoke
+            or isinstance(generation, _DiscardedGeneration)
+        ):
+            return
+        logger.debug("discarding the response xAI left in flight")
+        self._close_current_generation()
+        self._current_generation = _DiscardedGeneration()
+
+    def interrupt(self) -> None:
+        super().interrupt()
+        if self._is_xai:
+            self._discard_abandoned_response()
+
+    def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
+        if self._is_xai:
+            self._discard_abandoned_response()
+            self._close_current_generation()
+            self._response_spoke = False
+        super()._handle_response_created(event)
+
+    def _handle_input_audio_buffer_speech_started(
+        self, event: InputAudioBufferSpeechStartedEvent
+    ) -> None:
+        if not self._is_xai:
+            super()._handle_input_audio_buffer_speech_started(event)
+            return
+
+        if self._pending_transcription and self._pending_transcription.item_id != event.item_id:
+            self._flush_input_transcription()
+
+        started_at = self._input_speech_started_at.get(event.item_id)
+        super()._handle_input_audio_buffer_speech_started(event)
+        if started_at is not None:
+            self._input_speech_started_at[event.item_id] = started_at
+
+    def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
+        if self._is_xai:
+            if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
+                logger.warning(
+                    "xAI placed a chat history item after an unknown item; appended it instead",
+                    extra={"item_id": event.item.id, "previous_item_id": event.previous_item_id},
+                )
+                event.previous_item_id = None
+            if event.previous_item_id is None:
+                event.previous_item_id = self._remote_chat_ctx.tail_id
+        super()._handle_conversion_item_added(event)
+
+    def _handle_conversion_item_deleted(self, event: ConversationItemDeletedEvent) -> None:
+        if self._is_xai and event.item_id == "" and self._item_delete_future:
+            event.item_id = list(self._item_delete_future.keys())[0]
+        self._pending_input_transcriptions.discard(event.item_id)
+        super()._handle_conversion_item_deleted(event)
+
+    def _handle_conversion_item_input_audio_transcription_completed(
+        self, event: ConversationItemInputAudioTranscriptionCompletedEvent
+    ) -> None:
+        if not self._is_xai:
+            super()._handle_conversion_item_input_audio_transcription_completed(event)
+            return
+
+        if getattr(event, "status", None) != "in_progress":
+            if self._pending_transcription and self._pending_transcription.item_id != event.item_id:
+                self._flush_input_transcription()
+            self._pending_transcription = event
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id, transcript=event.transcript, is_final=False
+            ),
+        )
+
+    def _flush_input_transcription(self) -> None:
+        if (event := self._pending_transcription) is None:
+            return
+        self._pending_transcription = None
+        if (remote_item := self._remote_chat_ctx.get(event.item_id)) and (
+            remote_item.item.type == "message"
+        ):
+            remote_item.item.content = [
+                c for c in remote_item.item.content if not isinstance(c, str)
+            ]
+        super()._handle_conversion_item_input_audio_transcription_completed(event)
+
+    def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
+        if self._is_xai:
+            self._response_spoke = True
+            self._flush_input_transcription()
+        super()._handle_response_audio_delta(event)
+
+    def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
+        if self._is_xai:
+            self._response_spoke = True
+            self._flush_input_transcription()
+        super()._handle_response_text_delta(event)
+
     def _is_fatal_error(self, error: object | None) -> bool:
-        code = getattr(error, "code", None) or getattr(error, "type", None)
+        fatal = {
+            "unsupported_transcription_model",
+            "unsupported_audio_transport",
+            "unsupported_audio_format",
+        }
+        code = getattr(error, "code", None)
+        type_ = getattr(error, "type", None)
         return (
-            isinstance(code, str)
-            and code
-            in {
-                "unsupported_transcription_model",
-                "unsupported_audio_transport",
-                "unsupported_audio_format",
-            }
-        ) or super()._is_fatal_error(error)
+            (isinstance(code, str) and code in fatal)
+            or (isinstance(type_, str) and type_ in fatal)
+            or super()._is_fatal_error(error)
+        )

@@ -8,9 +8,28 @@ from google.genai import types
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, function_tool
 from livekit.agents.types import APIConnectOptions
-from livekit.plugins.google.llm import LLM, LLMStream
+from livekit.plugins.google.llm import LLM, LONG_DECODE_HTTP_TIMEOUT_MS, LLMStream
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.tools import GoogleSearch
+
+_llms: list[LLM] = []
+
+
+@pytest.fixture(autouse=True)
+async def _close_llms(monkeypatch: pytest.MonkeyPatch):
+    # PR #7994: forced httpx transport makes genai's httpx client close nondeterministically at GC; close here.
+    orig = LLM.__init__
+
+    def _tracking_init(self: LLM, *args: object, **kwargs: object) -> None:
+        orig(self, *args, **kwargs)
+        _llms.append(self)
+
+    monkeypatch.setattr(LLM, "__init__", _tracking_init)
+    yield
+    for model in _llms:
+        await model.aclose()
+    _llms.clear()
+
 
 pytestmark = pytest.mark.plugin("google")
 
@@ -196,6 +215,41 @@ class TestCachedContentRequestSuppression:
         assert config.cached_content == "cachedContents/abc123"
 
     @pytest.mark.asyncio
+    async def test_dynamic_instructions_become_a_turn_when_cached_content_set(self) -> None:
+        """The static prompt lives in the cache, so ``Instructions.dynamic`` has to
+        reach the model as a turn: folded into the dropped system_instruction it
+        would never be seen."""
+        from livekit.agents.llm.chat_context import Instructions
+        from livekit.agents.voice.generation import update_instructions
+
+        llm = LLM(
+            model="gemini-2.5-flash",
+            api_key="test",
+            cached_content="cachedContents/abc123",
+        )
+
+        chat_ctx = ChatContext.empty()
+        update_instructions(
+            chat_ctx,
+            instructions=Instructions("system prompt that lives in cache", dynamic="Caller: Alex"),
+            add_if_missing=True,
+        )
+        chat_ctx.add_message(role="user", content="hi")
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(chat_ctx=chat_ctx)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        assert captured["config"].system_instruction is None
+        texts = [part.text for content in captured["contents"] for part in content.parts]
+        assert texts == ["<instructions>\nCaller: Alex\n</instructions>", "hi"]
+
+    @pytest.mark.asyncio
     async def test_request_omits_tools_when_cached_content_set(self) -> None:
         """With a cache attached, the outgoing request must NOT include
         ``tools`` even if the LLMStream was constructed with function
@@ -283,6 +337,60 @@ class TestCachedContentRequestSuppression:
         assert "livekit-agents/" in config.http_options.headers["x-goog-api-client"]
         assert caller_http_options.timeout is None
         assert caller_http_options.headers == {"X-Vertex-Test": "1"}
+
+    @pytest.mark.asyncio
+    async def test_timeout_is_read_timeout_not_whole_request_deadline(self) -> None:
+        """#7987: genai turns the ms timeout into aiohttp ClientTimeout(total=...) and an
+        X-Server-Timeout header, both of which Vertex enforces as a WHOLE-REQUEST deadline:
+        a healthy Gemini answer streaming for longer than the read timeout is killed
+        mid-sentence with a 504 or a CancelledError. The other plugins pass
+        conn_options.timeout to httpx, where it bounds the silence between chunks. The
+        client must (a) force httpx at CLIENT level (genai reads
+        the transport choice from client options only, see google.genai._api_client._use_aiohttp)
+        so the timeout keeps read-timeout semantics, and (b) preset X-Server-Timeout with
+        the long-decode ceiling so the header does not re-introduce a server-side deadline
+        derived from the read timeout."""
+        llm = LLM(model="gemini-2.5-flash", api_key="test")
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(
+                chat_ctx=ChatContext.empty(),
+                conn_options=APIConnectOptions(timeout=5.5),
+            )
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        http_options = captured["config"].http_options
+        # timeout stays the read timeout in ms
+        assert http_options.timeout == 5500
+        # server deadline no longer derived from the read timeout
+        assert http_options.headers["X-Server-Timeout"] == str(LONG_DECODE_HTTP_TIMEOUT_MS // 1000)
+
+    @pytest.mark.asyncio
+    async def test_user_http_options_timeout_keeps_the_server_deadline_untouched(self) -> None:
+        """A user-set http_options.timeout is their whole-request choice; no header preset."""
+        llm = LLM(
+            model="gemini-2.5-flash",
+            api_key="test",
+            http_options=types.HttpOptions(timeout=30000),
+        )
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(chat_ctx=ChatContext.empty())
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        http_options = captured["config"].http_options
+        assert http_options.timeout == 30000
+        assert "X-Server-Timeout" not in http_options.headers
 
 
 class TestMediaResolution:
@@ -623,3 +731,10 @@ class TestThinkingConfigRequestConstruction:
         assert thinking_config is not None
         assert thinking_config.thinking_budget == 1024
         assert thinking_config.thinking_level is None
+
+
+def test_default_model_is_not_a_retired_one():
+    # gemini-2.5-* stopped being served on Vertex AI on 2026-10-20
+    retired = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-001"}
+
+    assert LLM(api_key="test-key").model not in retired

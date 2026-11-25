@@ -6,9 +6,13 @@ import sys
 from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NamedTuple
 
+import aiohttp
 import pytest
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, utils
 from livekit.agents.cli import log
@@ -251,6 +255,32 @@ def _filter_by_provider(config: pytest.Config, items: list[pytest.Item]) -> None
 
 
 @pytest.fixture
+def quota_http_session() -> SimpleNamespace:
+    """Refuse WebSocket upgrades with gateway quota headers without opening a socket."""
+
+    async def ws_connect(url: str, **kwargs: object) -> None:
+        request_url = URL(url)
+        raise aiohttp.WSServerHandshakeError(
+            request_info=aiohttp.RequestInfo(
+                request_url, "GET", CIMultiDictProxy(CIMultiDict()), request_url
+            ),
+            history=(),
+            status=429,
+            message="Invalid response status",
+            headers=CIMultiDict(
+                {
+                    "X-LiveKit-Inference-Quota-Category": "MaxGatewayCredits",
+                    "X-LiveKit-Inference-Quota-Message": "Credit quota exhausted.",
+                    "X-LiveKit-Request-Id": "quota-test-request",
+                    "X-Should-Retry": "false",
+                }
+            ),
+        )
+
+    return SimpleNamespace(ws_connect=ws_connect, closed=False)
+
+
+@pytest.fixture
 async def job_process():
     utils.http_context._new_session_ctx()
     yield
@@ -303,10 +333,18 @@ def _is_ignorable_task(task) -> bool:
     try:
         coro = task.get_coro()
         # async_generator_athrow tasks are created by Python's GC when finalizing
-        # async generators (e.g. httpx/httpcore streaming generators)
+        # async generators (e.g. httpx/httpx2/httpcore streaming generators)
         coro_name = getattr(coro, "__qualname__", "") or type(coro).__name__
         if "async_generator_athrow" in coro_name:
             return True
+        # google-genai's client __del__ methods schedule aclose() on the running loop whenever
+        # GC collects a client (even one that is already closed), so this lands in whichever
+        # test happens to trigger GC
+        frame = getattr(coro, "cr_frame", None)
+        if coro_name.endswith(".aclose") and frame is not None:
+            owner = frame.f_locals.get("self")
+            if type(owner).__module__.startswith("google.genai"):
+                return True
         mod = getattr(coro, "__module__", "")
         if "pytest" in mod or "pytest_asyncio" in mod:
             return True

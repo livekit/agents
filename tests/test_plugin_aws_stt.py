@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, stt
 from livekit.agents.metrics import STTMetrics
 from livekit.plugins.aws import stt as aws_stt
 
@@ -25,18 +26,19 @@ class _FakeAudioStream:
     def __init__(self) -> None:
         self.events: list[Any] = []
         self.event_sent = asyncio.Event()
-        self.closed = False
+        self.closed = asyncio.Event()
 
     async def send(self, event: Any) -> None:
         self.events.append(event)
         self.event_sent.set()
 
     async def close(self) -> None:
-        self.closed = True
+        self.closed.set()
 
 
 class _FakeOutputStream:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, input_stream: _FakeAudioStream, error: Exception | None = None) -> None:
+        self._input_stream = input_stream
         self._error = error
 
     def __aiter__(self) -> _FakeOutputStream:
@@ -46,7 +48,8 @@ class _FakeOutputStream:
         if self._error is not None:
             error, self._error = self._error, None
             raise error
-        await asyncio.Event().wait()
+        # like AWS, the output ends once the input stream is closed
+        await self._input_stream.closed.wait()
         raise StopAsyncIteration
 
 
@@ -60,7 +63,7 @@ class _FakeTranscribeStream:
     async def await_output(self) -> tuple[None, _FakeOutputStream]:
         # the error is one-shot, so only the first attempt fails
         error, self._output_error = self._output_error, None
-        return None, _FakeOutputStream(error)
+        return None, _FakeOutputStream(self.input_stream, error)
 
 
 def _frame(duration_ms: int, sample_rate: int = 16000) -> rtc.AudioFrame:
@@ -77,16 +80,19 @@ def _make_stream(
     monkeypatch: pytest.MonkeyPatch,
     *,
     output_error: Exception | None = None,
+    max_retry: int = 0,
 ) -> tuple[aws_stt.STT, aws_stt.SpeechStream, _FakeTranscribeStream]:
     transcribe_stream = _FakeTranscribeStream(output_error)
 
     class _FakeTranscribeClient:
         def __init__(self, *, config: Any) -> None:
             transcribe_stream.configs.append(config)
-            if len(transcribe_stream.configs) > 1:
-                transcribe_stream.restarted.set()
 
         async def start_stream_transcription(self, *, input: Any) -> _FakeTranscribeStream:
+            # each attempt's output ends when that attempt closes its input
+            transcribe_stream.input_stream.closed = asyncio.Event()
+            if len(transcribe_stream.configs) > 1:
+                transcribe_stream.restarted.set()
             return transcribe_stream
 
     monkeypatch.setattr(aws_stt, "TranscribeStreamingClient", _FakeTranscribeClient)
@@ -98,7 +104,7 @@ def _make_stream(
             secret_access_key="test-secret-key",
         ),
     )
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0))
     return provider, stream, transcribe_stream
 
 
@@ -200,7 +206,7 @@ async def test_aws_stream_cleanup_survives_closed_event_channel(
 
         await stream.aclose()
 
-        assert transcribe_stream.input_stream.closed is True
+        assert transcribe_stream.input_stream.closed.is_set()
     finally:
         if not stream._task.done():
             await stream.aclose()
@@ -224,6 +230,7 @@ async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
         output_error=aws_stt.BadRequestException(
             "Your request timed out because no new audio was received for 15 seconds."
         ),
+        max_retry=1,
     )
 
     try:
@@ -233,8 +240,7 @@ async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
         first, second = transcribe_stream.configs
         # StartStreamTranscription is bidirectional, which only the CRT transport carries
         assert isinstance(first.transport, aws_stt.AWSCRTHTTPClient)
-        # AWS finishes the stream on its idle timeout, and the pooled connection dies with
-        # it, so the restarted attempt needs a transport of its own
+        # the pooled connection dies with the idle-timed-out stream, so a restart needs its own
         assert second.transport is not first.transport
         assert second.transport is stream._http_client
         assert closed == [first.transport]
@@ -243,3 +249,71 @@ async def test_aws_stream_gives_each_attempt_its_own_crt_transport(
         await provider.aclose()
 
     assert closed == [first.transport, second.transport]
+
+
+@pytest.mark.no_concurrent
+async def test_aws_transcript_after_idle_restart_uses_new_audio_offset(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    now = 100.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    provider, stream, transcribe_stream = _make_stream(
+        monkeypatch,
+        output_error=aws_stt.BadRequestException(
+            "Your request timed out because no new audio was received for 15 seconds."
+        ),
+        max_retry=1,
+    )
+
+    try:
+        stream.push_frame(_frame(100))
+        await asyncio.wait_for(transcribe_stream.restarted.wait(), timeout=1.0)
+
+        now = 120.0
+        transcribe_stream.input_stream.event_sent.clear()
+        stream.push_frame(_frame(100))
+        await asyncio.wait_for(transcribe_stream.input_stream.event_sent.wait(), timeout=1.0)
+
+        result = SimpleNamespace(
+            start_time=0.0,
+            end_time=0.1,
+            is_partial=False,
+            language_code="en-US",
+            alternatives=[SimpleNamespace(transcript="hello", items=[])],
+        )
+        stream._process_transcript_event(
+            SimpleNamespace(transcript=SimpleNamespace(results=[result]))
+        )
+        async with asyncio.timeout(1.0):
+            async for event in stream:
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                    assert event.alternatives[0].end_time == pytest.approx(20.1)
+                    break
+            else:
+                pytest.fail("No FINAL_TRANSCRIPT from the restarted stream")
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("processing", [False, True])
+async def test_idle_timeouts_obey_retry_limit(monkeypatch, processing):
+    provider, stream, transport = _make_stream(monkeypatch, max_retry=2)
+    stream._num_retries = 2
+
+    async def output_events():
+        if processing and len(transport.configs) == 1:
+            yield SimpleNamespace(value=aws_stt.TranscriptEvent())
+        raise aws_stt.BadRequestException("Your request timed out because no audio was received")
+
+    async def await_output():
+        return None, output_events()
+
+    monkeypatch.setattr(transport, "await_output", await_output)
+    try:
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, 1)
+        assert len(transport.configs) == (3 if processing else 1)
+    finally:
+        await stream.aclose()
+        await provider.aclose()

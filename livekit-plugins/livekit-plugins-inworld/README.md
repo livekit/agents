@@ -55,7 +55,7 @@ from livekit.plugins import inworld
 tts = inworld.TTS(
     voice="Hades",
     model="inworld-tts-1",
-    buffer_char_threshold=100,     # chars before triggering synthesis (default: 100)
+    buffer_char_threshold=100,     # chars before triggering synthesis (default: 250)
     max_buffer_delay_ms=3000,      # max buffer time in ms (default: 3000)
 )
 

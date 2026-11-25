@@ -1,15 +1,4 @@
-"""Baseten LLM: per-model handling of mid-conversation system messages.
-
-LiveKit appends ``generate_reply(instructions=...)`` (and the expressive TTS guide) to
-the chat context as a trailing system message. Some chat templates only accept a leading
-system message, so for an explicit list of model ids the plugin inlines later system
-messages as ``<instructions>``-wrapped user messages. Every other model id, including
-other Gemma and Qwen ids, must keep receiving the request untouched unless the caller
-opts in.
-
-These tests capture the JSON body the plugin would POST, so they exercise the real
-serializer path without network access.
-"""
+"""Baseten LLM inlines mid-conversation system messages only for models whose templates need it."""
 
 from __future__ import annotations
 
@@ -17,37 +6,19 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 
 from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import LLM
-from livekit.plugins.baseten.llm import _supports_inline_instructions
 
 pytestmark = pytest.mark.unit
 
 PREAMBLE = "You are a helpful assistant."
 INSTRUCTIONS = "Ask the caller for the year they were born."
 INLINED = f"<instructions>\n{INSTRUCTIONS}\n</instructions>"
-
-INLINE_MODELS = ["Qwen/Qwen3.8-27B"]
-PASSTHROUGH_MODELS = [
-    "openai/gpt-oss-120b",
-    "zai-org/GLM-5.2",
-    "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
-    "deepseek-ai/DeepSeek-V3-0324",
-    "moonshotai/Kimi-K2-Instruct",
-    "google/gemma-4-31B-it",
-    # same family as the opted-in id, but not on the list
-    "Qwen/Qwen3.5-35B-A3B-FP8",
-]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 class _OneTokenStream(httpx.AsyncByteStream):
@@ -137,43 +108,43 @@ def _plain_ctx() -> ChatContext:
     return chat_ctx
 
 
-# ---------------------------------------------------------------------------
-# Model-id detection: an explicit allow-list, not a family match
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
-    ("model", "expected"),
+    ("model", "inline", "inlined"),
     [
-        ("Qwen/Qwen3.8-27B", True),
-        ("qwen/qwen3.8-27b", True),
-        # other generations and sizes of the same family are not opted in
-        ("Qwen/Qwen3.5-122B-A10B", False),
-        ("Qwen/Qwen3-235B-A22B-Instruct-2507", False),
-        ("qwen3-dedicated", False),
-        ("google/gemma-4-31B-it", False),
-        ("openai/gpt-oss-120b", False),
-        ("zai-org/GLM-5.2", False),
-        ("meta-llama/Llama-4-Scout-17B-16E-Instruct", False),
-        ("my-dedicated-model", False),
+        ("Qwen/Qwen3.8-27B", NOT_GIVEN, True),
+        ("qwen/qwen3.8-27b", NOT_GIVEN, True),
+        # an explicit allow-list: other generations and sizes of the family are not opted in
+        ("Qwen/Qwen3.5-35B-A3B-FP8", NOT_GIVEN, False),
+        ("Qwen/Qwen3.5-122B-A10B", NOT_GIVEN, False),
+        ("Qwen/Qwen3-235B-A22B-Instruct-2507", NOT_GIVEN, False),
+        ("qwen3-dedicated", NOT_GIVEN, False),
+        ("google/gemma-4-31B-it", NOT_GIVEN, False),
+        ("openai/gpt-oss-120b", NOT_GIVEN, False),
+        ("zai-org/GLM-5.2", NOT_GIVEN, False),
+        ("meta-llama/Llama-4-Maverick-17B-128E-Instruct", NOT_GIVEN, False),
+        ("deepseek-ai/DeepSeek-V3-0324", NOT_GIVEN, False),
+        ("moonshotai/Kimi-K2-Instruct", NOT_GIVEN, False),
+        ("my-dedicated-model", NOT_GIVEN, False),
+        # the caller's override wins either way
+        ("google/gemma-4-31B-it", True, True),
+        ("my-dedicated-model", True, True),
+        ("Qwen/Qwen3.8-27B", False, False),
     ],
 )
-def test_inline_instructions_inferred_from_model_id(model: str, expected: bool) -> None:
-    assert _supports_inline_instructions(model) is expected
+async def test_per_turn_instructions_inlined_by_model(
+    model: str, inline: NotGivenOr[bool], inlined: bool
+) -> None:
+    messages = await _sent_messages(model, _per_turn_ctx(), inline=inline)
 
-
-# ---------------------------------------------------------------------------
-# New behaviour: opted-in models get inlined instructions
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("model", INLINE_MODELS)
-async def test_per_turn_instructions_are_inlined_for_single_system_models(model: str) -> None:
-    messages = await _sent_messages(model, _per_turn_ctx())
-
-    assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
-    assert messages[0] == {"role": "system", "content": PREAMBLE}
-    assert messages[-1] == {"role": "user", "content": INLINED}
+    assert messages[:3] == [
+        {"role": "system", "content": PREAMBLE},
+        {"role": "assistant", "content": "Hello! How can I help you?"},
+        {"role": "user", "content": "I'd like to refill my prescription."},
+    ]
+    if inlined:
+        assert messages[3:] == [{"role": "user", "content": INLINED}]
+    else:
+        assert messages[3:] == [{"role": "system", "content": INSTRUCTIONS}]
 
 
 async def test_inlining_preserves_tool_call_history() -> None:
@@ -208,20 +179,6 @@ async def test_empty_mid_conversation_system_message_is_dropped_when_inlining() 
     assert [m["role"] for m in messages] == ["system", "user"]
 
 
-# ---------------------------------------------------------------------------
-# Regression: every other model id is untouched
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("model", PASSTHROUGH_MODELS)
-async def test_per_turn_instructions_pass_through_for_openai_style_models(model: str) -> None:
-    messages = await _sent_messages(model, _per_turn_ctx())
-
-    assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
-    assert messages[0] == {"role": "system", "content": PREAMBLE}
-    assert messages[-1] == {"role": "system", "content": INSTRUCTIONS}
-
-
 async def test_tool_history_passes_through_for_openai_style_models() -> None:
     messages = await _sent_messages("openai/gpt-oss-120b", _tool_ctx())
 
@@ -236,23 +193,3 @@ async def test_conversation_without_mid_system_messages_is_identical_across_mode
 
     assert inlined == passthrough
     assert [m["role"] for m in inlined] == ["system", "user", "assistant", "user"]
-
-
-# ---------------------------------------------------------------------------
-# Explicit override
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("model", ["google/gemma-4-31B-it", "my-dedicated-model"])
-async def test_override_enables_inlining_for_models_not_on_the_list(model: str) -> None:
-    messages = await _sent_messages(model, _per_turn_ctx(), inline=True)
-
-    assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
-    assert messages[-1] == {"role": "user", "content": INLINED}
-
-
-async def test_override_disables_inlining_for_a_listed_model() -> None:
-    messages = await _sent_messages("Qwen/Qwen3.8-27B", _per_turn_ctx(), inline=False)
-
-    assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
-    assert messages[-1] == {"role": "system", "content": INSTRUCTIONS}

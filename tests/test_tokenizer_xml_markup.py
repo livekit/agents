@@ -7,6 +7,7 @@ used in expressive mode (Cartesia, ElevenLabs, Inworld).
 from __future__ import annotations
 
 import asyncio
+import re
 
 import pytest
 
@@ -39,18 +40,6 @@ async def _stream_tokenize(tok: SentenceTokenizer, text: str) -> list[str]:
     stream = tok.stream()
     for char in text:
         stream.push_text(char)
-    stream.end_input()
-    return [ev.token async for ev in stream]
-
-
-async def _stream_tokenize_tiktoken(tok: SentenceTokenizer, text: str) -> list[str]:
-    """Push text token-by-token using GPT-4o's tokenizer (realistic LLM streaming)."""
-    import tiktoken
-
-    enc = tiktoken.encoding_for_model("gpt-4o")
-    stream = tok.stream()
-    for token_id in enc.encode(text):
-        stream.push_text(enc.decode([token_id]))
     stream.end_input()
     return [ev.token async for ev in stream]
 
@@ -347,17 +336,18 @@ class TestFishAudioDialect:
     def test_steering_filters_sounds_and_examples(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
-        # everything off: the Sounds section and any example demonstrating a sound
-        # are omitted entirely, not advertised and then revoked
-        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": False})
-        assert instr is not None
-        assert "laughing" not in instr and "clear throat" not in instr
-        assert "Examples:" in instr  # the sound-free example survives
+        for provider in ("fishaudio", "fishaudio_drama"):
+            # everything off: the Sounds section and any example demonstrating a sound
+            # are omitted entirely, not advertised and then revoked
+            instr = pf.llm_instructions(provider, {"nonverbal_sounds": False})
+            assert instr is not None
+            assert "laughing" not in instr and "clear throat" not in instr
+            assert "Examples:" in instr  # the sound-free example survives
 
-        # sparse opt-out: removing reflex sounds keeps the laugh family
-        instr = pf.llm_instructions("fishaudio", {"nonverbal_sounds": {"reflex_sounds": False}})
-        assert instr is not None
-        assert "laughing" in instr and "clear throat" not in instr
+            # sparse opt-out: removing reflex sounds keeps the laugh family
+            instr = pf.llm_instructions(provider, {"nonverbal_sounds": {"reflex_sounds": False}})
+            assert instr is not None
+            assert "laughing" in instr and "clear throat" not in instr
 
     def test_supported_nonverbals(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -381,7 +371,7 @@ class TestFishAudioDialect:
 
         # register inference is provider-neutral: every markup-capable provider's
         # block carries the rule via the shared preamble, not just fish
-        for provider in ("fishaudio", "inworld", "xai", "cartesia"):
+        for provider in ("fishaudio", "fishaudio_drama", "inworld", "xai", "cartesia"):
             instr = pf.llm_instructions(provider)
             assert instr is not None
             assert "REGISTER of the moment" in instr, provider
@@ -389,20 +379,21 @@ class TestFishAudioDialect:
     def test_register_supplement_matches_steering(self) -> None:
         from livekit.agents.tts import _provider_format as pf
 
-        default = pf.llm_instructions("fishaudio")
-        assert default is not None
-        assert "Laughter belongs only" in default
-        assert "Save fillers for relaxed moments" in default
+        for provider in ("fishaudio", "fishaudio_drama"):
+            default = pf.llm_instructions(provider)
+            assert default is not None
+            assert "Laughter belongs only" in default
+            assert "Save fillers for relaxed moments" in default
 
-        # an opted-out concept must be absent from the ENTIRE block — not even
-        # mentioned prohibitively, or the LLM receives contradictory directions
-        composed = pf.llm_instructions(
-            "fishaudio", {"nonverbal_sounds": False, "disfluencies": False}
-        )
-        assert composed is not None
-        assert "laugh" not in composed.lower()
-        assert "filler" not in composed.lower()
-        assert "Um, uh" not in composed
+            # an opted-out concept must be absent from the ENTIRE block — not even
+            # mentioned prohibitively, or the LLM receives contradictory directions
+            composed = pf.llm_instructions(
+                provider, {"nonverbal_sounds": False, "disfluencies": False}
+            )
+            assert composed is not None
+            assert "laugh" not in composed.lower(), provider
+            assert "filler" not in composed.lower(), provider
+            assert "Um, uh" not in composed, provider
 
     def test_nonverbal_sounds_accepts_bool(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -423,7 +414,7 @@ class TestFishAudioDialect:
 
         # equivalent configurations must produce identical instructions: the
         # explicit all-on forms add no sound guidance the default doesn't have
-        for provider in ("fishaudio", "inworld", "xai"):
+        for provider in ("fishaudio", "fishaudio_drama", "inworld", "xai"):
             for steering in ({"nonverbal_sounds": True}, {"nonverbal_sounds": {}}):
                 assert pf.steering_instructions(provider, steering) == "", (provider, steering)
                 assert pf.llm_instructions(provider, steering) == pf.llm_instructions(provider), (
@@ -489,12 +480,13 @@ class TestFishAudioDialect:
 
         # fillers are few-shotted only while disfluencies are enabled, so the
         # examples never contradict the "no fillers" delivery guideline
-        on = pf.llm_instructions("fishaudio", {"disfluencies": True})
-        off = pf.llm_instructions("fishaudio", {"disfluencies": False})
-        default = pf.llm_instructions("fishaudio")  # disfluencies default on
-        assert on is not None and off is not None and default is not None
-        assert "Um, uh" in on and "Um, uh" in default
-        assert "Um, uh" not in off and ", um," not in off
+        for provider in ("fishaudio", "fishaudio_drama"):
+            on = pf.llm_instructions(provider, {"disfluencies": True})
+            off = pf.llm_instructions(provider, {"disfluencies": False})
+            default = pf.llm_instructions(provider)  # disfluencies default on
+            assert on is not None and off is not None and default is not None
+            assert "Um, uh" in on and "Um, uh" in default
+            assert "Um, uh" not in off and ", um," not in off
 
     def test_normalize_closes_unclosed_tags(self) -> None:
         from livekit.agents.tts import _provider_format as pf
@@ -505,6 +497,72 @@ class TestFishAudioDialect:
         assert pf.normalize_markup("fishaudio", '<expression value="happy"> hi') == (
             '<expression value="happy"/> hi'
         )
+
+
+class TestFishAudioDramaDialect:
+    """drama-3 follows free-form direction, so the LLM writes Inworld-style delivery
+    descriptions that lower verbatim to [direction], and prosody spans lower to drama-3's
+    paired tags. Sounds and steering are shared with the s2 dialect."""
+
+    def test_llm_instructions_are_free_form(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        instr = pf.llm_instructions("fishaudio_drama")
+        assert instr is not None
+        assert '<expr type="expression" label="DIRECTION"/>' in instr
+        assert "NOT free-form" not in instr
+        assert ", ".join(pf._FISHAUDIO_DRAMA_SPANS) in instr
+        assert ", ".join(pf._FISHAUDIO_SOUNDS) in instr
+
+    def test_convert_expr_to_drama_markup(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        raw = (
+            '<expr type="expression" label="a little sheepish, apologetic"/> That\'s on us. '
+            '<expr type="sound" label="laugh"/> You\'re set for <expr type="break" label="500ms"/> '
+            'Thursday the <expr type="prosody" label="emphasis">ninth</expr>. '
+            '<expr type="prosody" label="whisper">Keep it quiet</expr> okay? '
+            '<expr type="break" label="2s"/>'
+        )
+        # no "very": the direction reaches the TTS exactly as written
+        assert pf.convert_markup("fishaudio_drama", raw) == (
+            "[a little sheepish, apologetic] That's on us. [laughing] You're set for "
+            "[short pause] Thursday the <emphasis>ninth</emphasis>. "
+            "<whisper>Keep it quiet</whisper> okay? [pause]"
+        )
+
+    def test_convert_span_labels(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # s2 tone labels left in history still lower to a paired tag
+        raw = '<expr type="prosody" label="whispering">psst</expr>'
+        assert pf.convert_markup("fishaudio_drama", raw) == "<whisper>psst</whisper>"
+        raw = '<expr type="prosody" label="hurried">quick</expr>'
+        assert pf.convert_markup("fishaudio_drama", raw) == "<fast>quick</fast>"
+        # anything else keeps its words and drops the marker
+        raw = '<expr type="prosody" label="like a pirate">ahoy</expr>'
+        assert pf.convert_markup("fishaudio_drama", raw) == "ahoy"
+        raw = 'hey <expr type="prosody" label="soft"/> there'
+        assert pf.convert_markup("fishaudio_drama", raw) == "hey there"
+
+    def test_stray_native_spans_stripped(self) -> None:
+        from livekit.agents.tts import _provider_format as pf
+
+        # drama-3 natives that are never taught still never reach the transcript
+        clean, _ = pf.split_all_markup("<forceful>Stop</forceful> right <stress>now</stress>")
+        assert clean == "Stop right now"
+
+    def test_gateway_picks_dialect_by_model(self) -> None:
+        from livekit.agents import inference
+
+        tts = inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake")
+        assert tts.markup._provider_key() == "fishaudio"
+        # the key is read live, so a mid-session model switch changes the next guide
+        tts.update_options(model="fishaudio/drama-3")
+        assert tts.markup._provider_key() == "fishaudio_drama"
+        instr = tts.markup.llm_instructions()
+        assert instr is not None
+        assert 'label="DIRECTION"' in instr
 
 
 # ===========================================================================
@@ -608,6 +666,23 @@ class TestStreamingTokenizer:
         _assert_wrapping_tag_intact(tokens, "outer")
 
     @pytest.mark.asyncio
+    async def test_stray_closing_tag_does_not_unbalance_a_later_wrapping_tag(self) -> None:
+        """Regression: a closing tag whose opener was already emitted (or never sent)
+        drove the depth counter negative, so the next opening tag looked closed and
+        its sentences were split across chunks."""
+        from livekit.agents.tokenize.token_stream import _has_unclosed_xml_tags
+
+        assert _has_unclosed_xml_tags("</b> Now <emotion value='sad'>I am sorry.")
+
+        text = "Okay then.</b> Now <emotion value='sad'>I am sorry. Truly sorry.</emotion> Bye."
+        stream = self.tok.stream()
+        for word in text.split(" "):
+            stream.push_text(word + " ")
+        stream.end_input()
+        tokens = [ev.token async for ev in stream]
+        _assert_wrapping_tag_intact(tokens, "emotion")
+
+    @pytest.mark.asyncio
     async def test_standalone_expression_tag_streaming(self) -> None:
         """Regression: streaming must never emit a tag-only chunk."""
         text = (
@@ -628,16 +703,22 @@ class TestStreamingTokenizer:
         assert len(tokens) == 1
 
     @pytest.mark.asyncio
-    async def test_expression_tags_between_sentences_tiktoken(self) -> None:
-        """Regression: expression tags between sentences must split correctly
-        when streamed with GPT-4o's actual tokenizer."""
+    async def test_expression_tags_between_sentences_word_pieces(self) -> None:
+        """Expression tags between sentences split correctly when streamed as LLM word pieces."""
         text = (
             '<expression value="speak cheerfully"/> Hello and welcome to McDonalds! '
             '<expression value="speak with bright energy"/> We have got some great specials. '
             '<expression value="sound excited"/> Our new chicken sandwich is amazing. '
             '<expression value="speak warmly"/> Would you like to try a combo meal?'
         )
-        tokens = await _stream_tokenize_tiktoken(self.tok, text)
+        stream = self.tok.stream()
+        # BPE-style pieces: a word with its leading space, or a punctuation run, so tags
+        # arrive split as ' <', 'expression', ' value', '="', ...
+        for piece in re.findall(r" ?\w+| ?[^\w\s]+|\s+", text):
+            stream.push_text(piece)
+        stream.end_input()
+        tokens = [ev.token async for ev in stream]
+
         assert len(tokens) >= 3, f"Expected at least 3 sentences: {tokens}"
         _assert_no_tag_only_sentences(tokens)
         for t in tokens:

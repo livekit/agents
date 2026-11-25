@@ -13,7 +13,7 @@ import weakref
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import socketio  # type: ignore[import-not-found]
+import socketio  # type: ignore[import-untyped]
 
 from livekit.agents import (
     APIConnectionError,
@@ -169,6 +169,10 @@ class TTS(tts.TTS):
 
         self._client: WebSocketClient | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    @property
+    def provider(self) -> str:
+        return "UpliftAI"
 
     def update_options(
         self,

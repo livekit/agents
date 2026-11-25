@@ -34,7 +34,7 @@ from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics.base import InterruptionMetrics, Metadata
 from ..telemetry import trace_types
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import (
     AudioArrayBuffer,
     BoundedDict,
@@ -49,12 +49,15 @@ from ._utils import (
 )
 
 SAMPLE_RATE = 16000
-MIN_INTERRUPTION_DURATION = 0.025 * 2  # 25ms per frame, 2 consecutive frames
+MIN_INTERRUPTION_DURATION = 0.025 * 2  # The SDK default maps to two frames
 MAX_AUDIO_DURATION = 3  # 3 seconds
 DETECTION_INTERVAL = 0.1  # 0.1 second
 AUDIO_PREFIX_DURATION = 1.0  # 1.0 second
 REMOTE_INFERENCE_TIMEOUT = 0.7  # 700ms
 _FRAMES_PER_SECOND = 40
+# Do not reconnect after an error. The session falls back to VAD-based
+# interruption instead, which is faster than a reconnect to a slow backend.
+DEFAULT_INTERRUPTION_CONN_OPTIONS = APIConnectOptions(max_retry=0)
 
 
 class InterruptionDetectionError(BaseModel):
@@ -388,7 +391,7 @@ class AdaptiveInterruptionDetector(
         return self._session
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+        self, *, conn_options: APIConnectOptions = DEFAULT_INTERRUPTION_CONN_OPTIONS
     ) -> InterruptionWebSocketStream:
         try:
             stream = InterruptionWebSocketStream(model=self, conn_options=conn_options)
@@ -828,10 +831,17 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     raise
 
             closing_ws = True
+            if ws.closed:
+                return
             msg = InterruptionWSSessionCloseMessage(
                 type=InterruptionWSMessageType.SESSION_CLOSE,
             )
-            await ws.send_str(msg.model_dump_json())
+            try:
+                await ws.send_str(msg.model_dump_json())
+            except ConnectionResetError:
+                # aiohttp raises ConnectionResetError (ClientConnectionResetError on newer
+                # versions) if the peer wins the close race. session.close is best-effort.
+                return
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -995,15 +1005,15 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
                     self._reconnect_event.clear()
                 finally:
                     closing_ws = True
-                    if ws is not None and not ws.closed:
-                        await ws.close()
-                        ws = None
                     await aio.gracefully_cancel(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     try:
                         tasks_group.exception()
                     except asyncio.CancelledError:
                         pass
+                    if ws is not None and not ws.closed:
+                        await ws.close()
+                        ws = None
             finally:
                 closing_ws = True
                 if ws is not None and not ws.closed:
@@ -1070,14 +1080,17 @@ class InterruptionWebSocketStream(InterruptionStreamBase):
 def _estimate_probability(
     probabilities: npt.NDArray[np.float32] | None, window_size: float = MIN_INTERRUPTION_DURATION
 ) -> float:
-    """
-    Estimate the probability of the interruption event based on the probabilities of the frames.
-    The estimated probability is the maximum of the minimum of every window_size consecutive frames.
+    """Estimate the reported interruption probability from the returned frame scores.
+
+    Return the nth-highest score across all frames. Divide ``window_size``
+    in seconds by 0.025 and round up to get n.
+    Return 0.0 if the probabilities are missing or there are fewer than n frames.
+    The server determines the interruption verdict separately.
     """
     if probabilities is None:
         return 0.0
 
-    n_th = math.ceil(window_size / 0.025)  # 25ms per frame
+    n_th = math.ceil(window_size / 0.025)
     if len(probabilities) < n_th:
         return 0.0
 

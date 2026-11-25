@@ -5,15 +5,19 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-import httpx
+import aiohttp
+import httpx2 as httpx
 import openai
 import pytest
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
 import livekit.agents.inference._utils as inference_utils
 import livekit.agents.job as job_module
 from livekit.agents import inference
 from livekit.agents.inference._utils import (
     HEADER_SESSION_ID,
+    create_api_error_from_response,
     create_inference_request_id,
     extract_quota_usage,
     get_inference_headers,
@@ -21,6 +25,39 @@ from livekit.agents.inference._utils import (
 from livekit.agents.inference.llm import LLMStream
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "retryable", "message"),
+    [
+        (429, {}, True, "Invalid response status"),
+        (429, {"x-should-retry": "false"}, False, "Invalid response status"),
+        (401, {}, False, "Invalid response status"),
+        (
+            429,
+            {"x-livekit-inference-quota-message": "STT concurrent connection limit reached."},
+            True,
+            "STT concurrent connection limit reached.",
+        ),
+    ],
+)
+def test_handshake_error_preserves_retry_policy(
+    status: int, headers: dict[str, str], retryable: bool, message: str
+) -> None:
+    url = URL("https://example.livekit.cloud/v1/stt")
+    error = aiohttp.WSServerHandshakeError(
+        request_info=aiohttp.RequestInfo(url, "GET", CIMultiDictProxy(CIMultiDict()), url),
+        history=(),
+        status=status,
+        message="Invalid response status",
+        headers=CIMultiDict(headers),
+    )
+    result = create_api_error_from_response(error)
+
+    assert message in result.message
+    assert result.status_code == status
+    assert result.retryable is retryable
+    assert result.body is None
 
 
 def test_inference_class_has_public_import() -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from typing import Literal
 
 import aiohttp
 
@@ -23,6 +25,11 @@ from .log import logger
 SAMPLE_RATE = 24000
 _AVATAR_AGENT_IDENTITY = "tavus-avatar-agent"
 _AVATAR_AGENT_NAME = "tavus-avatar-agent"
+_APP_MESSAGES_TOPIC = "app_messages"
+
+Emotion = Literal[
+    "neutral", "happiness", "sadness", "anger", "fear", "surprise", "disgust", "contempt"
+]
 
 
 class AvatarSession(BaseAvatarSession):
@@ -123,4 +130,45 @@ class AvatarSession(BaseAvatarSession):
                 sample_rate=SAMPLE_RATE,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
             ),
+        )
+
+    async def aclose(self) -> None:
+        await super().aclose()
+
+        if self.conversation_id is not None:
+            conversation_id, self.conversation_id = self.conversation_id, None
+            # the replica keeps running until the conversation ends
+            try:
+                await self._api.end_conversation(conversation_id)
+            except Exception:
+                logger.warning(
+                    "failed to end the tavus conversation",
+                    extra={"conversation_id": conversation_id},
+                    exc_info=True,
+                )
+
+    async def set_emotion(self, emotion: Emotion) -> None:
+        """Set the avatar's facial emotion.
+
+        The avatar keeps the emotion until the next call; an unsupported emotion
+        sets 'neutral'. Call it after wait_for_join(): an emotion sent before the
+        avatar joins the room is dropped.
+
+        Args:
+            emotion: The emotion to express, e.g. 'neutral', 'happiness', 'sadness'.
+        """
+        if self._room is None:
+            logger.warning("set_emotion() called before start()")
+            return
+
+        message = {
+            "message_type": "conversation",
+            "event_type": "conversation.set_emotion",
+            "properties": {"emotion": emotion},
+        }
+        await self._room.local_participant.publish_data(
+            json.dumps(message).encode(),
+            reliable=True,
+            topic=_APP_MESSAGES_TOPIC,
+            destination_identities=[self._avatar_participant_identity],
         )
