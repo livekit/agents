@@ -379,6 +379,10 @@ class OjinVideoGenerator(VideoGenerator):
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         """Send one chunk of the agent's speech, or close the current utterance."""
         if isinstance(frame, AudioSegmentEnd):
+            if frame.interrupted:
+                # A clear discarded this segment and already reported it; owing
+                # its end again would finish the next turn as soon as it opens.
+                return
             if self._turn_started:
                 # A resampler can hold part of its input; unflushed, those samples
                 # either vanish with this turn or open the next one.
@@ -1015,9 +1019,11 @@ class AvatarSession(BaseAvatarSession):
         try:
             async for frame in audio_output:
                 if isinstance(frame, AudioSegmentEnd):
-                    audio_output.notify_playback_finished(
-                        playback_position=position, interrupted=False
-                    )
+                    if not frame.interrupted:
+                        # An interrupted segment was already reported by on_clear.
+                        audio_output.notify_playback_finished(
+                            playback_position=position, interrupted=False
+                        )
                     position, started = 0.0, False
                     continue
 

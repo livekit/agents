@@ -382,10 +382,8 @@ async def test_barge_in_recovers_into_a_following_turn(harness: RunnerHarness) -
     """The turn after a barge-in must still produce its completion marker.
 
     Asserted on the marker the plugin hands the runner, not on wait_for_playout:
-    the framework never resets AudioOutput.__capturing in clear_buffer, so the
-    next capture_frame opens no new segment and the follow-up report is dropped
-    by io.py's count guard. That accounting is identical for every avatar plugin;
-    what this plugin owns is emitting the completion marker at all.
+    that accounting is identical for every avatar plugin; what this plugin owns
+    is emitting the completion marker at all.
     """
     events: list[bool] = []
     harness.audio_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
@@ -397,6 +395,9 @@ async def test_barge_in_recovers_into_a_following_turn(harness: RunnerHarness) -
 
     harness.audio_output.clear_buffer()
     await until(lambda: events == [True], what="the interrupted report")
+    # Core always flushes after a clear; the framework flags that end as interrupted.
+    harness.audio_output.flush()
+    await asyncio.sleep(0.05)
     assert harness.markers_seen == 0, "an interrupted turn must not also emit a marker"
 
     await speak(harness)
@@ -427,6 +428,20 @@ async def test_idle_ticks_do_not_complete_a_captured_segment(harness: RunnerHarn
 
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(harness.audio_output.wait_for_playout(), 0.2)
+
+
+async def test_interrupted_segment_end_is_not_owed_again(harness: RunnerHarness) -> None:
+    """A clear already reported the segment; its interrupted end must not count twice."""
+    await harness.audio_output.capture_frame(tts_chunk())
+    await until(lambda: bool(harness.client.sent), what="the chunk to reach the client")
+
+    harness.audio_output.clear_buffer()
+    await until(lambda: not harness.sink.clear_pending, what="the clear to finish")
+    harness.audio_output.flush()  # delivers AudioSegmentEnd(interrupted=True)
+
+    await asyncio.sleep(0.05)
+    assert not harness.sink.owes_segment_end
+    assert harness.markers_seen == 0
 
 
 class _FakeAgentOutput:
@@ -463,5 +478,32 @@ async def test_degrade_gives_the_drain_its_own_output(monkeypatch: pytest.Monkey
     try:
         assert len(fake_session.output.tails) == 1
         assert fake_session.output.tails[0] is not previous
+    finally:
+        await session.aclose()
+
+
+async def test_degraded_drain_reports_an_interrupted_segment_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core clears more than once per interruption, then flushes an interrupted end."""
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        drain_output = fake_session.output.tails[0]
+        events: list[bool] = []
+        drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+
+        await drain_output.capture_frame(tts_chunk())
+        await asyncio.sleep(0.05)  # let the drain start the segment
+        drain_output.clear_buffer()
+        drain_output.clear_buffer()
+        drain_output.flush()
+        await asyncio.sleep(0.05)
+
+        assert events == [True]
     finally:
         await session.aclose()
