@@ -420,6 +420,9 @@ pub enum RecorderCall {
     },
 }
 
+/// When a stream last heard each of a microphone's frame numbers.
+type MicChunks = [Option<Observed>; Tag::MAX_MIC_CHUNK as usize + 1];
+
 /// What one audio sample says about where it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tag {
@@ -776,7 +779,7 @@ struct Index {
     /// When each listening stream last heard each microphone chunk number, by `(stream kind,
     /// stream, microphone)` and then chunk. A run forwards tens of thousands of frames, and the
     /// rules ask about each one whether it was heard after it was pushed.
-    heard: BTreeMap<(Kind, u32, u32), Box<[Option<Observed>; Tag::MAX_MIC_CHUNK as usize + 1]>>,
+    heard: BTreeMap<(Kind, u32, u32), Box<MicChunks>>,
 }
 
 impl Recording {
