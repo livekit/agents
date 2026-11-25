@@ -8,15 +8,22 @@ from collections.abc import AsyncIterable, AsyncIterator
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, tokenize
-from livekit.agents.types import TimedString
+from livekit.agents import Agent, APIError, tokenize, tts
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, TimedString
 from livekit.agents.voice import io
 from livekit.agents.voice.agent_activity import _aligned_transcript_or_text
-from livekit.agents.voice.events import ConversationItemAddedEvent
+from livekit.agents.voice.agent_session import SessionConnectOptions
+from livekit.agents.voice.events import (
+    CloseEvent,
+    CloseReason,
+    ConversationItemAddedEvent,
+    ErrorEvent,
+)
 from livekit.agents.voice.transcription._speaking_rate import SpeakingRateDetector
 from livekit.agents.voice.transcription.synchronizer import (
     TranscriptSynchronizer,
     _SegmentSynchronizerImpl,
+    _SyncedAudioOutput,
     _TextSyncOptions,
 )
 
@@ -327,3 +334,103 @@ async def test_turn_keeps_its_transcript_when_the_tts_sends_no_timings() -> None
         ev.item for ev in conversation if ev.item.type == "message" and ev.item.role == "assistant"
     ]
     assert agent_messages and agent_messages[0].text_content
+
+
+class _FailingAlignedTTS(tts.TTS):
+    """An aligned TTS that sends no word timings and fails with a non-retryable error."""
+
+    def __init__(self, *, audio_before_error: float) -> None:
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
+            sample_rate=SAMPLE_RATE,
+            num_channels=1,
+        )
+        self.audio_before_error = audio_before_error
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.ChunkedStream:
+        raise NotImplementedError
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.SynthesizeStream:
+        return _FailingAlignedStream(tts=self, conn_options=conn_options)
+
+
+class _FailingAlignedStream(tts.SynthesizeStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        assert isinstance(self._tts, _FailingAlignedTTS)
+        output_emitter.initialize(
+            request_id="failing",
+            sample_rate=SAMPLE_RATE,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+        async for data in self._input_ch:
+            if isinstance(data, str) and data.strip():
+                break  # fail once there is text to speak
+
+        self._mark_started()
+        if self._tts.audio_before_error > 0:
+            output_emitter.start_segment(segment_id="failing")
+            output_emitter.push(b"\x00\x00" * int(SAMPLE_RATE * self._tts.audio_before_error))
+            output_emitter.flush()
+            await asyncio.sleep(0.2)  # let the audio reach the output before failing
+
+        raise APIError("tts failed", retryable=False)
+
+
+@pytest.mark.parametrize("audio_before_error", [0.0, 0.5], ids=["before_audio", "after_audio"])
+async def test_failed_synthesis_does_not_forward_the_generated_text(
+    audio_before_error: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A TTS that fails before sending timings must not caption or commit unspoken text."""
+    reply = "I'm doing well, thank you!"
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Hello, how are you?", stt_delay=0.1)
+    actions.add_llm(reply, ttft=0.1, duration=0.2)
+
+    session = create_session(
+        actions,
+        extra_kwargs={
+            "use_tts_aligned_transcript": True,
+            # keep the session alive after the tts error, so the turn runs to its end
+            "conn_options": SessionConnectOptions(max_unrecoverable_errors=3),
+        },
+    )
+    # replace the synchronized outputs that create_session wired in
+    synced_audio = session.output.audio
+    assert isinstance(synced_audio, _SyncedAudioOutput)
+    captions = FakeTextOutput()
+    session.output.audio = FakeAudioOutput()
+    session.output.transcription = captions  # not synchronized with the audio
+
+    conversation: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation.append)
+    tts_errors: list[ErrorEvent] = []
+    session.on("error", tts_errors.append)
+    closes: list[CloseEvent] = []
+    session.on("close", closes.append)
+
+    agent = Agent(
+        instructions="test", tts=_FailingAlignedTTS(audio_before_error=audio_before_error)
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+            await asyncio.wait_for(run_session(session, agent), timeout=30)
+    finally:
+        await synced_audio._synchronizer.aclose()
+
+    assert tts_errors, "the tts should have failed"
+    assert all(ev.reason != CloseReason.ERROR for ev in closes)
+    captioned = captions._pushed_text + "".join(captions._messages)
+    assert "doing well" not in captioned
+    agent_texts = [
+        ev.item.text_content or ""
+        for ev in conversation
+        if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    assert not any("doing well" in text for text in agent_texts)
+    assert not [r for r in caplog.records if "no aligned transcript" in r.message]
