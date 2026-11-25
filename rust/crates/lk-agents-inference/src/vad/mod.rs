@@ -225,7 +225,7 @@ impl Vad for LocalVad {
         ProviderId {
             label: self.label(),
             model: VadModelName::Silero.as_str().into(),
-            provider: "livekit-local-inference".into(),
+            provider: "livekit_local_inference".into(),
         }
     }
 

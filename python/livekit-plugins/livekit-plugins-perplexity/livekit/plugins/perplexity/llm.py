@@ -68,5 +68,5 @@ class LLM(OpenAILLM):
             top_p=top_p,
             extra_headers=_ATTRIBUTION_HEADER,
             _strict_tool_schema=False,
-            _provider="Perplexity",
+            _provider="perplexity",
         )

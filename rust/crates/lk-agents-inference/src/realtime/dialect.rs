@@ -244,7 +244,7 @@ pub const INFERENCE: Dialect = Dialect {
 pub const XAI: Dialect = Dialect {
     provider: RealtimeProvider::Xai,
     provider_label: "xAI Realtime API",
-    vendor: "xAI",
+    vendor: "xai",
     // Already `wss://` with a path; `process_base_url` only appends `?model=`.
     default_base_url: "wss://api.x.ai/v1/realtime",
     api_key_env: "XAI_API_KEY",

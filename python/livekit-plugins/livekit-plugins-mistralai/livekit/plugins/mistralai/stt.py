@@ -161,7 +161,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "MistralAI"
+        return "mistralai"
 
     def update_options(
         self,

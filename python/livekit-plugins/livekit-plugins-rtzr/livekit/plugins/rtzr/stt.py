@@ -123,7 +123,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "RTZR"
+        return "rtzr"
 
     async def aclose(self) -> None:
         """Close the RTZR client and cleanup resources."""

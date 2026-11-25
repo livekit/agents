@@ -279,7 +279,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "FishAudio"
+        return "fishaudio"
 
     @property
     def output_format(self) -> OutputFormat:

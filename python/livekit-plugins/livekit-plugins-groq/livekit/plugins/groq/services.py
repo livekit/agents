@@ -63,7 +63,7 @@ class LLM(OpenAILLM):
             service_tier=service_tier,
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
-            _provider="Groq",
+            _provider="groq",
         )
 
 
@@ -94,7 +94,7 @@ class STT(OpenAISTT):
             detect_language=detect_language,
             prompt=prompt,
             use_realtime=False,
-            _provider="Groq",
+            _provider="groq",
         )
 
 

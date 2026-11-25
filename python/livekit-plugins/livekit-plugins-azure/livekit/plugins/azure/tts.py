@@ -213,7 +213,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Azure TTS"
+        return "azure_speech"
 
     def update_options(
         self,

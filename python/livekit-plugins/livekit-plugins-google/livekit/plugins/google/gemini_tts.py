@@ -224,9 +224,9 @@ class GeminiTTS(tts.TTS):
     @property
     def provider(self) -> str:
         if self._client.vertexai:
-            return "Vertex AI"
+            return "vertex_ai"
         else:
-            return "Gemini"
+            return "gemini"
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

@@ -105,7 +105,7 @@ class LLM(llm.LLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
-            _provider="Baseten",
+            _provider="baseten",
         )
         self._client.on("error", lambda ev: self.emit("error", ev))
         self._client.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
@@ -116,7 +116,7 @@ class LLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        return "Baseten"
+        return "baseten"
 
     def update_options(
         self,

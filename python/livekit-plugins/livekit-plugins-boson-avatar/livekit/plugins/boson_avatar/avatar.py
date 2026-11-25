@@ -135,7 +135,7 @@ class AvatarSession(BaseAvatarSession):
 
     @property
     def provider(self) -> str:
-        return "boson"
+        return "boson_avatar"
 
     @property
     def session_id(self) -> str | None:

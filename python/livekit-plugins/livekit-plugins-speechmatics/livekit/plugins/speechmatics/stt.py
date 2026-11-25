@@ -354,7 +354,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Speechmatics"
+        return "speechmatics"
 
     @property
     def model(self) -> str:

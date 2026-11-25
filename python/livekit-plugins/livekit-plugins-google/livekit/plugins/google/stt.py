@@ -295,7 +295,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Google Cloud Platform"
+        return "google_cloud"
 
     async def _create_client(self, conn_options: APIConnectOptions) -> SpeechAsyncClient:
         # a regional recognizer is only reachable through its regional endpoint

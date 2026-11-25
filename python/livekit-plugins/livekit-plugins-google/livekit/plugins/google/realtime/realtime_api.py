@@ -378,9 +378,9 @@ class RealtimeModel(llm.RealtimeModel):
     @property
     def provider(self) -> str:
         if self._opts.backend.vertexai:
-            return "Vertex AI"
+            return "vertex_ai"
         else:
-            return "Gemini"
+            return "gemini"
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # Gemini drives manual turns via activity_start/activity_end, not commit_audio/clear_audio,

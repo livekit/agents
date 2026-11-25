@@ -359,7 +359,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
-            _provider="FireworksAI",
+            _provider="fireworksai",
         )
 
     @staticmethod
@@ -402,7 +402,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
-            _provider="xAI",
+            _provider="xai",
         )
 
     @staticmethod
@@ -723,7 +723,7 @@ class LLM(inference.LLM):
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
-            _provider="Perplexity",
+            _provider="perplexity",
         )
 
     @staticmethod

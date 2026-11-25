@@ -137,7 +137,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "SimpliSmart"
+        return "simplismart"
 
     def _ensure_session(self) -> http.HttpSession:
         if not self._session:

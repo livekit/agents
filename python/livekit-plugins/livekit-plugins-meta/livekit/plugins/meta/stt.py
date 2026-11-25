@@ -227,7 +227,7 @@ class STT(stt.STT[Never]):
 
     @property
     def provider(self) -> str:
-        return "Meta"
+        return "meta"
 
     async def _recognize_impl(
         self,

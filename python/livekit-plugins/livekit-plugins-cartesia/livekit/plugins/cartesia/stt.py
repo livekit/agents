@@ -195,7 +195,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Cartesia"
+        return "cartesia"
 
     async def _recognize_impl(
         self,

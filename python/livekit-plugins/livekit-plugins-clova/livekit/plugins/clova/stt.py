@@ -84,7 +84,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Clova"
+        return "clova"
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):
