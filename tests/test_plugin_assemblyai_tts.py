@@ -338,6 +338,10 @@ def test_voice_and_language() -> None:
     tts = TTS(api_key="k")
     assert (tts._opts.voice, tts._opts.language, tts.model) == (AUDREY, None, "assemblyai-tts-1")
 
+    # explicit None also leaves language to the server default
+    tts_none = TTS(api_key="k", language=None)
+    assert tts_none._opts.language is None
+
     # voices pass through; the language is never inferred from one
     tts = TTS(api_key="k", voice=" aai-vera ")
     assert (tts._opts.voice, tts._opts.language) == ("aai-vera", None)
