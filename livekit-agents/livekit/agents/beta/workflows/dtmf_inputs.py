@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from livekit import rtc
 
 from ... import function_tool
-from ...job import get_job_context
 from ...llm.chat_context import ChatContext
 from ...llm.tool_context import ToolError
 from ...types import NOT_GIVEN, NotGivenOr
@@ -173,6 +172,7 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
                 # resume any previously cancelled DTMF reply generation after agent is back to non-speaking
                 self._generate_dtmf_reply.schedule()
 
+        self._dtmf_room: rtc.Room | None = None
         self._generate_dtmf_reply: Debounced[None] = _generate_dtmf_reply
         self._on_sip_dtmf_received: Callable[[rtc.SipDTMF], None] = _on_sip_dtmf_received
         self._on_user_state_changed: Callable[[UserStateChangedEvent], None] = (
@@ -186,17 +186,18 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         return self._dtmf_reply_running
 
     async def on_enter(self) -> None:
-        ctx = get_job_context()
-
-        ctx.room.on("sip_dtmf_received", self._on_sip_dtmf_received)
+        room_io = self.session._room_io
+        if room_io is not None:
+            self._dtmf_room = room_io.room
+            self._dtmf_room.on("sip_dtmf_received", self._on_sip_dtmf_received)
         self.session.on("user_state_changed", self._on_user_state_changed)
         self.session.on("agent_state_changed", self._on_agent_state_changed)
         self.session.generate_reply(tool_choice="none")
 
     async def on_exit(self) -> None:
-        ctx = get_job_context()
-
-        ctx.room.off("sip_dtmf_received", self._on_sip_dtmf_received)
+        if self._dtmf_room is not None:
+            self._dtmf_room.off("sip_dtmf_received", self._on_sip_dtmf_received)
+            self._dtmf_room = None
         self.session.off("user_state_changed", self._on_user_state_changed)
         self.session.off("agent_state_changed", self._on_agent_state_changed)
         self._generate_dtmf_reply.cancel()
