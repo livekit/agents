@@ -5,6 +5,7 @@ extern crate self as lk_agents_voice;
 
 pub mod agent;
 pub mod agent_session;
+pub mod amd;
 pub mod audio;
 pub mod audio_recognition;
 pub mod av_sync;
