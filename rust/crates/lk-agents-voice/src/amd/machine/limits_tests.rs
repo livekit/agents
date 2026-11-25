@@ -542,11 +542,14 @@ fn test_false_interruption_settlement_rearms_idle_without_a_speech_handle() {
 #[test]
 fn test_a_watched_speech_holds_the_idle_timer() {
     let mut h = H::started(AmdOptions { idle_timeout: secs(1), ..AmdOptions::default() });
+    // the gate reports the speech as busy in the same step it reports the speech
     let speech = h.created(crate::agent_session::machine::activity::scheduling::SpeechKind::Say);
+    h.busy(true);
     assert_eq!(h.armed(AmdTimer::Idle), None);
     h.advance(secs(2));
     assert!(h.detaches().is_empty());
     h.play(speech, "Hi, this is Alex.");
+    h.busy(false);
     assert_eq!(h.armed(AmdTimer::Idle), Some(h.now.saturating_add(secs(1))));
 }
 

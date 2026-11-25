@@ -209,8 +209,6 @@ struct WatchedSpeech {
     add_to_chat_ctx: bool,
     /// It was playing at attach: its words started before AMD's entry.
     before_entry: bool,
-    /// Queued or playing: a preemptive generation counts only once a turn adopts it.
-    live: bool,
     /// Its first playout, where its reply goes in the history.
     started_at: Option<Ts>,
 }
@@ -420,9 +418,6 @@ impl Amd {
                 let deadline = now.saturating_add(self.options.timeout);
                 self.overall_deadline = Some(deadline);
                 self.push(AmdEffect::SetDeadline(AmdTimer::Overall, deadline));
-                if self.speech.speaking {
-                    self.speech.started_at = Some(now);
-                }
                 let opening = self.options.opening();
                 self.answer(AmdAnswer::Activated { run: self.run, opening });
             }
@@ -432,28 +427,26 @@ impl Amd {
         }
     }
 
-    /// Speech boundaries before activation set only whether the participant speaks; a turn's
-    /// speech duration counts from activation.
+    /// The gate reports participant speech only once it is active, after this run activated. A
+    /// turn's speech duration counts from activation.
     fn on_user_speech(&mut self, speech: UserSpeechObservation) {
-        let active = self.active();
+        if !self.active() {
+            return;
+        }
         match speech {
-            _ if self.finished() => {}
             UserSpeechObservation::Started { at } => {
                 self.speech.speaking = true;
-                if let Some(activated) = self.activated_at.filter(|_| active) {
-                    self.speech.started_at = Some(at.max(activated));
-                }
+                self.speech.started_at = Some(self.activated_at.map_or(at, |a| at.max(a)));
             }
             UserSpeechObservation::Ended { at } => {
                 self.speech.speaking = false;
-                if let Some(started) = self.speech.started_at.take().filter(|_| active) {
+                if let Some(started) = self.speech.started_at.take() {
                     self.speech.duration += at.saturating_duration_since(started);
                 }
             }
-            UserSpeechObservation::Final { text, .. } if active => {
+            UserSpeechObservation::Final { text, .. } => {
                 self.transcripts.push(Source::Session, &text, false);
             }
-            UserSpeechObservation::Final { .. } => {}
         }
     }
 
@@ -517,7 +510,7 @@ impl Amd {
             self.start_classification(at, turn, late);
             self.insert_user_item(turn);
         } else if !late && self.request.is_none() {
-            self.record_prediction(now, turn, AmdReason::Reused, None, &[]);
+            self.record_prediction(now, turn, AmdReason::Reused, None, None);
         }
     }
 
@@ -613,7 +606,7 @@ impl Amd {
         let Some(text) = text else {
             // No text: the empty-turn rules, unless a newer turn owns the reply.
             if latest && t.prediction.is_none() && !pending {
-                self.record_prediction(now, turn, AmdReason::Reused, None, &[]);
+                self.record_prediction(now, turn, AmdReason::Reused, None, None);
             }
             return;
         };
@@ -708,7 +701,7 @@ impl Amd {
         match result {
             Err(_) => {
                 self.forget_category();
-                self.record_prediction(now, request.turn, AmdReason::InferenceError, None, &[]);
+                self.record_prediction(now, request.turn, AmdReason::InferenceError, None, None);
             }
             Ok(Classification { category, inference_duration }) => {
                 self.accept_prediction(now, request.turn, category, inference_duration);
@@ -720,7 +713,7 @@ impl Amd {
     fn timeout_inference(&mut self, now: Ts, request: Request) {
         self.timeouts += 1;
         self.forget_category();
-        self.record_prediction(now, request.turn, AmdReason::InferenceTimeout, None, &[]);
+        self.record_prediction(now, request.turn, AmdReason::InferenceTimeout, None, None);
     }
 
     /// `_forget_category`: a turn without a prediction is unknown, not a repeat of the previous
@@ -743,10 +736,10 @@ impl Amd {
         }
         // Terminal stages complete AMD, so a request never runs in one.
         let Some(transition) = stage::next(self.stage, category) else { return };
-        let mut effects = transition.effects;
+        let mut effect = transition.effect;
         if self.options.returns_early(transition.next_stage) {
             // The application handles this stage: no reply and no menu extraction.
-            effects = vec![StageEffect::Complete];
+            effect = Some(StageEffect::Complete);
         }
         if transition.next_stage != self.stage {
             self.previous_stage = Some(self.stage);
@@ -757,7 +750,7 @@ impl Amd {
         self.had_machine_stage |= self.stage.is_machine();
         self.timeouts = 0;
         self.uncertain = if category == Category::Uncertain { self.uncertain + 1 } else { 0 };
-        self.record_prediction(now, turn, AmdReason::Prediction, Some(took), &effects);
+        self.record_prediction(now, turn, AmdReason::Prediction, Some(took), effect);
     }
 
     /// `_record_prediction`: the turn's prediction, a `reused` copy for each later turn still
@@ -768,7 +761,7 @@ impl Amd {
         turn: TurnId,
         reason: AmdReason,
         inference: Option<Duration>,
-        effects: &[StageEffect],
+        effect: Option<StageEffect>,
     ) {
         let (category, stage) = (self.category, self.stage);
         let Some(t) = self.turns.get_mut(&turn) else { return };
@@ -804,15 +797,13 @@ impl Amd {
             later.prediction = Some(reused.clone());
             events.push(reused);
         }
-        for effect in effects {
-            match effect {
-                StageEffect::Complete => self.finish(AmdReason::Finished),
-                // A decision model only chooses a category; it cannot read a menu.
-                StageEffect::ExtractMenu if self.setup.extract_menus => {
-                    self.start_menu(now, turn_id, transcript.clone());
-                }
-                StageEffect::ExtractMenu => {}
+        match effect {
+            Some(StageEffect::Complete) => self.finish(AmdReason::Finished),
+            // A decision model only chooses a category; it cannot read a menu.
+            Some(StageEffect::ExtractMenu) if self.setup.extract_menus => {
+                self.start_menu(now, turn_id, transcript);
             }
+            Some(StageEffect::ExtractMenu) | None => {}
         }
         if self.uncertain >= self.options.max_uncertain_turns {
             self.finish(AmdReason::MaxUncertainTurns);

@@ -2,7 +2,7 @@
 //! the idle timer.
 
 use super::{Amd, VoicemailAttempt, WatchedSpeech, stage};
-use crate::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind};
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::amd::effects::{AGENT_REPLY, AmdEffect, AmdTimer};
 use crate::amd::events::{AmdReason, Category, Stage};
 use crate::amd::options::VOICEMAIL_PLAYED_NOTE;
@@ -126,7 +126,6 @@ impl Amd {
         if let Some(words) = words {
             watched.words = words;
         }
-        watched.live = true;
         // The voicemail message: the reserved turn's reply, or a correction's replacement of it,
         // whose first speech's interrupted end no longer counts.
         let vm = &mut self.voicemail;
@@ -144,7 +143,6 @@ impl Amd {
             words,
             add_to_chat_ctx: true,
             before_entry: false,
-            live: false,
             started_at: None,
         })
     }
@@ -154,11 +152,10 @@ impl Amd {
             return;
         }
         match event {
-            SpeechObservation::Created { kind, add_to_chat_ctx, playing } => {
+            SpeechObservation::Created { add_to_chat_ctx, playing, .. } => {
                 let watched = self.watch(speech);
                 watched.add_to_chat_ctx = add_to_chat_ctx;
                 watched.before_entry |= playing;
-                watched.live |= kind != SpeechKind::Preemptive;
             }
             SpeechObservation::ItemAdded { text, interrupted } => {
                 if let Some(attempt) =
@@ -224,7 +221,7 @@ impl Amd {
             || self.category == Category::Wait
             || self.held.is_some()
             || self.speech.speaking
-            || self.speeches.values().any(|s| s.live)
+            // Every queued or playing speech except the preemptive generation.
             || self.agent_busy;
         if busy {
             self.clear_idle();

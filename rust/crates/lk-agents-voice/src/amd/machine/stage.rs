@@ -41,28 +41,28 @@ pub enum StageEffect {
     Complete,
 }
 
-/// The stage after a prediction and its effects.
+/// The stage after a prediction and its effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transition {
     pub next_stage: Stage,
-    pub effects: Vec<StageEffect>,
+    pub effect: Option<StageEffect>,
 }
 
 /// `transition`: the stage after `prediction`. `None` from a terminal stage, where Python raises:
 /// AMD has completed, so nothing follows it.
 pub fn next(stage: Stage, prediction: Category) -> Option<Transition> {
-    if recommended(stage).is_empty() {
+    if matches!(stage, Stage::Human | Stage::MachineUnavailable) {
         return None;
     }
-    let (next_stage, effects) = match prediction {
-        Category::Human => (Stage::Human, vec![StageEffect::Complete]),
-        Category::MachineUnavailable => (Stage::MachineUnavailable, vec![StageEffect::Complete]),
-        Category::MachineIvr => (Stage::MachineIvr, vec![StageEffect::ExtractMenu]),
-        Category::Uncertain | Category::Wait => (stage, Vec::new()),
-        Category::MachineScreening => (Stage::MachineScreening, Vec::new()),
-        Category::MachineVm => (Stage::MachineVm, Vec::new()),
+    let (next_stage, effect) = match prediction {
+        Category::Human => (Stage::Human, Some(StageEffect::Complete)),
+        Category::MachineUnavailable => (Stage::MachineUnavailable, Some(StageEffect::Complete)),
+        Category::MachineIvr => (Stage::MachineIvr, Some(StageEffect::ExtractMenu)),
+        Category::Uncertain | Category::Wait => (stage, None),
+        Category::MachineScreening => (Stage::MachineScreening, None),
+        Category::MachineVm => (Stage::MachineVm, None),
     };
-    Some(Transition { next_stage, effects })
+    Some(Transition { next_stage, effect })
 }
 
 #[cfg(test)]

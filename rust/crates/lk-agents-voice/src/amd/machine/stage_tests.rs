@@ -14,9 +14,8 @@ const STAGES: [Stage; 6] = [
     Stage::MachineUnavailable,
 ];
 
-/// A transition with at most one effect, as `_fsm.py`'s table has.
 fn transition(next_stage: Stage, effect: Option<StageEffect>) -> Transition {
-    Transition { next_stage, effects: effect.into_iter().collect() }
+    Transition { next_stage, effect }
 }
 
 /// The stage a category names; `wait` names none.

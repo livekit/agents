@@ -146,26 +146,6 @@ fn machine_reply(instructions: &str, dtmf: bool) -> ReplyDecision {
 }
 
 #[test]
-fn stage_machine_is_the_fsm_table() {
-    use Category::*;
-    let next = |stage, prediction| stage::next(stage, prediction).unwrap();
-    assert_eq!(next(Stage::MachineVm, Wait).next_stage, Stage::MachineVm);
-    assert_eq!(next(Stage::MachineIvr, Uncertain).next_stage, Stage::MachineIvr);
-    assert_eq!(next(Stage::Uncertain, Human).effects, vec![StageEffect::Complete]);
-    assert_eq!(next(Stage::MachineVm, MachineIvr).effects, vec![StageEffect::ExtractMenu]);
-    // A correction outside the recommended list is accepted.
-    assert_eq!(next(Stage::MachineVm, MachineScreening).next_stage, Stage::MachineScreening);
-    assert!(stage::next(Stage::Human, Uncertain).is_none());
-    let names: Vec<_> =
-        stage::recommended(Stage::MachineScreening).iter().map(|c| c.as_str()).collect();
-    assert_eq!(
-        names,
-        ["human", "machine-screening", "machine-unavailable", "machine-vm", "uncertain", "wait"]
-    );
-    assert_eq!(stage::recommended(Stage::Uncertain).len(), 7);
-}
-
-#[test]
 fn options_refuse_what_the_constructor_refuses() {
     let refused = |change: fn(&mut AmdOptions)| {
         let mut options = AmdOptions::default();

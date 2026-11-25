@@ -407,6 +407,12 @@ impl H {
 
     // Agent speech.
 
+    /// The gate reports whether the agent is busy: a queued or playing speech other than the
+    /// preemptive generation, thinking, or a turn waiting on its hook.
+    pub(super) fn busy(&mut self, busy: bool) {
+        self.observe(AmdObservation::AgentBusy { busy, at: self.now });
+    }
+
     pub(super) fn new_speech(&mut self) -> SpeechId {
         self.next_speech += 1;
         SpeechId(self.next_speech)
