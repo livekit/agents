@@ -1,0 +1,21 @@
+rust/crates/lk-agents-runtime/src/voice/mod.rs
+  s_5dec60cbf303c5::t_8bf848e48301e9 627
+rust/crates/lk-agents-voice/src/data_plane/machine.rs
+  s_5dec60cbf303c5::t_5f6333a512297f 24-28,66-69,125-127,185,202-211,265-268,349,397-400,636-715
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bb15e5c99b986f1610f0c00694eff955e6abfd1f",
+  "prompts": {},
+  "sessions": {
+    "s_5dec60cbf303c5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_5dec60cbf303c5",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
