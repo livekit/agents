@@ -14,13 +14,20 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
-from spatialreal import InterruptReason, PlaybackSignal, PlaybackState, PlaybackStateEvent
+from spatialreal import (
+    AvatarSDKError,
+    AvatarSDKErrorCode,
+    InterruptReason,
+    PlaybackSignal,
+    PlaybackState,
+    PlaybackStateEvent,
+)
 
 from livekit import api, rtc
 from livekit.agents.voice import io as voice_io
 from livekit.agents.voice.avatar import AudioSegmentEnd, QueueAudioOutput
 from livekit.plugins.spatialreal import avatar
-from livekit.plugins.spatialreal.avatar import AvatarSession
+from livekit.plugins.spatialreal.avatar import AvatarSession, _resolve_audio_tail
 from livekit.plugins.spatialreal.resumable_queue_io import ResumableQueueAudioOutput
 
 pytestmark = pytest.mark.unit
@@ -211,6 +218,7 @@ async def test_consecutive_replies_get_their_own_requests(h: Harness) -> None:
     assert ("end", "p1-req-2") in h.provider.calls
 
 
+@pytest.mark.virtual_time
 async def test_a_reply_without_an_end_report_is_finished_after_it_should_have_played(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -313,6 +321,7 @@ async def test_an_interruption_while_held_does_not_count_the_hold_as_played(
     assert h.buffer.events[-1] == ("finished", 0.5, True)
 
 
+@pytest.mark.virtual_time
 async def test_a_pause_inside_the_fallback_wait_moves_its_deadline(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -376,6 +385,7 @@ async def test_after_a_resume_the_position_runs_on_from_the_server_report(
     assert h.buffer.events[-1] == ("finished", pytest.approx(0.7), True)
 
 
+@pytest.mark.virtual_time
 async def test_a_late_server_start_moves_the_fallback_deadline(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -490,13 +500,26 @@ def use_replacements(monkeypatch: pytest.MonkeyPatch, *providers: FakeProvider) 
         return provider
 
     monkeypatch.setattr(avatar, "new_avatar_session", factory)
-    monkeypatch.setattr(avatar, "PROVIDER_RECONNECT_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(avatar, "PROVIDER_CONNECT_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(avatar, "PROVIDER_RECONNECT_DELAYS_SECONDS", (0.0,))
     return created
 
 
 class FailingStart(FakeProvider):
+    """A connect attempt that fails the way a network blip does: worth retrying."""
+
     async def start(self) -> str:
         raise RuntimeError("provider unavailable")
+
+
+def rejected() -> AvatarSDKError:
+    """A connect failure that retrying won't fix (the server rejected the session)."""
+    return AvatarSDKError(AvatarSDKErrorCode.sessionTokenInvalid, "rejected", close_code=4001)
+
+
+class RejectedStart(FakeProvider):
+    async def start(self) -> str:
+        raise rejected()
 
 
 def prepare_reconnect(h: Harness) -> None:
@@ -510,8 +533,6 @@ async def test_a_lost_connection_finishes_the_reply_drops_its_rest_and_reconnect
     prepare_reconnect(h)
     replacement = FakeProvider("p2")
     use_replacements(monkeypatch, replacement)
-    states: list[str] = []
-    h.session.on("provider_connection_state_changed", lambda ev: states.append(ev.state))
 
     await h.reply(end=False)
     h.session._on_provider_lost(1, "provider_closed")
@@ -519,7 +540,6 @@ async def test_a_lost_connection_finishes_the_reply_drops_its_rest_and_reconnect
     assert h.buffer.finishes() == [True]
     assert h.session._provider is replacement
     assert h.provider.closed
-    assert states == ["recovering", "recovered"]
 
     await h.reply(frames=2)  # the rest of the reply that was cut off
     assert replacement.calls == []
@@ -552,19 +572,76 @@ async def test_a_reply_during_a_reconnect_waits_for_the_new_connection(
     assert h.buffer.finishes() == [False]
 
 
-async def test_after_recovery_fails_every_reply_still_finishes_once(
+async def test_an_outage_longer_than_a_few_attempts_still_recovers(
     h: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepare_reconnect(h)
-    use_replacements(monkeypatch, FailingStart("x"), FailingStart("y"), FailingStart("z"))
-    states: list[str] = []
-    h.session.on("provider_connection_state_changed", lambda ev: states.append(ev.state))
+    failures = [FailingStart(f"x{i}") for i in range(8)]
+    replacement = FakeProvider("p2")
+    use_replacements(monkeypatch, *failures, replacement)
+
+    h.session._on_provider_lost(1, "provider_closed")
+    await settle(100)
+    assert h.session._provider is replacement
+
+    await h.reply(frames=1)
+    assert replacement.calls == [("audio", "p2-req-1"), ("end", "p2-req-1")]
+
+
+@pytest.mark.virtual_time
+async def test_a_reply_during_a_long_outage_is_given_up_on_and_the_next_one_plays(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_reconnect(h)
+    gate = asyncio.Event()
+
+    class SlowStart(FakeProvider):
+        async def start(self) -> str:
+            await gate.wait()
+            return "connection"
+
+    replacement = SlowStart("p2")
+    use_replacements(monkeypatch, replacement)
+
+    h.session._on_provider_lost(1, "provider_closed")
+    await h.reply(frames=2)
+    await asyncio.sleep(avatar.PROVIDER_RECONNECT_WAIT_SECONDS + 0.1)
+    assert h.buffer.finishes() == [True], "the reply waited out the outage"
+    assert not h.session._drop_until_segment_end
+
+    gate.set()
+    await settle()
+    await h.reply(frames=1)
+    assert replacement.calls == [("audio", "p2-req-1"), ("end", "p2-req-1")]
+
+
+async def test_after_a_rejected_reconnect_the_next_reply_tries_again(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_reconnect(h)
+    replacement = FakeProvider("p2")
+    created = use_replacements(monkeypatch, RejectedStart("x"), replacement)
+
+    h.session._on_provider_lost(1, "provider_closed")
+    await settle()
+    assert h.session._provider is None
+    assert len(created) == 1, "kept retrying an error that retrying can't fix"
+
+    await h.reply(frames=1)
+    assert h.session._provider is replacement
+    assert replacement.calls == [("audio", "p2-req-1"), ("end", "p2-req-1")]
+
+
+async def test_when_reconnects_keep_being_rejected_every_reply_still_finishes_once(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_reconnect(h)
+    use_replacements(monkeypatch, *(RejectedStart(f"x{i}") for i in range(3)))
 
     h.session._on_provider_lost(1, "provider_closed")
     await h.reply(frames=2)
     await h.reply(frames=2)
 
-    assert states == ["recovering", "failed"]
     assert h.buffer.finishes() == [True, True]
     assert h.buffer.events.count(("started",)) == 2
     assert not h.session._drop_until_segment_end
@@ -608,9 +685,9 @@ async def test_a_frame_held_through_a_failed_reconnect_does_not_swallow_the_next
     class GatedFailure(FakeProvider):
         async def start(self) -> str:
             await gate.wait()
-            raise RuntimeError("provider unavailable")
+            raise rejected()
 
-    use_replacements(monkeypatch, GatedFailure("x"), FailingStart("y"), FailingStart("z"))
+    use_replacements(monkeypatch, GatedFailure("x"), RejectedStart("y"), RejectedStart("z"))
     h.session._on_provider_lost(1, "provider_closed")
     h.buffer.items.put_nowait(frame())  # reply A: the forwarder holds it, waiting
     await settle()
@@ -621,6 +698,79 @@ async def test_a_frame_held_through_a_failed_reconnect_does_not_swallow_the_next
     await h.reply(frames=2)  # reply B
     assert h.buffer.finishes() == [True, True], "reply B was never finished"
     assert not h.session._drop_until_segment_end
+
+
+def server_error(req_id: str | None = None, close_code: int | None = None) -> AvatarSDKError:
+    return AvatarSDKError(
+        AvatarSDKErrorCode.serverError, "failed", req_id=req_id, close_code=close_code
+    )
+
+
+async def test_a_request_error_finishes_only_that_reply_and_keeps_the_connection(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_reconnect(h)
+    created = use_replacements(monkeypatch)
+    await h.reply()  # p1-req-1, played out
+    await h.reply(end=False)  # p1-req-2, still being fed
+    h.signal("p1-req-1")
+
+    h.session._on_provider_error(1, server_error("p1-req-1"))
+    await settle()
+    assert h.buffer.finishes() == [True]
+    assert h.session._provider is h.provider and not h.provider.closed and created == []
+    assert len(h.session._replies) == 1, "the other reply was finished too"
+
+    h.session._on_provider_error(1, server_error("p1-req-2"))  # the reply being fed
+    await settle()
+    assert h.buffer.finishes() == [True, True]
+    assert h.provider.calls[-1] == ("interrupt", "p1-req-2")
+    await h.reply(frames=2)  # the rest of it is dropped
+    await h.reply(frames=1)
+    assert h.provider.calls[-2:] == [("audio", "p1-req-3"), ("end", "p1-req-3")]
+
+
+async def test_an_error_on_an_open_connection_about_no_reply_changes_nothing(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_reconnect(h)
+    created = use_replacements(monkeypatch)
+    await h.reply()
+    h.session._on_provider_error(1, server_error())  # e.g. relayed from upstream
+    h.session._on_provider_error(1, server_error("unknown-req"))
+    await settle()
+    assert h.buffer.finishes() == []
+    assert h.session._provider is h.provider and created == []
+
+
+async def test_an_error_carrying_a_close_code_replaces_the_connection(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_reconnect(h)
+    replacement = FakeProvider("p2")
+    use_replacements(monkeypatch, replacement)
+    await h.reply()
+    h.session._on_provider_error(1, server_error("p1-req-1", close_code=4500))
+    await settle()
+    assert h.buffer.finishes() == [True]
+    assert h.session._provider is replacement
+
+
+@pytest.mark.parametrize("reason", [InterruptReason.PREEMPTED, InterruptReason.EXPLICIT])
+async def test_a_reply_the_server_interrupts_is_finished_where_it_stopped(
+    h: Harness, reason: InterruptReason
+) -> None:
+    await h.reply(frames=10)
+    h.signal("p1-req-1")
+    h.session._on_playback_state(
+        PlaybackStateEvent(
+            req_id="p1-req-1", state=PlaybackState.INTERRUPTED, played_ms=400, reason=reason
+        ),
+        1,
+    )
+    assert h.buffer.events == [("started",), ("finished", 0.4, True)]
+    h.signal("p1-req-1", end=True)  # a late end changes nothing
+    assert h.buffer.finishes() == [True]
 
 
 async def test_a_stale_connection_reference_never_tears_down_its_replacement(
@@ -712,13 +862,13 @@ async def test_close_restores_the_original_audio_output(wrapped: bool) -> None:
     session._audio_buffer = queue  # type: ignore[assignment]
     session._agent_session = SimpleNamespace(output=output)  # type: ignore[assignment]
     session._original_audio_output = output.audio
-    session._original_audio_tail = AvatarSession._resolve_audio_tail(output.audio)
+    session._original_audio_tail = _resolve_audio_tail(output.audio)
 
     output.replace_audio_tail(queue)
-    assert AvatarSession._resolve_audio_tail(output.audio) is queue
+    assert _resolve_audio_tail(output.audio) is queue
     session._detach_audio_output()
     assert output.audio is top
-    assert AvatarSession._resolve_audio_tail(output.audio) is leaf
+    assert _resolve_audio_tail(output.audio) is leaf
 
 
 class _ConnectedRoom:

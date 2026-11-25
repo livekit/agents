@@ -21,7 +21,7 @@ import time
 from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any
 
 from livekit import api, rtc
 from livekit.agents import NOT_GIVEN, AgentSession, NotGivenOr, get_job_context, utils
@@ -29,6 +29,7 @@ from livekit.agents.voice.avatar import AudioSegmentEnd, AvatarSession as BaseAv
 from livekit.agents.voice.io import AudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from spatialreal import (
+    AvatarSDKError,
     AvatarSession as SpatialRealSession,
     InterruptReason,
     LiveKitEgressConfig,
@@ -42,8 +43,6 @@ from .log import logger
 from .resumable_queue_io import ResumableQueueAudioOutput
 
 __all__ = [
-    "AvatarPlaybackStartedEvent",
-    "AvatarProviderConnectionEvent",
     "AvatarSession",
     "SpatialRealException",
 ]
@@ -63,7 +62,14 @@ LIVEKIT_AVATAR_PUBLISH_SOURCES = ["camera", "microphone"]
 PLAYBACK_CONTROL_CAPABILITY = "playback_control"
 PLAYBACK_STATE_CAPABILITY = "playback_state"
 
-PROVIDER_RECONNECT_DELAYS_SECONDS = (0.0, 0.5, 1.0)
+# attempts at startup, so a misconfiguration fails fast
+PROVIDER_CONNECT_DELAYS_SECONDS = (0.0, 0.5, 1.0)
+# a lost connection is retried for as long as the session lives, backing off up to the last
+# delay; it stops only on an error that retrying can't fix, and then tries again on the
+# next reply
+PROVIDER_RECONNECT_DELAYS_SECONDS = (0.0, 0.5, 1.0, 2.0, 5.0, 10.0)
+# how long a reply waits for a reconnect in flight before it is given up on
+PROVIDER_RECONNECT_WAIT_SECONDS = 3.0
 PROVIDER_CONNECT_TIMEOUT_SECONDS = 15.0
 PROVIDER_CLOSE_TIMEOUT_SECONDS = 5.0
 
@@ -91,28 +97,65 @@ def _egress_video_grants(room_name: str) -> api.VideoGrants:
     )
 
 
+def _required(value: NotGivenOr[str], name: str, env: str) -> str:
+    resolved = value if utils.is_given(value) else os.getenv(env)
+    if not resolved:
+        raise SpatialRealException(
+            f"{name} must be set either by passing it to AvatarSession or "
+            f"by setting the {env} environment variable"
+        )
+    return str(resolved)
+
+
+def _optional(value: NotGivenOr[str], env: str) -> str:
+    return str(value if utils.is_given(value) else os.getenv(env) or "")
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("%s=%r is invalid; using %d", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("%s=%d must be > 0; using %d", name, value, default)
+        return default
+    return value
+
+
+def _resolve_audio_tail(sink: AudioOutput | None) -> AudioOutput | None:
+    while sink is not None and sink.next_in_chain is not None:
+        sink = sink.next_in_chain
+    return sink
+
+
+def _resolve_local_participant_identity(room: rtc.Room) -> str:
+    job_ctx = get_job_context(required=False)
+    if job_ctx is not None:
+        return job_ctx.local_participant_identity
+    if room.isconnected():
+        return room.local_participant.identity
+    raise SpatialRealException("failed to get local participant identity")
+
+
+def _format_error_reason(error: BaseException) -> str:
+    root: BaseException = error
+    seen: set[int] = set()
+    while id(root) not in seen:
+        seen.add(id(root))
+        cause = root.__cause__ or (None if root.__suppress_context__ else root.__context__)
+        if cause is None:
+            break
+        root = cause
+    message = str(root) or str(error)
+    return f"{type(root).__name__}: {message}" if message else type(root).__name__
+
+
 class SpatialRealException(Exception):
     """Exception raised for SpatialReal avatar integration errors."""
-
-
-@dataclass(frozen=True)
-class AvatarPlaybackStartedEvent:
-    """The avatar started playing one reply."""
-
-    request_id: str
-    source: str
-    observed_at: float
-
-
-@dataclass(frozen=True)
-class AvatarProviderConnectionEvent:
-    """State of the connection to SpatialReal (no conversation content)."""
-
-    state: Literal["connected", "recovering", "recovered", "failed"]
-    reason: str
-    attempt: int
-    generation: int
-    observed_at: float
 
 
 @dataclass(eq=False)
@@ -165,9 +208,9 @@ class AvatarSession(BaseAvatarSession):
         livekit_token_ttl_seconds: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
         super().__init__()
-        self._api_key = self._required(api_key, "api_key", "SPATIALREAL_API_KEY")
-        self._app_id = self._required(app_id, "app_id", "SPATIALREAL_APP_ID")
-        self._avatar_id = self._required(avatar_id, "avatar_id", "SPATIALREAL_AVATAR_ID")
+        self._api_key = _required(api_key, "api_key", "SPATIALREAL_API_KEY")
+        self._app_id = _required(app_id, "app_id", "SPATIALREAL_APP_ID")
+        self._avatar_id = _required(avatar_id, "avatar_id", "SPATIALREAL_AVATAR_ID")
 
         if idle_timeout_seconds < 0:
             raise SpatialRealException("idle_timeout_seconds must be greater than or equal to 0")
@@ -177,7 +220,7 @@ class AvatarSession(BaseAvatarSession):
         token_ttl = (
             int(livekit_token_ttl_seconds)
             if utils.is_given(livekit_token_ttl_seconds)
-            else self._int_env(
+            else _int_env(
                 "SPATIALREAL_LIVEKIT_TOKEN_TTL_SECONDS",
                 int(DEFAULT_LIVEKIT_TOKEN_TTL.total_seconds()),
             )
@@ -189,13 +232,9 @@ class AvatarSession(BaseAvatarSession):
         # The SDK owns where a deployment lives: it resolves the endpoints from `environment`
         # (its own default when unset). The two URLs are overrides for a deployment SpatialReal
         # hands you an address for; empty means "whatever the environment resolves to".
-        self._environment = self._optional(environment, "SPATIALREAL_ENVIRONMENT")
-        self._console_endpoint_url = self._optional(
-            console_endpoint_url, "SPATIALREAL_CONSOLE_ENDPOINT"
-        )
-        self._ingress_endpoint_url = self._optional(
-            ingress_endpoint_url, "SPATIALREAL_INGRESS_ENDPOINT"
-        )
+        self._environment = _optional(environment, "SPATIALREAL_ENVIRONMENT")
+        self._console_endpoint_url = _optional(console_endpoint_url, "SPATIALREAL_CONSOLE_ENDPOINT")
+        self._ingress_endpoint_url = _optional(ingress_endpoint_url, "SPATIALREAL_INGRESS_ENDPOINT")
         self._avatar_participant_identity = str(
             avatar_participant_identity
             if utils.is_given(avatar_participant_identity)
@@ -290,9 +329,7 @@ class AvatarSession(BaseAvatarSession):
         await super().start(agent_session, room)
 
         room_name = room.name
-        egress_attributes = {
-            ATTRIBUTE_PUBLISH_ON_BEHALF: self._resolve_local_participant_identity(room)
-        }
+        egress_attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: _resolve_local_participant_identity(room)}
         livekit_token = (
             api.AccessToken(api_key=key, api_secret=secret)
             .with_kind("agent")
@@ -318,12 +355,11 @@ class AvatarSession(BaseAvatarSession):
         self._agent_session = agent_session
         self._room = room
         self._original_audio_output = agent_session.output.audio
-        self._original_audio_tail = self._resolve_audio_tail(agent_session.output.audio)
+        self._original_audio_tail = _resolve_audio_tail(agent_session.output.audio)
         logger.debug("starting SpatialReal avatar session", extra={"room": room_name})
 
         try:
-            attempt = await self._connect_with_retries()
-            self._emit_connection_state("connected", reason="initial_start", attempt=attempt)
+            await self._connect_with_retries()
 
             # wait_playback_start: the framework's playback_started (transcript sync,
             # first-frame metrics) fires when the server reports the avatar playing,
@@ -362,7 +398,7 @@ class AvatarSession(BaseAvatarSession):
                 "LiveKit room auth/token configuration, endpoint URLs, and outbound network "
                 f"access. room={room_name}, avatar_id={self._avatar_id}, "
                 f"ingress_endpoint_url={self._ingress_endpoint_url or '(from environment)'}, "
-                f"sample_rate={sample_rate}. Reason: {self._format_error_reason(e)}"
+                f"sample_rate={sample_rate}. Reason: {_format_error_reason(e)}"
             ) from None
 
     async def aclose(self) -> None:
@@ -417,16 +453,10 @@ class AvatarSession(BaseAvatarSession):
             # no wrappers were present, so the whole chain was replaced
             output.audio = self._original_audio_output
         elif (
-            self._resolve_audio_tail(output.audio) is self._audio_buffer
+            _resolve_audio_tail(output.audio) is self._audio_buffer
             and self._original_audio_tail is not None
         ):
             output.replace_audio_tail(self._original_audio_tail)
-
-    async def disconnect_provider_for_test(self) -> None:
-        """Close the ingress WebSocket so a test can exercise provider recovery."""
-        if self._closing or self._provider is None:
-            raise SpatialRealException("SpatialReal provider session is unavailable")
-        await self._provider.close()
 
     # --- provider connection ------------------------------------------------------------
 
@@ -445,7 +475,7 @@ class AvatarSession(BaseAvatarSession):
             sample_rate=self._resolved_sample_rate,
             on_playback=lambda signal: self._on_playback_signal(signal, generation),
             on_playback_state=lambda event: self._on_playback_state(event, generation),
-            on_error=lambda error: self._on_provider_lost(generation, "provider_error", error),
+            on_error=lambda error: self._on_provider_error(generation, error),
             on_close=lambda: self._on_provider_lost(generation, "provider_closed"),
         )
 
@@ -466,7 +496,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def _connect_with_retries(self) -> int:
         last_error: Exception | None = None
-        for attempt, delay in enumerate(PROVIDER_RECONNECT_DELAYS_SECONDS, start=1):
+        for attempt, delay in enumerate(PROVIDER_CONNECT_DELAYS_SECONDS, start=1):
             if delay > 0:
                 await asyncio.sleep(delay)
             if self._closing:
@@ -497,6 +527,30 @@ class AvatarSession(BaseAvatarSession):
         finally:
             self._expected_close_generations.discard(generation)
 
+    def _on_provider_error(self, generation: int, error: Exception) -> None:
+        """An error the SDK reported. Only one carrying a close code ends the connection.
+
+        The SDK also reports server errors on a connection that stays open: an error
+        relayed from upstream, or one about a single request. Those must not tear down
+        a healthy connection; if the socket does close, on_close reports it.
+        """
+        if self._closing or generation != self._generation:
+            return
+        if getattr(error, "close_code", None) is not None:
+            self._on_provider_lost(generation, "provider_error", error)
+            return
+        req_id = getattr(error, "req_id", None)
+        reply = self._reply_for(req_id) if req_id else None
+        if reply is None:
+            logger.warning("SpatialReal reported an error", exc_info=error)
+            return
+        logger.warning(
+            "SpatialReal request failed; finishing its reply",
+            exc_info=error,
+            extra={"request_id": req_id},
+        )
+        self._abandon(reply, reason="request_error")
+
     def _on_provider_lost(
         self, generation: int, reason: str, error: Exception | None = None
     ) -> None:
@@ -516,64 +570,72 @@ class AvatarSession(BaseAvatarSession):
         # rest of a reply that is still being fed
         self._finish_all(reason=reason, drop_rest=True)
         provider, self._provider = self._provider, None
-        if self._reconnect_task is None or self._reconnect_task.done():
-            self._reconnect_task = asyncio.create_task(
-                self._reconnect(provider, generation, reason),
-                name="spatialreal_provider_reconnect",
-            )
-            self._background_tasks.add(self._reconnect_task)
-            self._reconnect_task.add_done_callback(self._background_tasks.discard)
+        self._start_reconnect(provider, generation, reason)
+
+    def _start_reconnect(
+        self, lost: SpatialRealSession | None, generation: int, reason: str
+    ) -> None:
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self._reconnect_task = asyncio.create_task(
+            self._reconnect(lost, generation, reason), name="spatialreal_provider_reconnect"
+        )
+        self._background_tasks.add(self._reconnect_task)
+        self._reconnect_task.add_done_callback(self._background_tasks.discard)
 
     async def _reconnect(
         self, lost: SpatialRealSession | None, generation: int, reason: str
     ) -> bool:
-        self._emit_connection_state("recovering", reason=reason, attempt=0)
+        self._recovery_exhausted = False
         if lost is not None:
             await self._close_quietly(lost, generation)
-        try:
-            attempt = await self._connect_with_retries()
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
+        attempt = 0
+        while not self._closing:
+            delay = PROVIDER_RECONNECT_DELAYS_SECONDS[
+                min(attempt, len(PROVIDER_RECONNECT_DELAYS_SECONDS) - 1)
+            ]
+            attempt += 1
+            if delay > 0:
+                await asyncio.sleep(delay)
             if self._closing:
-                return False
-            self._recovery_exhausted = True
-            logger.error(
-                "SpatialReal provider recovery exhausted; the avatar stays silent",
-                extra={"reason": f"{reason}:{self._format_error_reason(error)}"},
-            )
-            self._emit_connection_state("failed", reason=reason, attempt=0)
-            return False
-        logger.info("SpatialReal provider reconnected", extra={"attempt": attempt})
-        self._emit_connection_state("recovered", reason=reason, attempt=attempt)
-        return True
+                break
+            try:
+                await self._connect()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if isinstance(error, AvatarSDKError) and not error.retryable:
+                    # retrying won't fix it (credentials, quota, ...): stop, and try again
+                    # when the next reply comes
+                    self._recovery_exhausted = True
+                    logger.error(
+                        "SpatialReal provider reconnect failed; retrying on the next reply",
+                        extra={"reason": f"{reason}:{_format_error_reason(error)}"},
+                    )
+                    return False
+                logger.warning(
+                    "SpatialReal provider reconnect attempt failed",
+                    exc_info=error,
+                    extra={"attempt": attempt, "reason": reason},
+                )
+                continue
+            logger.info("SpatialReal provider reconnected", extra={"attempt": attempt})
+            return True
+        return False
 
     async def _ready_provider(self) -> SpatialRealSession:
-        """The live provider, waiting out a reconnect in flight."""
+        """The live provider, waiting a bounded time for a reconnect in flight."""
+        if self._provider is None and self._recovery_exhausted and not self._closing:
+            self._start_reconnect(None, self._generation, "next_reply")
         task = self._reconnect_task
         if self._provider is None and task is not None and not task.done():
-            await asyncio.shield(task)
+            # a reply doesn't wait out a long outage: it is given up on, and the
+            # reconnect carries on for the next one
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(task), PROVIDER_RECONNECT_WAIT_SECONDS)
         if self._provider is None:
             raise SpatialRealException("SpatialReal provider is unavailable")
         return self._provider
-
-    def _emit_connection_state(
-        self,
-        state: Literal["connected", "recovering", "recovered", "failed"],
-        *,
-        reason: str,
-        attempt: int,
-    ) -> None:
-        self.emit(
-            "provider_connection_state_changed",
-            AvatarProviderConnectionEvent(
-                state=state,
-                reason=reason,
-                attempt=attempt,
-                generation=self._generation,
-                observed_at=time.time(),
-            ),
-        )
 
     # --- audio forwarding ---------------------------------------------------------------
 
@@ -814,26 +876,40 @@ class AvatarSession(BaseAvatarSession):
                 event.played_ms / 1000, time.time(), held=event.state == PlaybackState.PAUSED
             )
             return
-        if (
-            event.state != PlaybackState.INTERRUPTED
-            or event.reason != InterruptReason.PAUSE_TIMEOUT
-        ):
+        if event.state != PlaybackState.INTERRUPTED:
             return
-        logger.warning(
-            "SpatialReal avatar pause timed out on the server; finishing the reply",
-            extra={"request_id": event.req_id, "played_ms": event.played_ms},
-        )
+        # Interruptions we ask for finish their replies first, so a known reply being
+        # interrupted is the server's doing: a held pause timed out, or a newer request
+        # preempted it. Either way it stopped at the position the server reports.
         reply.report(event.played_ms / 1000, time.time(), held=True)
-        self._paused = False
-        self._server_holding = False
+        if event.reason == InterruptReason.PAUSE_TIMEOUT:
+            logger.warning(
+                "SpatialReal avatar pause timed out on the server; finishing the reply",
+                extra={"request_id": event.req_id, "played_ms": event.played_ms},
+            )
+            self._paused = False
+            self._server_holding = False
+        else:
+            logger.warning(
+                "SpatialReal avatar reply interrupted by the server; finishing it",
+                extra={
+                    "request_id": event.req_id,
+                    "reason": event.reason,
+                    "played_ms": event.played_ms,
+                },
+            )
+        self._abandon(reply, reason=f"server_{event.reason or 'interrupted'}")
+
+    def _abandon(self, reply: _Reply, *, reason: str) -> None:
+        """The server dropped this reply's request: finish it as interrupted."""
         if reply is self._input:
             self._input = None
             self._drop_until_segment_end = True
             # the server dropped the request, but the SDK still has it open: close it, or
             # the next reply would be sent under the abandoned request id
             self._interrupt_pending = True
-            self._spawn(self._interrupt(), name="spatialreal_avatar_pause_timeout")
-        self._finish(reply, interrupted=True, reason="pause_timeout")
+            self._spawn(self._interrupt(), name="spatialreal_avatar_abandon")
+        self._finish(reply, interrupted=True, reason=reason)
 
     # --- reply bookkeeping --------------------------------------------------------------
 
@@ -848,14 +924,6 @@ class AvatarSession(BaseAvatarSession):
         logger.debug(
             "SpatialReal avatar playback started",
             extra={"request_id": reply.req_id, "source": source},
-        )
-        self.emit(
-            "playback_started",
-            AvatarPlaybackStartedEvent(
-                request_id=reply.req_id or "",
-                source=source,
-                observed_at=reply.started_at,
-            ),
         )
         if reply.input_done:
             # the fallback deadline now counts from the real start
@@ -953,60 +1021,3 @@ class AvatarSession(BaseAvatarSession):
             "ingress_endpoint_url": self._ingress_endpoint_url,
         }
         return {key: value for key, value in options.items() if value}
-
-    @staticmethod
-    def _required(value: NotGivenOr[str], name: str, env: str) -> str:
-        resolved = value if utils.is_given(value) else os.getenv(env)
-        if not resolved:
-            raise SpatialRealException(
-                f"{name} must be set either by passing it to AvatarSession or "
-                f"by setting the {env} environment variable"
-            )
-        return str(resolved)
-
-    @staticmethod
-    def _optional(value: NotGivenOr[str], env: str) -> str:
-        return str(value if utils.is_given(value) else os.getenv(env) or "")
-
-    @staticmethod
-    def _int_env(name: str, default: int) -> int:
-        raw = os.getenv(name)
-        if raw is None or not raw.strip():
-            return default
-        try:
-            value = int(raw)
-        except ValueError:
-            logger.warning("%s=%r is invalid; using %d", name, raw, default)
-            return default
-        if value <= 0:
-            logger.warning("%s=%d must be > 0; using %d", name, value, default)
-            return default
-        return value
-
-    @staticmethod
-    def _resolve_audio_tail(sink: AudioOutput | None) -> AudioOutput | None:
-        while sink is not None and sink.next_in_chain is not None:
-            sink = sink.next_in_chain
-        return sink
-
-    @staticmethod
-    def _resolve_local_participant_identity(room: rtc.Room) -> str:
-        job_ctx = get_job_context(required=False)
-        if job_ctx is not None:
-            return job_ctx.local_participant_identity
-        if room.isconnected():
-            return room.local_participant.identity
-        raise SpatialRealException("failed to get local participant identity")
-
-    @staticmethod
-    def _format_error_reason(error: BaseException) -> str:
-        root: BaseException = error
-        seen: set[int] = set()
-        while id(root) not in seen:
-            seen.add(id(root))
-            cause = root.__cause__ or (None if root.__suppress_context__ else root.__context__)
-            if cause is None:
-                break
-            root = cause
-        message = str(root) or str(error)
-        return f"{type(root).__name__}: {message}" if message else type(root).__name__
