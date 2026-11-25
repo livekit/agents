@@ -234,3 +234,88 @@ async def test_typed_user_turn_steer_reaches_the_reply() -> None:
         FakeLLMResponse(input="Stay calm.", content="Let's sort this out.", ttft=0.1, duration=0.1),
     ]
     assert await _run_typed(setup, responses, "you idiot") == ["assistant: Let's sort this out."]
+
+
+async def _wait_until(condition: Callable[[], bool]) -> None:
+    for _ in range(500):
+        if condition():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition not met")
+
+
+async def test_blocked_typed_message_stays_local_with_a_realtime_model() -> None:
+    from livekit.agents import AgentSession
+
+    from .fake_io import FakeAudioOutput
+    from .fake_realtime import FakeRealtimeModel, fake_capabilities
+
+    # no TTS and no native say(): the replacement can't be spoken
+    model = FakeRealtimeModel(capabilities=fake_capabilities(supports_say=False))
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        guardrail = DecisionGuardrail(session, model=KeywordModel("idiot"))
+
+        @guardrail.on_user_turn(decisions=FLAG)
+        def before_reply(ev: DecisionEvaluated) -> Block | None:
+            return Block(say="Please keep it civil.") if ev.get("flag") else None
+
+        await session.start(Agent(instructions="You are a helpful assistant."))
+        handle = session.generate_reply(user_input="you idiot")
+        await asyncio.wait_for(handle, timeout=5.0)
+
+        rt_session = model.active_session
+        # some providers start a reply on any new user message: it is never sent to them
+        assert all(item.type != "message" for item in rt_session.chat_ctx.items)
+        assert rt_session.generate_reply_calls == 0
+        assert [m.text_content for m in session.history.messages()] == ["you idiot"]
+
+
+async def test_typed_steer_reaches_a_realtime_reply() -> None:
+    from livekit.agents import AgentSession
+
+    from .fake_realtime import FakeRealtimeModel
+
+    model = FakeRealtimeModel()
+    async with AgentSession(llm=model) as session:
+        guardrail = DecisionGuardrail(session, model=KeywordModel("idiot"))
+
+        @guardrail.on_user_turn(decisions=FLAG)
+        def before_reply(ev: DecisionEvaluated) -> Steer | None:
+            return Steer(instructions="Stay calm.") if ev.get("flag") else None
+
+        await session.start(Agent(instructions="You are a helpful assistant."))
+        session.generate_reply(user_input="you idiot")
+        rt_session = model.active_session
+        await _wait_until(lambda: rt_session.generate_reply_calls > 0)
+        assert "Stay calm." in str(rt_session.reply_instructions[-1])
+
+
+@pytest.mark.parametrize("on_error, replies", [("allow", 1), ("block", 0)])
+async def test_manual_realtime_commit_without_a_transcript_follows_on_error(
+    on_error: Any, replies: int
+) -> None:
+    from livekit.agents import AgentSession
+
+    from .fake_realtime import FakeRealtimeModel
+
+    model = FakeRealtimeModel()
+    async with AgentSession(llm=model, turn_handling={"turn_detection": "manual"}) as session:
+        guardrail = DecisionGuardrail(session, model=KeywordModel("idiot"))
+
+        @guardrail.on_user_turn(decisions=FLAG, on_error=on_error)
+        def before_reply(ev: DecisionEvaluated) -> None:
+            return None
+
+        await session.start(Agent(instructions="You are a helpful assistant."))
+        rt_session = model.active_session
+        # no STT: the realtime model transcribes the turn itself, after replying
+        transcript = await asyncio.wait_for(session.commit_user_turn(), timeout=5.0)
+        assert transcript == ""
+        assert rt_session.committed
+        if replies:
+            await _wait_until(lambda: rt_session.generate_reply_calls == replies)
+        else:
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert rt_session.generate_reply_calls == 0

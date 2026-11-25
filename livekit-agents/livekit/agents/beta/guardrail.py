@@ -601,25 +601,37 @@ class DecisionGuardrail:
             checks.add(task)
             queue.send_nowait((text, task))
 
+        def _submit_all(pending: str) -> None:
+            # the text is complete: every boundary in it is final
+            sentences = tokenizer.tokenize(pending)
+            for sentence in sentences if "".join(sentences) == pending else [pending]:
+                _submit(sentence)
+
         async def _split() -> None:
             pending = ""
             try:
                 async for chunk in text:
                     if isinstance(chunk, FlushSentinel):
                         if pending:
-                            _submit(pending)
+                            _submit_all(pending)
                         pending = ""
                         queue.send_nowait(chunk)
                         continue
                     pending += chunk
                     sentences = tokenizer.tokenize(pending)
-                    # every sentence but the last is complete; the last may still grow
-                    if len(sentences) > 1 and "".join(sentences) == pending:
+                    # every sentence but the last is complete; the last may still grow. A
+                    # boundary is only final once the next sentence has a second word: "Okay. U"
+                    # splits, but "Okay. U.S. refunds" is one sentence
+                    if (
+                        len(sentences) > 1
+                        and "".join(sentences) == pending
+                        and len(sentences[-1].split()) > 1
+                    ):
                         for sentence in sentences[:-1]:
                             _submit(sentence)
                         pending = sentences[-1]
                 if pending:
-                    _submit(pending)
+                    _submit_all(pending)
             finally:
                 queue.close()
 

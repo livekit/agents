@@ -681,3 +681,25 @@ async def test_user_turn_without_a_transcript_follows_on_error(
     assert await _run_user_turn(session, "") == expected
     assert model.inputs == []
     await guardrail.aclose()
+
+
+async def test_sentence_gate_splits_streamed_abbreviations_like_the_whole_text() -> None:
+    reply = "Okay. U.S. refunds are not permitted. Sorry."
+    seen: list[list[str]] = []
+    for chunks in ([reply], ["Okay. U", ".S", ". refunds are not permitted. Sorry."]):
+        session = StubSession()
+        model = ScriptedModel(lambda _: 0.0)
+        guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+
+        @guardrail.on_agent_sentence(decisions=OFF_POLICY)
+        def during_reply(ev: DecisionEvaluated) -> None:
+            return None
+
+        async for _ in guardrail._gate_agent_sentences(
+            _stream(*chunks), chat_ctx=ChatContext(), speech_id="s", on_block=_no_block
+        ):
+            pass
+        seen.append(sorted(model.inputs))
+        await guardrail.aclose()
+    # "Okay. U" must not release "Okay." alone before "U.S." is known not to end it
+    assert seen[0] == seen[1]
