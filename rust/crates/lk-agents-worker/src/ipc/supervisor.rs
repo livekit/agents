@@ -751,7 +751,7 @@ impl Driver {
                 Exit { code, .. } if code < 0 => CrashSignature::Signaled,
                 Exit { .. } => CrashSignature::Exited,
             };
-            lk_agents_telemetry::productstats::count(&ProcessCrashes { signature });
+            lk_agents_telemetry::productstats::measure(&ProcessCrashes { signature }, 1u64);
             runner_log!(self.host.runner(), log::Level::Error; "{} exited with non-zero exit code {}", runner_name(&self.opts), exit.code);
         }
     }

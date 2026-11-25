@@ -13,9 +13,9 @@
 // `#[span]` functions name the span API by its crate path, here as in every caller.
 extern crate self as lk_agents_telemetry;
 
+mod observability;
 pub mod process;
 pub mod productstats;
-mod scoped;
 pub mod span;
 
-pub use scoped::*;
+pub use observability::*;

@@ -467,7 +467,7 @@ fn record_product_stats(metrics: &AgentMetrics) {
     use lk_agents_abi::productstats::{
         Operation, ProviderDuration, ProviderRequests, ProviderTtft,
     };
-    use lk_agents_telemetry::productstats::record;
+    use lk_agents_telemetry::productstats::measure;
     let labels = |operation| {
         let md = metrics.metadata();
         let id = lk_agents_abi::ProviderId {
@@ -480,24 +480,24 @@ fn record_product_stats(metrics: &AgentMetrics) {
     match metrics {
         AgentMetrics::Stt(m) => {
             if let Some(duration) = m.duration.filter(|d| *d > 0.0) {
-                record(&ProviderDuration { provider: labels(Operation::Stt) }, duration);
+                measure(&ProviderDuration { provider: labels(Operation::Stt) }, duration);
             }
         }
         AgentMetrics::RealtimeModel(m) if !m.cancelled => {
             let provider = labels(Operation::Realtime);
             if let Some(ttft) = m.ttft.filter(|t| *t >= 0.0) {
-                record(&ProviderTtft { provider: provider.clone() }, ttft);
+                measure(&ProviderTtft { provider: provider.clone() }, ttft);
             }
-            record(&ProviderDuration { provider }, m.duration);
+            measure(&ProviderDuration { provider }, m.duration);
         }
         AgentMetrics::EotInference(m) => {
             let provider = labels(Operation::Eot);
-            record(&ProviderRequests { provider: provider.clone() }, u64::from(m.num_requests));
-            record(&ProviderDuration { provider }, m.prediction_duration);
+            measure(&ProviderRequests { provider: provider.clone() }, u64::from(m.num_requests));
+            measure(&ProviderDuration { provider }, m.prediction_duration);
         }
         AgentMetrics::Vad(m) if m.inference_count > 0 => {
             let provider = labels(Operation::Vad);
-            record(&ProviderRequests { provider }, u64::from(m.inference_count));
+            measure(&ProviderRequests { provider }, u64::from(m.inference_count));
         }
         _ => {}
     }

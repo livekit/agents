@@ -56,7 +56,7 @@ impl Report<'_> {
     ) {
         if !self.stt.retries_itself() {
             let provider = telemetry::stat_labels(Operation::Stt, &self.stt.id());
-            lk_agents_telemetry::productstats::count(&labels(provider));
+            lk_agents_telemetry::productstats::measure(&labels(provider), 1u64);
         }
     }
 }

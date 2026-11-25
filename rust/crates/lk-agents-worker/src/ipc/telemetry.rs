@@ -102,7 +102,7 @@ pub(crate) fn start_job(
     let job = &start.info.job;
     let room = job.room.clone().unwrap_or_default();
     let key = JobKey(job.id.clone());
-    lk_agents_telemetry::productstats::count(&lk_agents_abi::productstats::JobStarts);
+    lk_agents_telemetry::productstats::measure(&lk_agents_abi::productstats::JobStarts, 1u64);
     if let Some(exporter) = exporter() {
         if let Some(cloud) = cloud {
             exporter.configure_cloud(cloud.clone());

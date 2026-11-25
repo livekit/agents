@@ -496,7 +496,7 @@ impl Pump {
     }
 
     async fn run_loop(&self, mut commands: media_queue::AudioReceiver<Cmd>) {
-        productstats::count(&ProviderRequests { provider: self.stats.clone() });
+        productstats::measure(&ProviderRequests { provider: self.stats.clone() }, 1u64);
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
         let mut reconnect = false;
@@ -518,12 +518,18 @@ impl Pump {
                     }
                     RealtimeConnectionEffect::Retry { error, backoff } => {
                         let _ = backoff.announce(&self.label, &error);
-                        productstats::count(&ProviderRetries { provider: self.stats.clone() });
+                        productstats::measure(
+                            &ProviderRetries { provider: self.stats.clone() },
+                            1u64,
+                        );
                         self.emit_error(error, true);
                         ControlFlow::Continue(())
                     }
                     RealtimeConnectionEffect::Reconnect { error } => {
-                        productstats::count(&ProviderReconnects { provider: self.stats.clone() });
+                        productstats::measure(
+                            &ProviderReconnects { provider: self.stats.clone() },
+                            1u64,
+                        );
                         let subject = &self.label;
                         lk_agents_core::request::retrying(
                             log::Level::Warn,
@@ -538,7 +544,7 @@ impl Pump {
                     RealtimeConnectionEffect::Failed { error } => {
                         let error_type = FailureType::of_api(&error);
                         let provider = self.stats.clone();
-                        productstats::count(&ProviderFailures { provider, error_type });
+                        productstats::measure(&ProviderFailures { provider, error_type }, 1u64);
                         self.emit_error(error, false);
                         self.close().await;
                         ControlFlow::Break(())

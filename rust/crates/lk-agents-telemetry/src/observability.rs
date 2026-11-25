@@ -363,5 +363,5 @@ impl<D: SpanDecl> Drop for ScopedSpan<D> {
 }
 
 #[cfg(test)]
-#[path = "scoped_tests.rs"]
+#[path = "observability_tests.rs"]
 mod tests;
