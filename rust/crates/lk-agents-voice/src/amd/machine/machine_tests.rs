@@ -78,8 +78,13 @@ impl Run {
         let (turn, effects) = self.commit(text);
         let req = request(&effects).expect("a request").req;
         self.advance(100);
-        (turn, self.step(In::Classified { req, result: Ok(category) }))
+        (turn, self.step(In::Classified { req, result: ok(category, 100) }))
     }
+}
+
+/// A classifier answer that took `ms` of model time.
+fn ok(category: Category, ms: u64) -> Result<Classification, ClassifyError> {
+    Ok(Classification { category, inference_duration: Duration::from_millis(ms) })
 }
 
 fn request(effects: &[AmdEffect]) -> Option<ClassifyRequest> {
@@ -210,7 +215,7 @@ fn a_direct_human_completes_without_stage_instructions_and_reports_after_teardow
         (1, Stage::Uncertain, None)
     );
     run.advance(400);
-    let effects = run.step(In::Classified { req: req.req, result: Ok(Category::Human) });
+    let effects = run.step(In::Classified { req: req.req, result: ok(Category::Human, 400) });
     let p = &predictions(&effects)[0];
     assert_eq!(
         (p.category, p.stage, p.reason),
@@ -247,7 +252,7 @@ fn screening_replies_with_instructions_after_silence_and_a_first_human_is_likely
     let req = request(&effects).unwrap();
     assert!(req.likely_human);
     assert!(req.state_json().contains("\"category\": \"uncertain (likely human)\""));
-    let effects = run.step(In::Classified { req: req.req, result: Ok(Category::Human) });
+    let effects = run.step(In::Classified { req: req.req, result: ok(Category::Human, 0) });
     let human = ReplyDecision {
         allow: true,
         instructions: Some(DEFAULT_HUMAN_INSTRUCTIONS.into()),
@@ -377,7 +382,7 @@ fn empty_turns_reuse_the_pending_result_without_a_request() {
     let req = request(&effects).unwrap();
     let (t2, effects) = run.commit("");
     assert!(request(&effects).is_none() && predictions(&effects).is_empty());
-    let effects = run.step(In::Classified { req: req.req, result: Ok(Category::MachineVm) });
+    let effects = run.step(In::Classified { req: req.req, result: ok(Category::MachineVm, 0) });
     let p = predictions(&effects);
     assert_eq!(
         p.iter().map(|p| (p.turn_id, p.reason)).collect::<Vec<_>>(),
@@ -400,8 +405,8 @@ fn a_newer_turn_with_text_cancels_the_request_and_its_result_is_stale() {
     let (_, effects) = run.commit("two");
     assert!(effects.contains(&AmdEffect::CancelClassify));
     let second = request(&effects).unwrap();
-    assert!(run.step(In::Classified { req: first.req, result: Ok(Category::Human) }).is_empty());
-    let effects = run.step(In::Classified { req: second.req, result: Ok(Category::Uncertain) });
+    assert!(run.step(In::Classified { req: first.req, result: ok(Category::Human, 0) }).is_empty());
+    let effects = run.step(In::Classified { req: second.req, result: ok(Category::Uncertain, 0) });
     // Turn 1 gets no prediction: ids skip.
     assert_eq!(predictions(&effects).iter().map(|p| p.turn_id).collect::<Vec<_>>(), [2]);
     // Its words stay in the history.
@@ -418,7 +423,7 @@ fn inference_timeouts_forget_wait_and_complete_once_nothing_is_held() {
     let req = request(&effects).unwrap();
     run.advance(2000);
     // A result at its deadline counts as a timeout.
-    let effects = run.step(In::Classified { req: req.req, result: Ok(Category::Wait) });
+    let effects = run.step(In::Classified { req: req.req, result: ok(Category::Wait, 0) });
     let p = &predictions(&effects)[0];
     assert_eq!((p.category, p.reason), (Category::Uncertain, AmdReason::InferenceTimeout));
     // `wait` is forgotten, so the voicemail reply is allowed and held for silence.
@@ -555,7 +560,7 @@ fn a_turn_under_another_agent_completes_with_agent_changed() {
         at: run.now,
     });
     let req = request(&effects).unwrap();
-    let effects = run.step(In::Classified { req: req.req, result: Ok(Category::Uncertain) });
+    let effects = run.step(In::Classified { req: req.req, result: ok(Category::Uncertain, 0) });
     assert_eq!(reason(&run), Some(AmdReason::AgentChanged));
     assert_eq!(detach(&effects), Some((ReplyDecision::deny(), DetachCancel::Keep)));
     assert_eq!(predictions(&effects).len(), 1);
@@ -651,6 +656,7 @@ fn history_keeps_successful_dtmf_once_and_at_most_twenty_items() {
 fn request_state_is_rendered_as_python_does() {
     let request = ClassifyRequest {
         req: ReqId(1),
+        turn: TurnId(2),
         turn_id: 2,
         stage: Stage::MachineVm,
         previous_prediction: Some(PreviousPrediction {

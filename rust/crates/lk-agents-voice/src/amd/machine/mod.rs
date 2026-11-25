@@ -22,6 +22,8 @@ pub mod stage;
 mod history;
 mod reply;
 
+pub use self::history::HISTORY_LIMIT;
+
 use self::history::{ClassifierHistory, Source, Transcripts};
 use self::stage::StageEffect;
 use super::effects::{AmdEffect, AmdTimer, ClassifyRequest, PreviousPrediction, ReqId};
@@ -72,7 +74,7 @@ pub enum In {
     /// An observation from the session's reply gate.
     Observed(AmdObservation),
     /// The classifier answered `req`. Its death is `LegFailed`.
-    Classified { req: ReqId, result: Result<Category, ClassifyError> },
+    Classified { req: ReqId, result: Result<Classification, ClassifyError> },
     /// The menu leg answered `req`; `None` when extraction failed. A failure is silent.
     MenuExtracted { req: ReqId, menu: Option<Menu> },
     /// A final from AMD's own STT.
@@ -89,6 +91,15 @@ pub enum In {
     LegsClosed,
     /// `aclose()`: complete with `cancelled` if still running.
     Close,
+}
+
+/// A classifier answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Classification {
+    pub category: Category,
+    /// Model time, as the leg measured it around the model call: Python times `classify`
+    /// alone, after the late-final wait.
+    pub inference_duration: Duration,
 }
 
 /// A classification that gives no category: an `inference_error` prediction (spec §8.4).
@@ -172,9 +183,7 @@ struct Request {
 enum RequestState {
     /// Built at commit; sent once the turn's AMD final arrives or its wait passes.
     AwaitingFinal(ClassifyRequest),
-    Issued {
-        at: Ts,
-    },
+    Issued,
 }
 
 /// The newest committed turn's claim on the next AMD final.
@@ -505,7 +514,7 @@ impl Amd {
             self.push(AmdEffect::SetDeadline(AmdTimer::LateFinal(turn), until));
         }
         if has_text {
-            self.start_classification(now, at, turn, late);
+            self.start_classification(at, turn, late);
             self.insert_user_item(turn);
         } else if !late && self.request.is_none() {
             self.record_prediction(now, turn, AmdReason::Reused, None, &[]);
@@ -567,7 +576,7 @@ impl Amd {
             && request.turn == turn
             && matches!(request.state, RequestState::AwaitingFinal(_))
         {
-            return self.issue_request(now, text);
+            return self.issue_request(text);
         }
         if self.turns.get(&turn).is_some_and(|t| t.awaiting_final) {
             self.resolve_heard(now, turn, text);
@@ -575,9 +584,9 @@ impl Amd {
     }
 
     /// `_classify` after the wait: the final replaces the turn's message, then the model runs.
-    fn issue_request(&mut self, now: Ts, text: Option<&str>) {
+    fn issue_request(&mut self, text: Option<&str>) {
         let Some(request) = self.request.as_mut() else { return };
-        let state = std::mem::replace(&mut request.state, RequestState::Issued { at: now });
+        let state = std::mem::replace(&mut request.state, RequestState::Issued);
         let RequestState::AwaitingFinal(mut classify) = state else {
             request.state = state;
             return;
@@ -610,7 +619,7 @@ impl Amd {
         };
         t.transcript.amd = Some(text.to_owned());
         if latest && t.prediction.is_none() {
-            self.start_classification(now, now, turn, false);
+            self.start_classification(now, turn, false);
         } else {
             // A newer turn owns the request and the reply, or a reused prediction is kept: the
             // next request covers this text.
@@ -624,7 +633,7 @@ impl Amd {
 
     /// `_start_classification`: the turn's message joins the history and its request starts at
     /// `at` (its deadline counts from there), held back until its AMD final if `late`.
-    fn start_classification(&mut self, now: Ts, at: Ts, turn: TurnId, late: bool) {
+    fn start_classification(&mut self, at: Ts, turn: TurnId, late: bool) {
         let Some(t) = self.turns.get(&turn) else { return };
         let (turn_id, transcript, speech_duration) =
             (t.id, t.transcript.clone(), t.speech_duration);
@@ -635,6 +644,7 @@ impl Amd {
         let req = self.next_req();
         let classify = ClassifyRequest {
             req,
+            turn,
             turn_id,
             stage: self.stage,
             previous_prediction: (self.last_prediction.as_ref()).map(|p| PreviousPrediction {
@@ -653,7 +663,7 @@ impl Amd {
             RequestState::AwaitingFinal(classify)
         } else {
             self.push(AmdEffect::Classify(classify));
-            RequestState::Issued { at: now }
+            RequestState::Issued
         };
         self.request = Some(Request { id: req, turn, deadline, state });
     }
@@ -673,17 +683,22 @@ impl Amd {
     /// `_cancel_classification`: the pending request is stale.
     fn cancel_classification(&mut self) -> Option<Request> {
         let request = self.take_request()?;
-        if matches!(request.state, RequestState::Issued { .. }) {
+        if matches!(request.state, RequestState::Issued) {
             self.push(AmdEffect::CancelClassify);
         }
         Some(request)
     }
 
-    fn on_classified(&mut self, now: Ts, req: ReqId, result: Result<Category, ClassifyError>) {
+    fn on_classified(
+        &mut self,
+        now: Ts,
+        req: ReqId,
+        result: Result<Classification, ClassifyError>,
+    ) {
         let Some(request) = self.request.as_ref().filter(|r| r.id == req && self.active()) else {
             return;
         };
-        let RequestState::Issued { at: issued } = request.state else { return };
+        let RequestState::Issued = request.state else { return };
         // A result after its deadline counts as a timeout.
         let late = now >= request.deadline;
         let Some(request) = self.take_request() else { return };
@@ -695,9 +710,8 @@ impl Amd {
                 self.forget_category();
                 self.record_prediction(now, request.turn, AmdReason::InferenceError, None, &[]);
             }
-            Ok(category) => {
-                let inference = now.saturating_duration_since(issued);
-                self.accept_prediction(now, request.turn, category, inference);
+            Ok(Classification { category, inference_duration }) => {
+                self.accept_prediction(now, request.turn, category, inference_duration);
             }
         }
     }
@@ -962,3 +976,27 @@ impl Amd {
 #[cfg(test)]
 #[path = "machine_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "harness.rs"]
+mod harness;
+
+#[cfg(test)]
+#[path = "turns_tests.rs"]
+mod turns_tests;
+
+#[cfg(test)]
+#[path = "replies_tests.rs"]
+mod replies_tests;
+
+#[cfg(test)]
+#[path = "voicemail_tests.rs"]
+mod voicemail_tests;
+
+#[cfg(test)]
+#[path = "limits_tests.rs"]
+mod limits_tests;
+
+#[cfg(test)]
+#[path = "invariants_tests.rs"]
+mod invariants_tests;

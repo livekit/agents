@@ -5,7 +5,7 @@ use crate::amd::effects::{ClassifierItem, TurnTranscript};
 use lk_agents_abi::{FunctionCall, FunctionCallOutput, Ts};
 
 /// At most this many items go into a request (spec §8.1).
-pub(super) const HISTORY_LIMIT: usize = 20;
+pub const HISTORY_LIMIT: usize = 20;
 
 /// User turns, agent replies and DTMF calls, in speaking order. Each item keeps the time it is
 /// ordered by: an agent reply is inserted at its start, since the session reports it when its

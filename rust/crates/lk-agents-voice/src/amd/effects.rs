@@ -113,7 +113,9 @@ pub struct PreviousPrediction {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassifyRequest {
     pub req: ReqId,
-    /// The turn it classifies.
+    /// The session's turn it classifies.
+    pub turn: TurnId,
+    /// AMD's id for that turn.
     pub turn_id: u64,
     pub stage: Stage,
     pub previous_prediction: Option<PreviousPrediction>,

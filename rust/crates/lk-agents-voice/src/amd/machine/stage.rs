@@ -28,8 +28,10 @@ pub fn recommended(stage: Stage) -> Vec<Category> {
 /// `LIKELY_HUMAN_STAGES`. After a menu or a screener, the next speaker can be a person or a
 /// voicemail greeting, and a short greeting fits both. In these stages a first human prediction
 /// is likely human: it counts as uncertain, and the next turn decides.
+pub const LIKELY_HUMAN_STAGES: [Stage; 2] = [Stage::MachineScreening, Stage::MachineIvr];
+
 pub fn is_likely_human_stage(stage: Stage) -> bool {
-    matches!(stage, Stage::MachineScreening | Stage::MachineIvr)
+    LIKELY_HUMAN_STAGES.contains(&stage)
 }
 
 /// What entering a stage asks of AMD.
@@ -62,3 +64,7 @@ pub fn next(stage: Stage, prediction: Category) -> Option<Transition> {
     };
     Some(Transition { next_stage, effects })
 }
+
+#[cfg(test)]
+#[path = "stage_tests.rs"]
+mod tests;
