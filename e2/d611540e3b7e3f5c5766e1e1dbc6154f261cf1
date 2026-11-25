@@ -1,0 +1,21 @@
+rust/crates/lk-agents-inference/src/llm/gateway/request.rs
+  s_342953b2c18827::t_f0142b55cbffa8 73
+rust/crates/lk-agents-inference/src/llm/request.rs
+  s_342953b2c18827::t_d3e72c6bb7ddac 93-96,99,101-107,111-112,208-238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e2d611540e3b7e3f5c5766e1e1dbc6154f261cf1",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
