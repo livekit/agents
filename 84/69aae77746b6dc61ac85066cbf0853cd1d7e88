@@ -1,0 +1,20 @@
+rust/crates/lk-agents-fuzz/src/input.rs
+  s_bbb46b29e16294::t_443cd93b391b82 11
+  s_bbb46b29e16294::t_455fdc952f67d1 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8469aae77746b6dc61ac85066cbf0853cd1d7e88",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
