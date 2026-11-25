@@ -63,7 +63,7 @@ class DecisionModel(llm.DecisionModel):
     def __init__(
         self,
         *,
-        model: DecisionModels | str = "gpt-6-luna-decisions",
+        model: DecisionModels | str = "gpt-6-luna",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -102,6 +102,7 @@ class DecisionModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         names = list(decisions)
         try:
@@ -112,6 +113,7 @@ class DecisionModel(llm.DecisionModel):
                 safety_identifier=self._safety_identifier
                 if is_given(self._safety_identifier)
                 else openai.omit,
+                extra_headers=extra_headers,
                 timeout=conn_options.timeout,
             )
         except openai.APITimeoutError:

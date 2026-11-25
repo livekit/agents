@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Agent Framework Plugin for Silero"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10.0"
+requires-python = ">=3.10.0,<3.15"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = ["voice", "ai", "realtime", "audio", "video", "livekit", "webrtc"]
 classifiers = [
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.8.11",
+    "livekit-agents>=1.9.0",
     "onnxruntime>=1.18",
     "numpy>=1.26",
 ]

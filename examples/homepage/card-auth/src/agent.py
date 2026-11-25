@@ -38,7 +38,7 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 AGENT_NAME = "card-verification"
-STT_MODEL = "assemblyai/universal-3-6-pro"
+STT_MODEL = "assemblyai/assemblyai-stt-3-7-realtime-agent"
 LLM_MODEL = "google/gemma-4-31b-it"
 TTS_MODEL = "rime/coda"
 VOICE = "lintel"
