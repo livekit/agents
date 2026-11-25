@@ -15,11 +15,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from urllib.parse import urlsplit
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.llm import _systemone as systemone
 from livekit.agents.llm.decisions import Decision, DecisionCapabilities, DecisionResponse
@@ -97,8 +98,9 @@ class DecisionModel(llm.DecisionModel):
     async def evaluate(
         self,
         *,
-        input: str | llm.ChatContext,
+        input: NotGivenOr[str | llm.ChatContext] = NOT_GIVEN,
         decisions: Mapping[str, Decision],
+        audio: rtc.AudioFrame | Sequence[rtc.AudioFrame] | None = None,
         conn_options: APIConnectOptions = DEFAULT_CONN_OPTIONS,
         extra_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
     ) -> DecisionResponse:
@@ -108,6 +110,7 @@ class DecisionModel(llm.DecisionModel):
             input: Text to evaluate, sent as-is, or a conversation converted to a
                 transcript of user and assistant text.
             decisions: Decisions keyed by name.
+            audio: Not supported; VLM Run decisions take text input only.
             conn_options: Retry and per-attempt timeout settings. The timeout defaults to
                 70 s, above the gateway's own deadline.
             extra_headers: Headers sent with every attempt.
@@ -118,6 +121,7 @@ class DecisionModel(llm.DecisionModel):
         return await super().evaluate(
             input=input,
             decisions=decisions,
+            audio=audio,
             conn_options=conn_options_or_default(conn_options),
             extra_headers=extra_headers,
         )
