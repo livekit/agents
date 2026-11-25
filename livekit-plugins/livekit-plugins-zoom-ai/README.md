@@ -5,6 +5,8 @@ Support for [Zoom Scribe](https://developers.zoom.us/docs/ai-services/scribe/) s
 - **Live** ([docs](https://developers.zoom.us/docs/ai-services/scribe/live-mode/)): streaming over WebSocket. Scribe's own VAD ends each speech turn and returns its final transcript.
 - **Fast** ([docs](https://developers.zoom.us/docs/ai-services/scribe/fast-mode/)): one HTTP request per utterance. Not streaming, so `AgentSession` pairs it with a VAD.
 
+And [Zoom TTS](https://developers.zoom.us/docs/ai-services/tts/) text-to-speech: one HTTP request per sentence, with the audio streamed back as it is synthesized.
+
 See [zoom.ai](https://www.zoom.ai/) for all Zoom AI Services APIs and features.
 
 ## Installation
@@ -21,7 +23,7 @@ uv add "livekit-agents[zoom-ai]"
 
 ## Pre-requisites
 
-The plugin needs a Zoom AI Services API key with the Scribe permissions. Get your credentials at [zoom.ai](https://www.zoom.ai/).
+The plugin needs a Zoom AI Services API key with the Scribe or Text-to-Speech permissions. Get your credentials at [zoom.ai](https://www.zoom.ai/).
 
 Set it in your `.env` file:
 
@@ -90,7 +92,25 @@ event = await zoom_ai.STT(mode="fast", http_session=session).recognize(frames)  
 
 For transcription, a longer `silence_duration_ms` (such as 600) keeps sentences with pauses together and can improve accuracy; the 350 ms default is tuned for voice agents.
 
+### Text-to-speech
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import zoom_ai
+
+session = AgentSession(
+    stt=zoom_ai.STT(),
+    tts=zoom_ai.TTS(voice="ava"),
+    turn_handling={"turn_detection": "stt"},
+    # ... llm, etc.
+)
+```
+
+`TTS` isn't streaming, so `AgentSession` sends it one sentence at a time. Zoom TTS returns 44.1 kHz audio. An interruption closes the request, which stops synthesis on the server.
+
 ## Options
+
+### STT
 
 Options map to the Scribe API fields of the same name; see the [Scribe docs](https://developers.zoom.us/docs/ai-services/scribe/) for what each one does and its availability. For a Scribe feature without an option here, pass its fields in `extra_kwargs`.
 
@@ -110,3 +130,15 @@ Options map to the Scribe API fields of the same name; see the [Scribe docs](htt
 | `text_polishing` | `False` | Polished text as the transcript, with the original in `metadata["transcript"]`; if polishing fails, the original text. `en-US` only |
 | `extra_kwargs` | `None` | Other Scribe request fields, e.g. `{"config": {"language_detection": {"candidate_languages": ["en-US", "fr-FR"]}}}` to restrict language detection |
 | `base_url` | `https://api.zoom.us/v2/aiservices/scribe` | Scribe API base URL |
+
+### TTS
+
+Options map to the [Text-to-Speech API](https://developers.zoom.us/docs/ai-services/tts/fast-mode/) fields of the same name. `update_options()` changes `voice`, `speed` and `volume` from the next sentence.
+
+| Option | Default | Description |
+|---|---|---|
+| `voice` | `"jenna"` | Voice ID; see the [voice list](https://developers.zoom.us/docs/ai-services/tts/#language-and-voices). Any ID is passed through, so new voices work without an update |
+| `speed` | `None` | Speaking rate multiplier, 0.5 to 2.0; `None` uses the voice's normal rate |
+| `volume` | `None` | Volume multiplier, above 0 and up to 10; `None` uses the voice's normal volume |
+| `api_key` | `$ZOOM_AI_API_KEY` | Zoom AI Services API key |
+| `base_url` | `https://api.zoom.us/v2/aiservices/tts` | Text-to-Speech API base URL; requests go to `<base>/synthesize` |
