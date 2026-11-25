@@ -92,6 +92,7 @@ if TYPE_CHECKING:
     from ..storage.context import ContextStore, _SessionBinding
     from ..storage.session_state import BoundContext
     from ._session_bindings import SessionHost
+    from .amd import AMD
     from .io import TurnHandlingOptions
 
 # The session and the state of the event its callbacks are handling.
@@ -131,6 +132,9 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _steps: dict[str, Callable[..., Any]]
     _audio_input_options: AudioInputOptions | None
     _tasks: aio.TaskSet
+    # the running AMD, and its DTMF tool: kept after detach, so a reply AMD allowed still runs it
+    _amd: AMD | None = None
+    _amd_tools: list[Tool] = []  # noqa: RUF012 - replaced, never mutated
 
     def __init__(
         self,
@@ -221,6 +225,11 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     @property
     def conn_options(self) -> SessionConnectOptions:
         return self._conn_options
+
+    @property
+    def amd(self) -> AMD | None:
+        """The running ``AMD``, or ``None``."""
+        return self._amd
 
     @property
     def input(self) -> io.AgentInput:
