@@ -1,0 +1,19 @@
+rust/ai_slop/lk-agents-codegen/src/records/models.rs
+  s_342953b2c18827::t_454f490fc2d043 466,471,623-629,988-995
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dc1ea5e03f0991d4fb599d5f3122923469c43130",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
