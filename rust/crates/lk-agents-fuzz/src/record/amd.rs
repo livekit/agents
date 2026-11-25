@@ -272,6 +272,8 @@ impl<'a> AmdView<'a> {
                 continue;
             }
             let Some(attachment) = self.attached_at(*at) else { continue };
+            // The gate's own commit, which the host hears after: AMD may answer in between.
+            let at = &self.gate_committed(attachment.run, done.turn.0, *at);
             let item_id = host.iter().find_map(|(_, e)| match e {
                 SessionEvent::ConversationItemAdded {
                     item,
@@ -295,6 +297,24 @@ impl<'a> AmdView<'a> {
             });
         }
         out
+    }
+
+    /// When the gate committed `turn` of `run`, which the host heard at `heard`: the session
+    /// reports AMD the commit in its own transition, so AMD may answer before the host hears it.
+    fn gate_committed(&self, run: u64, turn: u64, heard: Observed) -> Observed {
+        use lk_agents_voice::trace::GateStep;
+        (self.0.journal().iter())
+            .filter(|(at, _)| *at <= heard)
+            .rev()
+            .find_map(|(at, step)| match step {
+                Step::Gate(GateStep::Committed { run: r, turn: t })
+                    if r.0 == run && t.0 == turn =>
+                {
+                    Some(*at)
+                }
+                _ => None,
+            })
+            .unwrap_or(heard)
     }
 
     /// Whether the end of turn the host heard at `at` asked for a reply: the verdict journalled

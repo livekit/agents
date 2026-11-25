@@ -21,7 +21,7 @@ impl Rule for ReplyFollowsDecision {
         id: "reply_follows_decision",
         guarantee: "A turn committed under the AMD gate is answered, and heard, only after an \
                     allowing decision for it, at most once; a denied turn is never answered.",
-        examples: &[allowed_then_answered, denied_and_silent],
+        examples: &[allowed_then_answered, denied_and_silent, decided_before_the_host_heard],
         counterexamples: &[answered_before_its_decision, denied_but_heard, answered_twice],
         probe: Some(an_allowed_turn),
     };
@@ -87,6 +87,58 @@ fn allowed_then_answered() -> Recording {
     attached()
         .sent(decide(AmdVerdict::Allow))
         .request(10, 1, "hello who is this", &[], &[])
+        .pushed(10)
+        .done()
+}
+
+/// AMD answers in the gap between the gate's commit and the host hearing it: the session
+/// reports the commit to AMD in its own transition, so the decision still follows the commit.
+fn decided_before_the_host_heard() -> Recording {
+    use lk_agents_voice::amd::{AmdObservation, AmdRunId};
+    use lk_agents_voice::audio_recognition::TurnId;
+    use lk_agents_voice::events::{SessionEvent, UserTurnCompletedEvent};
+    use lk_agents_voice::trace::{GateStep, Step};
+    let words = "hello who is this";
+    Authored::new()
+        .sent(Input::AmdAttach {})
+        .journal(Step::Gate(GateStep::Committed { run: AmdRunId(1), turn: TurnId(1) }))
+        .opens(Kind::AmdTurn, crate::record::Detail::AmdTurn { run: 1, turn: 1 })
+        .amd(
+            1,
+            AmdObservation::TurnCommitted {
+                turn: TurnId(1),
+                transcript: words.into(),
+                eot_delay: None,
+                skip_reply: false,
+                bound: true,
+                speaking: false,
+                agent: "agent".into(),
+                at: lk_agents_abi::Ts::ZERO,
+            },
+        )
+        .sent(decide(AmdVerdict::Allow))
+        .journal(Step::Turn(lk_agents_voice::trace::TurnStep::EndOfTurn {
+            transcript: words.into(),
+            verdict: lk_agents_voice::audio_recognition::UserTurnCommitVerdict::Reply,
+            committed: true,
+        }))
+        .session(SessionEvent::UserTurnCompleted(UserTurnCompletedEvent {
+            turn: TurnId(1),
+            new_transcript: words.into(),
+            transcript_confidence: 1.0,
+        }))
+        .session(SessionEvent::ConversationItemAdded {
+            item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
+                "user_1",
+                lk_agents_abi::Role::User,
+                words,
+                std::time::UNIX_EPOCH,
+            ))),
+            agent: "agent".into(),
+            source: lk_agents_voice::agent::Source::UserTurn { turn: TurnId(1) },
+            visibility: lk_agents_voice::agent::Visibility::Both,
+        })
+        .request(10, 1, words, &[], &[])
         .pushed(10)
         .done()
 }
