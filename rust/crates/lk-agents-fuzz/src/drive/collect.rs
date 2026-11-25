@@ -382,6 +382,11 @@ impl Run {
             }
             self.record.record_amd(at, run, observation);
         }
+        let calls = std::mem::take(&mut *self.amd_models.lock().unwrap());
+        for call in calls {
+            let at = self.stamps.next();
+            self.record.record_amd_model(at, call);
+        }
     }
 
     /// Open a driver-owned resource unless that identity is already known. The journal can name one

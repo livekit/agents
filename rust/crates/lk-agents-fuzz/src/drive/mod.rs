@@ -734,6 +734,12 @@ pub struct Run {
     amd: Arc<Mutex<AmdSeen>>,
     /// How many AMD runs attached: the latest is the one answering.
     amd_runs: u64,
+    /// The latest real AMD run (`Input::AmdEnter`), started by the production entry point.
+    amd_real: Option<lk_agents_runtime::voice::amd::AmdRun>,
+    /// What a real run's own STT hears: the session's finals, after a lag.
+    amd_ear: Arc<fakes::amd_models::AmdEar>,
+    /// Every call a real run's fake models answered.
+    pub(crate) amd_models: fakes::amd_models::AmdModelLog,
     /// What the host received, with the live handle of a speech it was told of, taken as the
     /// event was delivered (the session lets it go once nothing names it).
     host: HostJournal,

@@ -460,6 +460,15 @@ plain_enum! {
     AmdOpening { Text, Instructions }
 }
 plain_enum! {
+    /// Who answers a call a real AMD run classifies: the categories its fake classifier answers
+    /// turn by turn (`fakes::amd::models`).
+    AmdPersona { Human, Screener, Voicemail, Hold, Unavailable }
+}
+plain_enum! {
+    /// What classifies a real AMD run's turns: an LLM with `record_result`, or a decision model.
+    AmdModel { Llm, Decision }
+}
+plain_enum! {
     /// Which models a swap replaces.
     Models { Stt, Llm, Tts, LlmAndTts, All }
 }
@@ -483,7 +492,7 @@ macro_rules! unreferenced {
 unreferenced!(
     bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
     Knob, TurnMode, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker, RtEvent,
-    DtmfInput, DtmfKey, AgentTurn, SpeechWait, AmdVerdict, AmdOpening
+    DtmfInput, DtmfKey, AgentTurn, SpeechWait, AmdVerdict, AmdOpening, AmdPersona, AmdModel
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -685,6 +694,21 @@ inputs! {
     /// will: a `Wait` category or `forbid` denies, anything else allows with no instructions,
     /// DTMF or silence. `forbid` cancels every speech with no playout yet.
     AmdDetach { category: AmdVerdict, forbid: bool } never true;
+    /// A real AMD run starts (`VoiceSession::start_amd`): the production executor and machine
+    /// over fake models whose categories follow `persona`. `own_stt` gives it AMD's own STT,
+    /// which hears the session's finals after a lag; `stt_fails` makes that STT refuse to open.
+    /// `seed` seeds the fake models' lags and failures. The run attaches through the same command
+    /// as `AmdAttach`.
+    AmdEnter {
+        persona: AmdPersona,
+        model: AmdModel,
+        opening: Option<AmdOpening>,
+        own_stt: bool,
+        stt_fails: bool,
+        seed: Count,
+    } never true;
+    /// `aclose()` on the latest real AMD run.
+    AmdClose { } never true;
 
     FeedText { stream: Ref<Stream>, text: AgentText };
     FeedAudio { stream: Ref<Stream>, chunks: Count };

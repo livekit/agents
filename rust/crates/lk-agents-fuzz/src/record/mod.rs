@@ -729,8 +729,8 @@ pub struct Recording {
     /// What each audio source published in the room played, by source, as last looked at.
     room_speakers: Vec<crate::fakes::room::Speaker>,
     journal: Vec<(Observed, Step)>,
-    /// What the attached AMD runs observed, in the order the session emitted it.
-    amd: Vec<amd::Seen>,
+    /// What the attached AMD runs observed, and what a real run's fake models answered.
+    amd: amd::AmdLog,
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,

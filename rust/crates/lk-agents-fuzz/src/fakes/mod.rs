@@ -24,6 +24,7 @@ use crate::{
 
 pub mod a2a_peer;
 pub mod amd;
+pub mod amd_models;
 mod avatar;
 pub(crate) mod clock;
 mod console;
