@@ -40,6 +40,7 @@ class ScriptedModel(decisions.DecisionModel):
         input: str,
         decisions: Mapping[str, decisions.Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         self.inputs.append(input)
         if self._delay:

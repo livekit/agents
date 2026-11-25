@@ -35,6 +35,7 @@ class KeywordModel(decisions.DecisionModel):
         input: str,
         decisions: Mapping[str, decisions.Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         self.inputs.append(input)
         value = 1.0 if self._keyword in input.lower() else 0.0
