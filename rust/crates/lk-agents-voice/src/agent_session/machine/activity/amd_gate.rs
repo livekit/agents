@@ -509,6 +509,14 @@ impl VoiceDriver {
         let Some(speech) = self.reply_to_turn(now, &info, edits, Some(&decision)) else {
             return self.gate_turn_ended(turn, TurnEnd::Dropped);
         };
+        // A speech fixes its interruptibility at creation, and the gate forces it on while
+        // attached: an adopted preemptive generation takes the value a new reply would have now,
+        // the restored one after `Detach`.
+        let interruptible = self.session.config.effective.turn.interruption.enabled();
+        let s = &self.activity.speech_scheduler;
+        if s.speech(speech).is_some_and(|h| h.allow_interruptions() != interruptible) {
+            self.set_allow_interruptions(speech, interruptible);
+        }
         self.observe_amd(AmdObservation::ReplyCreated { turn, speech });
         self.gate_turn_ended(turn, TurnEnd::Replied);
         if !gated {
