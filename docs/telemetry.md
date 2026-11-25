@@ -174,10 +174,11 @@ Each metric carries the same labels:
 
 | Metric | Type | Counts |
 | --- | --- | --- |
-| `lk.productstats.model.requests` | counter | Requests made to a model |
+| `lk.productstats.model.requests` | counter | Requests made to a model: one LLM completion, one TTS synthesis, one STT stream (or one recognition for a non-streaming STT) |
 | `lk.productstats.model.ttft` | histogram, seconds | Time to the first token of an LLM, realtime or duplex response |
 | `lk.productstats.model.ttfb` | histogram, seconds | Time to the first audio of a TTS request |
 | `lk.productstats.model.transcription_delay` | histogram, seconds | Time from the end of the user's speech to the STT's final transcript, once per user turn |
+| `lk.productstats.model.audio_duration` | counter, seconds | Audio sent to an STT. A streaming STT keeps one stream for a whole session, so this, not its request count, is its usage |
 
 The transcription delay carries one more label, because it starts at the end of speech,
 which the STT does not always decide:
@@ -191,6 +192,11 @@ which the STT does not always decide:
 - Delays are compared only within one `speech_end` value, as medians and percentiles per
   provider and model. A `vad` delay includes the VAD's silence window; a `provider` delay
   includes the provider's own endpointing.
+
+Model usage is recorded by the framework around every model, never by a plugin: a plugin
+written in Python is counted exactly like a built-in one, and a plugin cannot add, change
+or skip a statistic. The plugin, provider and model names are the ones the model reports
+about itself; a plugin that reports none appears as `unknown`.
 
 **Feature usage**
 
