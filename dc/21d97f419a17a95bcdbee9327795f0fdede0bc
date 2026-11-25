@@ -1,0 +1,61 @@
+rust/crates/lk-agents-voice/src/agent_session/effects.rs
+  s_bbb46b29e16294::t_0258f3f7254390 223-228,284-286
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/mod.rs
+  s_bbb46b29e16294::t_df121f686020fb 15,159-162,420-424,699-701,827-828
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/recognition.rs
+  s_bbb46b29e16294::t_2efdde531ec16a 81,86,125-129,321,323,357-358,360,362,367-368,375-376,383-384,388-390,619-620,639,691,707,737,759,765,776-777,786,791-795,933-935
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/reply_run.rs
+  s_bbb46b29e16294::t_b73a392d12517a 291-293
+rust/crates/lk-agents-voice/src/generation/mod.rs
+  s_bbb46b29e16294::t_a60ca2721e1594 653-654,799
+rust/crates/lk-agents-fuzz/src/drive/queue.rs
+  s_bbb46b29e16294::t_6f3e9d9e23146c 154
+rust/crates/lk-agents-fuzz/src/input.rs
+  s_bbb46b29e16294::t_b9bcab380a2668 769
+rust/crates/lk-agents-runtime/src/voice/effects.rs
+  s_bbb46b29e16294::t_548e55d9a356ff 372-374
+rust/crates/lk-agents-voice/src/agent_session/agent_user_state.rs
+  s_bbb46b29e16294::t_a5a1c666611505 52-55
+rust/crates/lk-agents-voice/src/agent_session/closing.rs
+  s_bbb46b29e16294::t_14d613fed6de30 398-403,507-508
+rust/crates/lk-agents-voice/src/agent_session/commands.rs
+  s_bbb46b29e16294::t_527e7784dd3591 4,49-50,133,549-550,615
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/amd_gate.rs
+  s_bbb46b29e16294::t_49143bd551f6c9 1-790
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/hooks.rs
+  s_bbb46b29e16294::t_354981ecbd1274 472-473,490-493
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/idle.rs
+  s_bbb46b29e16294::t_9cd4010e12b4b3 107
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/io.rs
+  s_bbb46b29e16294::t_76df8ddfd239d2 26-28,64,326
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/scheduling.rs
+  s_bbb46b29e16294::t_f5edc6dd4ff527 41-44,133-145,264-266,270-271,274-276,310-311,319,340,358-365,413,510-514,598-601,641-642,852-854,937-944,954
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/speech.rs
+  s_bbb46b29e16294::t_d44aaf83581833 34-39,44-46,80,120-132,317-326,335,338-343,366,368-369,377-378,386,470,870,1035,1149-1154
+rust/crates/lk-agents-voice/src/agent_session/machine/activity/tools.rs
+  s_bbb46b29e16294::t_4d2ccbc6643a6a 720-724
+rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs
+  s_bbb46b29e16294::t_ab79bf80d758ff 103-104,440-441
+rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs
+  s_bbb46b29e16294::t_67bd1fc2c4c1e0 54-55,487,568,633,706
+rust/crates/lk-agents-voice/src/audio_recognition/machine/end_of_turn.rs
+  s_bbb46b29e16294::t_2eb87536778285 277
+rust/crates/lk-agents-voice/src/trace.rs
+  s_bbb46b29e16294::t_4d273f11bc86f8 31,57,238-333,1011,1013,1098-1113,1149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dc21d97f419a17a95bcdbee9327795f0fdede0bc",
+  "prompts": {},
+  "sessions": {
+    "s_bbb46b29e16294": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c36bca80-b158-41e8-a5b3-7c8e03fcd165",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
