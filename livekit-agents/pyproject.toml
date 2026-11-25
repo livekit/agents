@@ -70,6 +70,7 @@ images = [
     "pillow>=10.3.0; python_version < '3.11'",
     "pillow>=13.0.0; python_version >= '3.11'",
 ]
+alkove = ["livekit-plugins-alkove>=1.8.13"]
 anam = ["livekit-plugins-anam>=1.8.13"]
 anthropic = ["livekit-plugins-anthropic>=1.8.13"]
 assemblyai = ["livekit-plugins-assemblyai>=1.8.13"]
