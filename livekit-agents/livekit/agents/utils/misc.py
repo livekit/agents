@@ -66,7 +66,8 @@ def safe_render(template: str, data: dict[str, object]) -> str:
     Missing keys log a warning and become empty strings.
     ``None`` values also become empty strings.
     Nested dicts are converted to namespaces for dotted access
-    (e.g. ``{audio_recognition.stt_context.emotion}``).
+    (e.g. ``{audio_recognition.stt_context.emotion}``); keys that are not identifiers
+    can be read with item access (e.g. ``{user[support-tier]}``).
     """
     from types import SimpleNamespace
 
