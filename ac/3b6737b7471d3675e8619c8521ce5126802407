@@ -1,0 +1,19 @@
+rust/crates/lk-agents-fuzz/src/rules/amd/gated_turn_has_one_user_item.rs
+  s_fe0b584e74cb4c::t_ff45b174476525 1-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac3b6737b7471d3675e8619c8521ce5126802407",
+  "prompts": {},
+  "sessions": {
+    "s_fe0b584e74cb4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da1f6a87-9ec4-476b-ba24-265326562452",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
