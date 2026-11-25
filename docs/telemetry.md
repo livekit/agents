@@ -168,7 +168,7 @@ Each metric carries the same labels:
 | Label | Values |
 | --- | --- |
 | `lk.productstats.model.kind` | `stt`, `tts`, `llm`, `realtime`, `duplex` |
-| `lk.productstats.model.plugin` | the plugin's package (`livekit.plugins.deepgram`), `livekit-inference` for LiveKit Inference, `custom` for any class outside `livekit.plugins.*` |
+| `lk.productstats.model.plugin` | the plugin's id (`deepgram`, `boson-avatar`), `livekit-inference` for LiveKit Inference, `custom` for any class outside a LiveKit plugin |
 | `lk.productstats.model.provider` | the provider's name (`deepgram`, `openai`); a self-hosted endpoint is `other` |
 | `lk.productstats.model.name` | the model's name as configured |
 
@@ -190,6 +190,10 @@ the speech, `provider` when the STT detects speech itself.
 - Delays are compared only within one `speech_end` value, as medians and percentiles per
   provider and model. A `vad` delay includes the VAD's silence window; a `provider` delay
   includes the provider's own endpointing.
+
+The plugin id is the last part of the package name, lowercase with hyphens, the same in
+every language: `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram`
+in Node are both `deepgram`.
 
 Model usage is recorded by the framework around every model, never by a plugin: a plugin
 written in Python is counted exactly like a built-in one, and a plugin cannot add, change
