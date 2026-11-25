@@ -10,6 +10,7 @@ use super::{Call, detecting};
 use lk_agents_fuzz::drive::{RealtimeSetup, Setup};
 use lk_agents_fuzz::fakes::RealtimeDelays;
 use lk_agents_fuzz::fakes::amd::{AmdSetup, HUMAN_AFTER_MACHINE, IVR, SCREENING, SEND_DTMF_TOOL};
+use lk_agents_fuzz::input::RtEvent;
 use lk_agents_fuzz::input::{
     AgentText, AmdSays, Count, HookAnswer, Input, Millis, Ref, Stt, TurnMode, UserText,
 };
@@ -486,4 +487,193 @@ fn the_session_supplies_the_user_item_without_native_transcription() {
         assert!(call.run.record.amd_view().inserted_items().is_empty(), "AMD inserted nothing");
         call.clean();
     }
+}
+
+// The words rule's one owner (proposal, Realtime).
+
+/// A turn superseded while its customer hook ran keeps its words by the gate's rule: on a model
+/// that transcribes, only the server's transcript, never the session recogniser's words; on one
+/// that does not, the session's words, once. Python adds no STT message for a realtime turn and
+/// inserts one only when the model does not transcribe (`agent_activity.py`
+/// `_user_turn_completed_impl`).
+#[test]
+fn a_turn_superseded_in_its_hook_keeps_its_words_once() {
+    for transcribes in [true, false] {
+        let setup = Setup {
+            hook_bound_ms: Some(10_000),
+            realtime: Some(model(transcribes)),
+            ..detecting(AmdSetup::default())
+        };
+        let call = Call::run(setup, async |call| {
+            call.enter().await;
+            // The first turn's hook runs; the second waits behind it, then supersedes it.
+            call.speaks("is anyone there", "").await;
+            call.speaks("hello", "").await;
+            call.hook_returns().await;
+            call.advance(100).await;
+            call.hook_returns().await;
+            call.classifier_says(AmdSays::Human).await;
+            call.advance(4_000).await;
+        });
+        let users = call.saved_user_words();
+        let first = users.iter().filter(|w| *w == "is anyone there").count();
+        assert_eq!(first, usize::from(!transcribes), "transcribes={transcribes}: {users:?}");
+        call.clean();
+    }
+}
+
+/// `InsertUserItem` follows the live model: after a handoff to a model that does not transcribe,
+/// with no session recogniser, AMD's words are the user item once. The runtime used to decide from
+/// the model the session opened on, which transcribed, and sent nothing.
+#[test]
+fn amd_supplies_the_words_after_a_handoff_to_a_model_without_transcription() {
+    let realtime = RealtimeSetup { handoff_user_transcription: Some(false), ..model(true) };
+    let amd = AmdSetup { own_stt: true, ..AmdSetup::default() };
+    let setup = Setup { stt: false, realtime: Some(realtime), ..detecting(amd) };
+    let call = Call::run(setup, async |call| {
+        let handoff = Input::Handoff {
+            agent: "second".into(),
+            instructions: AgentText("You are the second agent.".into()),
+            tools: Vec::new(),
+            turn: None,
+        };
+        call.send(handoff).await;
+        call.advance(1_000).await;
+        call.enter().await;
+        call.speaks("", "AMD transcript.").await;
+        call.classifier_says(AmdSays::Human).await;
+        call.advance(4_000).await;
+    });
+    assert!(call.entered_ok(), "{:?}", call.run.record.amd_run().enter_answers());
+    let users: Vec<_> = call.saved_user_words().into_iter().filter(|w| !w.is_empty()).collect();
+    assert_eq!(users, vec!["AMD transcript.".to_owned()], "once, AMD's words");
+    call.clean();
+}
+
+// A DTMF reply cut short (proposal, Realtime: the agent's tools come back when the reply's
+// speech ends).
+
+/// A model that presses a key whenever it has a tool: under a menu's reply, the only one it has
+/// is AMD's `send_dtmf_events`.
+fn pressing(fallback: bool) -> Setup {
+    let realtime = RealtimeSetup { tool_calls: Some(100), fallback, ..model(true) };
+    Setup { realtime: Some(realtime), tools: Vec::new(), ..detecting(AmdSetup::default()) }
+}
+
+impl Call {
+    /// A menu, classified as one: its reply is asked once the silence ends, with the keypad.
+    async fn menu_reply(&mut self) {
+        self.enter().await;
+        self.speaks("for billing press one for support press two", "").await;
+        self.classifier_says(AmdSays::Ivr).await;
+        self.advance(50).await;
+        self.menu_says(AmdSays::NoMenu).await;
+        self.advance(2_000).await;
+    }
+
+    /// Advances until the model pressed a key (its reply called AMD's tool), at most `ms`.
+    async fn until_pressed(&mut self, ms: u64) -> bool {
+        use lk_agents_voice::trace::{Step, ToolStep};
+        for _ in 0..ms / 100 {
+            let pressed = self.run.record.journal().iter().any(|(_, step)| {
+                matches!(step, Step::Tool(ToolStep::Calls { names, .. })
+                    if names.iter().any(|n| n == SEND_DTMF_TOOL))
+            });
+            if pressed {
+                return true;
+            }
+            self.advance(100).await;
+        }
+        false
+    }
+
+    /// Every tool still running returns.
+    async fn tools_return(&mut self) {
+        for tool in self.run.record.live().of(Kind::Tool) {
+            let answer = lk_agents_fuzz::input::ToolAnswer::Return;
+            let text = AgentText(String::new());
+            self.send(Input::ToolAnswered { tool: Ref::new(tool), answer, text }).await;
+        }
+    }
+
+    /// The tools the last socket received last.
+    fn last_tools(&self) -> Option<Vec<String>> {
+        let sent = self.run.record.rt_sent();
+        let socket = sent.iter().map(|(_, socket, _)| *socket).max()?;
+        sent.iter().rev().find_map(|(_, s, sent)| match sent {
+            RtSent::Tools(tools) if *s == socket => Some(tools.clone()),
+            _ => None,
+        })
+    }
+
+    fn keypad_offered(&self) -> bool {
+        self.last_tools().is_some_and(|tools| tools.iter().any(|t| t == SEND_DTMF_TOOL))
+    }
+}
+
+/// The menu's reply is interrupted while its key press runs: the speech ends with the tool, and
+/// the agent's tools come back on the server.
+#[test]
+fn a_dtmf_reply_interrupted_during_its_key_press_restores_the_tools() {
+    let mut pressed = false;
+    let call = Call::run(pressing(false), async |call| {
+        call.menu_reply().await;
+        pressed = call.until_pressed(6_000).await;
+        call.send(Input::Interrupt { force: true, wait: false }).await;
+        call.advance(200).await;
+        call.tools_return().await;
+        call.advance(4_000).await;
+    });
+    assert!(pressed, "the model pressed a key: {:?}", call.responses());
+    let responses = call.responses();
+    assert!(responses.first().is_some_and(|q| q.offers(SEND_DTMF_TOOL)), "{responses:?}");
+    assert!(!call.keypad_offered(), "the keypad left the server: {:?}", call.last_tools());
+    call.clean();
+}
+
+/// A fallback swap while the menu's reply runs (the fake swaps to a fresh server behind the same
+/// socket): the new session gets the agent's tools with its frame, the keypad only for a
+/// response asked again for the reply, and the agent's tools back once the reply's speech ends.
+#[test]
+fn a_fallback_swap_during_a_dtmf_reply_restores_the_tools() {
+    let call = Call::run(pressing(true), async |call| {
+        call.menu_reply().await;
+        call.until_pressed(6_000).await;
+        let fatal = Input::RealtimeEvent { socket: Ref::new(0), event: RtEvent::FatalError };
+        call.send(fatal).await;
+        call.advance(2_000).await;
+        call.tools_return().await;
+        call.advance(6_000).await;
+        call.tools_return().await;
+        call.advance(4_000).await;
+    });
+    // The swap's frame: the session's instructions go to the fresh session a second time.
+    let frames = (call.run.record.rt_sent().iter())
+        .filter(|(_, _, sent)| matches!(sent, RtSent::Instructions(_)))
+        .count();
+    assert!(frames > 1, "the fallback swapped the session and sent it its frame");
+    assert!(!call.keypad_offered(), "the keypad left the new server: {:?}", call.last_tools());
+    call.clean();
+}
+
+/// AMD completes while the menu's reply runs: the reply plays on with the keypad, and the
+/// agent's tools come back when its speech ends, after the detach.
+#[test]
+fn a_detach_during_a_dtmf_reply_restores_the_tools_when_the_reply_ends() {
+    let mut detached_with_keypad = false;
+    let call = Call::run(pressing(false), async |call| {
+        call.menu_reply().await;
+        call.until_pressed(6_000).await;
+        detached_with_keypad = call.keypad_offered();
+        call.close_amd().await;
+        call.advance(200).await;
+        call.tools_return().await;
+        call.advance(8_000).await;
+        call.tools_return().await;
+        call.advance(4_000).await;
+    });
+    assert!(detached_with_keypad, "the reply held the keypad at the detach");
+    assert!(call.detached_at().is_some(), "AMD detached");
+    assert!(!call.keypad_offered(), "the keypad left the server: {:?}", call.last_tools());
+    call.clean();
 }

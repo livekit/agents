@@ -430,6 +430,9 @@ pub struct RealtimeSetup {
     /// server sends no input transcription, and a session without STT has the turn's words only
     /// from AMD (spec §7.2).
     pub user_transcription: bool,
+    /// A handoff gives the new agent its own realtime model of the same shape, which transcribes
+    /// the user or not, instead of keeping the session's.
+    pub handoff_user_transcription: Option<bool>,
 }
 
 impl Default for RealtimeSetup {
@@ -446,6 +449,7 @@ impl Default for RealtimeSetup {
             duplex: false,
             delays: Default::default(),
             user_transcription: true,
+            handoff_user_transcription: None,
         }
     }
 }

@@ -138,8 +138,36 @@ impl Run {
                 },
             ) as Arc<Tts>
         });
-        let providers =
-            Legs { llm: llm.clone(), tts: tts.clone(), stt: stt.clone(), clock: time.clock() };
+        // A handoff's own realtime model: the session's, but for its transcription.
+        let handoff_realtime = setup.realtime.as_ref().and_then(|server| {
+            let user_transcription = server.handoff_user_transcription?;
+            let setup = fakes::ServerSetup {
+                provider: server.provider,
+                vad: server.turn_detection.then_some(if server.semantic {
+                    fakes::RealtimeVad::Semantic
+                } else {
+                    fakes::RealtimeVad::Server
+                }),
+                seed: server.seed ^ 0x4a4d,
+                connect,
+                tool_calls: server.tool_calls,
+                text_only: server.text_only,
+                fallback: false,
+                timing: setup.timing(),
+                delays: server.delays,
+                user_transcription,
+            };
+            let model =
+                fakes::FakeRealtime::new(registry.clone(), setup, time.clock(), tasks.clone());
+            Some(model as Arc<dyn Realtime>)
+        });
+        let providers = Legs {
+            llm: llm.clone(),
+            tts: tts.clone(),
+            stt: stt.clone(),
+            clock: time.clock(),
+            handoff_realtime,
+        };
         let nodes = agent_nodes(setup, &registry, OPENING_AGENT, &providers);
         // The avatar worker is in the room before its stream is opened to it. Its reports cross
         // as they are sent, so the sink gives up on one after a clear as in production.
@@ -728,6 +756,8 @@ pub(super) struct Legs {
     pub(super) stt: Option<Arc<Stt>>,
     /// The run's clock, which a node's own synthesis paces by.
     pub(super) clock: Arc<dyn lk_agents_abi::Clock>,
+    /// The realtime model a handoff gives its agent (`RealtimeSetup::handoff_user_transcription`).
+    pub(super) handoff_realtime: Option<Arc<dyn Realtime>>,
 }
 
 /// The node factories an agent installs: its `llm_node`, `tts_node` and `stt_node`, each over the
@@ -799,6 +829,8 @@ pub(super) fn frame(
     tools: &[String],
 ) -> UpdateAgentArgs {
     let mut args = plain_frame(registry, agent, instructions, tools);
+    args.realtime =
+        legs.handoff_realtime.clone().map(lk_agents_abi::llm::fallback::RealtimeLeg::Native);
     if setup.nodes.is_some() {
         let nodes = agent_nodes(setup, registry, agent, legs);
         args.llm_node = nodes.llm;
