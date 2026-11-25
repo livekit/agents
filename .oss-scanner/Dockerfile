@@ -14,7 +14,7 @@
 
 # Build image for Anthropic's OSS Scanner. Python matches the unit-test job in .github/workflows/tests.yml.
 # CMAKE_POLICY_VERSION_MINIMUM lets sdists with old CMakeLists (sphn's audiopus_sys) build where no wheel exists.
-FROM python:3.12-bookworm
+FROM python:3.15-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     UV_PYTHON_DOWNLOADS=never \
