@@ -1,0 +1,19 @@
+rust/crates/lk-agents-fuzz/src/rules/amd/only_the_opening_plays_first.rs
+  s_fe0b584e74cb4c::t_952c451efd200f 101-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c74f44cfcebd3c15c860ac6b758159dcb6065d02",
+  "prompts": {},
+  "sessions": {
+    "s_fe0b584e74cb4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da1f6a87-9ec4-476b-ba24-265326562452",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
