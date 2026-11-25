@@ -510,6 +510,7 @@ impl VoiceDriver {
             transcript: info.new_transcript.clone(),
             eot_delay: info.metrics.end_of_turn_delay,
             skip_reply: info.skip_reply,
+            bound,
             speaking,
             agent: self.activity.agent.clone(),
             at: now,

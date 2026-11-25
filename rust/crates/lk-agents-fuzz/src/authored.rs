@@ -472,6 +472,7 @@ impl Authored {
                     transcript: words.into(),
                     eot_delay: None,
                     skip_reply: false,
+                    bound: true,
                     speaking: false,
                     agent: "agent".into(),
                     at: lk_agents_abi::Ts::ZERO,

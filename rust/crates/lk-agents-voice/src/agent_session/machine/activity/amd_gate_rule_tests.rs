@@ -491,11 +491,30 @@ fn turn_committed_carries_the_turn_and_its_facts() {
             transcript: "please leave a message".into(),
             eot_delay: Some(ms(400)),
             skip_reply: false,
+            bound: true,
             speaking: false,
             agent: "agent".into(),
             at: ts(1_000),
         }]
     );
+}
+
+/// A turn committed before `Activated` applies is unbound, and says so: the run may already be
+/// active, so it cannot tell from its own state.
+#[test]
+fn turn_committed_says_whether_the_turn_is_bound() {
+    let mut g = Gate::new();
+    g.attach(RUN);
+    g.commit(1, "hello");
+    g.activate(None);
+    g.commit(2, "hello again");
+    let bound: Vec<_> = (g.observed(RUN).into_iter())
+        .filter_map(|o| match o {
+            AmdObservation::TurnCommitted { turn, bound, .. } => Some((turn.0, *bound)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bound, [(1, false), (2, true)]);
 }
 
 /// A denied turn commits only its user item. Python's

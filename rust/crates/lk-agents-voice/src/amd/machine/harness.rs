@@ -192,6 +192,7 @@ impl H {
             transcript: commit.text,
             eot_delay: commit.eot_delay,
             skip_reply: false,
+            bound: true,
             speaking: commit.speaking,
             agent: commit.agent,
             at: self.now,

@@ -41,8 +41,14 @@ pub enum AmdObservation {
     TurnCommitted {
         turn: TurnId,
         transcript: String,
+        /// The endpointing delay. With no speech boundary since the previous commit, the
+        /// participant's silence counts from `at` minus this delay.
         eot_delay: Option<Duration>,
+        /// The turn asked for no reply.
         skip_reply: bool,
+        /// The gate was active at commit, so this turn's decision moves the hold. An unbound turn
+        /// gets the first row of the reply table.
+        bound: bool,
         /// The participant was still speaking at commit (spec §7.1 speech duration).
         speaking: bool,
         /// The agent that was running when the turn committed.
