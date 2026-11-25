@@ -881,3 +881,57 @@ async def test_remote_run_reports_errors_but_not_silence(failing: bool) -> None:
         await client.aclose()
         await host.aclose()
         await session.aclose()
+
+
+async def test_function_call_arguments_match_a_call_sent_without_arguments() -> None:
+    """A tool without parameters can be called with an empty arguments string (Anthropic
+    streams no input JSON for it, and the tool still runs with no arguments). Matching on
+    arguments must read that call as having none, so a search moves past it to the call
+    that matches instead of failing to parse it."""
+
+    class Desk(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="Book synthetic slots.")
+
+        @function_tool
+        async def get_current_time(self) -> str:
+            """Return the current time."""
+            return "10:00"
+
+        @function_tool
+        async def book_slot(self, slot_id: str) -> str:
+            """Book a slot.
+
+            Args:
+                slot_id: The slot to book.
+            """
+            return f"booked {slot_id}"
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="book the first slot",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="get_current_time", arguments="", call_id="time"),
+                    FunctionToolCall(
+                        name="book_slot", arguments='{"slot_id": "a1"}', call_id="book"
+                    ),
+                ],
+            ),
+        ]
+    )
+    async with AgentSession(llm=llm) as session:
+        await session.start(Desk())
+        result = await session.run(user_input="book the first slot")
+
+    booked = result.expect.contains_function_call(arguments={"slot_id": "a1"})
+    assert booked.event().item.name == "book_slot"
+
+    assert (
+        result.expect.skip_next_event_if(type="function_call", arguments={"slot_id": "a1"}) is None
+    )
+    result.expect.next_event().is_function_call(name="get_current_time", arguments={})
+    result.expect.next_event().is_function_call(name="book_slot", arguments={"slot_id": "a1"})

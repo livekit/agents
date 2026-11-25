@@ -737,7 +737,14 @@ class EventAssert:
         if is_given(name) and self._event.item.name != name:
             self._raise(f"Expected call name '{name}', got '{self._event.item.name}'")
         if is_given(arguments):
-            actual = json.loads(self._event.item.arguments)
+            # read the arguments the way the tool received them: a call to a tool without
+            # parameters can carry an empty string, and arguments that can't be read are a
+            # mismatch to report, not an error that ends a search through the events
+            try:
+                actual = llm_utils.parse_function_arguments(self._event.item.arguments or "{}")
+            except ValueError as e:
+                self._raise(f"Expected arguments {arguments}, got unreadable arguments: {e}")
+                raise RuntimeError("unreachable") from None
             for key, value in arguments.items():
                 if key not in actual or actual[key] != value:
                     self._raise(f"For key '{key}', expected {value}, got {actual.get(key)}")
