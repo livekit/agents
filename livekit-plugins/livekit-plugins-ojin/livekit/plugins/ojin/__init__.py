@@ -15,7 +15,7 @@
 
 """Ojin avatar plugin for LiveKit Agents.
 
-See https://docs.livekit.io/agents/integrations/avatar/ for more information.
+See https://docs.livekit.io/agents/models/avatar/plugins/ojin/ for more information.
 """
 
 from .avatar import AvatarSession
