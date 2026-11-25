@@ -255,7 +255,7 @@ def test_init_recording_decides_the_job_output() -> None:
     ctx._recording_initialized = False
     ctx.job.enable_redaction = False
     ctx._info.url = "ws://localhost:7880"
-    JobContext.init_recording(ctx, {"logs": False, "redaction": True})
+    JobContext._init_recording(ctx, {"logs": False, "redaction": True})
     ctx._hosted_output.decide.assert_called_once_with(logs=False, redaction=True)
 
 
@@ -265,7 +265,7 @@ def test_init_recording_exports_the_job_file_when_the_project_recording_is_off()
     ctx.job.enable_redaction = False
     ctx._info.url = "ws://localhost:7880"
     all_off = _resolve_recording_options(False)
-    JobContext.init_recording(ctx, all_off, export_job_log_file=True)
+    JobContext._init_recording(ctx, all_off, export_job_log_file=True)
     ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=False)
 
 
@@ -291,7 +291,7 @@ def test_init_recording_decides_only_once() -> None:
     ctx = MagicMock()
     ctx._recording_initialized = True
     ctx.job.enable_redaction = False
-    JobContext.init_recording(ctx, {"logs": True})
+    JobContext._init_recording(ctx, {"logs": True})
     ctx._hosted_output.decide.assert_not_called()
 
 
@@ -583,7 +583,7 @@ def _cleanup_ctx() -> MagicMock:
 async def test_cleanup_uses_rejected_options_when_no_session_decided() -> None:
     ctx = _cleanup_ctx()
     with pytest.raises(ValueError):
-        JobContext.init_recording(ctx, _REJECTED)
+        JobContext._init_recording(ctx, _REJECTED)
     ctx._hosted_output.decide.assert_not_called()
     await JobContext._on_cleanup(ctx)
     ctx._hosted_output.decide.assert_called_once_with(logs=False, redaction=True)
@@ -592,9 +592,9 @@ async def test_cleanup_uses_rejected_options_when_no_session_decided() -> None:
 def test_a_valid_retry_decides_after_rejected_options() -> None:
     ctx = _cleanup_ctx()
     with pytest.raises(ValueError):
-        JobContext.init_recording(ctx, _REJECTED)
+        JobContext._init_recording(ctx, _REJECTED)
     with contextlib.suppress(Exception):
-        JobContext.init_recording(ctx, {"logs": True, "redaction": True, "transcript": True})
+        JobContext._init_recording(ctx, {"logs": True, "redaction": True, "transcript": True})
     ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=True)
 
 

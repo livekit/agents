@@ -1008,7 +1008,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                             # auto-disable recording for non-primary sessions when record is not given
                             self._opts.recording_options = _resolve_recording_options(False)
 
-                job_ctx.init_recording(
+                job_ctx._init_recording(
                     self._opts.recording_options, export_job_log_file=export_job_log_file
                 )
 

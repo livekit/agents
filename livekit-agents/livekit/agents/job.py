@@ -926,7 +926,10 @@ class JobContext:
 
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
-    def init_recording(
+    def init_recording(self, options: RecordingOptions) -> None:
+        self._init_recording(options)
+
+    def _init_recording(
         self, options: RecordingOptions, *, export_job_log_file: bool | None = None
     ) -> None:
         """Set up recording for the job.
