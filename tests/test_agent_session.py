@@ -62,7 +62,7 @@ from livekit.agents.voice.room_io import RoomOptions
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 from livekit.agents.voice.turn import _StreamingTurnDetector
 
-from .fake_io import FakeAudioInput
+from .fake_io import FakeAudioInput, FakeAudioOutput
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel
 from .fake_session import FakeActions, create_session, run_session
@@ -3131,5 +3131,65 @@ async def test_failed_start_with_recording_detaches_wrappers(tmp_path: Path) -> 
         assert session._room_io is not None
         assert session.input.audio is session._room_io.audio_input
         assert session.input.audio is not None
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_restores_caller_audio_output() -> None:
+    """RoomIO's transcription synchronizer wraps a caller output (e.g. an avatar) when
+    room audio is disabled; a partial close must restore the caller's output, or a
+    retry publishes speech to the room track instead.
+    """
+    session = AgentSession(llm=FakeRealtimeModel())
+    caller_output = FakeAudioOutput()
+    session.output.audio = caller_output
+
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=False,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=True,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    room_io = session._room_io
+    assert room_io is not None
+    assert room_io._tr_synchronizer is not None
+    # the synchronizer's output replaced the caller's avatar output
+    assert session.output.audio is room_io.audio_output
+    assert session.output.audio is not caller_output
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    assert session.output.audio is caller_output
+
+    retry_room = _RetryableRoom()
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=retry_room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=False,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=True,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        # room audio stays disabled because the caller output is still attached
+        assert session._room_io is not None
+        assert session._room_io._audio_output is None
+        assert session.output.audio is session._room_io.audio_output
     finally:
         await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)

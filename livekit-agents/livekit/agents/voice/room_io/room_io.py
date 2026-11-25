@@ -96,6 +96,8 @@ class RoomIO:
         self._attached_input_video: VideoInput | None = None
         self._attached_output_audio: AudioOutput | None = None
         self._attached_output_transcription: TextOutput | None = None
+        # an output the transcription synchronizer replaced, restored on close
+        self._previous_output_audio: AudioOutput | None = None
 
     def register_text_input(self, text_input_cb: TextInputCallback) -> None:
         self._text_input_cb = text_input_cb
@@ -209,6 +211,9 @@ class RoomIO:
             self._agent_session.input.video = self.video_input
 
         if self.audio_output:
+            # the transcription synchronizer may wrap a caller output (an avatar,
+            # for example); remember it so a failed start can restore it
+            self._previous_output_audio = self._agent_session.output.audio
             self._attached_output_audio = self.audio_output
             self._agent_session.output.audio = self.audio_output
 
@@ -242,7 +247,7 @@ class RoomIO:
         if self._agent_session.input.video is self._attached_input_video:
             self._agent_session.input.video = None
         if self._agent_session.output.audio is self._attached_output_audio:
-            self._agent_session.output.audio = None
+            self._agent_session.output.audio = self._previous_output_audio
         if self._agent_session.output.transcription is self._attached_output_transcription:
             self._agent_session.output.transcription = None
 
