@@ -208,6 +208,9 @@ class VAD(agents.vad.VAD):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+            # Recalculate deactivation_threshold if not explicitly provided, matching load() behavior
+            if not is_given(deactivation_threshold):
+                self._opts.deactivation_threshold = max(activation_threshold - 0.15, 0.01)
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
 
@@ -274,6 +277,9 @@ class VADStream(agents.vad.VADStream):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+            # Recalculate deactivation_threshold if not explicitly provided, matching load() behavior
+            if not is_given(deactivation_threshold):
+                self._opts.deactivation_threshold = max(activation_threshold - 0.15, 0.01)
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
 
