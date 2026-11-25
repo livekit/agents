@@ -5,8 +5,9 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterable, AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -61,6 +62,7 @@ from livekit.agents.voice.room_io import RoomOptions
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 from livekit.agents.voice.turn import _StreamingTurnDetector
 
+from .fake_io import FakeAudioInput
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel
 from .fake_session import FakeActions, create_session, run_session
@@ -2929,3 +2931,205 @@ async def test_failed_start_in_room_bring_up_is_still_closed() -> None:
     # closing twice stays safe
     await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
     assert closes == [CloseReason.USER_INITIATED]
+
+
+class _RetryableRoom:
+    """Just enough of an rtc.Room for RoomIO's audio input/output setup."""
+
+    def __init__(self) -> None:
+        self._listeners: dict[str, list[object]] = {}
+        self.local_participant = SimpleNamespace(identity="local")
+        self.remote_participants: dict[str, object] = {}
+        self.name = "retry-room"
+
+    def on(self, event: str, callback: object) -> None:
+        self._listeners.setdefault(event, []).append(callback)
+
+    def off(self, event: str, callback: object) -> None:
+        callbacks = self._listeners.get(event, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+
+    def isconnected(self) -> bool:
+        return False
+
+    def register_byte_stream_handler(self, topic: str, handler: object) -> None:
+        pass
+
+    def unregister_byte_stream_handler(self, topic: str) -> None:
+        pass
+
+
+async def test_failed_start_detaches_room_io_streams_for_a_retry() -> None:
+    """RoomIO attaches its streams before the activity exists; a failed bring-up must
+    detach them, or a retry treats the closed streams as caller-provided I/O and
+    disables fresh room audio.
+    """
+    session = AgentSession(llm=FakeRealtimeModel())
+    room = _RetryableRoom()
+
+    # a realtime config AgentActivity rejects after RoomIO has attached its streams
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    room_io = session._room_io
+    assert room_io is not None
+    assert session._activity is None
+    assert session.input.audio is room_io.audio_input
+    assert session.output.audio is room_io.audio_output
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    assert session.input.audio is None
+    assert session.input.video is None
+    assert session.output.audio is None
+    assert session.output.transcription is None
+
+    # the retry attaches fresh room streams instead of trusting the closed ones
+    retry_room = _RetryableRoom()
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=retry_room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        assert session._started
+        assert session._room_io is not None
+        assert session.input.audio is session._room_io.audio_input
+        assert session.input.audio is not None
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_keeps_caller_provided_audio() -> None:
+    """Only the I/O RoomIO attached is released on a partial teardown."""
+    session = AgentSession(llm=FakeRealtimeModel())
+    caller_audio = FakeAudioInput()
+    session.input.audio = caller_audio
+
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    assert session.input.audio is caller_audio
+
+
+def _fake_job_ctx(tmp_path: Path) -> MagicMock:
+    ctx = MagicMock()
+    ctx._primary_agent_session = None
+    ctx.session_directory = tmp_path
+    ctx.connect = AsyncMock()
+    ctx.job.enable_recording = False
+    ctx.job.enable_redaction = False
+    ctx.job.id = "job-1"
+    ctx.job.agent_name = "agent"
+    ctx.job.room.sid = "RM_1"
+    ctx.job.dispatch_id = "dispatch"
+    ctx._info.worker_id = "worker"
+    ctx.job.state.agent_id = "agent-id"
+    return ctx
+
+
+async def test_failed_start_with_recording_detaches_wrappers(tmp_path: Path) -> None:
+    """Recording wraps RoomIO's streams before the activity exists; a partial close
+    must unwrap them so a retry attaches fresh room media.
+    """
+    from livekit.agents.job import _JobContextVar
+
+    session = AgentSession(llm=FakeRealtimeModel())
+    token = _JobContextVar.set(_fake_job_ctx(tmp_path))
+    try:
+        # the encoder thread needs real time; the wrapper identity is what this checks
+        with patch(
+            "livekit.agents.voice.recorder_io.recorder_io.RecorderIO.start",
+            new=AsyncMock(),
+        ):
+            with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+                await asyncio.wait_for(
+                    session.start(
+                        Agent(instructions="hello", allow_interruptions=False),
+                        room=_RetryableRoom(),  # type: ignore[arg-type]
+                        session_host=False,
+                        record=True,
+                        room_options=RoomOptions(
+                            audio_input=True,
+                            audio_output=True,
+                            text_input=False,
+                            text_output=False,
+                        ),
+                    ),
+                    timeout=SESSION_TIMEOUT,
+                )
+    finally:
+        _JobContextVar.reset(token)
+
+    room_io = session._room_io
+    assert room_io is not None
+    assert session._activity is None
+    # the recorder wrappers, not RoomIO's own streams, are attached at this point
+    assert session.input.audio is not None
+    assert session.input.audio is not room_io.audio_input
+    assert session.output.audio is not room_io.audio_output
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    assert session.input.audio is None
+    assert session.output.audio is None
+
+    retry_room = _RetryableRoom()
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=retry_room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        assert session._room_io is not None
+        assert session.input.audio is session._room_io.audio_input
+        assert session.input.audio is not None
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
