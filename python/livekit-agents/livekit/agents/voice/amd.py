@@ -230,8 +230,28 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
                 raise ValueError("amd requires a streaming STT")
             classifier = self._llm or agent_llm
             entry = self._entry(classifier)
+            # a model's properties are user code: read before the run exists
+            labels = (
+                _label(classifier),
+                _label(self._stt) if self._stt is not None else "session transcript only",
+            )
             self._run = await native.enter_amd(entry)
         except BaseException:
+            self._lifecycle = AMDLifecycle.FINISHED
+            await self._close_owned()
+            raise
+
+        run = self._run
+        try:
+            self._completion = asyncio.get_running_loop().create_future()
+            session._amd = self
+            session._amd_tools = _amd_tools()
+            # the pump ends with the run's completion, which the session's close also brings
+            self._pump = self._tasks.spawn(self._deliver(run), name="amd_events")
+        except BaseException:
+            # the run is accepted: close it, so the session is not left gated
+            self._detach()
+            await run.aclose()
             self._lifecycle = AMDLifecycle.FINISHED
             await self._close_owned()
             raise
@@ -242,17 +262,12 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
         logger.info(
             f"amd initialized with {source} models",
             extra={
-                "llm": _label(classifier),
+                "llm": labels[0],
                 "llm_source": llm_source,
-                "stt": _label(self._stt) if self._stt is not None else "session transcript only",
+                "stt": labels[1],
                 "stt_source": stt_source,
             },
         )
-        self._completion = asyncio.get_running_loop().create_future()
-        session._amd = self
-        session._amd_tools = _amd_tools()
-        # the pump ends with the run's completion, which the session's close also brings
-        self._pump = self._tasks.spawn(self._deliver(self._run), name="amd_events")
         return self
 
     def _entry(self, classifier: Any) -> AmdEntry:

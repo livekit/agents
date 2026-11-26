@@ -1287,6 +1287,29 @@ async def test_slow_resource_close_does_not_keep_amd_attached(
         assert (model_factories.llm_model.closes, model_factories.stt_model.closes) == (1, 1)
 
 
+async def test_failing_model_label_after_creation_leaves_nothing_attached(
+    model_factories: Factories,
+) -> None:
+    """A model whose ``provider`` raises fails the entry before the run attaches: the models
+    AMD created close, ``session.amd`` stays ``None``, and a new AMD can enter."""
+
+    class BadLabel(Classifier):
+        @property
+        def provider(self) -> str:
+            raise RuntimeError("provider lookup failed")
+
+    model_factories.llm_model = BadLabel({"Hello?": "human"})
+    async with started([], llm_model=Classifier()) as (session, _):
+        detector = AMD(session, llm="google/gemma-4-31b-it", stt="cartesia/ink-2")
+        with refused(RuntimeError, "provider lookup failed"):
+            await detector.__aenter__()
+        assert session.amd is None
+        assert detector.lifecycle is AMDLifecycle.FINISHED
+        assert (model_factories.llm_model.closes, model_factories.stt_model.closes) == (1, 1)
+        async with AMD(session, llm=Classifier(), stt=None) as later:
+            assert session.amd is later
+
+
 async def test_llm_calls_use_session_connection_options() -> None:
     """Classification and menu requests use the session's ``llm_conn_options`` (§4.1)."""
     options = APIConnectOptions(max_retry=1, retry_interval=0, read_timeout=0.5)
