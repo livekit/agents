@@ -27,7 +27,8 @@ async def _shutdown() -> None:
 _provider_adopted = False
 
 
-def _install(runner_cmd: _core.RunnerCmd) -> None:
+def _install(runner_cmd: _core.RunnerCmd = _core.RunnerCmd.NoCommand) -> None:
+    # `runner_cmd`: the `lk agent` command that started the process; none for a script or a test.
     # Adopts the global provider if unset and bridges an SDK provider; any other is left alone.
     global _provider_adopted
     from .version import __version__
