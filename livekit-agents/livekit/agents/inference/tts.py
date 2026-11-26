@@ -10,6 +10,7 @@ from typing import Any, Literal, TypedDict, cast, overload
 from urllib.parse import urlencode
 
 import aiohttp
+from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired
 
@@ -22,6 +23,7 @@ from .._exceptions import (
 )
 from ..language import LanguageCode
 from ..log import logger
+from ..telemetry import trace_types
 from ..tts._provider_format import drop_bracket_cues
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -803,6 +805,9 @@ class SynthesizeStream(tts.SynthesizeStream):
     """Streamed API using websockets"""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        # The gateway reports the model that served after this request starts. Capture the
+        # caller now so the response can be attributed to the enclosing tts_node span.
+        self._caller_span = trace.get_current_span()
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
 
@@ -818,6 +823,24 @@ class SynthesizeStream(tts.SynthesizeStream):
         # lower for the model this stream sends, not whatever update_options picks
         # mid-utterance (fishaudio s2.1-pro and drama-3 lower differently)
         self._markup_key = tts.markup._provider_key()
+
+    def _record_serving_fallback(self, event: FallbackActivatedEvent) -> None:
+        """Attribute the request to the fallback model that produced audio."""
+        self._set_metrics_metadata(
+            model_name=event.model,
+            model_provider=event.provider,
+        )
+        response_attrs: dict[str, Any] = {
+            trace_types.ATTR_GEN_AI_RESPONSE_MODEL: event.model,
+            trace_types.ATTR_FALLBACK_TYPE: event.fallback_type,
+            trace_types.ATTR_FALLBACK_CAUSE: event.cause,
+        }
+        if (normalized_provider := trace_types.gen_ai_provider_name(event.provider)) is not None:
+            response_attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized_provider
+
+        for span in (self._tts_request_span, self._caller_span):
+            if span is not None:
+                span.set_attributes(response_attrs)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = ""
@@ -876,6 +899,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_task(connection: _TTSConnection) -> None:
             current_session_id: str | None = None
+            fallback_event: FallbackActivatedEvent | None = None
             await input_sent_event.wait()
 
             while True:
@@ -926,11 +950,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                             },
                         )
                         continue
+
+                    # The notice can arrive on an attempt that later fails before
+                    # producing audio. Keep it local to this attempt and publish the
+                    # serving attribution only once that attempt supplies audio.
+                    fallback_event = event
+
                     self._tts.emit(
                         "fallback_activated",
                         event,
                     )
                 elif msg_type == "output_audio":
+                    if fallback_event is not None:
+                        self._record_serving_fallback(fallback_event)
+                        fallback_event = None
+
                     b64data = base64.b64decode(data["audio"])
                     output_emitter.push(b64data)
                 elif msg_type == "output_alignment":

@@ -4,11 +4,15 @@ import asyncio
 import base64
 import json
 from collections import deque
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import livekit.agents.inference.tts as inference_tts
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
@@ -21,11 +25,27 @@ from livekit.agents.inference.tts import (
     _normalize_fallback,
     _parse_model_string,
 )
+from livekit.agents.metrics import ModelUsageCollector, TTSMetrics, TTSModelUsage
+from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 _AUDIO = {"type": "output_audio", "audio": base64.b64encode(b"\0\0" * 2400).decode()}
+
+
+@pytest.fixture
+def span_exporter() -> Iterator[InMemorySpanExporter]:
+    original_provider = tracer._tracer_provider
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    set_tracer_provider(provider)
+    try:
+        yield exporter
+    finally:
+        set_tracer_provider(original_provider)
+        provider.shutdown()
 
 
 def _make_tts(model: str = "cartesia/sonic-3", **kwargs: Any) -> TTS:
@@ -122,13 +142,15 @@ class _FakeWebSocket:
 
 
 class _FakePool:
-    def __init__(self, websocket: _FakeWebSocket) -> None:
-        self._websocket = websocket
+    def __init__(self, websocket: _FakeWebSocket | list[_FakeWebSocket]) -> None:
+        self._websockets = [websocket] if isinstance(websocket, _FakeWebSocket) else websocket
+        self.connection_count = 0
         self.last_acquire_time = 0.0
         self.last_connection_reused = False
 
     def connection(self, *, timeout: float):  # noqa: ANN201, ARG002
-        websocket = self._websocket
+        websocket = self._websockets[self.connection_count]
+        self.connection_count += 1
 
         class _Context:
             async def __aenter__(self):  # noqa: ANN204
@@ -153,6 +175,15 @@ async def _synthesize(tts: TTS, messages: list[dict[str, Any]], text: str) -> li
         stream.push_text(text)
         stream.end_input()
         return [event async for event in stream]
+
+
+async def _synthesize_with_metrics(
+    tts: TTS, messages: list[dict[str, Any]], text: str
+) -> tuple[list[Any], list[TTSMetrics]]:
+    metrics: list[TTSMetrics] = []
+    tts.on("metrics_collected", metrics.append)
+    events = await _synthesize(tts, messages, text)
+    return events, metrics
 
 
 @pytest.mark.parametrize(
@@ -355,6 +386,310 @@ async def test_emits_fallback_activated_event(
         )
     ]
     assert audio_events
+
+
+async def test_fallback_attribution_updates_metrics_usage_and_spans(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    tts = _make_tts("xai/tts-1")
+    metrics: list[TTSMetrics] = []
+    tts.on("metrics_collected", metrics.append)
+    collector = ModelUsageCollector()
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "s"},
+            _fallback_notice(),
+            _AUDIO,
+            {"type": "done"},
+        ]
+    )
+    tts._pool = _FakePool(websocket)  # type: ignore[assignment]
+
+    with tracer.start_as_current_span(
+        "tts_node",
+        attributes={
+            trace_types.ATTR_GEN_AI_REQUEST_MODEL: "xai/tts-1",
+            trace_types.ATTR_GEN_AI_PROVIDER_NAME: "livekit",
+        },
+    ):
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+            stream.push_text("hello")
+            stream.end_input()
+            audio_events = [event async for event in stream]
+
+    assert audio_events
+    assert len(metrics) == 1
+    metric = metrics[0]
+    assert metric.metadata is not None
+    assert metric.metadata.model_name == "deepgram/aura-2"
+    assert metric.metadata.model_provider == "deepgram"
+
+    collector.collect(metric)
+    [usage] = collector.flatten()
+    assert isinstance(usage, TTSModelUsage)
+    assert usage.provider == "deepgram"
+    assert usage.model == "deepgram/aura-2"
+    assert usage.characters_count == len("hello")
+
+    [request] = [span for span in span_exporter.get_finished_spans() if span.name == "tts_request"]
+    [caller] = [span for span in span_exporter.get_finished_spans() if span.name == "tts_node"]
+    for span in (request, caller):
+        attrs = span.attributes or {}
+        assert attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "xai/tts-1"
+        assert attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == "deepgram/aura-2"
+        assert attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] == "deepgram"
+        assert attrs[trace_types.ATTR_FALLBACK_TYPE] == "fallback"
+        assert attrs[trace_types.ATTR_FALLBACK_CAUSE] == "provider_error"
+
+
+@pytest.mark.virtual_time
+async def test_failed_fallback_attempt_does_not_attribute_successful_primary_retry(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    tts = _make_tts("xai/tts-1")
+    metrics: list[TTSMetrics] = []
+    fallback_events: list[FallbackActivatedEvent] = []
+    tts.on("metrics_collected", metrics.append)
+    tts.on("fallback_activated", fallback_events.append)
+    collector = ModelUsageCollector()
+    pool = _FakePool(
+        [
+            _FakeWebSocket(
+                [
+                    {"type": "session.created", "session_id": "failed"},
+                    _fallback_notice(session_id="failed"),
+                ]
+            ),
+            _FakeWebSocket(
+                [
+                    {"type": "session.created", "session_id": "primary"},
+                    _AUDIO,
+                    {"type": "done"},
+                ]
+            ),
+        ]
+    )
+    tts._pool = pool  # type: ignore[assignment]
+
+    with tracer.start_as_current_span(
+        "tts_node",
+        attributes={
+            trace_types.ATTR_GEN_AI_REQUEST_MODEL: "xai/tts-1",
+            trace_types.ATTR_GEN_AI_PROVIDER_NAME: "livekit",
+        },
+    ):
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=1, timeout=1.0)) as stream:
+            stream.push_text("hello")
+            stream.end_input()
+            audio_events = [event async for event in stream]
+
+    assert audio_events
+    assert pool.connection_count == 2
+    assert len(fallback_events) == 1
+    assert len(metrics) == 1
+    metric = metrics[0]
+    assert metric.metadata is not None
+    assert metric.metadata.model_name == "xai/tts-1"
+    assert metric.metadata.model_provider == "livekit"
+
+    collector.collect(metric)
+    [usage] = collector.flatten()
+    assert isinstance(usage, TTSModelUsage)
+    assert usage.provider == "livekit"
+    assert usage.model == "xai/tts-1"
+
+    [request] = [span for span in span_exporter.get_finished_spans() if span.name == "tts_request"]
+    [caller] = [span for span in span_exporter.get_finished_spans() if span.name == "tts_node"]
+    for span in (request, caller):
+        attrs = span.attributes or {}
+        assert attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "xai/tts-1"
+        assert attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] == "livekit"
+        assert trace_types.ATTR_GEN_AI_RESPONSE_MODEL not in attrs
+        assert trace_types.ATTR_FALLBACK_TYPE not in attrs
+        assert trace_types.ATTR_FALLBACK_CAUSE not in attrs
+
+
+@pytest.mark.virtual_time
+async def test_synthesize_retry_does_not_attribute_failed_fallback_attempt(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    tts = _make_tts("xai/tts-1")
+    metrics: list[TTSMetrics] = []
+    fallback_events: list[FallbackActivatedEvent] = []
+    tts.on("metrics_collected", metrics.append)
+    tts.on("fallback_activated", fallback_events.append)
+    collector = ModelUsageCollector()
+    pool = _FakePool(
+        [
+            _FakeWebSocket(
+                [
+                    {"type": "session.created", "session_id": "failed"},
+                    _fallback_notice(session_id="failed"),
+                ]
+            ),
+            _FakeWebSocket(
+                [
+                    {"type": "session.created", "session_id": "primary"},
+                    _AUDIO,
+                    {"type": "done"},
+                ]
+            ),
+        ]
+    )
+    tts._pool = pool  # type: ignore[assignment]
+
+    with tracer.start_as_current_span(
+        "tts_node",
+        attributes={
+            trace_types.ATTR_GEN_AI_REQUEST_MODEL: "xai/tts-1",
+            trace_types.ATTR_GEN_AI_PROVIDER_NAME: "livekit",
+        },
+    ):
+        async with tts.synthesize(
+            "hello", conn_options=APIConnectOptions(max_retry=1, timeout=1.0)
+        ) as stream:
+            audio_events = [event async for event in stream]
+
+    assert audio_events
+    assert pool.connection_count == 2
+    assert len(fallback_events) == 1
+    assert metrics
+    for metric in metrics:
+        assert metric.metadata is not None
+        assert metric.metadata.model_name == "xai/tts-1"
+        assert metric.metadata.model_provider == "livekit"
+        collector.collect(metric)
+
+    [usage] = collector.flatten()
+    assert isinstance(usage, TTSModelUsage)
+    assert usage.provider == "livekit"
+    assert usage.model == "xai/tts-1"
+
+    spans = span_exporter.get_finished_spans()
+    request_spans = [span for span in spans if span.name == "tts_request"]
+    attempt_spans = [span for span in spans if span.name == "tts_request_run"]
+    [caller] = [span for span in spans if span.name == "tts_node"]
+    assert request_spans
+    assert attempt_spans
+    for span in (*request_spans, *attempt_spans, caller):
+        attrs = span.attributes or {}
+        assert attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "xai/tts-1"
+        assert attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] == "livekit"
+        assert trace_types.ATTR_GEN_AI_RESPONSE_MODEL not in attrs
+        assert trace_types.ATTR_FALLBACK_TYPE not in attrs
+        assert trace_types.ATTR_FALLBACK_CAUSE not in attrs
+
+
+@pytest.mark.virtual_time
+async def test_successful_fallback_on_retry_is_attributed_to_the_fallback_model(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    tts = _make_tts("xai/tts-1")
+    metrics: list[TTSMetrics] = []
+    fallback_events: list[FallbackActivatedEvent] = []
+    tts.on("metrics_collected", metrics.append)
+    tts.on("fallback_activated", fallback_events.append)
+    pool = _FakePool(
+        [
+            _FakeWebSocket([{"type": "session.created", "session_id": "failed"}]),
+            _FakeWebSocket(
+                [
+                    {"type": "session.created", "session_id": "fallback"},
+                    _fallback_notice(session_id="fallback"),
+                    _AUDIO,
+                    {"type": "done"},
+                ]
+            ),
+        ]
+    )
+    tts._pool = pool  # type: ignore[assignment]
+
+    with tracer.start_as_current_span(
+        "tts_node",
+        attributes={
+            trace_types.ATTR_GEN_AI_REQUEST_MODEL: "xai/tts-1",
+            trace_types.ATTR_GEN_AI_PROVIDER_NAME: "livekit",
+        },
+    ):
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=1, timeout=1.0)) as stream:
+            stream.push_text("hello")
+            stream.end_input()
+            audio_events = [event async for event in stream]
+
+    assert audio_events
+    assert pool.connection_count == 2
+    assert len(fallback_events) == 1
+    assert len(metrics) == 1
+    metric = metrics[0]
+    assert metric.metadata is not None
+    assert metric.metadata.model_name == "deepgram/aura-2"
+    assert metric.metadata.model_provider == "deepgram"
+
+    spans = span_exporter.get_finished_spans()
+    [request] = [span for span in spans if span.name == "tts_request"]
+    [caller] = [span for span in spans if span.name == "tts_node"]
+    for span in (request, caller):
+        attrs = span.attributes or {}
+        assert attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == "xai/tts-1"
+        assert attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == "deepgram/aura-2"
+        assert attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] == "deepgram"
+        assert attrs[trace_types.ATTR_FALLBACK_TYPE] == "fallback"
+        assert attrs[trace_types.ATTR_FALLBACK_CAUSE] == "provider_error"
+
+
+async def test_synthesize_fallback_attribution_uses_the_serving_model() -> None:
+    tts = _make_tts("xai/tts-1")
+    metrics: list[TTSMetrics] = []
+    tts.on("metrics_collected", metrics.append)
+    collector = ModelUsageCollector()
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "s"},
+            _fallback_notice(),
+            _AUDIO,
+            {"type": "done"},
+        ]
+    )
+    tts._pool = _FakePool(websocket)  # type: ignore[assignment]
+
+    async with tts.synthesize(
+        "hello", conn_options=APIConnectOptions(max_retry=0, timeout=1.0)
+    ) as stream:
+        audio_events = [event async for event in stream]
+
+    assert audio_events
+    assert metrics
+    for metric in metrics:
+        assert metric.metadata is not None
+        assert metric.metadata.model_name == "deepgram/aura-2"
+        assert metric.metadata.model_provider == "deepgram"
+        collector.collect(metric)
+
+    # The chunked wrapper and its inner stream both report metrics, but they must
+    # not split usage between the primary and serving models.
+    [usage] = collector.flatten()
+    assert isinstance(usage, TTSModelUsage)
+    assert usage.provider == "deepgram"
+    assert usage.model == "deepgram/aura-2"
+
+
+async def test_metrics_keep_primary_attribution_without_fallback() -> None:
+    tts = _make_tts("xai/tts-1")
+    collector = ModelUsageCollector()
+
+    _, metrics = await _synthesize_with_metrics(tts, [_AUDIO, {"type": "done"}], "hello")
+
+    assert len(metrics) == 1
+    metric = metrics[0]
+    assert metric.metadata is not None
+    assert metric.metadata.model_name == "xai/tts-1"
+    assert metric.metadata.model_provider == "livekit"
+
+    collector.collect(metric)
+    [usage] = collector.flatten()
+    assert isinstance(usage, TTSModelUsage)
+    assert usage.provider == "livekit"
+    assert usage.model == "xai/tts-1"
 
 
 @pytest.mark.parametrize(

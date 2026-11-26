@@ -306,6 +306,10 @@ class ChunkedStream(ABC):
         self._output_tokens = 0
         self._acquire_time: float = 0.0
         self._connection_reused: bool = False
+        self._primary_metrics_metadata = Metadata(
+            model_name=self._tts.model, model_provider=self._tts.provider
+        )
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -341,6 +345,17 @@ class ChunkedStream(ABC):
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
 
+    def _set_metrics_metadata(self, *, model_name: str, model_provider: str) -> None:
+        """Set the model attribution used by this stream's metrics."""
+        self._metrics_metadata = Metadata(
+            model_name=model_name,
+            model_provider=model_provider,
+        )
+
+    def _reset_metrics_metadata(self) -> None:
+        """Restore the primary model attribution before a new synthesis attempt."""
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
+
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         """Task used to collect metrics"""
 
@@ -375,7 +390,7 @@ class ChunkedStream(ABC):
             streamed=False,
             acquire_time=self._acquire_time,
             connection_reused=self._connection_reused,
-            metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
+            metadata=self._metrics_metadata.model_copy(),
         )
         if self._tts_request_span:
             self._tts_request_span.set_attribute(
@@ -408,6 +423,7 @@ class ChunkedStream(ABC):
         )
 
         for i in range(self._conn_options.max_retry + 1):
+            self._reset_metrics_metadata()
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
                 with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
@@ -545,6 +561,13 @@ class _ChunkedStreamFromStream(ChunkedStream):
                 if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                     output_emitter.push_timed_transcript(timed_transcripts)
 
+        # The wrapped stream may discover which model actually served (for example,
+        # an Inference gateway fallback). Keep this wrapper's metrics on that model too.
+        self._set_metrics_metadata(
+            model_name=stream._metrics_metadata.model_name or self._tts.model,
+            model_provider=stream._metrics_metadata.model_provider or self._tts.provider,
+        )
+
         output_emitter.flush()
 
 
@@ -587,12 +610,27 @@ class SynthesizeStream(ABC):
         self._output_tokens = 0
         self._acquire_time: float = 0.0
         self._connection_reused: bool = False
+        self._primary_metrics_metadata = Metadata(
+            model_name=self._tts.model, model_provider=self._tts.provider
+        )
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
 
         self._tts_request_span: trace.Span | None = None
 
     def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
+
+    def _set_metrics_metadata(self, *, model_name: str, model_provider: str) -> None:
+        """Set the model attribution used by this stream's metrics."""
+        self._metrics_metadata = Metadata(
+            model_name=model_name,
+            model_provider=model_provider,
+        )
+
+    def _reset_metrics_metadata(self) -> None:
+        """Restore the primary model attribution before a new synthesis attempt."""
+        self._metrics_metadata = self._primary_metrics_metadata.model_copy()
 
     @abstractmethod
     async def _run(self, output_emitter: AudioEmitter) -> None: ...
@@ -611,6 +649,7 @@ class SynthesizeStream(ABC):
         )
 
         for i in range(self._conn_options.max_retry + 1):
+            self._reset_metrics_metadata()
             output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
             try:
                 with _attempt_span(self._tts_attempt_span_name, self._tts) as attempt_span:
@@ -736,7 +775,7 @@ class SynthesizeStream(ABC):
                 streamed=True,
                 acquire_time=self._acquire_time,
                 connection_reused=self._connection_reused,
-                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
+                metadata=self._metrics_metadata.model_copy(),
             )
             if self._tts_request_span:
                 self._tts_request_span.set_attribute(
