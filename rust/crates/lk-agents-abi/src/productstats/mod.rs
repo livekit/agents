@@ -1,4 +1,4 @@
-use crate::telemetry::decl::{Attrs, Label, SpanValue};
+use crate::telemetry::decl::{Attrs, Bounded, Label, SpanValue};
 use crate::telemetry::record::Measurement;
 use crate::telemetry::semconv::otel;
 use runner::Runner;
@@ -49,7 +49,7 @@ pub enum ThreadStorage {
 }
 
 /// What every product statistics export says of its process.
-#[derive(Attrs, Debug, Clone, PartialEq)]
+#[derive(Attrs, Bounded, Debug, Clone, PartialEq)]
 pub struct ProductStatsResource {
     /// The framework's service name, `livekit-agents`.
     #[attr(otel::SERVICE_NAME)]

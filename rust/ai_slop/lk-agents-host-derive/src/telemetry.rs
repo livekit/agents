@@ -24,6 +24,7 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         return Err(syn::Error::new_spanned(&input.ident, "#[derive(Attrs)] is for structs"));
     };
     let (mut write, mut labels, mut measure) = (Vec::new(), Vec::new(), Vec::new());
+    let mut keys = Vec::new();
     let mut at = None;
     for (i, field) in data.fields.iter().enumerate() {
         let member = match &field.ident {
@@ -47,6 +48,10 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             }
             Field::Attr(attr) => {
                 let key = &attr.key;
+                let owned = matches!(key, t::Name::Lit(_));
+                keys.push(quote! {
+                    const _: () = #d::key_declared(#key, ::core::module_path!(), #owned);
+                });
                 let value = match attr.unmeasured {
                     Unmeasured::Omit => quote!(#d::SpanValue::value(&self.#member)),
                     Unmeasured::Zero => quote!(self.#member.value_or(#d::Unmeasured::Zero)),
@@ -81,6 +86,7 @@ pub fn attrs(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         }
     });
     Ok(quote! {
+        #( #keys )*
         impl #imp #d::Attrs for #ident #ty #wh {
             #at
             fn write(&self, out: &mut #d::KeyValues) { #unused #( #write )* }
@@ -118,7 +124,8 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         if let Some(v) = data.variants.iter().find(|v| t::variant_open(v) || named_wire(v)) {
             return Err(syn::Error::new_spanned(v, "a wire vocabulary's strings are its own"));
         }
-        return Ok(value);
+        let closed = closed(ident);
+        return Ok(quote!(#value #closed));
     }
     let mut open = false;
     let arms = data
@@ -151,6 +158,7 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
     } else {
         quote!(pub const fn as_str(&self) -> &'static str)
     };
+    let closed = (!open).then(|| closed(ident));
     Ok(quote! {
         impl #ident {
             /// The wire string.
@@ -159,7 +167,34 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             }
         }
         #value
+        #closed
     })
+}
+
+/// A closed vocabulary is a value a product statistic may carry.
+fn closed(ident: &syn::Ident) -> TokenStream {
+    let d = decl();
+    quote! {
+        impl #d::bounded::Sealed for #ident {}
+        impl #d::Bounded for #ident {}
+    }
+}
+
+/// `#[derive(Bounded)]`: a group of product statistics labels, each field itself bounded.
+pub fn bounded(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
+    let syn::Data::Struct(data) = &input.data else {
+        return Err(syn::Error::new_spanned(&input.ident, "#[derive(Bounded)] is for structs"));
+    };
+    let fields = bounded_fields(&data.fields);
+    let closed = closed(&input.ident);
+    Ok(quote!(#fields #closed))
+}
+
+/// Each field's type is one a product statistic may carry, or the declaration does not compile.
+fn bounded_fields(fields: &syn::Fields) -> TokenStream {
+    let d = decl();
+    let types = fields.iter().map(|field| &field.ty);
+    quote!(const _: () = { #( #d::bounded::<#types>(); )* };)
 }
 
 /// A role attribute on an `Attrs` struct: the item, unchanged, and the role's impls.
@@ -186,6 +221,7 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
             let manual = span.manual;
             let audience = audience(span.audience);
             quote! {
+                const _: () = #d::declared::<#audience>(#name, ::core::module_path!());
                 impl #d::SpanDecl for #ident {
                     const NAME: &'static str = #name;
                     type Audience = #audience;
@@ -219,6 +255,7 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
         Role::Event { name, audience: a } => {
             let a = audience(a);
             quote! {
+                const _: () = #d::declared::<#a>(#name, ::core::module_path!());
                 impl #d::EventDecl for #ident {
                     const NAME: &'static str = #name;
                     type Audience = #a;
@@ -233,8 +270,13 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                 InstrumentKind::Histogram => quote!(Histogram),
             };
             let bounds = metric.bounds.as_ref().map_or_else(|| quote!(&[]), |b| quote!(#b));
+            // A product statistic's labels are closed enums and bounded labels, by their types.
+            let bounded = matches!(metric.audience, Audience::ProductStats)
+                .then(|| bounded_fields(&st.fields));
             let audience = audience(metric.audience);
             quote! {
+                const _: () = #d::declared::<#audience>(#name, ::core::module_path!());
+                #bounded
                 impl #d::MetricDecl for #ident {
                     const NAME: &'static str = #name;
                     type Audience = #audience;

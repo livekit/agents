@@ -1,5 +1,5 @@
 use crate::ProviderId;
-use crate::telemetry::decl::{Attrs, Label, Measure, SpanValue, metric};
+use crate::telemetry::decl::{Attrs, Bounded, Label, Measure, SpanValue, metric};
 use crate::telemetry::instruments::DURATION_BOUNDS;
 
 // What every model is counted under. The framework derives the labels from the identity a model
@@ -27,7 +27,7 @@ pub const CUSTOM_PLUGIN: &str = "custom";
 pub const UNKNOWN: &str = "unknown";
 
 /// The code, the vendor and the model a statistic is about.
-#[derive(Attrs, Debug, Clone, PartialEq, Eq)]
+#[derive(Attrs, Bounded, Debug, Clone, PartialEq, Eq)]
 pub struct ModelLabels {
     /// STT, TTS, LLM, realtime or duplex.
     #[attr("lk.product.agents.model.kind")]

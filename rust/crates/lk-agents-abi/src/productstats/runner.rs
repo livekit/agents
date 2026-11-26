@@ -1,4 +1,4 @@
-use crate::telemetry::decl::{Attrs, SpanValue};
+use crate::telemetry::decl::{Attrs, Bounded, SpanValue};
 
 /// The command that started the process, which its host names when it installs telemetry:
 /// `none` when no `lk agent` command did (a script, a test).
@@ -23,7 +23,7 @@ pub enum RunnerKind {
 }
 
 /// The process's runner, as every telemetry consumer reads it.
-#[derive(Attrs, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Attrs, Bounded, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Runner {
     /// The command that started the process.
     #[attr("lk.product.agents.runner.cmd")]
