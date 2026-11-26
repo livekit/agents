@@ -2134,8 +2134,9 @@ class AgentActivity(RecognitionHooks):
         return_handle: bool = False,
     ) -> asyncio.Future[str] | asyncio.Future[CommitUserTurnResult]:
         completion = _TurnCompletion() if return_handle else None
-        # Turn hooks gate realtime replies after EOT.
-        if self._rt_session is not None and (self._session._turn_hooks is None or skip_reply):
+        turn_hooks = self._session._turn_hooks
+        gated = turn_hooks and turn_hooks.gates_replies
+        if self._rt_session is not None and (not gated or skip_reply):
             # commit audio buffer and conditionally trigger response generation
             self._rt_session.commit_audio()
             if skip_reply:
@@ -2148,6 +2149,10 @@ class AgentActivity(RecognitionHooks):
             # `skip_reply` prevents duplicate reply from _on_user_turn_completed
             # but keeps flushing STT transcript into the chat context
             skip_reply = True
+
+        if turn_hooks and not gated and self.stt is None:
+            # ends a turn here when hooks are passive
+            turn_hooks.on_user_turn_committed("", None)
 
         assert self._audio_recognition is not None
         transcript_fut = self._audio_recognition._commit_user_turn(
@@ -3023,11 +3028,12 @@ class AgentActivity(RecognitionHooks):
             # TODO(theomonnom): should we "forward" this new turn to the next agent/activity?
             return True
 
+        turn_hooks = self._session._turn_hooks
         # avoid interruption if the new_transcript is too short
         # AMD classifies every turn, so short turns are committed while it runs
         if (
             self.stt is not None
-            and not self._session._amd_gates_replies
+            and not (turn_hooks and turn_hooks.gates_replies)
             and self._turn_detection != "manual"
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
@@ -3057,7 +3063,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.clear_audio()
             return False
 
-        if (turn_hooks := self._session._turn_hooks) is not None:
+        if turn_hooks is not None:
             turn_hooks = turn_hooks.on_user_turn_committed(
                 info.new_transcript, info.metrics.end_of_turn_delay
             )
@@ -3227,6 +3233,7 @@ class AgentActivity(RecognitionHooks):
 
         if (
             turn_hooks is not None
+            and turn_hooks.gates_replies
             and info.new_transcript
             and isinstance(self.llm, llm.RealtimeModel)
             and not self.llm.capabilities.user_transcription
@@ -3341,7 +3348,7 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
-        if self._session._amd_gates_replies:
+        if (turn_hooks := self._session._turn_hooks) and turn_hooks.gates_replies:
             return  # AMD owns replies while it runs, and a voicemail greeting runs long
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(

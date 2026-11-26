@@ -22,6 +22,12 @@ class TurnHooks(Protocol):
         """Temporary realtime instructions, available after ``should_reply`` allows a reply."""
         ...
 
+    @property
+    def gates_replies(self) -> bool:
+        """Whether the hooks can hold, deny, or direct a reply. False for hooks that only
+        observe turns: AgentSession then replies as it does without hooks."""
+        ...
+
     def on_user_turn_committed(self, transcript: str, end_of_turn_delay: float | None) -> TurnHooks:
         """Bind hooks to the accepted user turn before the customer hook runs.
         Useful for per-turn classification task.

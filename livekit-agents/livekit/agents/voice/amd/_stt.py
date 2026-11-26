@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from typing import Literal
 
 from livekit import rtc
 
 from ... import stt
 from ...log import logger
 from ...types import APIConnectOptions
-from ...utils import aio
+from ...utils import EventEmitter, aio
+from ..events import UserInputTranscribedEvent
 from . import _inference
 from ._chat_context import AMDTranscript, AMDTranscriptSource
 
@@ -61,12 +62,15 @@ class LateAMDFinal:
         return self._transcript or None
 
 
-class AMDTranscriber:
+class AMDTranscriber(EventEmitter[Literal["user_input_transcribed"]]):
     """Collect each turn's session transcript and, with an AMD STT, its own transcript too.
 
     Neither source wins: the classifier sees both, so a late or missing transcript from
     one STT does not empty the turn. Without session STT, AMD uses its own transcript
     alone. If the AMD stream fails, turns fall back to the session transcript alone.
+
+    Emits ``user_input_transcribed`` for each AMD STT final, except a late final that
+    goes to a turn that already ended.
     """
 
     def __init__(
@@ -75,11 +79,9 @@ class AMDTranscriber:
         conn_options: APIConnectOptions,
         *,
         session_stt: bool = True,
-        on_amd_final: Callable[[], None] | None = None,
     ) -> None:
+        super().__init__()
         self._model = model
-        # called when an AMD final joins the open turn, not a turn that already ended
-        self._on_amd_final = on_amd_final
         self._conn_options = conn_options
         self._session_enabled = session_stt or model is None
         self._amd_enabled = model is not None
@@ -126,40 +128,30 @@ class AMDTranscriber:
                             continue  # a blank final must not consume a turn's wait
                         late, self._late = self._late, None
                         if late is None or not late.deliver(transcript):
-                            heard = self.push_transcript(transcript=transcript, source="amd")
-                            if heard and self._on_amd_final is not None:
-                                self._on_amd_final()
+                            self.push_transcript(transcript=transcript, source="amd")
+                            self._emit_final(transcript)
         except Exception as exc:
             self.fail(exc)
 
+    def _emit_final(self, transcript: str) -> None:
+        try:
+            self.emit(
+                "user_input_transcribed",
+                UserInputTranscribedEvent(transcript=transcript, is_final=True),
+            )
+        except Exception:
+            # a listener error is not an STT failure
+            logger.exception("amd transcript listener failed")
+
     def push_transcript(
         self, transcript: str, *, replace: bool = False, source: AMDTranscriptSource = "session"
-    ) -> bool:
-        """Add a final to the open turn. Return whether it gave text from an STT in use."""
+    ) -> None:
         self._current.add(source, transcript, replace=replace)
-        enabled = self._session_enabled if source == "session" else self._amd_enabled
-        return enabled and bool(transcript.strip())
 
-    @property
-    def session_stt_active(self) -> bool:
-        """Whether turns use the session transcript."""
-        return self._session_enabled
-
-    def heard(self, source: AMDTranscriptSource) -> bool:
-        """Whether the open turn has text from this source."""
-        return bool(self._current.get(source))
-
-    def end_turn(
-        self, session_transcript: str | None = None, *, late_wait: float = 0.0
-    ) -> AMDTranscript:
+    def end_turn(self, session_transcript: str, *, late_wait: float = 0.0) -> AMDTranscript:
         """End the turn. Within `late_wait` seconds, the next AMD final still belongs to it
-        when it has no AMD text yet.
-
-        `session_transcript` is the session's transcript of the committed turn. It replaces
-        the session finals heard so far. None keeps those finals.
-        """
-        if session_transcript is not None:
-            self.push_transcript(session_transcript, replace=True, source="session")
+        when it has no AMD text yet."""
+        self.push_transcript(session_transcript, replace=True, source="session")
         turn, self._current = self._current, AMDTurnTranscriptAccumulator()
         # without session STT the turn has no text until its AMD final arrives
         late = (

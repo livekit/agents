@@ -1132,7 +1132,9 @@ class AudioRecognition:
         fut: asyncio.Future[str] = loop.create_future()
 
         # Turn hooks may use transcripts from a separate STT stream.
-        if (not self._stt and self._session._turn_hooks is None) or self._closing.is_set():
+        turn_hooks = self._session._turn_hooks
+        gated = turn_hooks and turn_hooks.gates_replies
+        if (not self._stt and not gated) or self._closing.is_set():
             fut.set_result("")
             return fut
 

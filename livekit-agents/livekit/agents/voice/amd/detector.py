@@ -22,7 +22,13 @@ from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from ..agent import AgentTask
 from . import _fsm, _inference
-from ._chat_context import AMDChatContext, AMDRequest, Turn, update_transcript
+from ._chat_context import (
+    AMDChatContext,
+    AMDRequest,
+    AMDTranscriptSource,
+    Turn,
+    update_transcript,
+)
 from ._stt import AMDTranscriber, LateAMDFinal
 from .events import (
     AMDCategory,
@@ -54,12 +60,6 @@ _TRACK_PUBLICATION_TIMEOUT = 5.0
 # The AMD STT finalizes a sentence a little after the session commits it (about 0.1 to 0.2 s
 # for cartesia/ink-whisper). Classify the turn once that final arrives, or after this wait.
 _LATE_AMD_FINAL_WAIT = 0.3
-# Ungated AMD has no end of turn from the session. Its turn ends after this silence, counted
-# from the last final transcript and the last speech end.
-_TRANSCRIPT_TURN_SILENCE = 0.3
-# With two STTs in use, one final can arrive much later than the other. Ungated AMD waits this
-# long for the missing one, so that it does not open a second turn with the same words.
-_MISSING_FINAL_WAIT = 1.0
 _MACHINE_CATEGORIES = frozenset(
     {
         AMDCategory.MACHINE_SCREENING,
@@ -132,6 +132,10 @@ class _AMDTurnHooks:
     _reply_words: bool = False
     reply_instructions: str | None = None
 
+    @property
+    def gates_replies(self) -> bool:
+        return self._amd._gates_replies
+
     def on_user_turn_committed(self, transcript: str, end_of_turn_delay: float | None) -> TurnHooks:
         return self._amd._on_user_turn_committed(transcript, end_of_turn_delay)
 
@@ -144,6 +148,8 @@ class _AMDTurnHooks:
         return self._amd._on_reply_generation(tools)
 
     async def should_reply(self, chat_ctx: llm.ChatContext) -> bool:
+        if not self.gates_replies:
+            return True
         # decide now: a later turn's prediction can arrive while the reply plays
         self._reply_words = self._amd._shows_agent_words
         if self._turn_id is None:
@@ -184,9 +190,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     opening_instructions.
 
     Ungated AMD (``gate_replies=False``) only listens and classifies. It does not
-    hold, cancel, or change a reply. The limits above on realtime models, agent
-    handoffs, and direct speech generation do not apply to it. Use it when you do
-    not want the agent to deal with machines.
+    hold, cancel, or change a reply. The limits on realtime models, agent handoffs,
+    and direct speech generation do not apply to it. Use it when you do not want
+    the agent to interact with machines.
 
     Example:
         async with AMD(session) as amd:
@@ -219,10 +225,15 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             a prediction, then allows, denies, or directs it. When False, AMD only
             listens and classifies. The agent replies as it does without AMD, before
             the prediction arrives. AMD completes at the first ``human`` or machine
-            prediction. Then you interrupt the agent, hang up, or continue. AMD takes
-            each turn from the transcripts, so a realtime model can keep server-side
-            turn detection. AMD ignores the stage instructions, human_instructions,
-            and machine_silence_threshold. ``say()``, ``generate_reply()``, and agent
+            prediction. Then you interrupt the agent, hang up, or continue. AMD
+            takes its turns and transcripts as before when the session detects the
+            turns. With a realtime model that detects turns itself, AMD classifies
+            each final transcript when it arrives: the AMD STT's, or the session's
+            when AMD has no STT. A final can hold only a part of what the
+            participant says, and each ``uncertain`` prediction for a final counts
+            toward max_uncertain_turns.
+            AMD ignores the stage instructions, human_instructions, and
+            machine_silence_threshold. ``say()``, ``generate_reply()``, and agent
             handoffs stay available.
         screening_instructions: Instructions for each screening turn. None
             completes AMD when the call enters screening, without a reply.
@@ -350,10 +361,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             AMDCategory.HUMAN: human_instructions,
         }
         if not gate_replies:
-            # ungated AMD never replies: the customer handles every machine stage
             self._instructions = dict.fromkeys(self._instructions)
-        # ungated AMD: when the open turn got its last final transcript; None after the commit
-        self._last_final_at: float | None = None
+
         self._opening_text = opening_text
         self._opening_instructions = opening_instructions
         self._opening: SpeechHandle | None = None
@@ -428,6 +437,12 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         return self._lifecycle
 
     @property
+    def _server_turn_detection(self) -> bool:
+        """Whether the current Agent's realtime model detects the turns."""
+        activity = self._session._activity
+        return bool(activity and activity._rt_turn_detection_enabled)
+
+    @property
     def _blocks_session_audio(self) -> bool:
         return self.lifecycle not in {AMDLifecycle.ACTIVE, AMDLifecycle.FINISHED}
 
@@ -438,22 +453,14 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if activity._new_turns_blocked or self._session._next_activity is not None:
             raise RuntimeError("wait for the agent handoff to finish before entering AMD")
         if isinstance(activity.agent, AgentTask) and self._gates_replies:
-            # the task's return to its caller is a handoff, which AMD rejects
             raise RuntimeError("finish the AgentTask before entering AMD")
+        session_stt = activity.stt is not None
+        amd_stt = self._stt is not None or self._stt_model is not None
+        server_turn_detection = activity._rt_turn_detection_enabled
         if isinstance(activity.llm, llm.RealtimeModel):
             capabilities = activity.llm.capabilities
-            has_stt = (
-                activity.stt is not None or self._stt is not None or self._stt_model is not None
-            )
-            if not self._gates_replies:
-                # ungated AMD controls no reply, so it needs only a transcript to classify
-                if not has_stt and not capabilities.user_transcription:
-                    raise ValueError(
-                        "amd without gate_replies requires session STT, AMD STT, or user "
-                        "transcription with realtime models"
-                    )
-            else:
-                if activity._rt_turn_detection_enabled:
+            if self._gates_replies:
+                if server_turn_detection:
                     raise ValueError(
                         "amd requires client-side turn detection with realtime models; "
                         "set gate_replies=False to only detect"
@@ -466,8 +473,20 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                         "amd requires a realtime model with per-response tools and "
                         "client-controlled tool replies; set gate_replies=False to only detect"
                     )
-                if not has_stt:
+            if not server_turn_detection:
+                if not session_stt and not amd_stt:
                     raise ValueError("amd requires session STT or AMD STT with realtime models")
+            elif not amd_stt:
+                if not session_stt and not capabilities.user_transcription:
+                    raise ValueError(
+                        "amd requires session STT, AMD STT, or user transcription with "
+                        "server-side turn detection"
+                    )
+                if capabilities.user_transcription:
+                    logger.warning(
+                        "amd classifies the realtime model's own transcript, which arrives "
+                        "late; set an AMD STT to detect faster"
+                    )
         if self._session.amd:
             raise RuntimeError("amd is already active")
         if self._session.options.ivr_detection or self._session._ivr_activity is not None:
@@ -514,8 +533,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 stt=AMDTranscriber(
                     self._stt,
                     self._session.conn_options.stt_conn_options,
-                    session_stt=activity.stt is not None,
-                    on_amd_final=self._on_final_transcript,
+                    session_stt=session_stt and not server_turn_detection,
                 ),
                 session_allow_interruptions=self._session.options.interruption["enabled"],
                 agent_allow_interruptions=activity.agent.allow_interruptions,
@@ -525,11 +543,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             await self._close_resources()
             raise
 
-        if self._session_final_is_late() and self._stt is None:
-            logger.warning(
-                "ungated amd uses the realtime model's own transcript, which can arrive late; "
-                "set an AMD STT to detect faster"
-            )
         llm_source, stt_source = self._model_sources
         # AMD defaults use their own model quotas, apart from the session's models
         source = next((s for s in self._model_sources if s != "default"), "default")
@@ -551,8 +564,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         try:
             self._started_at = time.time()
             self._session._amd = self
+            self._session._turn_hooks = self._turn_hooks
             if self._gates_replies:
-                self._session._turn_hooks = self._turn_hooks
                 self._session.options.interruption["enabled"] = True
                 activity.agent._allow_interruptions = True
                 activity._pause_authorization()
@@ -564,6 +577,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 (self._session, "speech_created", self._on_speech_created),
                 (self._session, "agent_state_changed", self._on_agent_state_changed),
                 (self._session, "agent_false_interruption", self._on_false_interruption),
+                (self._run.stt, "user_input_transcribed", self._on_amd_user_input_transcribed),
             ]
             if self._session._room_io:
                 room = self._session._room_io.room
@@ -739,52 +753,35 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._update_idle()
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
-        if self.lifecycle is not AMDLifecycle.ACTIVE or not event.is_final:
+        if event.is_final:
+            self._on_final_transcript(event.transcript, "session")
+
+    def _on_amd_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
+        self._on_final_transcript(event.transcript, "amd")
+
+    def _on_final_transcript(self, transcript: str, source: AMDTranscriptSource) -> None:
+        if self.lifecycle is not AMDLifecycle.ACTIVE:
             return
         transcriber = self._resources.stt
-        if transcriber.amd_stt_active and self._session_final_is_late():
-            return  # the AMD STT works alone
-        if transcriber.push_transcript(event.transcript):
-            self._on_final_transcript()
-
-    def _session_final_is_late(self) -> bool:
-        """Ungated AMD: whether the session finals are a realtime model's own transcription.
-
-        No committed transcript replaces them, and such a final can arrive after the AMD
-        final ended the turn. It would then open a second turn with the same words. The
-        Agent can change during ungated AMD, so this reads the current one.
-        """
-        activity = self._session._activity
-        return (
-            not self._gates_replies
-            and activity is not None
-            and isinstance(activity.llm, llm.RealtimeModel)
-            and activity.llm.capabilities.user_transcription
-        )
-
-    def _on_final_transcript(self) -> None:
-        """Ungated AMD: a final with text restarts the silence that ends the open turn."""
-        if not self._gates_replies and self.lifecycle is AMDLifecycle.ACTIVE:
-            self._last_final_at = time.monotonic()
-            self._update_idle()
-
-    def _transcript_turn_deadline(self) -> float | None:
-        """When the open turn of ungated AMD ends; None while it has no text or speech goes on."""
-        if self._last_final_at is None or self._session.user_state == "speaking":
-            return None
-        transcriber = self._resources.stt
-        awaits_final = (
-            transcriber.amd_stt_active
-            and transcriber.session_stt_active
-            and not self._session_final_is_late()
-            and not (transcriber.heard("session") and transcriber.heard("amd"))
-        )
-        silence = _MISSING_FINAL_WAIT if awaits_final else _TRANSCRIPT_TURN_SILENCE
-        return max(self._last_final_at, self._speech_ended_at or 0.0) + silence
+        if source == "session":
+            if self._server_turn_detection and transcriber.amd_stt_active:
+                return
+            transcriber.push_transcript(transcript)
+        if self._server_turn_detection and transcript.strip() and not self._check_hard_timeout():
+            # use each STT final when no turn events reach AMD
+            self._commit_turn("", None)
 
     def _on_user_turn_committed(
         self, transcript: str, end_of_turn_delay: float | None
     ) -> TurnHooks:
+        if not self._gates_replies:
+            if (
+                self.lifecycle is AMDLifecycle.ACTIVE
+                and not self._server_turn_detection
+                and not self._check_hard_timeout()
+            ):
+                self._commit_turn(transcript, end_of_turn_delay)
+            return self._turn_hooks
         if self.lifecycle is not AMDLifecycle.ACTIVE or self._check_hard_timeout():
             return self._turn_hooks
         if activity := self._session._activity:
@@ -795,15 +792,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         turn = self._commit_turn(transcript, end_of_turn_delay)
         return _AMDTurnHooks(self, turn.turn_id)
 
-    def _commit_turn(self, transcript: str | None, end_of_turn_delay: float | None) -> Turn:
-        """End the open turn and classify it. None keeps the session finals as its transcript."""
-        self._last_final_at = None
-        transcriber = self._resources.stt
-        turn_transcript = transcriber.end_turn(transcript, late_wait=_LATE_AMD_FINAL_WAIT)
-        if transcriber.amd_stt_active and self._session_final_is_late():
-            # the session transcript is not in use: the classifier gets the AMD one alone
-            turn_transcript = dataclasses.replace(turn_transcript, session=None)
-        late_final = transcriber.late_final
+    def _commit_turn(self, transcript: str, end_of_turn_delay: float | None) -> Turn:
+        """End the open turn and classify it."""
+        turn_transcript = self._resources.stt.end_turn(transcript, late_wait=_LATE_AMD_FINAL_WAIT)
+        late_final = self._resources.stt.late_final
         now = time.monotonic()
         speaking = self._session.user_state == "speaking"
         if not speaking and not self._speech_since_commit:
@@ -883,7 +875,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         activity = self._session._activity
         if (
             activity is not None
-            and self._gates_replies  # ungated AMD leaves the Agent's history alone
+            and self._gates_replies
             and isinstance(activity.llm, llm.RealtimeModel)
             and not activity.llm.capabilities.user_transcription
             and activity.stt is None
@@ -1396,7 +1388,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return
         busy = (
             self._pending_turn is not None
-            or self._last_final_at is not None  # ungated AMD: the open turn has text
             or self._should_wait  # hold music or an advertisement; the hard timeout still applies
             or reply_held
             or self._session.user_state == "speaking"
@@ -1428,7 +1419,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     self._inference_deadline,
                     self._idle_deadline,
                     silence_deadline,
-                    self._transcript_turn_deadline(),
                 )
                 if at is not None
             ),
@@ -1445,13 +1435,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 if self.lifecycle is not AMDLifecycle.ACTIVE or self._check_hard_timeout():
                     return
                 now = time.monotonic()
-                turn_deadline = self._transcript_turn_deadline()
                 if self._inference_deadline is not None and now >= self._inference_deadline:
                     self._timeout_inference()
                 elif self._idle_deadline is not None and now >= self._idle_deadline:
                     self._finish(AMDReason.IDLE_TIMEOUT)
-                elif turn_deadline is not None and now >= turn_deadline:
-                    self._commit_turn(None, None)
                 self._prediction_changed.set()
                 self._update_idle()
 
@@ -1470,7 +1457,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._completion_reason = reason
         self._hard_deadline = None
         self._idle_deadline = None
-        self._last_final_at = None
         self._cancel_classification()
         self._prediction_changed.set()
         self._arm_timer()
@@ -1488,6 +1474,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._voicemail_handle = None
         if self._session._amd is self:
             self._session._amd = None
+            if self._session._turn_hooks is self._turn_hooks:
+                self._session._turn_hooks = None
             if self._gates_replies:
                 self._session.options.interruption["enabled"] = (
                     self._resources.session_allow_interruptions
@@ -1495,8 +1483,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 self._resources.agent._allow_interruptions = (
                     self._resources.agent_allow_interruptions
                 )
-                if self._session._turn_hooks is self._turn_hooks:
-                    self._session._turn_hooks = None
                 if activity := self._session._activity:
                     if self._forbids_reply:
                         activity._cancel_pending_speeches()

@@ -61,8 +61,6 @@ from livekit.agents.voice.amd.detector import (
     _DEFAULT_SCREENING_INSTRUCTIONS,
     _DEFAULT_VOICEMAIL_INSTRUCTIONS,
     _LATE_AMD_FINAL_WAIT,
-    _MISSING_FINAL_WAIT,
-    _TRANSCRIPT_TURN_SILENCE,
 )
 from livekit.agents.voice.audio_recognition import (
     _EndOfTurnInfo,
@@ -616,6 +614,25 @@ async def test_a_final_within_the_wait_belongs_to_the_turn_just_ended(
     # the next turn starts clean
     await amd_heard(amd, stream, "Yes, that works.")
     assert amd.end_turn("Yes, that works.").amd == "Yes, that works."
+
+
+@pytest.mark.asyncio
+async def test_the_transcriber_emits_a_final_only_for_the_open_turn(
+    transcriber: tuple[AMDTranscriber, DrainingStream],
+) -> None:
+    amd, stream = transcriber
+    emitted: list[str] = []
+    amd.on("user_input_transcribed", lambda event: emitted.append(event.transcript))
+    amd.end_turn("Sam Lee speaking.", late_wait=0.3)
+    late = amd.late_final
+    assert late is not None
+    waiting = asyncio.create_task(late.wait())
+    stream.send_fake_transcript("Sam Lee speaking.")  # it goes to the turn that ended
+    assert await waiting == "Sam Lee speaking."
+    assert emitted == []
+
+    await amd_heard(amd, stream, "Yes, that works.")
+    assert emitted == ["Yes, that works."]
 
 
 @pytest.mark.asyncio
@@ -1231,6 +1248,7 @@ async def test_turn_hooks_control_replies_without_amd(allow_reply: bool) -> None
 
     class Hooks:
         reply_instructions = None
+        gates_replies = True
 
         def on_user_turn_committed(
             self, transcript: str, end_of_turn_delay: float | None
@@ -6962,8 +6980,12 @@ async def test_manual_realtime_commit_returns_the_reply_amd_allows(category: AMD
 
 @pytest.mark.parametrize("session_stt", [False, True])
 @pytest.mark.parametrize("skip_reply", [False, True])
-async def test_manual_realtime_commit_without_amd(session_stt: bool, skip_reply: bool) -> None:
+@pytest.mark.parametrize("ungated_amd", [False, True])
+async def test_manual_realtime_commit_without_amd(
+    session_stt: bool, skip_reply: bool, ungated_amd: bool
+) -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True))
+    amd_stt = DrainingSTT() if ungated_amd else None
     async with AgentSession(
         llm=model,
         stt=FakeSTT() if session_stt else None,
@@ -6971,6 +6993,11 @@ async def test_manual_realtime_commit_without_amd(session_stt: bool, skip_reply:
     ) as session:
         session.output.audio = FakeAudioOutput()
         await session.start(Agent(instructions="Call about an appointment."))
+        if amd_stt is not None:
+            # the hooks of ungated AMD only observe, so the commit path does not change
+            detector = AMD(session, llm=ClassifierLLM(), stt=amd_stt, gate_replies=False)
+            await detector.__aenter__()
+            await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
         rt = model.active_session
         rt.commit_audio = Mock(wraps=rt.commit_audio)
         handles: list[SpeechHandle] = []
@@ -6998,8 +7025,12 @@ async def test_manual_realtime_commit_without_amd(session_stt: bool, skip_reply:
             await asyncio.wait_for(handles[0], 2)
         assert rt.generate_reply_calls == (0 if skip_reply else 1)
         rt.commit_audio.assert_called_once_with()
+        if amd_stt is not None:
+            assert detector._turn_id == 1  # AMD gets the commit once, with or without an STT
     if not session_stt:
         assert not [m for m in session.history.messages() if m.role == "user"]
+    if amd_stt is not None:
+        await amd_stt.aclose()
 
 
 @pytest.mark.parametrize("session_stt", [False, True])
@@ -7201,15 +7232,17 @@ async def test_customer_stop_response_prevents_realtime_generation() -> None:
 
 @asynccontextmanager
 async def running_ungated_realtime(
-    *, user_transcription: bool = True, amd_stt: stt.STT | None = None, session_stt: bool = False
+    *, amd_stt: stt.STT | None = None, session_stt: bool = False
 ) -> AsyncIterator[tuple[AMD, AgentSession, ClassifierLLM, FakeRealtimeSession]]:
-    """Ungated AMD on a realtime model that detects turns and replies to tool calls itself."""
+    """Ungated AMD on a realtime model that detects turns and replies to tool calls itself.
+
+    The session has no client-side turn detection, so AMD classifies each final transcript.
+    """
     model = FakeRealtimeModel(
         capabilities=fake_capabilities(
             can_disable_turn_detection=False,
             auto_tool_reply_generation=True,
             per_response_tool_choice=False,
-            user_transcription=user_transcription,
         )
     )
     async with AgentSession(
@@ -7221,21 +7254,12 @@ async def running_ungated_realtime(
         classifier = ClassifierLLM()
         async with AMD(session, llm=classifier, stt=amd_stt, gate_replies=False) as detector:
             await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+            assert detector._server_turn_detection
             yield detector, session, classifier, model.active_session
 
 
-def server_speech(rt: FakeRealtimeSession, transcript: str | None) -> None:
-    """The realtime model detects a participant turn and, with user transcription, its text."""
-    rt.emit("input_speech_started", llm.InputSpeechStartedEvent())
-    rt.emit(
-        "input_speech_stopped",
-        llm.InputSpeechStoppedEvent(user_transcription_enabled=transcript is not None),
-    )
-    if transcript is not None:
-        model_transcript(rt, transcript)
-
-
 def model_transcript(rt: FakeRealtimeSession, transcript: str) -> None:
+    """The realtime model gives its own transcript of the participant turn."""
     rt.emit(
         "input_audio_transcription_completed",
         llm.InputTranscriptionCompleted(
@@ -7245,7 +7269,7 @@ def model_transcript(rt: FakeRealtimeSession, transcript: str) -> None:
 
 
 def server_reply(session: AgentSession, rt: FakeRealtimeSession) -> asyncio.Future[SpeechHandle]:
-    """The realtime model starts its own reply to the turn it detected."""
+    """The realtime model ends the participant turn and starts its own reply."""
     handle = asyncio.get_running_loop().create_future()
     session.once("speech_created", lambda ev: handle.set_result(ev.speech_handle))
     rt.emit("generation_created", generation(user_initiated=False))
@@ -7291,8 +7315,34 @@ async def test_only_ungated_amd_enters_without_reply_control(
 
         async with detector:
             assert session.amd is detector
-            assert session._turn_hooks is None
+            assert not session._turn_hooks.gates_replies  # its hooks only observe turns
             assert session._activity._authorization_allowed.is_set()
+            # only a session without client-side turn detection needs a turn for each final
+            assert detector._server_turn_detection == (configuration == "server_turn_detection")
+
+
+@pytest.mark.parametrize("turn_detection", ["client", "server"])
+async def test_ungated_amd_needs_a_transcript_with_a_realtime_model(turn_detection: str) -> None:
+    client = turn_detection == "client"
+    model = FakeRealtimeModel(
+        # with client-side turn detection, the transcript of the model arrives after the turn
+        capabilities=fake_capabilities(can_disable_turn_detection=client, user_transcription=client)
+    )
+    async with AgentSession(
+        llm=model, vad=None, turn_handling={"turn_detection": "manual"} if client else {}
+    ) as session:
+        await session.start(Agent(instructions="Call about an appointment."))
+        assert session._activity._rt_turn_detection_enabled is not client
+        detector = AMD(session, llm=ClassifierLLM(), stt=None, gate_replies=False)
+        error = (
+            "amd requires session STT or AMD STT with realtime models"
+            if client
+            else "amd requires session STT, AMD STT, or user transcription with server-side"
+        )
+        with pytest.raises(ValueError, match=error):
+            await detector.__aenter__()
+        assert session.amd is None
+        assert detector.lifecycle is AMDLifecycle.INITIALIZED
 
 
 async def test_ungated_amd_keeps_the_interruption_settings() -> None:
@@ -7313,50 +7363,166 @@ async def test_ungated_amd_keeps_the_interruption_settings() -> None:
         assert not utils.is_given(agent.allow_interruptions)
 
 
-async def test_ungated_amd_needs_a_transcript_source_with_a_realtime_model() -> None:
-    model = FakeRealtimeModel(capabilities=fake_capabilities(user_transcription=False))
-    async with AgentSession(llm=model, vad=None) as session:
+async def test_ungated_amd_takes_the_end_of_turn_of_the_session() -> None:
+    async with running(
+        gate_replies=False,
+        session_options={"stt": FakeSTT(), "turn_handling": {"turn_detection": "stt"}},
+    ) as (detector, session, classifier, model):
+        assert not detector._server_turn_detection
+        transcribe(detector, "hello")
+        await asyncio.sleep(2)
+        assert not detector._turns  # a final ends no turn: the session does
+
+        assert session._activity.on_end_of_turn(end_of_turn())
+        request = await classifier.request()
+        assert request.current_turn.text_content == "hello"
+        # the reply of the session does not wait for the prediction
+        await asyncio.wait_for(model.calls.get(), 2)
+        assert detector._turns[1].prediction is None
+
+        classifier.prediction(1, AMDCategory.HUMAN)
+        result = await asyncio.wait_for(detector.execute(), 2)
+        assert result.category == AMDCategory.HUMAN
+        assert result.reason == "finished"
+        assert session._turn_hooks is None
+
+
+async def test_ungated_amd_pairs_the_session_and_amd_transcripts_of_a_turn() -> None:
+    amd_stt = DrainingSTT()
+    async with running(gate_replies=False, stt=amd_stt, session_options={"stt": FakeSTT()}) as (
+        detector,
+        _,
+        classifier,
+        _,
+    ):
+        stream = push_audio(detector, amd_stt)
+        commit_turn(detector, end_of_turn("Hello."))
+        await asyncio.sleep(_LATE_AMD_FINAL_WAIT - 0.1)
+        stream.send_fake_transcript("Hello?")  # the AMD final follows the end of turn
+        request = await classifier.request()
+        assert json.loads(request.current_turn.text_content) == {
+            "transcript_1": "Hello.",
+            "transcript_2": "Hello?",
+        }
+        assert detector._turn_id == 1
+    await amd_stt.aclose()
+
+
+@pytest.mark.parametrize("category", [AMDCategory.UNCERTAIN, AMDCategory.WAIT])
+async def test_ungated_amd_keeps_listening_until_a_human_or_a_machine(
+    category: AMDCategory,
+) -> None:
+    async with running(gate_replies=False) as (detector, session, classifier, _):
+        commit_turn(detector, end_of_turn("One moment."))
+        request = await classifier.request()
+        classifier.prediction(request.current_turn.extra["turn_id"], category)
+        await eventually(lambda: detector._turns[1].prediction is not None)
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
+        assert session._activity._authorization_allowed.is_set()
+
+        commit_turn(detector, end_of_turn("Hello, who is this?"))
+        request = await classifier.request()
+        assert request.current_turn.extra["turn_id"] == 2
+        classifier.prediction(2, AMDCategory.HUMAN)
+        result = await asyncio.wait_for(detector.execute(), 2)
+        assert result.category == AMDCategory.HUMAN
+        assert result.reason == "finished"
+
+
+async def test_ungated_amd_denies_no_reply_after_a_wait_prediction() -> None:
+    async with running(
+        gate_replies=False,
+        session_options={"stt": FakeSTT(), "turn_handling": {"turn_detection": "stt"}},
+    ) as (detector, session, classifier, model):
+        assert session._activity.on_end_of_turn(end_of_turn())
+        request = await classifier.request()
+        await asyncio.wait_for(model.calls.get(), 2)
+        classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.WAIT)
+        await eventually(lambda: detector._turns[1].prediction is not None)
+        assert detector._should_wait
+        await session._activity._user_turn_completed_atask
+
+        # gated AMD denies the reply to the turn after a wait prediction
+        assert session._activity.on_end_of_turn(end_of_turn())
+        await asyncio.wait_for(model.calls.get(), 2)
+
+
+async def test_ungated_amd_takes_a_turn_that_the_application_commits() -> None:
+    amd_stt = DrainingSTT()
+    model = FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=True))
+    async with AgentSession(llm=model, turn_handling={"turn_detection": "manual"}) as session:
+        session.output.audio = FakeAudioOutput()
         await session.start(Agent(instructions="Call about an appointment."))
-        detector = AMD(session, llm=ClassifierLLM(), stt=None, gate_replies=False)
-        with pytest.raises(
-            ValueError, match="amd without gate_replies requires session STT, AMD STT, or"
-        ):
-            await detector.__aenter__()
-        assert session.amd is None
-        assert detector.lifecycle is AMDLifecycle.INITIALIZED
+        classifier = ClassifierLLM()
+        async with AMD(session, llm=classifier, stt=amd_stt, gate_replies=False) as detector:
+            await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+            rt = model.active_session
+            await amd_heard(detector._resources.stt, push_audio(detector, amd_stt), "Hello?")
+            await asyncio.sleep(1)
+            assert not detector._turns  # a final ends no turn: the commit does
+
+            # without an STT in the session, the commit ends in no end of turn
+            assert await session.commit_user_turn() == ""
+            await eventually(lambda: rt.generate_reply_calls == 1)
+            request = await classifier.request()
+            assert request.current_turn.text_content == "Hello?"
+            assert detector._turn_id == 1
+    await amd_stt.aclose()
+
+
+async def test_ungated_amd_adds_no_user_message_to_the_history_of_the_agent() -> None:
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            can_disable_turn_detection=True,
+            auto_tool_reply_generation=False,
+            user_transcription=False,
+        )
+    )
+    async with AgentSession(
+        llm=model, stt=FakeSTT(), turn_handling={"turn_detection": "manual"}
+    ) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(Agent(instructions="Call about an appointment."))
+        async with AMD(session, llm=ClassifierLLM(), stt=None, gate_replies=False) as detector:
+            await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+            rt = model.active_session
+            assert session._activity.on_end_of_turn(end_of_turn("Hello."))
+            await asyncio.wait_for(session._activity._user_turn_completed_atask, 2)
+            await eventually(lambda: rt.generate_reply_calls == 1)
+            # gated AMD adds the STT transcript for this model; ungated AMD changes nothing
+            assert not [m for m in session.current_agent.chat_ctx.messages() if m.role == "user"]
 
 
 @pytest.mark.parametrize("source", ["model", "amd_stt"])
-async def test_ungated_amd_classifies_a_server_detected_turn_and_keeps_its_reply(
+async def test_ungated_amd_classifies_each_final_without_client_side_turn_detection(
     source: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     amd_stt = DrainingSTT() if source == "amd_stt" else None
-    async with running_ungated_realtime(user_transcription=source == "model", amd_stt=amd_stt) as (
-        detector,
-        session,
-        classifier,
-        rt,
-    ):
-        # the transcript of the model can be late: ungated AMD accepts it with a warning
+    async with running_ungated_realtime(amd_stt=amd_stt) as (detector, session, classifier, rt):
+        # the transcript of the model arrives late: AMD accepts it with a warning
         assert ("model's own transcript" in caplog.text) == (source == "model")
         greeting = "Hi, you have reached Sam. Leave a message."
+        # an end of turn from the session ends no turn here
+        commit_turn(detector, end_of_turn(greeting))
+        assert not detector._turns
         if amd_stt is not None:
-            stream = push_audio(detector, amd_stt)
-            server_speech(rt, None)
-            stream.send_fake_transcript(greeting)
-        else:
-            server_speech(rt, greeting)
+            push_audio(detector, amd_stt).send_fake_transcript(greeting)
+            request = await classifier.request()  # before the model ends the turn
 
-        # the reply of the model plays before AMD classifies the turn
+        # the reply of the model plays before AMD has a prediction
         handle = await server_reply(session, rt)
         await asyncio.wait_for(handle, 0.2)
         assert not handle.interrupted
         assert session.output.audio.captured_playout_segments == 1
-        assert not detector._turns
-
-        request = await classifier.request()
-        assert request.current_turn.text_content == greeting
         assert rt.generate_reply_calls == 0  # AMD starts no reply of its own
+
+        model_transcript(rt, greeting)
+        if amd_stt is None:
+            request = await classifier.request()
+        assert request.current_turn.text_content == greeting
+        await asyncio.sleep(1)
+        assert detector._turn_id == 1  # with an AMD STT, the model transcript makes no turn
+
         classifier.prediction(1, AMDCategory.MACHINE_VM)
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.category == AMDCategory.MACHINE_VM
@@ -7366,7 +7532,7 @@ async def test_ungated_amd_classifies_a_server_detected_turn_and_keeps_its_reply
         await amd_stt.aclose()
 
 
-async def test_ungated_amd_with_its_own_stt_ignores_a_late_model_transcript() -> None:
+async def test_ungated_amd_classifies_the_session_final_after_its_stt_fails() -> None:
     amd_stt = DrainingSTT()
     async with running_ungated_realtime(amd_stt=amd_stt, session_stt=True) as (
         detector,
@@ -7375,99 +7541,20 @@ async def test_ungated_amd_with_its_own_stt_ignores_a_late_model_transcript() ->
         rt,
     ):
         stream = push_audio(detector, amd_stt)
-        server_speech(rt, None)
         stream.send_fake_transcript("Hello?")
-        await eventually(lambda: detector._last_final_at is not None)
-        await asyncio.sleep(_TRANSCRIPT_TURN_SILENCE - 0.05)
-        model_transcript(rt, "Hello?")  # must not restart the silence of the open turn
-        await asyncio.sleep(0.1)
-        request = classifier.requests.get_nowait()
+        request = await classifier.request()
+        # one transcript: the session has an STT too, but AMD classifies its own alone
         assert request.current_turn.text_content == "Hello?"
         classifier.prediction(1, AMDCategory.UNCERTAIN)
         await eventually(lambda: detector._turns[1].prediction is not None)
 
-        # the same words must not make a second turn
-        model_transcript(rt, "Hello?")
-        await asyncio.sleep(1)
-        assert detector._turn_id == 1
-        assert classifier.requests.empty()
-    await amd_stt.aclose()
-
-
-async def test_ungated_amd_drops_the_model_transcript_after_a_handoff_to_a_realtime_agent() -> None:
-    amd_stt = DrainingSTT()
-    realtime_agent = Agent(instructions="Continue the call.", llm=FakeRealtimeModel())
-    async with running(gate_replies=False, stt=amd_stt, session_options={"stt": FakeSTT()}) as (
-        detector,
-        session,
-        classifier,
-        _,
-    ):
-        session.update_agent(realtime_agent)
-        await eventually(lambda: session.current_agent is realtime_agent)
-        stream = push_audio(detector, amd_stt)
-        stream.send_fake_transcript("Hello?")
+        # a session final from before the failure does not join the first turn after it
+        model_transcript(rt, "Are you there?")
+        detector._resources.stt.fail(RuntimeError("stt failed"))
+        model_transcript(rt, "Who is this?")
         request = await classifier.request()
-        classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.UNCERTAIN)
-        await eventually(lambda: detector._turns[1].prediction is not None)
-
-        # the session finals are now the model's own transcript, which can arrive late
-        transcribe(detector, "Hello?")
-        await asyncio.sleep(1)
-        assert detector._turn_id == 1
-        assert classifier.requests.empty()
-    await amd_stt.aclose()
-
-
-@pytest.mark.parametrize("first", ["session", "amd"])
-async def test_ungated_amd_waits_for_the_final_of_the_other_stt(first: str) -> None:
-    amd_stt = DrainingSTT()
-    async with running(gate_replies=False, stt=amd_stt, session_options={"stt": FakeSTT()}) as (
-        detector,
-        _,
-        classifier,
-        _,
-    ):
-        stream = push_audio(detector, amd_stt)
-
-        def final(source: str) -> None:
-            if source == "session":
-                transcribe(detector, "Hello.")
-            else:
-                stream.send_fake_transcript("Hello?")
-
-        final(first)
-        await asyncio.sleep(_MISSING_FINAL_WAIT - 0.3)
-        assert classifier.requests.empty()  # the late final must not make a second turn
-        final("amd" if first == "session" else "session")
-        request = await classifier.request()
-        assert json.loads(request.current_turn.text_content) == {
-            "transcript_1": "Hello.",
-            "transcript_2": "Hello?",
-        }
-        await asyncio.sleep(1)
-        assert detector._turn_id == 1
-    await amd_stt.aclose()
-
-
-async def test_ungated_amd_ends_a_turn_when_the_other_stt_gives_no_final() -> None:
-    amd_stt = DrainingSTT()
-    async with running(gate_replies=False, stt=amd_stt, session_options={"stt": FakeSTT()}) as (
-        detector,
-        _,
-        classifier,
-        _,
-    ):
-        push_audio(detector, amd_stt)
-        transcribe(detector, "Hello.")
-        await asyncio.sleep(_MISSING_FINAL_WAIT - 0.05)
-        assert not detector._turns
-
-        request = await classifier.request()
-        assert json.loads(request.current_turn.text_content) == {
-            "transcript_1": "Hello.",
-            "transcript_2": "",
-        }
+        assert request.current_turn.extra["turn_id"] == 2
+        assert request.current_turn.text_content == "Who is this?"
     await amd_stt.aclose()
 
 
@@ -7487,7 +7574,7 @@ async def test_ungated_amd_keeps_the_preemptive_reply_of_the_session() -> None:
         preemptive = activity._preemptive_generation.speech_handle
 
         # the prediction changes the stage and completes AMD; neither cancels the reply
-        transcribe(detector, "Hello, who is this?")
+        commit_turn(detector, end_of_turn("Hello, who is this?"))
         request = await classifier.request()
         classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.HUMAN)
         await asyncio.wait_for(detector.execute(), 2)
@@ -7495,76 +7582,127 @@ async def test_ungated_amd_keeps_the_preemptive_reply_of_the_session() -> None:
         assert not preemptive.interrupted
 
 
-async def test_ungated_amd_arms_no_timer_after_it_completes() -> None:
-    async with running(gate_replies=False) as (detector, _, classifier, _):
-        transcribe(detector, "Hello, who is this?")
-        request = await classifier.request()
-        transcribe(detector, "Are you there?")  # the next turn is open at completion
-        classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.HUMAN)
-        await asyncio.wait_for(detector.execute(), 2)
-        assert detector._timer is None
+async def test_ungated_amd_enters_while_an_agent_task_runs() -> None:
+    task_entered = asyncio.Event()
+    results: list[str] = []
+
+    class Task(AgentTask[str]):
+        def __init__(self) -> None:
+            super().__init__(instructions="Collect a value.")
+
+        async def on_enter(self) -> None:
+            task_entered.set()
+
+    class Parent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="Test")
+            self.task = Task()
+
+        async def on_enter(self) -> None:
+            results.append(await self.task)
+
+    parent = Parent()
+    async with AgentSession(llm=FakeLLM(), stt=FakeSTT()) as session:
+        await session.start(parent)
+        await asyncio.wait_for(task_entered.wait(), 2)
+        async with AMD(session, llm=ClassifierLLM(), stt=None, gate_replies=False) as detector:
+            # the return of the task to its caller is a handoff, which ungated AMD allows
+            parent.task.complete("done")
+            await eventually(lambda: session.current_agent is parent)
+            assert results == ["done"]
+            assert session.amd is detector
 
 
-@pytest.mark.parametrize("category", [AMDCategory.UNCERTAIN, AMDCategory.WAIT])
-async def test_ungated_amd_keeps_listening_until_a_human_or_a_machine(
-    category: AMDCategory,
-) -> None:
+async def test_ungated_amd_lets_a_tool_hand_off_the_agent() -> None:
+    replacement = Agent(instructions="Continue the call.")
+
+    class HandoffAgent(Agent):
+        @llm.function_tool
+        async def transfer(self) -> Agent:
+            """Transfer the call to the next agent."""
+            return replacement
+
+    model = FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=False))
+    async with AgentSession(llm=model, vad=None, aec_warmup_duration=None) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(HandoffAgent(instructions="Call about an appointment."))
+        async with AMD(session, llm=ClassifierLLM(), stt=None, gate_replies=False) as detector:
+            await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
+            call = llm.FunctionCall(call_id="move", name="transfer", arguments="{}")
+            model.active_session.emit(
+                "generation_created", generation(tool=call, user_initiated=False)
+            )
+            await eventually(lambda: session.current_agent is replacement)
+            assert detector.lifecycle is AMDLifecycle.ACTIVE
+
+
+async def test_ungated_amd_follows_a_handoff_to_another_turn_detection() -> None:
+    realtime_agent = Agent(
+        instructions="Continue the call.",
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(can_disable_turn_detection=False)),
+    )
     async with running(gate_replies=False) as (detector, session, classifier, _):
-        transcribe(detector, "One moment.")
-        request = await classifier.request()
-        classifier.prediction(request.current_turn.extra["turn_id"], category)
-        await eventually(lambda: detector._turns[1].prediction is not None)
-        assert detector.lifecycle is AMDLifecycle.ACTIVE
-        assert session._activity._authorization_allowed.is_set()
-
-        transcribe(detector, "Hello, who is this?")
-        request = await classifier.request()
-        assert request.current_turn.extra["turn_id"] == 2
-        classifier.prediction(2, AMDCategory.HUMAN)
-        result = await asyncio.wait_for(detector.execute(), 2)
-        assert result.category == AMDCategory.HUMAN
-        assert result.reason == "finished"
-
-
-async def test_ungated_amd_ends_a_turn_after_the_participant_is_silent() -> None:
-    async with running(gate_replies=False) as (detector, _, classifier, _):
-        speech_started(detector)
-        transcribe(detector, "Hi, you have reached Sam.")
+        assert not detector._server_turn_detection
+        transcribe(detector, "Hello?")
         await asyncio.sleep(1)
-        assert classifier.requests.empty()  # a final during speech does not end the turn
+        assert not detector._turns  # the session ends the turns of this Agent
 
-        transcribe(detector, "Leave a message.")
-        speech_ended(detector, 0)
-        await asyncio.sleep(_TRANSCRIPT_TURN_SILENCE - 0.05)
-        assert classifier.requests.empty()
-
+        session.update_agent(realtime_agent)
+        await eventually(
+            lambda: session._activity is not None and session._activity.agent is realtime_agent
+        )
+        # the model of the new Agent detects the turns, so each final is a turn
+        assert detector._server_turn_detection
+        transcribe(detector, "Who is this?")
         request = await classifier.request()
-        assert request.current_turn.text_content == "Hi, you have reached Sam. Leave a message."
+        # the final that waited for an end of turn at the handoff joins this turn
+        assert request.current_turn.text_content == "Hello? Who is this?"
         assert detector._turn_id == 1
-        assert detector._turns[1].speech_duration == pytest.approx(1, abs=0.01)
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
 
 
-async def test_ungated_amd_joins_the_session_and_amd_finals_of_a_turn() -> None:
+async def test_ungated_amd_keeps_its_transcripts_after_a_handoff_to_client_side_turn_detection() -> (
+    None
+):
     amd_stt = DrainingSTT()
-    async with running(gate_replies=False, stt=amd_stt, session_options={"stt": FakeSTT()}) as (
-        detector,
-        _,
-        classifier,
-        _,
-    ):
+    pipeline_agent = Agent(
+        instructions="Continue the call.",
+        llm=RecordingLLM(),
+        stt=FakeSTT(),
+        tts=FakeTTS(fake_audio_duration=0.05),
+        turn_handling={"turn_detection": "manual"},
+    )
+    async with running_ungated_realtime(amd_stt=amd_stt) as (detector, session, classifier, _):
         stream = push_audio(detector, amd_stt)
-        transcribe(detector, "Hello.")
-        await asyncio.sleep(_TRANSCRIPT_TURN_SILENCE - 0.1)
-        stream.send_fake_transcript("Hello?")  # the later final restarts the silence
-        await asyncio.sleep(_TRANSCRIPT_TURN_SILENCE - 0.1)
-        assert classifier.requests.empty()
+        session.update_agent(pipeline_agent)
+        await eventually(
+            lambda: session._activity is not None and session._activity.agent is pipeline_agent
+        )
+        assert not detector._server_turn_detection
 
+        # the session ends the turns now; the transcripts stay as they were at entry
+        commit_turn(detector, end_of_turn("Hello."))
+        stream.send_fake_transcript("Hello?")
         request = await classifier.request()
-        assert json.loads(request.current_turn.text_content) == {
-            "transcript_1": "Hello.",
-            "transcript_2": "Hello?",
-        }
+        assert request.current_turn.text_content == "Hello?"
+        assert detector._turn_id == 1
     await amd_stt.aclose()
+
+
+async def test_ungated_amd_keeps_the_user_turn_limit() -> None:
+    async with running(gate_replies=False) as (detector, session, _, _):
+        activity = session._activity
+        assert activity is not None
+        activity.on_user_turn_exceeded(
+            UserTurnExceededEvent(
+                transcript="Hi, you've reached Sam.",
+                accumulated_transcript="Hi, you've reached Sam.",
+                accumulated_word_count=50,
+                duration=30.0,
+            )
+        )
+        assert activity._user_turn_exceeded_atask is not None  # gated AMD skips the callback
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
 
 
 @pytest.mark.parametrize("call", ["say", "generate_reply", "handoff"])
@@ -7582,28 +7720,13 @@ async def test_ungated_amd_leaves_replies_and_handoffs_to_the_session(call: str)
 
         # a machine result does not cancel a reply: the customer interrupts or hangs up
         pending = session.say("Are you still there?")
-        transcribe(detector, "The mailbox is full.")
+        commit_turn(detector, end_of_turn("The mailbox is full."))
         request = await classifier.request()
         classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.MACHINE_VM)
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.category == AMDCategory.MACHINE_VM
         await asyncio.wait_for(pending, 2)
         assert not pending.interrupted
-
-
-async def test_ungated_amd_completes_on_idle_only_after_the_open_turn() -> None:
-    async with running(gate_replies=False, idle_timeout=0.2) as (detector, _, classifier, _):
-        speech_started(detector)
-        transcribe(detector, "Hello?")
-        await asyncio.sleep(0.5)
-        assert detector.lifecycle is AMDLifecycle.ACTIVE  # speech keeps the turn open
-
-        speech_ended(detector, 0)
-        request = await classifier.request()
-        classifier.prediction(request.current_turn.extra["turn_id"], AMDCategory.UNCERTAIN)
-        result = await asyncio.wait_for(detector.execute(), 2)
-        assert result.reason == "idle_timeout"
-        assert result.category == AMDCategory.UNCERTAIN
 
 
 # endregion

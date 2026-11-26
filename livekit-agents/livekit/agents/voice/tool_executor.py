@@ -639,7 +639,7 @@ class _ToolExecutor:
                 async with session._activity_lock:
                     pass
 
-        if session._amd_gates_replies:
+        if session._turn_hooks and session._turn_hooks.gates_replies:
             # AMD owns replies while it runs; its next reply sees the updates in the chat context
             logger.debug("dropping tool reply while AMD runs")
             self._pending_updates.clear()
