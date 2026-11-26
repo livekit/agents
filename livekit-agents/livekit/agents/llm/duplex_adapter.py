@@ -620,11 +620,11 @@ class _DuplexRealtimeSession(RealtimeSession):
                 "duplex context is append-only; the model keeps what it has been told",
                 extra={"item_ids": edited},
             )
-        new_items = [item for _, item_id in diff.to_create if (item := chat_ctx.get_by_id(item_id))]
-        # before the await, so a burst that closes meanwhile lands in the new context
-        self._chat_ctx = chat_ctx
-        if new_items:
+        if new_items := [
+            item for _, item_id in diff.to_create if (item := chat_ctx.get_by_id(item_id))
+        ]:
             await self._duplex._append_items(new_items)
+        self._chat_ctx = chat_ctx
 
     async def update_tools(self, tools: list[Tool]) -> None:
         await self._duplex._update_tools(tools)
