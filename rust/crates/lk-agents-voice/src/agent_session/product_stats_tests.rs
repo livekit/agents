@@ -10,6 +10,7 @@ use crate::audio_recognition::{EndOfTurnInfo, TurnDetectionMode, TurnId, TurnSna
 use crate::events::SessionEvent;
 use lk_agents_abi::metrics::base::{AgentMetrics, RealtimeModelMetrics};
 use lk_agents_abi::productstats::models::EndpointedBy;
+use lk_agents_abi::productstats::testkit::{Stat, stat};
 use lk_agents_abi::resources::{LlmRef, ResourceId, SttRef, TtsRef};
 use lk_agents_abi::stt::events::SpeechData;
 use lk_agents_abi::telemetry::record::Record;
@@ -17,14 +18,13 @@ use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::voice::session_options::{DetectorKind, SessionLegs};
 use lk_agents_abi::{Maybe, agent::AgentDefinition};
 use lk_agents_abi::{ProviderId, RecognitionUsage, SpeechEvent, SpeechEventType, Ts};
-use lk_agents_telemetry::productstats::testkit::{Stat, stat};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// The product statistics among `records`.
 fn stats_of(records: impl IntoIterator<Item = Record>) -> Vec<Stat> {
     let stats = records.into_iter().filter_map(|record| match record {
-        Record::ProductStat(measured) => Some(stat(measured.into_measurement())),
+        Record::ProductStat(measured) => Some(stat(measured)),
         _ => None,
     });
     stats.collect()

@@ -5,7 +5,6 @@ use lk_agents_abi::productstats::runner::{Runner, RunnerCmd, RunnerKind};
 use lk_agents_abi::productstats::testkit::{TestCounts, TestDuration};
 use lk_agents_abi::telemetry::decl::{self, MetricDecl};
 use lk_agents_abi::telemetry::record::{Number, RecordSink as _};
-use lk_agents_telemetry::productstats::Sink as _;
 
 use super::super::otlp::proto::collector::metrics::v1::ExportMetricsServiceRequest;
 use super::super::otlp::proto::common::v1::{KeyValue, any_value::Value as Any};
@@ -21,7 +20,7 @@ const LIMIT: Duration = Duration::from_secs(5);
 fn stats() -> ProductStats {
     let resource = ProductStatsResource {
         runner: Runner { cmd: RunnerCmd::Start, kind: RunnerKind::Production },
-        ..super::resource("2.0.0", RuntimeName::Python, "3.12.4")
+        ..super::resource("2.0.0", RuntimeName::Python, "3.12.4", RunnerCmd::Start)
     };
     ProductStats::start(
         &crate::task::TokioSpawner::current(),
@@ -43,17 +42,7 @@ fn measure<M: MetricDecl<Audience = decl::ProductStats>>(
     labels: &M,
     value: impl Into<Number>,
 ) {
-    let mut out = KeyValues::new();
-    labels.write(&mut out);
-    stats.record(Measurement {
-        instrument: M::NAME,
-        kind: M::KIND,
-        unit: M::UNIT,
-        bounds: M::BOUNDS,
-        value: value.into(),
-        labels: out,
-        job: None,
-    });
+    stats.record(ProductStat::of(labels, value));
 }
 
 fn string(value: &Option<super::super::otlp::proto::common::v1::AnyValue>) -> &str {
@@ -122,7 +111,7 @@ async fn an_export_carries_only_declared_product_statistics_keys() {
     let (url, mut rx) = endpoint(ok).await;
     let stats = stats();
     stats.configure(Some(destination(&url)));
-    thread_storage(ThreadStorage::AgentDb);
+    stats.shared.state.lock().resource.storage = ThreadStorage::AgentDb;
     measure(&stats, &counts("a"), 2u64);
     measure(&stats, &counts("b"), 1u64);
     measure(&stats, &TestDuration, 0.3);
@@ -188,7 +177,7 @@ async fn model_statistics_reach_the_collector_as_declared() {
     let model = ModelLabels::of(ModelKind::Stt, &id);
     measure(&stats, &ModelRequests { model: model.clone() }, 1u64);
     for heard in (ModelUsage { audio_duration: 2.0, ..Default::default() }).stats(&model) {
-        stats.record(heard.into_measurement());
+        stats.record(heard);
     }
     let delay = ModelTranscriptionDelay { model, endpointing: EndpointedBy::Vad };
     measure(&stats, &delay, 0.3);
@@ -360,4 +349,22 @@ fn the_declared_keys_are_exactly_the_documented_list() {
         }
     }
     assert_eq!(declared.into_iter().collect::<Vec<_>>(), DOCUMENTED);
+}
+
+// Catches: a product statistic a session's machine measured queued for a customer's exporter
+// (their endpoint or their Cloud project) instead of LiveKit's.
+#[tokio::test]
+async fn a_product_statistic_among_a_sessions_records_never_reaches_a_customer_exporter() {
+    let captured = testkit::Capture::start();
+    let (url, mut rx) = endpoint(ok).await;
+    let customer = exporter(Limits::default());
+    customer.configure_cloud(cloud(&url));
+    customer.open_job(key("AJ_1"), identity("AJ_1"));
+    customer.register_job(&key("AJ_1"), CloudRecording { ..recording() });
+    let stat = ProductStat::of(&counts("a"), 1u64);
+    customer.record(lk_agents_abi::telemetry::record::Record::ProductStat(stat));
+    let label = vec![("lk.product.agents.test.label".to_owned(), "a".to_owned())];
+    assert_eq!(captured.take(), [("lk.product.agents.test.counts", label, 1.0)]);
+    customer.flush(None, LIMIT).await;
+    assert!(received(&mut rx).is_empty(), "the customer's exporter sent it");
 }

@@ -632,7 +632,7 @@ async fn the_report_belongs_to_the_starting_job_and_a_redacted_one_keeps_no_cont
 // their session, one of them counted again on its second use, or one hiding another.
 #[tokio::test]
 async fn a_session_counts_each_options_feature_it_uses_once() {
-    let stats = lk_agents_telemetry::productstats::testkit::Capture::start();
+    let stats = lk_agents_net::export::productstats::testkit::Capture::start();
     let counted = || stats.take().into_iter().map(|(metric, ..)| metric).collect::<Vec<_>>();
     let owner = owner();
     use Maybe::NotGiven as N;

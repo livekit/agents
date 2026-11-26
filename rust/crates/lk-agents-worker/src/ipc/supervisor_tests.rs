@@ -378,7 +378,7 @@ fn hello() -> Hello {
         asyncio_debug: false,
         http_proxy: None,
         health_timeout_ms: None,
-        cmd: lk_agents_abi::productstats::runner::RunnerCmd::None,
+        cmd: lk_agents_abi::productstats::runner::RunnerCmd::NoCommand,
     }
 }
 

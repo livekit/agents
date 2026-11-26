@@ -479,7 +479,7 @@ fn model_stat(
     metric: &'static str,
     [kind, plugin, provider, name]: [&str; 4],
     value: f64,
-) -> lk_agents_telemetry::productstats::testkit::Stat {
+) -> lk_agents_abi::productstats::testkit::Stat {
     let labels = [
         ("lk.product.agents.model.kind", kind),
         ("lk.product.agents.model.plugin", plugin),
@@ -495,7 +495,7 @@ fn model_stat(
 #[tokio::test]
 async fn a_model_request_is_counted_once_with_what_it_was_measured_in() {
     use lk_agents_abi::usage::TokenUsage;
-    let stats = lk_agents_telemetry::productstats::testkit::Capture::start();
+    let stats = lk_agents_net::export::productstats::testkit::Capture::start();
     // To the millisecond: a span's clock is the wall's, in nanoseconds.
     let taken = || {
         let rounded = stats.take().into_iter().map(|(m, l, v)| (m, l, (v * 1e3).round() / 1e3));

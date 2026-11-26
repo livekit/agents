@@ -2649,14 +2649,18 @@ impl ::lk_agents_abi::worker::ipc_host::ChildInitialize for ChildInitializeProxy
     fn initialize(
         &self,
         http_proxy: ::std::option::Option<::std::string::String>,
+        runner_cmd: ::lk_agents_abi::productstats::runner::RunnerCmd,
     ) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
         let host = ::std::clone::Clone::clone(&self.host);
         let http_proxy_arg = http_proxy;
+        let runner_cmd_arg = runner_cmd;
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(http_proxy_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(http_proxy_arg, py)?,
+                    crate::generated::native_enums::runner_cmd_to_py(py, runner_cmd_arg)?,
+                ];
                 Ok((
                     host.bind(py)?.getattr("__call__")?,
                     ::pyo3::types::PyTuple::new(py, args)?,

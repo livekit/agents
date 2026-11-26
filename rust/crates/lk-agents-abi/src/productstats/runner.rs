@@ -1,14 +1,16 @@
 use crate::telemetry::decl::{Attrs, SpanValue};
 
-/// The command that started the process: `none` when no `lk agent` command did (a script, a
-/// test).
+/// The command that started the process, which its host names when it installs telemetry:
+/// `none` when no `lk agent` command did (a script, a test).
+#[crate::host(native_enum(name = "RunnerCmd"))]
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RunnerCmd {
     Dev,
     Console,
     Simulation,
     Start,
-    None,
+    #[wire = "none"]
+    NoCommand,
 }
 
 /// What kind of runner the process is, derived once at its start.
@@ -49,7 +51,7 @@ impl Runner {
                 }
                 RunnerCmd::Start if matches!(os, "macos" | "windows") => RunnerKind::Development,
                 RunnerCmd::Start => RunnerKind::Production,
-                RunnerCmd::None => RunnerKind::Unknown,
+                RunnerCmd::NoCommand => RunnerKind::Unknown,
             }
         };
         Runner { cmd, kind }
@@ -64,22 +66,22 @@ mod tests {
     // `start` counted as production, or a script counted as anything but unknown.
     #[test]
     fn the_first_matching_rule_decides_the_kind() {
-        use RunnerCmd::*;
+        use RunnerCmd::{Console, Dev, NoCommand, Simulation, Start};
         use RunnerKind::*;
         type Vars = &'static [(&'static str, &'static str)];
         let cases: &[(Vars, &str, RunnerCmd, RunnerKind)] = &[
             (&[("CI", "true"), ("LK_HOSTED_AGENTS", "1")], "linux", Start, Ci),
             (&[("CI", "TRUE")], "macos", Dev, Ci),
-            (&[("CI", "false")], "linux", None, Unknown),
+            (&[("CI", "false")], "linux", NoCommand, Unknown),
             (&[("LK_HOSTED_AGENTS", "1")], "linux", Dev, Production),
-            (&[("LK_HOSTED_AGENTS", "")], "linux", None, Unknown),
+            (&[("LK_HOSTED_AGENTS", "")], "linux", NoCommand, Unknown),
             (&[], "linux", Dev, Development),
             (&[], "linux", Console, Development),
             (&[], "linux", Simulation, Development),
             (&[], "macos", Start, Development),
             (&[], "windows", Start, Development),
             (&[], "linux", Start, Production),
-            (&[], "linux", None, Unknown),
+            (&[], "linux", NoCommand, Unknown),
         ];
         for (vars, os, cmd, kind) in cases {
             let var =

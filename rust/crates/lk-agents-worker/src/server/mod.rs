@@ -484,7 +484,7 @@ impl ServerRuntime {
         if !start.unregistered {
             settings.check_registration()?;
         }
-        lk_agents_net::export::productstats::configure(
+        lk_agents_net::export::productstats::configure_destination(
             &settings.ws_url,
             &settings.api_key,
             &settings.api_secret,

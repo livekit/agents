@@ -146,6 +146,7 @@ from ._generated._core_metrics import (
 )
 from ._generated._core_native_enums import (
     Role as Role,
+    RunnerCmd as RunnerCmd,
     Runtime as Runtime,
     SpanKind as SpanKind,
     StatusCode as StatusCode,

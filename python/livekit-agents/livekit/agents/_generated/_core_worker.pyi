@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Self
 
-from livekit.agents._core import Role
+from livekit.agents._core import Role, RunnerCmd
 from livekit.agents.http import AgentRoutes
 from livekit.agents.ipc import JobLauncher
 from livekit.agents.ipc.child import _JobProc
@@ -132,7 +132,7 @@ class IpcClient:
     def __new__(
         cls,
         fd: int,
-        initialize: Callable[[str | None], None],
+        initialize: Callable[[str | None, RunnerCmd], None],
         *,
         process: bool = False,
     ) -> Self:

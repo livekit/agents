@@ -59,7 +59,7 @@ disallowed-methods = [
   { path = "lk_agents_telemetry::observability::event", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
   { path = "lk_agents_telemetry::observability::event_at", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
   { path = "lk_agents_telemetry::observability::measure", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
-  { path = "lk_agents_telemetry::productstats::measure", reason = "Product statistics record through a process-global sink: async crates only." },
+  { path = "lk_agents_net::export::productstats::measure", reason = "Product statistics record to the process's exporter: async crates only; a machine hands a ProductStat to its Trace." },
   { path = "lk_agents_telemetry::observability::reserve", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
   { path = "lk_agents_telemetry::observability::random_seed", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
   { path = "lk_agents_telemetry::process::Instruments::set", reason = "The process's own instruments are recorded by the worker, not by a sans-I/O machine." },

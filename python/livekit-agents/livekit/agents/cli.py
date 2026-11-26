@@ -195,6 +195,13 @@ def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool =
         raise CLIError(str(configuration_error)) from configuration_error
     server._config.simulation = args.simulation
     devmode = args.dev
+    server._runner_cmd = (
+        _core.RunnerCmd.Simulation
+        if args.simulation
+        else _core.RunnerCmd.Dev
+        if devmode
+        else _core.RunnerCmd.Start
+    )
     setup_logging(args.log_level, "dev" if devmode else "json")
 
     shutdown = _core.Shutdown(server._config.shutdown_timeout, server._config.drain_timeout)
@@ -281,6 +288,7 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     from .voice._session_bindings import ConsoleCall
 
     setup_logging("debug", "console")
+    server._runner_cmd = _core.RunnerCmd.Console
     ConsoleCall.addr, ConsoleCall.record = connect_addr, record
     server._update_options(ProcessOptions(job_executor_type=JobExecutorType.THREAD))
 

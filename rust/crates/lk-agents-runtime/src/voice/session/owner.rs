@@ -162,7 +162,7 @@ impl Inner {
     /// The session used `feature`: counted the first time.
     fn count_feature(&self, feature: Feature) {
         if let Some(counted) = self.features.lock().used(feature) {
-            lk_agents_telemetry::productstats::record(counted);
+            lk_agents_net::export::productstats::record(counted);
         }
     }
 

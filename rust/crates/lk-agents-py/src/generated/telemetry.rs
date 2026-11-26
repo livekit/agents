@@ -208,21 +208,25 @@ type TelemetryImpl =
 
 /// Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
 /// the `OTEL_EXPORTER_OTLP_*` environment, and the process's product statistics unless they
-/// are opted out of, which name the host's `runtime` and its version. Later calls do nothing.
+/// are opted out of, which name the host's `runtime`, its version and the command that started
+/// the process. Later calls do nothing.
 #[pyfunction]
-#[pyo3(signature = (sdk_version, runtime, runtime_version))]
+#[pyo3(signature = (sdk_version, runtime, runtime_version, runner_cmd))]
 pub fn _core_telemetry_install(
     py: Python<'_>,
     sdk_version: ::std::string::String,
     runtime: Bound<'_, PyAny>,
     runtime_version: ::std::string::String,
+    runner_cmd: Bound<'_, PyAny>,
 ) -> PyResult<()> {
     let runtime = crate::generated::native_enums::runtime_from_py(runtime.as_any())?;
+    let runner_cmd = crate::generated::native_enums::runner_cmd_from_py(runner_cmd.as_any())?;
     py.detach(|| {
         <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_install(
             sdk_version,
             runtime,
             runtime_version,
+            runner_cmd,
         )
     });
     Ok(())

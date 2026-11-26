@@ -159,6 +159,12 @@ impl Exporter {
 
 impl RecordSink for Exporter {
     fn record(&self, record: Record) {
+        // A session's records carry the product statistics its machine measured: they go to
+        // LiveKit's exporter here, and never into a customer's queue.
+        let record = match record {
+            Record::ProductStat(stat) => return super::productstats::record(stat),
+            record => record,
+        };
         let bytes = encode::charge(&record);
         let batch_ready = self.shared.state.lock().record(record, bytes);
         if batch_ready {

@@ -63,7 +63,7 @@ livekit-token.workspace = true
 lk-agents-inference = { path = ".", features = ["testkit"] }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
 # A test's own capture of product statistics.
-lk-agents-telemetry = { path = "../lk-agents-telemetry", features = ["testkit"] }
+lk-agents-net = { path = "../lk-agents-net", features = ["testkit"] }
 fastrand = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util", "net", "io-util"] }
 

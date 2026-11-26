@@ -146,7 +146,7 @@ pub async fn shutdown() {
     if let Some(exporter) = PROCESS.slot.take() {
         exporter.shutdown(SHUTDOWN_TIMEOUT).await;
     }
-    if let Some(stats) = productstats::take() {
+    if let Some(stats) = productstats::uninstall() {
         stats.shutdown(PRODUCT_STATS_SHUTDOWN_TIMEOUT).await;
     }
 }
@@ -176,6 +176,7 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         sdk_version: String,
         runtime: lk_agents_abi::productstats::RuntimeName,
         runtime_version: String,
+        runner_cmd: lk_agents_abi::productstats::runner::RunnerCmd,
     ) {
         let process = &*PROCESS;
         if process.slot.get().is_some() {
@@ -188,7 +189,8 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
             }
         };
         productstats::install(|| {
-            let resource = productstats::resource(&sdk_version, runtime, &runtime_version);
+            let resource =
+                productstats::resource(&sdk_version, runtime, &runtime_version, runner_cmd);
             ProductStats::start(&*spawner, crate::process::host_clock(), resource)
         });
         let exporter = process.slot.install(|| {

@@ -49,19 +49,6 @@ pub enum CliArgs {
     },
 }
 
-impl CliArgs {
-    /// The command, as the process's runner reads it.
-    pub fn runner_cmd(&self) -> crate::productstats::runner::RunnerCmd {
-        use crate::productstats::runner::RunnerCmd;
-        match self {
-            CliArgs::Start { simulation: true, .. } => RunnerCmd::Simulation,
-            CliArgs::Start { dev: true, .. } => RunnerCmd::Dev,
-            CliArgs::Start { .. } => RunnerCmd::Start,
-            CliArgs::Console { .. } => RunnerCmd::Console,
-        }
-    }
-}
-
 /// Parsing never prints or exits the hosting process.
 #[derive(Clone, PartialEq)]
 #[crate::host(record(module = "cli", emit))]

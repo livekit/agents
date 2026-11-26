@@ -2,9 +2,10 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::productstats::{ProductStatsResource, RuntimeName, ThreadStorage};
-use lk_agents_abi::telemetry::decl::{Attrs as _, Label};
-use lk_agents_abi::telemetry::record::{KeyValues, Measurement};
+use lk_agents_abi::productstats::runner::{Runner, RunnerCmd};
+use lk_agents_abi::productstats::{ProductStat, ProductStatsResource, RuntimeName, ThreadStorage};
+use lk_agents_abi::telemetry::decl::{self, Attrs as _, Label, MetricDecl, Number};
+use lk_agents_abi::telemetry::record::KeyValues;
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
 use parking_lot::{Mutex, RwLock};
 
@@ -97,8 +98,7 @@ impl State {
                     return None;
                 }
                 let mut resource = KeyValues::new();
-                let storage = *THREAD_STORAGE.read();
-                ProductStatsResource { storage, ..self.resource.clone() }.write(&mut resource);
+                self.resource.write(&mut resource);
                 Some((destination.clone(), window, resource))
             }
         }
@@ -165,10 +165,11 @@ impl ProductStats {
     }
 }
 
-impl lk_agents_telemetry::productstats::Sink for ProductStats {
-    /// A measurement the aggregation refuses (its series limit) is dropped.
-    fn record(&self, measurement: Measurement) {
-        self.shared.state.lock().aggregator.record(&measurement);
+impl ProductStats {
+    /// Adds one measurement to the current window; one the aggregation refuses (its series
+    /// limit) is dropped.
+    pub fn record(&self, stat: ProductStat) {
+        self.shared.state.lock().aggregator.record(&stat.into_measurement());
     }
 }
 
@@ -225,66 +226,99 @@ impl Shared {
     }
 }
 
-/// The process's product statistics once the host installed them.
-static PROCESS: RwLock<Option<Arc<ProductStats>>> = RwLock::new(None);
+/// The process's product statistics exporter, which every `measure` and `record` writes to.
+/// The host's telemetry installation installs it once ([`install`]), unless they are opted out of.
+static EXPORTER: RwLock<Option<Arc<ProductStats>>> = RwLock::new(None);
 
-/// Installs the process's product statistics `start` builds, unless installed or opted out of
-/// ([`crate::env::product_stats_enabled`]): every measurement point records to them from then on.
+/// Installs the exporter `start` builds as the process's, unless one is installed or product
+/// statistics are opted out of ([`crate::env::product_stats_enabled`]).
 pub fn install(start: impl FnOnce() -> ProductStats) -> Option<Arc<ProductStats>> {
     if !crate::env::product_stats_enabled() {
         return None;
     }
-    let mut slot = PROCESS.write();
-    if let Some(stats) = &*slot {
-        return Some(stats.clone());
+    let mut slot = EXPORTER.write();
+    if let Some(exporter) = &*slot {
+        return Some(exporter.clone());
     }
-    let stats = Arc::new(start());
-    lk_agents_telemetry::productstats::install(stats.clone());
-    *slot = Some(stats.clone());
-    Some(stats)
+    let exporter = Arc::new(start());
+    *slot = Some(exporter.clone());
+    Some(exporter)
 }
 
-/// The installed product statistics.
-pub fn get() -> Option<Arc<ProductStats>> {
-    PROCESS.read().clone()
+/// Removes the process's exporter and returns it for its last flush: measurements are dropped
+/// until the next install.
+pub fn uninstall() -> Option<Arc<ProductStats>> {
+    EXPORTER.write().take()
 }
 
-/// Removes the installed product statistics, so a later install starts new ones.
-pub fn take() -> Option<Arc<ProductStats>> {
-    lk_agents_telemetry::productstats::uninstall();
-    PROCESS.write().take()
-}
-
-/// A forked child abandons its parent's product statistics without dropping them: their task
-/// belongs to the parent's runtime.
+/// A forked child abandons its parent's exporter without dropping it: its task belongs to the
+/// parent's runtime.
 pub fn forget() {
-    lk_agents_telemetry::productstats::forget();
-    std::mem::forget(PROCESS.write().take());
+    std::mem::forget(EXPORTER.write().take());
 }
 
-/// The server or job at `livekit_url` signs later exports with its key.
-pub fn configure(livekit_url: &str, api_key: &str, api_secret: &str) {
-    if let Some(stats) = get() {
-        stats.configure(Destination::cloud(livekit_url, api_key, api_secret));
+/// Signs later exports with the key of the server or job at `livekit_url`; off LiveKit Cloud
+/// nothing is sent.
+pub fn configure_destination(livekit_url: &str, api_key: &str, api_secret: &str) {
+    if let Some(exporter) = EXPORTER.read().clone() {
+        exporter.configure(Destination::cloud(livekit_url, api_key, api_secret));
     }
 }
 
-/// Where the process stores its threads: the storage it opened last, read at each export; none
-/// until it opens one.
-static THREAD_STORAGE: RwLock<ThreadStorage> = RwLock::new(ThreadStorage::None);
-
-/// The process opens a thread storage of this kind, before or after the installation.
-pub fn thread_storage(storage: ThreadStorage) {
-    *THREAD_STORAGE.write() = storage;
+/// Records one measurement of `M` under `labels`. Only a product statistic records here:
+///
+/// ```
+/// use lk_agents_abi::productstats::testkit::TestDuration;
+/// lk_agents_net::export::productstats::measure(&TestDuration, 1.0);
+/// ```
+///
+/// A customer instrument does not compile:
+///
+/// ```compile_fail,E0271
+/// use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
+/// lk_agents_net::export::productstats::measure(&WorkerProcessReadyDuration, 1.0);
+/// ```
+pub fn measure<M: MetricDecl<Audience = decl::ProductStats>>(labels: &M, value: impl Into<Number>) {
+    record(ProductStat::of(labels, value));
 }
 
-/// The process's resource: the framework, the host's runtime, the platform and the runner; the
-/// thread storage is read at each export.
+/// Records a measurement made elsewhere (a sans-I/O machine's, several of one usage): dropped
+/// when no exporter is installed.
+pub fn record(stat: ProductStat) {
+    #[cfg(any(test, feature = "testkit"))]
+    let Some(stat) = testkit::capture(stat) else { return };
+    if let Some(exporter) = EXPORTER.read().clone() {
+        exporter.record(stat);
+    }
+}
+
+/// The process opened a thread storage of this kind: later exports name it. A process that opens
+/// several names the last one.
+pub fn storage_opened(storage: ThreadStorage) {
+    if let Some(exporter) = EXPORTER.read().clone() {
+        exporter.shared.state.lock().resource.storage = storage;
+    }
+}
+
+/// The command that started this process, which a worker hands its job processes; none when no
+/// exporter is installed, where nothing reads it.
+pub fn runner_cmd() -> RunnerCmd {
+    let exporter = EXPORTER.read().clone();
+    exporter
+        .map_or(RunnerCmd::NoCommand, |exporter| exporter.shared.state.lock().resource.runner.cmd)
+}
+
+/// The process's resource: the framework, the host's runtime, the platform and the runner, which
+/// is derived from the command that started the process, its platform and the `CI` and
+/// `LK_HOSTED_AGENTS` variables (no host name, user name or path is read). No storage is opened
+/// yet.
 pub fn resource(
     sdk_version: &str,
     runtime_name: RuntimeName,
     runtime_version: &str,
+    runner_cmd: RunnerCmd,
 ) -> ProductStatsResource {
+    let var = |name: &str| std::env::var(name).ok();
     ProductStatsResource {
         service: Label(lk_agents_abi::telemetry::record::FRAMEWORK.to_owned()),
         framework_version: Label(sdk_version.to_owned()),
@@ -292,8 +326,56 @@ pub fn resource(
         runtime_version: Label(runtime_version.to_owned()),
         os: Label(std::env::consts::OS.to_owned()),
         arch: Label(std::env::consts::ARCH.to_owned()),
-        runner: crate::env::runner(),
+        runner: Runner::detect(var, std::env::consts::OS, runner_cmd),
         storage: ThreadStorage::None,
+    }
+}
+
+/// A test's own product statistics: what its thread records, instead of the process's exporter.
+/// Tests of one binary run in parallel on one process, so an installed exporter would mix theirs.
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit {
+    use std::cell::RefCell;
+
+    use lk_agents_abi::productstats::ProductStat;
+    use lk_agents_abi::productstats::testkit::{Stat, stat};
+
+    thread_local! {
+        static CAPTURED: RefCell<Option<Vec<ProductStat>>> = const { RefCell::new(None) };
+    }
+
+    /// Captures what this thread records until dropped: a test on a current-thread runtime sees
+    /// its own statistics and no other test's.
+    pub struct Capture(());
+
+    impl Capture {
+        pub fn start() -> Self {
+            CAPTURED.with(|c| *c.borrow_mut() = Some(Vec::new()));
+            Capture(())
+        }
+
+        /// What was recorded since the last call.
+        pub fn take(&self) -> Vec<Stat> {
+            let taken = CAPTURED.with(|c| c.borrow_mut().as_mut().map(std::mem::take));
+            taken.unwrap_or_default().into_iter().map(stat).collect()
+        }
+    }
+
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            CAPTURED.with(|c| *c.borrow_mut() = None);
+        }
+    }
+
+    /// `None` when the thread's capture took the measurement.
+    pub(super) fn capture(stat: ProductStat) -> Option<ProductStat> {
+        CAPTURED.with(|c| match c.borrow_mut().as_mut() {
+            Some(captured) => {
+                captured.push(stat);
+                None
+            }
+            None => Some(stat),
+        })
     }
 }
 

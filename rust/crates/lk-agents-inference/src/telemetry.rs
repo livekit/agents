@@ -31,8 +31,9 @@ pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
+use lk_agents_net::export::productstats;
 pub(crate) use lk_agents_telemetry::{
-    Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, productstats, start,
+    Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
 };
 
 /// The provider a span or metric names: the vendor id the model declares, `unknown` without one.

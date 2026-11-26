@@ -9,7 +9,6 @@ license.workspace = true
 # The shared async transport: owned tasks, server-sent events, HTTPS with phase deadlines, the
 # WebSocket seam, LiveKit token signing, the delegation A2A client and telemetry's export.
 [lib]
-doctest = false
 
 [dependencies]
 parking_lot.workspace = true
@@ -60,6 +59,8 @@ miniz_oxide = "0.8"
 sysinfo.workspace = true
 
 [features]
+# A test's own capture of product statistics (`export::productstats::testkit`).
+testkit = ["lk-agents-abi/testkit"]
 # Test-only: the registry of parked signal waiters a simulation checks at quiescence.
 dst = []
 

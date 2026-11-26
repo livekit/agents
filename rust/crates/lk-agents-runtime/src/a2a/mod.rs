@@ -333,7 +333,7 @@ impl Turn {
                     // One text request is one session, however it ended.
                     let ended = call.managed.session_facts();
                     for stat in ended.ended_with_features(Entrypoint::A2aSession) {
-                        lk_agents_telemetry::productstats::record(stat);
+                        lk_agents_net::export::productstats::record(stat);
                     }
                     let now = elapsed();
                     let Call { holder, run, lease, mut submitted, .. } = call;

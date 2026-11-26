@@ -54,7 +54,7 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "rin
 web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
 # A test's own capture of product statistics.
-lk-agents-telemetry = { path = "../lk-agents-telemetry", features = ["testkit"] }
+lk-agents-net = { path = "../lk-agents-net", features = ["testkit"] }
 bytes = "1"
 lk-agents-storage = { path = "../lk-agents-storage", features = ["testing"] }
 

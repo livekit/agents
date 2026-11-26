@@ -34,8 +34,6 @@ pbjson-types.workspace = true
 [dev-dependencies]
 # The zeroed metrics records a test fills in field by field.
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde", "testkit"] }
-# A test's reading of the product statistics the session measured.
-lk-agents-telemetry = { path = "../lk-agents-telemetry", features = ["testkit"] }
 
 [features]
 # Decodes the checked-in Opus replies of the transcript sync accuracy test.

@@ -1128,7 +1128,7 @@ mod attachments {
 #[tokio::test]
 async fn a_text_request_is_one_session_with_what_its_runs_called() {
     use lk_agents_abi::productstats::sessions::SessionFacts;
-    let stats = lk_agents_telemetry::productstats::testkit::Capture::start();
+    let stats = lk_agents_net::export::productstats::testkit::Capture::start();
     let fx = Backend::Sqlite.fixture(None).await;
     let thread = fx.thread().await;
     let session = |topology: &str, delegation: &str| {

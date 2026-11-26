@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use lk_agents_abi::productstats::runner::{Runner, RunnerCmd};
 use lk_agents_abi::{Clock, Spawner};
 
 use crate::http::GatewayHttp;
@@ -160,33 +159,10 @@ pub fn server_setting(name: &str) -> Option<String> {
     registered.or_else(|| std::env::var(name).ok())
 }
 
-/// The command that started this process: the launcher's, or its worker's for a job process.
-static RUNNER_CMD: parking_lot::RwLock<RunnerCmd> = parking_lot::RwLock::new(RunnerCmd::None);
-
-/// Registers the command that started this process, before its telemetry is installed.
-pub fn serve_runner_cmd(cmd: RunnerCmd) {
-    *RUNNER_CMD.write() = cmd;
-}
-
-/// The command that started this process; `none` when no `lk agent` command did.
-pub fn runner_cmd() -> RunnerCmd {
-    *RUNNER_CMD.read()
-}
-
-/// The process's runner, derived once from the command that started it, its platform and the
-/// `CI` and `LK_HOSTED_AGENTS` variables. No hostname, user name or path is read.
-pub fn runner() -> Runner {
-    static RUNNER: std::sync::OnceLock<Runner> = std::sync::OnceLock::new();
-    *RUNNER.get_or_init(|| {
-        Runner::detect(|name| std::env::var(name).ok(), std::env::consts::OS, runner_cmd())
-    })
-}
-
-/// Whether LiveKit's product statistics are on, read once: `LIVEKIT_PRODUCT_STATS=0` or
-/// `DO_NOT_TRACK=1` turns them off for the process.
+/// Whether LiveKit's product statistics are on: `LIVEKIT_PRODUCT_STATS=0` or `DO_NOT_TRACK=1`
+/// turns them off. Read when the process's exporter is installed, once.
 pub fn product_stats_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| product_stats_allowed(|name| std::env::var(name).ok()))
+    product_stats_allowed(|name| std::env::var(name).ok())
 }
 
 fn product_stats_allowed(var: impl Fn(&str) -> Option<String>) -> bool {
