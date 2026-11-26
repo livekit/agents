@@ -318,15 +318,24 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run_session(
         self, ws: aiohttp.ClientWebSocketResponse, output_emitter: tts.AudioEmitter
     ) -> None:
+        loop = asyncio.get_running_loop()
+        timeout = self._conn_options.timeout
         in_turn = False
-        awaiting_final = False
         turn_done = asyncio.Event()
+        last_message_at = loop.time()
 
         async def _end_turn() -> None:
-            nonlocal in_turn, awaiting_final
-            awaiting_final = True
+            nonlocal in_turn
             await ws.send_str(_END_STREAM_MESSAGE)
-            await turn_done.wait()
+            ended_at = loop.time()
+            # Deepdub is silent while the LLM is still writing, so the deadline starts
+            # at end-stream and is extended by every message that follows it.
+            while not turn_done.is_set():
+                remaining = max(ended_at, last_message_at) + timeout - loop.time()
+                if remaining <= 0:
+                    raise APITimeoutError(f"Deepdub sent nothing for {timeout}s after end-stream")
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(turn_done.wait(), remaining)
             turn_done.clear()
             in_turn = False
 
@@ -350,15 +359,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await _end_turn()
 
         async def _recv_task() -> None:
-            nonlocal awaiting_final
+            nonlocal last_message_at
             while True:
-                # Deepdub is silent while the LLM is still writing the turn, so a receive
-                # deadline only applies once the turn has been closed.
-                timeout = self._conn_options.timeout if awaiting_final else None
-                message = await _receive_message(ws, timeout=timeout)
+                message = await _receive_message(ws, timeout=None)
+                last_message_at = loop.time()
                 if _handle_audio(message, output_emitter):
                     output_emitter.end_segment()
-                    awaiting_final = False
                     turn_done.set()
 
         send = asyncio.create_task(_send_task())

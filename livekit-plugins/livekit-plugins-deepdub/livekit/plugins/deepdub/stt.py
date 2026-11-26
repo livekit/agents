@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents import (
@@ -191,6 +192,10 @@ class SpeechStream(stt.SpeechStream):
         )
         self._reported_audio_ms = 0
 
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        # Deepdub takes mono audio, and the base stream resamples without mixing channels.
+        super().push_frame(_downmix_to_mono(frame))
+
     def _start_message(self) -> dict[str, Any]:
         opts = self._stt._opts
         config: dict[str, Any] = {
@@ -315,6 +320,11 @@ class SpeechStream(stt.SpeechStream):
         def end_utterance() -> None:
             nonlocal speaking
             if final.text:
+                if not speaking:
+                    # The first words of this utterance arrived together with its endpoint.
+                    self._event_ch.send_nowait(
+                        stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
+                    )
                 data = final.to_speech_data(self.start_time_offset)
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT, alternatives=[data])
@@ -332,7 +342,10 @@ class SpeechStream(stt.SpeechStream):
         monitor = utils.aio.WebSocketMonitor(
             ws, liveness_timeout=self._conn_options.liveness_timeout
         )
-        async for msg in monitor:
+        while True:
+            # Iterating the monitor would end silently on a close frame; receiving
+            # directly lets a mid-session disconnect raise and be retried.
+            msg = await monitor.receive()
             if msg.type in (
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSED,
@@ -454,6 +467,20 @@ class _TokenAccumulator:
             end_time=max(self.end_ms, other.end_ms) / 1000 + start_time_offset,
             confidence=sum(confidences) / len(confidences) if confidences else 0.0,
         )
+
+
+def _downmix_to_mono(frame: rtc.AudioFrame) -> rtc.AudioFrame:
+    if frame.num_channels == 1:
+        return frame
+    samples = np.frombuffer(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
+    # Average in floating point to avoid overflowing when mixing loud channels.
+    mono = samples.mean(axis=1).astype(np.int16)
+    return rtc.AudioFrame(
+        data=mono.tobytes(),
+        sample_rate=frame.sample_rate,
+        num_channels=1,
+        samples_per_channel=frame.samples_per_channel,
+    )
 
 
 def _api_error(content: dict[str, Any]) -> APIStatusError:

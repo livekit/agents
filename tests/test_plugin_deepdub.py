@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from unittest.mock import patch
 
@@ -18,7 +18,13 @@ import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError, stt
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -55,11 +61,18 @@ def _audio(generation_id: str, index: int, **flags: Any) -> bytes:
 class _FakeTTSServer:
     """Speaks each turn as two generations once ``end-stream`` arrives."""
 
-    def __init__(self, *, hold_turn: bool = False, error: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        hold_turn: bool = False,
+        mute: bool = False,
+        error: dict[str, Any] | None = None,
+    ) -> None:
         self.messages: list[dict[str, Any]] = []
         self.api_keys: list[str | None] = []
         self.turn_started = asyncio.Event()
         self._hold_turn = hold_turn
+        self._mute = mute
         self._error = error
 
     async def handler(self, request: web.Request) -> web.WebSocketResponse:
@@ -77,6 +90,8 @@ class _FakeTTSServer:
                 if self._hold_turn:
                     await ws.send_bytes(_audio(f"held-{turn}", 0))
             elif action == "end-stream":
+                if self._mute:
+                    continue
                 if self._error is not None:
                     await ws.send_str(json.dumps(self._error))
                     continue
@@ -267,6 +282,32 @@ async def test_tts_closing_an_interrupted_stream_sends_cancel():
     assert server.actions() == ["stream-config", "stream-text", "cancel"]
 
 
+async def test_tts_stream_times_out_when_the_turn_never_finishes():
+    from livekit.plugins.deepdub import TTS
+
+    server = _FakeTTSServer(mute=True)
+    runner, base = await _serve("/ws", server.handler)
+    try:
+        async with aiohttp.ClientSession() as session:
+            tts = TTS(api_key="dd-test", base_url=base, http_session=session)
+            stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.3))
+            stream.push_text("Hello.")
+            # The receiver is already waiting, untimed, when end-stream goes out.
+            await asyncio.wait_for(server.turn_started.wait(), 5)
+            stream.end_input()
+            with pytest.raises(APITimeoutError):
+                await asyncio.wait_for(_drain(stream), 5)
+            for _ in range(100):
+                if "cancel" in server.actions():
+                    break
+                await asyncio.sleep(0.01)
+            await tts.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert server.actions() == ["stream-config", "stream-text", "end-stream", "cancel"]
+
+
 def _token(text: str, start: int | None, end: int | None, *, final: bool, lang: str = "en") -> dict:
     token: dict[str, Any] = {"text": text, "is_final": final, "language": lang}
     if start is not None:
@@ -419,10 +460,74 @@ async def test_stt_flush_finalizes_and_closes_the_utterance():
 
     assert "language_hints" not in seen["config"]
     assert seen["control"] == ["finalize"]
-    finals = [ev for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
-    assert [ev.alternatives[0].text for ev in finals] == ["שלום"]
-    assert finals[0].alternatives[0].language == "he"
-    assert events[-1].type == stt.SpeechEventType.END_OF_SPEECH
+    # The first words arrive together with <fin>, so speech still starts before it ends.
+    types = [ev.type for ev in events if ev.type != stt.SpeechEventType.RECOGNITION_USAGE]
+    assert types == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    final = events[types.index(stt.SpeechEventType.FINAL_TRANSCRIPT)]
+    assert final.alternatives[0].text == "שלום"
+    assert final.alternatives[0].language == "he"
+
+
+async def test_stt_downmixes_stereo_input():
+    from livekit.plugins.deepdub import STT
+
+    async def script(ws: web.WebSocketResponse, seen: dict[str, Any]) -> None:
+        seen["pcm"] = b""
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                seen["pcm"] += msg.data
+            elif msg.type == aiohttp.WSMsgType.TEXT and msg.data == "":
+                await ws.send_str(json.dumps({"tokens": [], "finished": True}))
+                await ws.close()
+
+    n = 1600  # 100 ms per channel at 16 kHz
+    stereo = rtc.AudioFrame(
+        b"\x10\x00\x30\x00" * n, sample_rate=16000, num_channels=2, samples_per_channel=n
+    )
+    seen: dict[str, Any] = {}
+    runner, base = await _serve("/transcribe-websocket", _stt_handler(seen, script))
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="dd-test", base_url=base, http_session=session)
+            stream = s.stream(conn_options=_CONN)
+            stream.push_frame(stereo)
+            stream.end_input()
+            async for _ in stream:
+                pass
+    finally:
+        await runner.cleanup()
+
+    assert seen["pcm"] == b"\x20\x00" * n
+
+
+async def test_stt_disconnect_mid_session_raises():
+    from livekit.plugins.deepdub import STT
+
+    async def script(ws: web.WebSocketResponse, seen: dict[str, Any]) -> None:
+        await ws.receive()
+        await ws.close()
+
+    seen: dict[str, Any] = {}
+    runner, base = await _serve("/transcribe-websocket", _stt_handler(seen, script))
+    try:
+        async with aiohttp.ClientSession() as session:
+            s = STT(api_key="dd-test", base_url=base, http_session=session)
+            stream = s.stream(conn_options=_CONN)
+            stream.push_frame(_frame())
+            with pytest.raises(APIConnectionError):
+                await asyncio.wait_for(_drain(stream), 5)
+            await stream.aclose()
+    finally:
+        await runner.cleanup()
+
+
+async def _drain(stream: AsyncIterator[Any]) -> None:
+    async for _ in stream:
+        pass
 
 
 async def test_stt_endpoint_without_final_words_still_ends_speech():
