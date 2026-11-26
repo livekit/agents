@@ -20,15 +20,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [frontdesk, drive_thru]
+        include:
+          - example: frontdesk
+            run: uv run pytest examples/frontdesk/test_agent.py -s
+          # `uv run` puts the synced workspace venv on PATH so lk resolves the
+          # local livekit-agents checkout rather than a published SDK.
+          - example: drive_thru
+            run: >-
+              uv run lk agent simulate text examples/drive_thru/agent.py
+              --scenarios examples/drive_thru/scenarios.yaml
 
     runs-on: ubuntu-latest
     name: ${{ matrix.example }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          lfs: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -39,6 +49,12 @@ jobs:
 
       - name: Install the project
         run: uv sync --all-extras --dev
+
+      - name: Install LiveKit CLI
+        if: matrix.example == 'drive_thru'
+        run: |
+          curl -sSL https://get.livekit.io/cli | bash
+          lk --version
 
       - name: Setup Google credentials
         if: matrix.example == 'google'
@@ -80,4 +96,4 @@ jobs:
           SPITCH_API_KEY: ${{ secrets.SPITCH_API_KEY }}
           LMNT_API_KEY: ${{ secrets.LMNT_API_KEY }}
           INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
-        run: uv run pytest examples/${{matrix.example}}/test_agent.py -s
+        run: ${{ matrix.run }}

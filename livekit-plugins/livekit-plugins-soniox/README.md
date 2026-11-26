@@ -1,6 +1,6 @@
 # Soniox plugin for LiveKit Agents
 
-Support for Soniox [Speech-to-Text](https://soniox.com/docs/stt) and [Text-to-Speech](https://soniox.com/docs/tts) APIs, using WebSocket streaming interfaces.
+Support for Soniox [Speech-to-Text](https://soniox.com/docs/stt/get-started) and [Text-to-Speech](https://soniox.com/docs/tts/get-started) APIs, using WebSocket streaming interfaces.
 
 See [STT documentation](https://docs.livekit.io/agents/models/stt/soniox/) and [TTS documentation](https://docs.livekit.io/agents/models/tts/soniox/) for more information.
 

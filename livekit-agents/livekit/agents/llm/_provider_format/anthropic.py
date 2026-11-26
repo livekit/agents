@@ -37,7 +37,11 @@ def to_chat_ctx(
         chat_items.extend(group.flatten())
 
     for msg in chat_items:
-        if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
+        if (
+            msg.type == "message"
+            and msg.role in ("system", "developer")
+            and (text := msg.raw_text_content)
+        ):
             system_messages.append(text)
             continue
 
@@ -58,7 +62,7 @@ def to_chat_ctx(
             for c in msg.content:
                 if isinstance(c, llm.ImageContent):
                     content.append(_to_image_content(c))
-                elif isinstance(c, llm.AudioContent):
+                elif isinstance(c, (llm.AudioContent, llm.CacheBreakpoint)):
                     pass
                 elif c:
                     # str or Instructions

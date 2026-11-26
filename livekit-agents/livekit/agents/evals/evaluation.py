@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..llm import LLM, ChatContext
+from ..utils import resolve_env_int
 from .judge import JudgmentResult
 
-_evals_verbose = int(os.getenv("LIVEKIT_EVALS_VERBOSE", 0))
+_evals_verbose = resolve_env_int("LIVEKIT_EVALS_VERBOSE")
 
 if TYPE_CHECKING:
     from ..inference import LLMModels

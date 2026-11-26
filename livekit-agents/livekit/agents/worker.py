@@ -30,11 +30,6 @@ from enum import Enum
 from typing import Any, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
-
 import aiohttp
 import jwt
 from aiohttp import web
@@ -43,7 +38,7 @@ from google.protobuf.json_format import MessageToDict, MessageToJson
 from livekit import api, rtc
 from livekit.protocol import agent, agent_worker, models
 
-from . import ipc, telemetry, utils
+from . import _hosted_logs, ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
 from .inference_runner import _InferenceRunner
 from .job import (
@@ -63,25 +58,17 @@ from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 ASSIGNMENT_TIMEOUT = 7.5
-UPDATE_STATUS_INTERVAL = 2.5
+UPDATE_STATUS_INTERVAL = 1.5
 UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
+WORKER_PING_INTERVAL = 1.0
+WORKER_PONG_TIMEOUT = 2.0
+WORKER_REGISTRATION_TIMEOUT = 10.0
+# how long a previously registered worker may stay disconnected (e.g. while it
+# reconnects after a websocket interruption) before the health check reports 503
+HEALTH_RECONNECT_GRACE_PERIOD = 30.0
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
-
-
-def _toml_agent_name(path: str) -> str:
-    try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-    except FileNotFoundError:
-        return ""
-    except (OSError, tomllib.TOMLDecodeError) as e:
-        logger.debug("ignoring unreadable livekit.toml", extra={"path": path, "error": str(e)})
-        return ""
-    agent = data.get("agent")
-    name = agent.get("name") if isinstance(agent, dict) else None
-    return name if isinstance(name, str) else ""
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -239,8 +226,7 @@ class ServerOptions:
     agent_name: str = ""
     """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
 
-    Deprecated: set the name in ``livekit.toml`` (``[agent] name``) or the ``LIVEKIT_AGENT_NAME``
-    environment variable instead; this parameter will be removed in a future release."""  # noqa: E501
+    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -284,6 +270,8 @@ class ServerOptions:
 
     By default it uses "spawn" on all platforms, but "forkserver" on Linux.
     """
+    preload_modules: list[str] | None = None
+    """Modules imported once in the forkserver and shared by job processes. No-op under spawn."""
     prometheus_port: NotGivenOr[int] = NOT_GIVEN
     """When enabled, will expose prometheus metrics on :{prometheus_port}/metrics"""
     prometheus_multiproc_dir: str | None = None
@@ -346,6 +334,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         ),
         setup_fnc: Callable[[JobProcess], Any] | None = None,
         load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = None,
+        preload_modules: list[str] | None = None,
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
         log_level: str | ServerEnvOption[str] = _default_log_level,
@@ -375,6 +364,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._prometheus_multiproc_dir = prometheus_multiproc_dir
         self._mp_ctx_str = multiprocessing_context
         self._mp_ctx = mp.get_context(multiprocessing_context)
+        self._preload_modules = preload_modules or []
 
         if not is_given(http_proxy):
             http_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
@@ -385,7 +375,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # simulation: load shedding is disabled so runs can saturate the agent.
         self._simulation = False
         self._agent_name = ""
-        self._agent_name_source: Literal["override", "code", "env", "livekit.toml", "none"] = "none"
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -405,6 +394,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
+        # monotonic time when a registered connection was lost, cleared on re-register
+        self._disconnected_at: float | None = None
         self._http_server: http_server.HttpServer | None = None
 
         self._lock = asyncio.Lock()
@@ -458,6 +449,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             prometheus_multiproc_dir=options.prometheus_multiproc_dir,
             setup_fnc=options.prewarm_fnc,
             load_fnc=options.load_fnc,
+            preload_modules=options.preload_modules,
             log_level=options.log_level,
         )
         server.rtc_session(
@@ -512,13 +504,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         Decorator or direct registrar for the RTC session entrypoint.
 
         Usage:
-            @server.rtc_session()
+            @server.rtc_session(agent_name="survey_agent")
             async def my_agent(job_ctx: JobContext): ...
 
-            server.rtc_session(my_agent)
-
-        The agent name comes from ``LIVEKIT_AGENT_NAME`` or ``[agent] name`` in ``livekit.toml``.
-        ``agent_name`` is deprecated and will be removed in a future release.
+            server.rtc_session(my_agent, agent_name="survey_agent")
         """
 
         def decorator(
@@ -534,20 +523,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._simulation_end_fnc = on_simulation_end
             # precedence: the LIVEKIT_AGENT_NAME_OVERRIDE env var (a platform-injected
             # force, e.g. from the lk simulation launcher) takes priority, then the
-            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default, then
-            # [agent] name from livekit.toml (resolved in run(), production only).
+            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default.
             if os.environ.get("LIVEKIT_AGENT_NAME_OVERRIDE"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME_OVERRIDE"]
-                self._agent_name_source = "override"
             elif agent_name:
                 self._agent_name = agent_name
-                self._agent_name_source = "code"
             elif os.environ.get("LIVEKIT_AGENT_NAME"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
-                self._agent_name_source = "env"
             else:
                 self._agent_name = ""
-                self._agent_name_source = "none"
             self._server_type = type
             return f
 
@@ -555,24 +539,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             return decorator(func)
 
         return decorator
-
-    def _resolve_agent_name(self, *, devmode: bool) -> None:
-        """Applies the livekit.toml fallback and warns about code-defined names.
-
-        Dev workers never take the toml name so they stay out of the deployed agent's pool.
-        """
-        if self._agent_name_source == "code":
-            logger.warning(
-                "agent_name is set in code; move it to livekit.toml ([agent] name). "
-                "The agent_name parameter will be removed in a future release.",
-                extra={"agent_name": self._agent_name},
-            )
-        if self._agent_name_source != "none" or devmode:
-            return
-        name = _toml_agent_name(os.path.join(os.getcwd(), "livekit.toml"))
-        if name:
-            self._agent_name = name
-            self._agent_name_source = "livekit.toml"
 
     @property
     def worker_info(self) -> WorkerInfo:
@@ -624,6 +590,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._load_fnc is None:
                 self._load_fnc = _DefaultLoadCalc.get_load
 
+            if self._job_executor_type == JobExecutorType.THREAD and _hosted_logs.logs_handed_off():
+                _hosted_logs.install_thread_router()
+
             if self.worker_info.cloud_agents:
                 if self._load_fnc != _DefaultLoadCalc.get_load:
                     logger.warning(
@@ -638,8 +607,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._simulation:
                 logger.info("simulation mode enabled: worker load limit disabled")
-
-            self._resolve_agent_name(devmode=devmode)
 
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
@@ -704,6 +671,21 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
                     if self._connection_failed:
                         return web.Response(status=503, text="failed to connect to livekit")
+
+                    # 503 until the first RegisterWorkerResponse (docs / Node SDK).
+                    # unregistered=True workers never connect; keep / as a liveness probe.
+                    if not unregistered:
+                        if self._id == "unregistered":
+                            return web.Response(status=503, text="not connected to livekit")
+
+                        # a short reconnect after a websocket interruption is expected;
+                        # only report unhealthy once it has lasted longer than the grace period
+                        disconnected_at = self._disconnected_at
+                        if (
+                            disconnected_at is not None
+                            and time.monotonic() - disconnected_at > HEALTH_RECONNECT_GRACE_PERIOD
+                        ):
+                            return web.Response(status=503, text="not connected to livekit")
 
                     return web.Response(text="OK")
 
@@ -797,7 +779,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._mp_ctx_str == "forkserver":
                 # the framework's warm-up runs once in the forkserver and is inherited via
                 # COW; under `spawn` each job process imports it itself (see ipc._preload)
-                plugin_packages = [p.package for p in Plugin.registered_plugins] + [
+                plugin_packages = list(
+                    dict.fromkeys(
+                        [p.package for p in Plugin.registered_plugins] + self._preload_modules
+                    )
+                ) + [
                     "livekit.agents.ipc._preload",
                     # Must remain last; it freezes objects imported by earlier preloads.
                     "livekit.agents.ipc._preload_freeze",
@@ -805,15 +791,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 logger.info("preloading plugins", extra={"packages": plugin_packages})
                 self._mp_ctx.set_forkserver_preload(plugin_packages)
 
+            # create before starting resources so aclose() can clean up a failed startup
+            self._closed = False
+            self._close_future = asyncio.Future(loop=self._loop)
+
             if self._inference_executor is not None:
                 logger.info("starting inference executor")
                 await self._inference_executor.start()
                 await self._inference_executor.initialize()
 
-            self._closed = False
-
             def _update_job_status(proc: ipc.job_executor.JobExecutor) -> None:
                 t = self._loop.create_task(self._update_job_status(proc))
+                self._job_lifecycle_tasks.add(t)
+                t.add_done_callback(self._job_lifecycle_tasks.discard)
+
+            def _send_join_timing(
+                proc: ipc.job_executor.JobExecutor, timing: agent.JobJoinTiming
+            ) -> None:
+                t = self._loop.create_task(self._update_job_status(proc, join_timing=timing))
                 self._job_lifecycle_tasks.add(t)
                 t.add_done_callback(self._job_lifecycle_tasks.discard)
 
@@ -834,6 +829,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool.on("process_started", _update_job_status)
             self._proc_pool.on("process_closed", _update_job_status)
             self._proc_pool.on("process_job_launched", _update_job_status)
+            self._proc_pool.on("process_job_connected", _send_join_timing)
             await self._proc_pool.start()
 
             self._http_session = aiohttp.ClientSession(
@@ -844,7 +840,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._api = api.LiveKitAPI(
                     self._ws_url, self._api_key, self._api_secret, session=self._http_session
                 )
-            self._close_future = asyncio.Future(loop=self._loop)
 
             @utils.log_exceptions(logger=logger)
             async def _load_task() -> None:
@@ -1073,11 +1068,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._closed = True
 
-            # Worker never fully started (e.g. interrupted during init, or
-            # running unregistered without a LiveKit connection)
-            if self._close_future is None:
-                return
-
             logger.info("shutting down worker", extra={"id": self.id})
 
             if self._conn_task is not None:
@@ -1110,7 +1100,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
             self._msg_chan.close()
 
-            if not self._close_future.done():
+            if self._close_future is not None and not self._close_future.done():
                 self._close_future.set_result(None)
 
     async def _queue_msg(self, msg: agent.WorkerMessage) -> None:
@@ -1129,8 +1119,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         assert self._http_session is not None
 
         retry_count = 0
-        ws: aiohttp.ClientWebSocketResponse | None = None
         while not self._closed:
+            ws: aiohttp.ClientWebSocketResponse | None = None
             try:
                 self._connecting = True
                 join_jwt = (
@@ -1162,8 +1152,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     heartbeat=HEARTBEAT_INTERVAL,
                 )
 
-                retry_count = 0
-
                 # register the worker
                 req = agent.WorkerMessage()
                 req.register.type = self._server_type.value
@@ -1184,23 +1172,41 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 await ws.send_bytes(req.SerializeToString())
 
                 # wait for the register response before running this connection
-                first_msg_b = await ws.receive_bytes()
+                try:
+                    first_msg_b = await asyncio.wait_for(
+                        ws.receive_bytes(), timeout=WORKER_REGISTRATION_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    raise asyncio.TimeoutError("worker registration timed out") from None
                 msg = agent.ServerMessage()
                 msg.ParseFromString(first_msg_b)
 
                 if not msg.HasField("register"):
                     raise Exception("expected register response as first message")
 
+                retry_count = 0
                 self._handle_register(msg.register)
                 self._connecting = False
+                self._disconnected_at = None
 
                 # report all active jobs to the server after registration
                 await self._report_active_jobs()
 
-                await self._run_ws(ws)
+                try:
+                    await self._run_ws(ws)
+                finally:
+                    # registered connection lost: start the health check grace period
+                    if self._disconnected_at is None:
+                        self._disconnected_at = time.monotonic()
             except Exception as e:
                 if self._closed:
                     break
+
+                if isinstance(e, asyncio.TimeoutError) and ws is not None:
+                    # A dead connection may never complete the close handshake.
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(ws.close(), timeout=1.0)
+                    ws = None
 
                 if retry_count >= self._max_retry:
                     self._connection_failed = True
@@ -1222,6 +1228,27 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         closing_ws = False
+        ping_timestamp = 0
+        pong_received = asyncio.Event()
+
+        async def _send_ping() -> None:
+            ping = agent.WorkerMessage(ping=agent.WorkerPing(timestamp=ping_timestamp))
+            await ws.send_bytes(ping.SerializeToString())
+            await pong_received.wait()
+
+        async def _ping_task() -> None:
+            nonlocal ping_timestamp
+            interval = utils.aio.interval(WORKER_PING_INTERVAL)
+            while True:
+                await interval.tick()
+                ping_timestamp = time.time_ns() // 1_000_000
+                pong_received.clear()
+                try:
+                    await asyncio.wait_for(_send_ping(), timeout=WORKER_PONG_TIMEOUT)
+                except asyncio.TimeoutError:
+                    raise asyncio.TimeoutError(
+                        "worker ping timed out waiting for LiveKit pong"
+                    ) from None
 
         async def _load_task() -> None:
             """periodically update worker status"""
@@ -1280,6 +1307,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._handle_availability(server_msg.availability)
                 elif which == "assignment":
                     self._handle_assignment(server_msg.assignment)
+                elif which == "pong" and server_msg.pong.last_timestamp == ping_timestamp:
+                    pong_received.set()
                 elif which == "termination":
                     user_task = self._loop.create_task(
                         self._handle_termination(server_msg.termination),
@@ -1289,6 +1318,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     user_task.add_done_callback(self._job_lifecycle_tasks.discard)
 
         tasks = [
+            asyncio.create_task(_ping_task()),
             asyncio.create_task(_load_task()),
             asyncio.create_task(_send_task()),
             asyncio.create_task(_recv_task()),
@@ -1341,7 +1371,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
         # receipt is now, not when the task gets to run: that delay is dispatch latency
-        task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
+        task = self._loop.create_task(
+            self._answer_availability(msg, received_at=time.time(), received_mono=time.monotonic())
+        )
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
@@ -1397,13 +1429,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._get_effective_load() < load_threshold
 
     async def _answer_availability(
-        self, msg: agent.AvailabilityRequest, *, received_at: float | None = None
+        self,
+        msg: agent.AvailabilityRequest,
+        *,
+        received_at: float | None = None,
+        received_mono: float | None = None,
     ) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
         if received_at is None:
             received_at = time.time()
+        if received_mono is None:
+            received_mono = time.monotonic()
         await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
@@ -1431,6 +1469,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             nonlocal answered
             answered = True
             accepted_at = time.time()
+            accepted_mono = time.monotonic()
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1470,6 +1509,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 received_at=received_at,
                 accepted_at=accepted_at,
                 assigned_at=time.time(),
+                received_mono=received_mono,
+                accepted_mono=accepted_mono,
+                assigned_mono=time.monotonic(),
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -1577,7 +1619,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         with contextlib.suppress(utils.aio.ChanClosed):
             await self._queue_msg(msg)
 
-    async def _update_job_status(self, proc: ipc.job_executor.JobExecutor) -> None:
+    async def _update_job_status(
+        self,
+        proc: ipc.job_executor.JobExecutor,
+        *,
+        join_timing: agent.JobJoinTiming | None = None,
+    ) -> None:
         job_info = proc.running_job
         if job_info is None:
             return
@@ -1590,7 +1637,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         elif proc.status == ipc.job_executor.JobStatus.RUNNING:
             status = agent.JobStatus.JS_RUNNING
 
-        update = agent.UpdateJobStatus(job_id=job_info.job.id, status=status, error="")
+        update = agent.UpdateJobStatus(
+            job_id=job_info.job.id, status=status, error="", join_timing=join_timing
+        )
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
 
@@ -1599,8 +1648,16 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if not active_jobs:
             return
 
-        job_ids = [job_info.job.id for job_info in active_jobs]
-        migrate_req = agent.MigrateJobRequest(job_ids=job_ids)
+        # the jobs as they were assigned, so the server tracks them again
+        jobs = []
+        for job_info in active_jobs:
+            job = agent.Job()
+            job.CopyFrom(job_info.job)
+            job.state.participant_identity = job_info.accept_arguments.identity
+            jobs.append(job)
+
+        job_ids = [job.id for job in jobs]
+        migrate_req = agent.MigrateJobRequest(job_ids=job_ids, jobs=jobs)
         msg = agent.WorkerMessage(migrate_job=migrate_req)
         await self._queue_msg(msg)
 

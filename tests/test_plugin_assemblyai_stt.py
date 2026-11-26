@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from unittest.mock import MagicMock, patch
 
@@ -218,25 +220,25 @@ async def test_continuous_partials_requires_u3_rt_pro():
 
 async def test_continuous_partials_with_u3_pro_alias():
     """continuous_partials works with the deprecated 'u3-pro' alias (rewritten to
-    universal-3-5-pro)."""
+    assemblyai-stt-3-7-realtime-agent)."""
     from livekit.plugins.assemblyai import STT
 
     stt = STT(api_key="test-key", model="u3-pro", continuous_partials=True)
     assert stt._opts.continuous_partials is True
-    assert stt._opts.speech_model == "universal-3-5-pro"
+    assert stt._opts.speech_model == "assemblyai-stt-3-7-realtime-agent"
 
 
-async def test_u3_pro_deprecated_rewrites_to_universal_3_5_pro():
+async def test_u3_pro_deprecated_rewrites_to_stt_3_7_realtime_agent():
     """The deprecated 'u3-pro' alias warns and is rewritten to the recommended
-    default model 'universal-3-5-pro'."""
+    default model 'assemblyai-stt-3-7-realtime-agent'."""
     from livekit.plugins.assemblyai import STT
 
     with patch("livekit.plugins.assemblyai.stt.logger") as mock_logger:
         stt = STT(api_key="test-key", model="u3-pro")
 
-    assert stt._opts.speech_model == "universal-3-5-pro"
+    assert stt._opts.speech_model == "assemblyai-stt-3-7-realtime-agent"
     mock_logger.warning.assert_called_once()
-    assert "universal-3-5-pro" in mock_logger.warning.call_args.args[0]
+    assert "assemblyai-stt-3-7-realtime-agent" in mock_logger.warning.call_args.args[0]
 
 
 async def test_continuous_partials_update():
@@ -515,22 +517,13 @@ async def test_previous_context_n_turns_zero_is_forwarded():
 
 
 # ---------------------------------------------------------------------------
-# universal-3-5-pro: default model + u3-rt-pro parameter family
+# universal-3-5-pro: u3-rt-pro parameter family
 #
-# universal-3-5-pro is the plugin's default model and belongs to the u3-rt-pro
-# parameter family, so it accepts the u3-pro-gated params (prompt,
-# agent_context, previous_context_n_turns, continuous_partials,
-# interruption_delay) and inherits the family's connect-time defaults.
+# universal-3-5-pro belongs to the u3-rt-pro parameter family, so it accepts
+# the u3-pro-gated params (prompt, agent_context, previous_context_n_turns,
+# continuous_partials, interruption_delay) and inherits the family's
+# connect-time defaults.
 # ---------------------------------------------------------------------------
-
-
-async def test_default_model_is_universal_3_5_pro():
-    """The plugin defaults to universal-3-5-pro."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key")
-    assert stt.model == "universal-3-5-pro"
-    assert stt._opts.speech_model == "universal-3-5-pro"
 
 
 async def test_universal_3_5_pro_accepts_u3_pro_params():
@@ -564,10 +557,10 @@ async def test_universal_3_5_pro_leaves_continuous_partials_unset():
 # ---------------------------------------------------------------------------
 # universal-3-6-pro: u3-rt-pro parameter family
 #
-# universal-3-6-pro is the next U3 Pro release: server-side it has the same
-# parameter support as universal-3-5-pro and differs only in which ASR
-# deployment serves the session. So it accepts the u3-pro-gated params and
-# inherits the family's connect-time defaults.
+# universal-3-6-pro is the U3 Pro release after universal-3-5-pro:
+# server-side it has the same parameter support as universal-3-5-pro and
+# differs only in which ASR deployment serves the session. So it accepts the u3-pro-gated params and inherits the family's
+# connect-time defaults.
 # ---------------------------------------------------------------------------
 
 
@@ -625,6 +618,90 @@ async def test_universal_3_6_pro_connect_config_uses_u3_pro_defaults():
 
     query = parse_qs(urlparse(captured["url"]).query)
     assert query["speech_model"] == ["universal-3-6-pro"]
+    assert query["min_turn_silence"] == ["100"]
+    assert query["max_turn_silence"] == ["100"]
+    assert query["language_detection"] == ["true"]
+
+
+# ---------------------------------------------------------------------------
+# assemblyai-stt-3-7-realtime-agent: default model + u3-rt-pro parameter family
+#
+# assemblyai-stt-3-7-realtime-agent is the 3.7 voice-agent streaming model and
+# the plugin's default model.
+# Server-side it is in the U3 Pro family (`SpeechModel.is_u3_pro`) with the
+# same parameter support as universal-3-6-pro, so it accepts the u3-pro-gated
+# params and inherits the family's connect-time defaults.
+# ---------------------------------------------------------------------------
+
+
+async def test_default_model_is_stt_3_7_realtime_agent():
+    """The plugin defaults to assemblyai-stt-3-7-realtime-agent."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key")
+    assert stt.model == "assemblyai-stt-3-7-realtime-agent"
+    assert stt._opts.speech_model == "assemblyai-stt-3-7-realtime-agent"
+
+
+async def test_stt_3_7_realtime_agent_is_accepted():
+    """assemblyai-stt-3-7-realtime-agent is a valid model selection."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="assemblyai-stt-3-7-realtime-agent")
+    assert stt.model == "assemblyai-stt-3-7-realtime-agent"
+    assert stt._opts.speech_model == "assemblyai-stt-3-7-realtime-agent"
+
+
+async def test_stt_3_7_realtime_agent_accepts_u3_pro_params():
+    """assemblyai-stt-3-7-realtime-agent shares the u3-rt-pro parameter family."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(
+        api_key="test-key",
+        model="assemblyai-stt-3-7-realtime-agent",
+        prompt="medical dictation",
+        agent_context="The agent asked for the patient's name.",
+        previous_context_n_turns=10,
+        continuous_partials=True,
+        interruption_delay=300,
+        voice_focus="near-field",
+        voice_focus_threshold=0.5,
+        mode="max_accuracy",
+        language_codes=["en", "es"],
+    )
+    assert stt._opts.speech_model == "assemblyai-stt-3-7-realtime-agent"
+    assert stt._opts.prompt == "medical dictation"
+    assert stt._opts.agent_context == "The agent asked for the patient's name."
+    assert stt._opts.previous_context_n_turns == 10
+    assert stt._opts.continuous_partials is True
+    assert stt._opts.interruption_delay == 300
+    assert stt._opts.voice_focus == "near-field"
+    assert stt._opts.voice_focus_threshold == 0.5
+    assert stt._opts.mode == "max_accuracy"
+    assert stt._opts.language_codes == ["en", "es"]
+
+
+async def test_stt_3_7_realtime_agent_connect_config_uses_u3_pro_defaults():
+    """The connect query names assemblyai-stt-3-7-realtime-agent and applies the
+    U3 Pro family's connect-time defaults (100ms min/max turn silence, language
+    detection on)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model="assemblyai-stt-3-7-realtime-agent")
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query["speech_model"] == ["assemblyai-stt-3-7-realtime-agent"]
     assert query["min_turn_silence"] == ["100"]
     assert query["max_turn_silence"] == ["100"]
     assert query["language_detection"] == ["true"]
@@ -777,7 +854,13 @@ async def test_voice_focus_allowed_for_all_u3_pro_family_models():
     """voice_focus is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
+    ):
         stt = STT(api_key="test-key", model=model, voice_focus="far-field")
         assert stt._opts.voice_focus == "far-field"
 
@@ -833,7 +916,13 @@ async def test_mode_allowed_for_all_u3_pro_family_models():
     """mode is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
+    ):
         stt = STT(api_key="test-key", model=model, mode="min_latency")
         assert stt._opts.mode == "min_latency"
 
@@ -1057,6 +1146,27 @@ async def test_language_codes_max_10():
         STT(api_key="test-key", model="u3-rt-pro", language_codes=codes)
 
 
+async def test_language_codes_uncapped_on_universal_3_6_pro():
+    """Universal-3.6 Pro has no documented cap, so more than 10 codes are accepted."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    stt = STT(api_key="test-key", model="universal-3-6-pro", language_codes=codes)
+    assert stt._opts.language_codes == codes
+
+    stt.update_options(language_codes=codes + ["zu"])
+    assert stt._opts.language_codes == codes + ["zu"]
+
+
+async def test_language_codes_max_10_on_stt_3_7_realtime_agent():
+    """assemblyai-stt-3-7-realtime-agent keeps the server's 10-code cap."""
+    from livekit.plugins.assemblyai import STT
+
+    codes = ["en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "ja", "ko"]
+    with pytest.raises(ValueError, match="at most 10"):
+        STT(api_key="test-key", model="assemblyai-stt-3-7-realtime-agent", language_codes=codes)
+
+
 async def test_language_codes_max_10_applies_after_dedup():
     """11 raw entries that dedup to 10 codes are accepted — the client is never
     stricter than what it actually sends to the server."""
@@ -1118,7 +1228,13 @@ async def test_language_codes_allowed_for_all_u3_pro_family_models():
     """language_codes is accepted for every u3-rt-pro-family model, not just the default."""
     from livekit.plugins.assemblyai import STT
 
-    for model in ("u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"):
+    for model in (
+        "u3-rt-pro",
+        "u3-rt-pro-beta-1",
+        "universal-3-5-pro",
+        "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
+    ):
         stt = STT(api_key="test-key", model=model, language_codes=["en", "es"])
         assert stt._opts.language_codes == ["en", "es"]
 
@@ -1515,6 +1631,7 @@ async def test_carryover_on_by_default_for_u3_pro_family():
         "u3-rt-pro-beta-1",
         "universal-3-5-pro",
         "universal-3-6-pro",
+        "assemblyai-stt-3-7-realtime-agent",
         "u3-pro",
     ):
         stt = STT(api_key="test-key", model=model)
@@ -1636,6 +1753,28 @@ def _turn_message(**overrides):
     return msg
 
 
+@pytest.mark.parametrize("offset", [0.0, 8.5])
+async def test_eos_uses_last_word_end_time(offset):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = offset
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello"))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives[0].end_time == pytest.approx(offset + 0.48)
+
+
+@pytest.mark.parametrize("words", [[], [{"text": "hello", "confidence": 0.9}]])
+async def test_eos_without_word_timing_does_not_use_stream_offset(words):
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = 8.5
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="hello", words=words))
+
+    endpoints = [e for e in _drain_events(stream) if e.type == SpeechEventType.END_OF_SPEECH]
+    assert len(endpoints) == 1
+    assert endpoints[0].alternatives == []
+
+
 async def test_end_of_turn_confidence_surfaced_on_interim_metadata():
     """A held-turn partial carries its end_of_turn_confidence on interim metadata."""
     stream = _make_stream_for_unit_test()
@@ -1678,3 +1817,354 @@ async def test_end_of_turn_confidence_absent_leaves_metadata_none():
     interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
     assert interim
     assert interim[0].alternatives[0].metadata is None
+
+
+# ---------------------------------------------------------------------------
+# language_confidence surfaced on SpeechData.metadata
+#
+# When `language_detection` is enabled (the plugin's default for U3 Pro and
+# multilingual models) Turn messages carry `language_code` alongside a
+# `language_confidence` between 0 and 1 scoring it. Both are populated only when
+# an utterance is complete or the turn is final, so a plain interim carries
+# neither. The plugin passes the score through on SpeechData.metadata untouched.
+# ---------------------------------------------------------------------------
+
+
+async def test_language_confidence_surfaced_on_final_metadata():
+    """A final turn carries the detected language's confidence on its metadata."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(end_of_turn=True, transcript="hola", language_confidence=0.92)
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {"language_confidence": 0.92}
+
+
+async def test_language_confidence_surfaced_on_preflight_metadata():
+    """An utterance-carrying turn surfaces the confidence on its preflight event."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(utterance="hola", language_confidence=0.81))
+
+    preflight = [e for e in _drain_events(stream) if e.type == SpeechEventType.PREFLIGHT_TRANSCRIPT]
+    assert preflight
+    assert preflight[0].alternatives[0].metadata == {"language_confidence": 0.81}
+
+
+async def test_language_confidence_absent_on_plain_interim():
+    """The server omits language_confidence on a plain partial, so metadata stays
+    unset rather than carrying a fabricated score."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message())  # no language_confidence key
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata is None
+
+
+async def test_language_confidence_zero_is_surfaced():
+    """0 is the bottom of the documented 0-to-1 range, so it is a real score
+    rather than an absent one and must not be dropped as falsy -- a truthiness
+    check here would silently discard the least confident detections."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(end_of_turn=True, transcript="hello", language_confidence=0.0)
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {"language_confidence": 0.0}
+
+
+async def test_language_confidence_coexists_with_end_of_turn_confidence():
+    """Both scores ride the same metadata dict when the turn carries both."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(
+            end_of_turn=True,
+            transcript="hola",
+            end_of_turn_confidence=1.0,
+            language_confidence=0.92,
+        )
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {
+        "end_of_turn_confidence": 1.0,
+        "language_confidence": 0.92,
+    }
+
+
+# ---------------------------------------------------------------------------
+# mode="manual"
+#
+# Manual mode turns off AssemblyAI's turn detection so LiveKit ends every turn.
+# The STT advertises manual_flush, and a flush sends the buffered audio and
+# then a ForceEndpoint, which AssemblyAI answers with exactly one final (empty
+# if nothing was said). Only assemblyai-stt-3-7-realtime-agent supports it; the
+# server closes any other model's connection with code 3006.
+# ---------------------------------------------------------------------------
+
+_MANUAL_MODEL = "assemblyai-stt-3-7-realtime-agent"
+_FORCE_ENDPOINT = {"type": "ForceEndpoint"}
+
+
+async def test_mode_manual_accepted_on_stt_3_7_realtime_agent():
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model=_MANUAL_MODEL, mode="manual")
+    assert stt._opts.mode == "manual"
+    assert stt.capabilities.manual_flush is True
+
+
+async def test_mode_manual_accepted_with_deprecated_u3_pro_alias():
+    """'u3-pro' is rewritten to the 3.7 agent model, which supports manual mode."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="u3-pro", mode="manual")
+    assert stt._opts.speech_model == _MANUAL_MODEL
+    assert stt.capabilities.manual_flush is True
+
+
+@pytest.mark.parametrize(
+    "model", ["u3-rt-pro", "u3-rt-pro-beta-1", "universal-3-5-pro", "universal-3-6-pro"]
+)
+async def test_mode_manual_rejected_on_other_u3_pro_models(model):
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="manual"):
+        STT(api_key="test-key", model=model, mode="manual")
+
+
+async def test_mode_manual_rejected_on_universal_streaming():
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="mode"):
+        STT(api_key="test-key", model="universal-streaming-english", mode="manual")
+
+
+async def test_mode_manual_rejects_speaker_labels():
+    """With speaker labels on, the server uses its speaker-label turn defaults
+    instead of manual mode and would end turns LiveKit hasn't ended."""
+    from livekit.plugins.assemblyai import STT
+
+    with pytest.raises(ValueError, match="speaker_labels"):
+        STT(api_key="test-key", mode="manual", speaker_labels=True)
+
+
+async def test_speaker_labels_still_allowed_outside_manual_mode():
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", mode="balanced", speaker_labels=True)
+    assert stt._opts.speaker_labels is True
+
+
+@pytest.mark.parametrize("mode", [NOT_GIVEN, "min_latency", "balanced", "max_accuracy"])
+async def test_manual_flush_off_outside_manual_mode(mode):
+    """The framework only flushes when the flush ends the turn on AssemblyAI's side."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", mode=mode)
+    assert stt.capabilities.manual_flush is False
+
+
+async def _manual_connect_query(**kwargs):
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **_):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", model=_MANUAL_MODEL, mode="manual", **kwargs)
+    stream = _make_stream_for_unit_test(stt)
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+    return parse_qs(urlparse(captured["url"]).query)
+
+
+async def test_mode_manual_leaves_turn_silence_to_the_server():
+    """No 100 ms defaults: max_turn_silence is manual mode's fallback turn end
+    (10000 ms by default), and 100 ms would end turns on every short pause."""
+    query = await _manual_connect_query()
+    assert query["mode"] == ["manual"]
+    assert "min_turn_silence" not in query
+    assert "max_turn_silence" not in query
+
+
+async def test_mode_manual_does_not_copy_min_turn_silence_into_max():
+    query = await _manual_connect_query(min_turn_silence=400)
+    assert query["min_turn_silence"] == ["400"]
+    assert "max_turn_silence" not in query
+
+
+async def test_mode_manual_sends_explicit_max_turn_silence():
+    query = await _manual_connect_query(max_turn_silence=5000)
+    assert query["max_turn_silence"] == ["5000"]
+
+
+async def test_empty_final_still_emits_final_transcript():
+    """A ForceEndpoint with nothing to end gets an empty final. It must still reach
+    the framework as a FINAL_TRANSCRIPT, which releases a commit waiting on it."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(end_of_turn=True, transcript="", words=[]))
+
+    finals = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].text == ""
+
+
+class _FakeWS:
+    """Records what the stream sends. receive() parks so recv_task stays alive."""
+
+    def __init__(self) -> None:
+        self.sent: list[bytes | dict] = []
+        self._never = asyncio.Event()
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def receive(self):
+        await self._never.wait()
+
+    async def close(self) -> None:
+        pass
+
+
+def _live_stream(ws: _FakeWS, **kwargs):
+    """A real SpeechStream running its real _run loop against a fake socket."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", http_session=MagicMock(), **kwargs)
+    stream = stt.stream()
+
+    async def _fake_connect():
+        return ws
+
+    # patched before the _run task gets its first tick, so no real socket is opened
+    stream._connect_ws = _fake_connect
+    return stream
+
+
+def _frame(ms: int, sample: bytes = b"\x01\x00"):
+    from livekit import rtc
+
+    samples = 16000 * ms // 1000
+    return rtc.AudioFrame(
+        data=sample * samples, sample_rate=16000, num_channels=1, samples_per_channel=samples
+    )
+
+
+def _ms(chunk: bytes) -> int:
+    return len(chunk) // 32  # 16-bit samples at 16 kHz
+
+
+async def _wait_until(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "timed out waiting for the stream to send"
+        await asyncio.sleep(0.01)
+
+
+async def test_manual_flush_sends_force_endpoint_after_the_buffered_audio():
+    """The tail of the turn reaches AssemblyAI before the ForceEndpoint, so the
+    final covers all of it."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(130))  # two full 50 ms chunks and a 30 ms tail
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 4)
+
+        assert [_ms(msg) for msg in ws.sent[:3]] == [50, 50, 30]
+        assert ws.sent[3] == _FORCE_ENDPOINT
+    finally:
+        await stream.aclose()
+
+
+async def test_manual_flush_sends_force_endpoint_when_no_audio_is_left():
+    """A flush on a whole number of chunks has no tail to send, and must still end
+    the turn: the caller is waiting on its final."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(100))
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) == 3)
+        assert ws.sent[2] == _FORCE_ENDPOINT
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_holds_a_tail_under_20ms_for_the_next_chunk():
+    """AssemblyAI rejects audio chunks under 20 ms (close code 3007), and a turn
+    flush can leave a shorter tail. It goes out at the start of the next chunk:
+    padding it would insert audio and shift every later word timestamp."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(10, b"\x01\x00"))
+        stream.flush()
+        await _wait_until(lambda: ws.sent == [_FORCE_ENDPOINT])
+
+        stream.push_frame(_frame(40, b"\x02\x00"))
+        await _wait_until(lambda: len(ws.sent) == 2)
+
+        # one full chunk: the held 10 ms, then the next 40 ms, with nothing inserted
+        assert ws.sent[1] == b"\x01\x00" * 160 + b"\x02\x00" * 640
+    finally:
+        await stream.aclose()
+
+
+async def test_end_input_pads_a_tail_under_20ms():
+    """No audio follows the last tail, so it's padded with silence instead."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(10))
+        stream.end_input()
+        await _wait_until(lambda: {"type": "Terminate"} in ws.sent)
+
+        (audio,) = [msg for msg in ws.sent if isinstance(msg, bytes)]
+        assert audio == b"\x01\x00" * 160 + b"\x00" * 320  # 10 ms, padded to 20 ms
+    finally:
+        await stream.aclose()
+
+
+async def test_flush_outside_manual_mode_does_not_end_the_turn():
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="balanced")
+    try:
+        stream.push_frame(_frame(130))
+        stream.flush()
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: len(ws.sent) == 4)
+
+        assert all(isinstance(msg, bytes) for msg in ws.sent)
+    finally:
+        await stream.aclose()
+
+
+async def test_manual_end_input_terminates_without_force_endpoint():
+    """Terminate finalizes the open turn, so ending input sends no ForceEndpoint."""
+    ws = _FakeWS()
+    stream = _live_stream(ws, mode="manual")
+    try:
+        stream.push_frame(_frame(130))
+        stream.end_input()
+        await _wait_until(lambda: {"type": "Terminate"} in ws.sent)
+
+        assert _FORCE_ENDPOINT not in ws.sent
+        assert [_ms(msg) for msg in ws.sent if isinstance(msg, bytes)] == [50, 50, 30]
+    finally:
+        await stream.aclose()

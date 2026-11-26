@@ -1,3 +1,4 @@
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, TypeVar
@@ -8,6 +9,12 @@ from pydantic_core import CoreSchema, core_schema
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_TRANSCRIPTION_LANGUAGE = "lk.transcription_language"
+"""
+The language a transcription segment is in, as a code such as ``"es"``, when it is known.
+Set where one track carries transcripts in more than one language, such as a speaker's own
+words and their translation.
+"""
 ATTRIBUTE_TRANSCRIPTION_EXPRESSION = "lk.expression"
 """
 The expression (delivery/emotion) the agent used for a transcription segment, surfaced so
@@ -80,6 +87,12 @@ def recording_enabled(options: Mapping[str, object]) -> bool:
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 
+CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS = 3
+"""Minimum ``ParticipantInfo.client_protocol`` of a client that rebuilds transcription
+events from ``lk.transcription`` text streams and ignores the deprecated ``rtc.Transcription``
+data packet. While any considered participant is below this, the legacy packet is still
+published. The value is defined by the client SDKs (``client-sdk-js`` ``src/version.ts``)."""
+
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """
 The key for the timed transcripts in the audio frame userdata.
@@ -137,6 +150,15 @@ class APIConnectOptions:
     Timeout for connecting to the API in seconds.
     """
 
+    liveness_timeout: float = 6.0
+    """
+    Maximum time, in seconds, without inbound transport activity before the connection fails.
+    Incoming data, PING, and PONG frames reset this timer. An idle connection is probed
+    after one-third of this interval.
+
+    Supported by streaming STT providers that use the framework WebSocket monitor.
+    """
+
     def __post_init__(self) -> None:
         if self.max_retry < 0:
             raise ValueError("max_retry must be greater than or equal to 0")
@@ -146,6 +168,9 @@ class APIConnectOptions:
 
         if self.timeout < 0:
             raise ValueError("timeout must be greater than or equal to 0")
+
+        if not math.isfinite(self.liveness_timeout) or self.liveness_timeout <= 0:
+            raise ValueError("liveness_timeout must be a finite number greater than 0")
 
     def _interval_for_retry(self, num_retries: int) -> float:
         """

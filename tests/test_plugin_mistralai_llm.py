@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import types
 from collections.abc import Callable
+from typing import Any
 
-import httpx
+import httpx2 as httpx
 import pytest
-from mistralai.client.errors import HTTPValidationError, HTTPValidationErrorData, SDKError
-from mistralai.client.models import MessageOutputEvent
+from mistralai.client.errors import (
+    HTTPValidationError,
+    HTTPValidationErrorData,
+    SDKError,
+)
+from mistralai.client.models import CompletionArgs, MessageOutputEvent, TextChunk, ThinkChunk
 
 from livekit.agents import APIStatusError, llm
 from livekit.agents.types import APIConnectOptions
@@ -23,20 +28,35 @@ class _FakeConversations:
     def __init__(self, handler: Callable[[int], object]) -> None:
         self._handler = handler
         self.calls = 0
+        self.requests: list[dict[str, object]] = []
 
     async def start_stream_async(self, **kwargs: object) -> object:
         self.calls += 1
+        self.requests.append(kwargs)
         result = self._handler(self.calls)
         if isinstance(result, BaseException):
             raise result
         return result
 
 
-def _model(conversations: _FakeConversations) -> LLM:
+def _model(conversations: _FakeConversations | None = None, **kwargs: Any) -> LLM:
     client = types.SimpleNamespace(
-        beta=types.SimpleNamespace(conversations=conversations),
+        beta=types.SimpleNamespace(
+            conversations=conversations or _FakeConversations(lambda _: (_ for _ in ())),
+        ),
     )
-    return LLM(client=client, model="test-model")  # type: ignore[arg-type]
+    return LLM(client=client, model="test-model", **kwargs)  # type: ignore[arg-type]
+
+
+async def _no_events():
+    return
+    yield
+
+
+async def _run(model: LLM, **chat_kwargs: Any) -> None:
+    async with model.chat(chat_ctx=llm.ChatContext.empty(), **chat_kwargs) as stream:
+        async for _ in stream:
+            pass
 
 
 def _sdk_error(status_code: int) -> SDKError:
@@ -65,7 +85,7 @@ class TestLLMErrorHandling:
     @pytest.mark.asyncio
     async def test_client_error_is_not_retried(self) -> None:
         conversations = _FakeConversations(lambda _: _sdk_error(400))
-        model = _model(conversations)
+        model = _model(conversations=conversations)
         errors: list[llm.LLMError] = []
         model.on("error", errors.append)
 
@@ -93,7 +113,7 @@ class TestLLMErrorHandling:
     @pytest.mark.asyncio
     async def test_validation_error_is_not_retried(self) -> None:
         conversations = _FakeConversations(lambda _: _validation_error())
-        model = _model(conversations)
+        model = _model(conversations=conversations)
 
         try:
             with pytest.raises(APIStatusError) as excinfo:
@@ -120,7 +140,7 @@ class TestLLMErrorHandling:
             raise _sdk_error(500)
 
         conversations = _FakeConversations(lambda _: _events())
-        model = _model(conversations)
+        model = _model(conversations=conversations)
         errors: list[llm.LLMError] = []
         model.on("error", errors.append)
         chunks: list[llm.ChatChunk] = []
@@ -140,5 +160,156 @@ class TestLLMErrorHandling:
             assert excinfo.value.retryable is False
             assert len(errors) == 1
             assert errors[0].recoverable is False
+        finally:
+            await model.aclose()
+
+
+class TestStore:
+    @pytest.mark.asyncio
+    async def test_store_is_not_sent_by_default(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            await _run(model)
+            assert "store" not in conversations.requests[0]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_store_is_sent_with_each_request(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, store=False)
+
+        try:
+            await _run(model)
+            assert conversations.requests[0]["store"] is False
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_update_options_changes_store(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            model.update_options(store=False)
+            await _run(model)
+            model.update_options(store=True)
+            await _run(model)
+            assert [request["store"] for request in conversations.requests] == [False, True]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_override_store(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, store=False)
+
+        try:
+            await _run(model, extra_kwargs={"store": True})
+            assert conversations.requests[0]["store"] is True
+        finally:
+            await model.aclose()
+
+
+class TestReasoningEffort:
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_is_not_sent_by_default(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            await _run(model)
+            assert "completion_args" not in conversations.requests[0]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_is_sent_in_completion_args(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, reasoning_effort="none")
+
+        try:
+            await _run(model)
+            assert conversations.requests[0]["completion_args"].reasoning_effort == "none"
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_update_options_changes_reasoning_effort(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations)
+
+        try:
+            model.update_options(reasoning_effort="none")
+            await _run(model)
+            model.update_options(reasoning_effort="high")
+            await _run(model)
+            assert [
+                request["completion_args"].reasoning_effort for request in conversations.requests
+            ] == ["none", "high"]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_effort_is_sent_with_other_completion_args(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, temperature=0.2, reasoning_effort="high")
+
+        try:
+            await _run(model)
+            completion_args = conversations.requests[0]["completion_args"]
+            assert completion_args.temperature == 0.2
+            assert completion_args.reasoning_effort == "high"
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_thinking_chunks_are_not_emitted(self) -> None:
+        async def _events():
+            yield _event(
+                MessageOutputEvent(
+                    id="msg_1", content=ThinkChunk(thinking=[TextChunk(text="let me think")])
+                )
+            )
+            yield _event(MessageOutputEvent(id="msg_1", content="Hello"))
+
+        conversations = _FakeConversations(lambda _: _events())
+        model = _model(conversations=conversations, reasoning_effort="high")
+        chunks: list[llm.ChatChunk] = []
+
+        try:
+            async with model.chat(chat_ctx=llm.ChatContext.empty()) as stream:
+                async for chunk in stream:
+                    chunks.append(chunk)
+
+            assert [chunk.delta.content for chunk in chunks if chunk.delta] == ["Hello"]
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_completion_args_are_merged(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, reasoning_effort="high")
+
+        try:
+            await _run(model, extra_kwargs={"completion_args": CompletionArgs(max_tokens=50)})
+            completion_args = conversations.requests[0]["completion_args"]
+            assert completion_args.max_tokens == 50
+            assert completion_args.reasoning_effort == "high"
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_extra_kwargs_completion_args_take_precedence(self) -> None:
+        conversations = _FakeConversations(lambda _: _no_events())
+        model = _model(conversations=conversations, temperature=0.2, reasoning_effort="high")
+
+        try:
+            await _run(model, extra_kwargs={"completion_args": {"reasoning_effort": "none"}})
+            completion_args = conversations.requests[0]["completion_args"]
+            assert completion_args.reasoning_effort == "none"
+            assert completion_args.temperature == 0.2
         finally:
             await model.aclose()

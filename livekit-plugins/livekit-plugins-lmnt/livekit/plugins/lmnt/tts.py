@@ -188,6 +188,8 @@ class TTS(tts.TTS):
             self._opts.format = format
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
+            # keep the base class property in sync; the framework reads tts.sample_rate
+            self._sample_rate = int(sample_rate)
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(top_p):

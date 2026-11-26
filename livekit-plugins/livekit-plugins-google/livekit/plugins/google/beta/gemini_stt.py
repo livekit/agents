@@ -370,6 +370,7 @@ class RecognizeStream(stt.RecognizeStream):
 
                 # interim first: when a message carries both, the final supersedes it
                 if interim := getattr(sc, "interim_input_transcription", None):
+                    self._mark_provider_progress()
                     if code := getattr(interim, "language_code", None):
                         lang = LanguageCode(code)
                     if text := (interim.text or "").strip():
@@ -379,6 +380,7 @@ class RecognizeStream(stt.RecognizeStream):
                         )
 
                 if transcription := getattr(sc, "input_transcription", None):
+                    self._mark_provider_progress()
                     if code := getattr(transcription, "language_code", None):
                         # the model detects the language when no hints are configured
                         lang = LanguageCode(code)
@@ -391,6 +393,7 @@ class RecognizeStream(stt.RecognizeStream):
 
                 # a turn that produced only interims would otherwise be dropped
                 if getattr(sc, "generation_complete", False) or getattr(sc, "turn_complete", False):
+                    self._mark_provider_progress()
                     if pending_interim:
                         self._event_ch.send_nowait(
                             self._speech_event(

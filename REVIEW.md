@@ -9,14 +9,18 @@
 - Focus on exposure introduced or changed by the PR. Read surrounding code to verify the
   path, including exception formatting, handlers, and redaction processors. Do not report an
   unchanged path unless the PR makes it newly reachable or changes its protection.
-- Sensitive data includes participant identities, room names, speech and transcripts, prompts
-  and instructions, chat context, tool arguments and output, DTMF digits, credentials, and
-  provider payload fields that carry this content.
+- Sensitive data includes speech and transcripts, prompts and instructions, chat context, tool
+  arguments and output, DTMF digits, credentials, and provider payload fields that carry this
+  content.
 - Ordinary diagnostics are not sensitive by default: status codes, counts, timings, model and
-  provider labels, code identifiers, callback and task names, source locations, and generated
-  correlation IDs. Developer-authored operational text, such as a shutdown reason, is not
-  conversation content merely because a developer can customize it. Flag these values only
-  when the actual source embeds sensitive data. They may appear in messages or untagged fields.
+  provider labels, code identifiers, callback and task names, source locations, generated
+  correlation IDs, and LiveKit identifiers such as room names and participant, avatar, and
+  destination identities. Identifiers must not contain PII, so do not flag them in logs. Span
+  attributes such as `ATTR_PARTICIPANT_IDENTITY` and `ATTR_ROOM_NAME` keep their `lk.pii.`
+  markers; this does not make the same values sensitive in logs. Developer-authored operational
+  text, such as a shutdown reason, is not conversation content merely because a developer can
+  customize it. Flag these values only when the actual source embeds sensitive data. They may
+  appear in messages or untagged fields.
 - Sensitive values must not appear in log message bodies, span names, or event names. Use a
   static message and move the value to a structured attribute instead.
 - Each structured attribute that can contain a sensitive value must have a key with a whole,

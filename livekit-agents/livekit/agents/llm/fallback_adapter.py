@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import sys
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
@@ -11,11 +12,16 @@ from opentelemetry import trace
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
-from ..telemetry import trace_types
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
+
+if sys.version_info >= (3, 11):
+    from asyncio import timeout_at
+else:
+    from async_timeout import timeout_at
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -26,6 +32,7 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 class _LLMStatus:
     available: bool
     recovering_task: asyncio.Task[None] | None
+    selection_id: int = 0
 
 
 @dataclass
@@ -46,21 +53,30 @@ class FallbackAdapter(
         llm: list[LLM],
         *,
         attempt_timeout: float = 5.0,
+        first_token_timeout: float | None = None,
         # use fallback instead of retrying
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         retry_on_chunk_sent: bool = False,
+        sticky: bool = False,
     ) -> None:
         """FallbackAdapter is an LLM that can fallback to a different LLM if the current LLM fails.
 
         Args:
             llm (list[LLM]): List of LLM instances to fallback to.
             attempt_timeout (float, optional): Timeout for each LLM attempt. Defaults to 5.0.
+            first_token_timeout (float, optional): Fail over when an attempt yields no text or
+                tool call within this many seconds, even if the provider keeps the connection
+                alive. Time the model spends reasoning counts against it. Defaults to None
+                (disabled).
             max_retry_per_llm (int, optional): Internal retries per LLM. Defaults to 0, which means no
                 internal retries, the failed LLM will be skipped and the next LLM will be used.
             retry_interval (float, optional): Interval between retries. Defaults to 0.5.
             retry_on_chunk_sent (bool, optional): Whether to retry when a LLM failed after chunks
                 are sent. Defaults to False.
+            sticky (bool, optional): Keep using the current LLM until it fails, even if a
+                higher-priority LLM recovers. On failure, try the remaining LLMs in the given
+                order. Defaults to False.
 
         Raises:
             ValueError: If no LLM instances are provided.
@@ -72,9 +88,12 @@ class FallbackAdapter(
 
         self._llm_instances = llm
         self._attempt_timeout = attempt_timeout
+        self._first_token_timeout = first_token_timeout
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
         self._retry_on_chunk_sent = retry_on_chunk_sent
+        self._sticky = sticky
+        self._attempt_id = 0
 
         self._status = [
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
@@ -86,14 +105,22 @@ class FallbackAdapter(
         for llm_instance in self._llm_instances:
             llm_instance.on("metrics_collected", self._on_metrics_collected)
 
+    def _llm_order(self) -> list[int]:
+        order = list(range(len(self._llm_instances)))
+        if self._sticky:
+            selected = max(
+                order,
+                key=lambda i: self._status[i].selection_id if self._status[i].available else 0,
+            )
+            order.remove(selected)
+            order.insert(0, selected)
+        return order
+
     def _next_instance(self) -> LLM:
-        """The instance the next request goes to first: the first one marked available, or
-        the primary once all are down (they are then all retried, primary first). A failed
-        instance's recovery task flips it back to available, so a recovered primary is
-        reported again before it has served."""
-        for instance, status in zip(self._llm_instances, self._status, strict=True):
-            if status.available:
-                return instance
+        """The first available instance in request order, or the primary if all are down."""
+        for i in self._llm_order():
+            if self._status[i].available:
+                return self._llm_instances[i]
         return self._llm_instances[0]
 
     @property
@@ -159,18 +186,12 @@ def _provider_attr(llm: LLM) -> dict[str, str]:
     return {trace_types.ATTR_GEN_AI_PROVIDER_NAME: normalized} if normalized else {}
 
 
-def _fallback_attrs(llm: LLM, index: int) -> dict[str, Any]:
-    """The instance that served: its label, position, model and provider."""
-    return {
-        trace_types.ATTR_FALLBACK_LABEL: llm.label,
-        trace_types.ATTR_FALLBACK_INDEX: index,
-        trace_types.ATTR_GEN_AI_REQUEST_MODEL: llm.model,
-        **_provider_attr(llm),
-    }
-
-
 class FallbackLLMStream(LLMStream):
     _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
+    # each instance's request span nests directly under the adapter's
+    _llm_attempt_span_name: ClassVar[str | None] = None
+    # Provider request spans own the inference operation.
+    _genai_operation_name: ClassVar[str | None] = None
 
     def __init__(
         self,
@@ -235,12 +256,38 @@ class FallbackLLMStream(LLMStream):
                 if not check_recovery:
                     stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
                 should_set_current = not check_recovery
-                async for chunk in stream:
-                    if should_set_current:
-                        should_set_current = False
-                        self._current_stream = stream
-                        self._fallback_adapter._active_instance = llm
-                    yield chunk
+                first_token_timeout = self._fallback_adapter._first_token_timeout
+                deadline = (
+                    asyncio.get_running_loop().time() + first_token_timeout
+                    if first_token_timeout is not None
+                    else None
+                )
+                try:
+                    while True:
+                        try:
+                            if deadline is None:
+                                chunk = await stream.__anext__()
+                            else:
+                                # keep-alives reset the provider's read timeout, so bound the
+                                # wait for the first output here; wait_for can drop a cancel
+                                # before 3.12 (cpython#86296), a timeout scope does not
+                                async with timeout_at(deadline):
+                                    chunk = await stream.__anext__()
+                                if chunk.has_response():
+                                    deadline = None
+                        except StopAsyncIteration:
+                            break
+                        if should_set_current:
+                            should_set_current = False
+                            self._current_stream = stream
+                            self._fallback_adapter._active_instance = llm
+                        yield chunk
+                finally:
+                    # the probe nests beside the request's real attempts; tell them apart
+                    if check_recovery and stream._llm_request_span is not None:
+                        stream._llm_request_span.set_attribute(
+                            trace_types.ATTR_FALLBACK_RECOVERY, True
+                        )
 
         except asyncio.TimeoutError:
             if check_recovery:
@@ -286,6 +333,9 @@ class FallbackLLMStream(LLMStream):
         if llm_status.recovering_task is None or llm_status.recovering_task.done():
 
             async def _recover_llm_task(llm: LLM) -> None:
+                # the probe is never served, so it must not carry the turn's llm_node
+                # attributes; this task runs in its own context copy, so the turn keeps them
+                gen_ai_telemetry._llm_request_attributes.set(None)
                 try:
                     async for _ in self._try_generate(llm=llm, check_recovery=True):
                         pass
@@ -308,9 +358,13 @@ class FallbackLLMStream(LLMStream):
         if all_failed:
             logger.error("all LLMs are unavailable, retrying..")
 
-        for i, llm in enumerate(self._fallback_adapter._llm_instances):
+        for i in self._fallback_adapter._llm_order():
+            llm = self._fallback_adapter._llm_instances[i]
             llm_status = self._fallback_adapter._status[i]
             if llm_status.available or all_failed:
+                self._fallback_adapter._attempt_id += 1
+                attempt_id = self._fallback_adapter._attempt_id
+                llm_status.selection_id = attempt_id
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
                 try:
@@ -323,8 +377,16 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
-                    served = _fallback_attrs(llm, i)
-                    trace.get_current_span().set_attributes(served)
+                    # Restore this selection after concurrent failures without outranking
+                    # a newer selection that has not failed.
+                    llm_status.selection_id = max(llm_status.selection_id, attempt_id)
+                    if self._fallback_adapter._sticky and not llm_status.available:
+                        llm_status.available = True
+                        self._fallback_adapter.emit(
+                            "llm_availability_changed",
+                            AvailabilityChangedEvent(llm=llm, available=True),
+                        )
+
                     # request-side attributes named the instance expected to serve; the
                     # response side names the one that did (from `llm`, not the adapter:
                     # concurrent requests may be served by different instances)
@@ -333,10 +395,17 @@ class FallbackLLMStream(LLMStream):
                         **_provider_attr(llm),
                     }
                     if self._llm_request_span is not None:
-                        self._llm_request_span.set_attributes(response_attrs)
+                        self._llm_request_span.set_attributes(
+                            {
+                                trace_types.ATTR_FALLBACK_LABEL: llm.label,
+                                trace_types.ATTR_FALLBACK_INDEX: i,
+                                **response_attrs,
+                            }
+                        )
                     self._caller_span.set_attributes(response_attrs)
                     return
                 except Exception:  # exceptions already logged inside _try_generate
+                    llm_status.selection_id = 0
                     if llm_status.available:
                         llm_status.available = False
                         self._fallback_adapter.emit(

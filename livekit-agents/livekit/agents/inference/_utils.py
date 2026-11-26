@@ -6,10 +6,19 @@ import platform
 from collections.abc import Mapping
 from typing import Literal
 
+import aiohttp
+
 from livekit import api
 
-from ..utils.misc import shortuuid
+from .._exceptions import APIStatusError, create_api_error_from_http
+from ..types import NOT_GIVEN, NotGivenOr
+from ..utils.deprecation import deprecate_params
+from ..utils.misc import is_given, shortuuid
 from ..version import __version__
+
+InferenceClass = Literal["priority", "standard", "low"]
+"""Scheduling class for a request. ``low`` yields to voice traffic, so it is only
+appropriate for work no caller is waiting on."""
 
 DEFAULT_INFERENCE_URL = "https://agent-gateway.livekit.cloud/v1"
 STAGING_INFERENCE_URL = "https://agent-gateway.staging.livekit.cloud/v1"
@@ -22,6 +31,43 @@ HEADER_SESSION_ID = "X-LiveKit-Session-ID"
 HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
+HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
+# Names the SDK feature that made a request (e.g. "AMD"). Absent on ordinary agent requests.
+HEADER_CLIENT_FEATURE = "X-LiveKit-Client-Feature"
+# set when a fallback model served a /v1/decisions request, to that model's id
+HEADER_DECISIONS_MODEL_FALLBACK = "X-LiveKit-Inference-Decisions-Model-Fallback"
+
+
+@deprecate_params(
+    {"provider": "Omit this argument to let LiveKit route requests and use fallback providers."},
+    target_date="March 1, 2027",
+)
+def _resolve_provider(*, provider: NotGivenOr[str | None] = NOT_GIVEN) -> str | None:
+    return provider if is_given(provider) else None
+
+
+def _terminal_denial(headers: Mapping[str, str] | None) -> bool:
+    # quota denials a retry cannot clear (out of credits, project suspended);
+    # httpx and aiohttp header maps are both case-insensitive
+    return (headers or {}).get("X-Should-Retry", "").strip().lower() == "false"
+
+
+def create_api_error_from_response(error: aiohttp.ClientResponseError) -> APIStatusError:
+    """Preserve quota details when a failed WebSocket upgrade hides its body."""
+    # UPDATE_ALL_INSTANCES(INFERENCE_QUOTA_ERROR_HEADERS): agent-gateway/pkg/http/header.go.
+    headers: Mapping[str, str] = error.headers or {}
+    message = headers.get("X-LiveKit-Inference-Quota-Message") or error.message
+    category = headers.get("X-LiveKit-Inference-Quota-Category")
+    result = create_api_error_from_http(
+        message,
+        status=error.status,
+        request_id=headers.get(HEADER_REQUEST_ID),
+        body={"category": category} if category else None,
+    )
+    if _terminal_denial(headers):
+        result.retryable = False
+    return result
+
 
 # Quota telemetry headers the inference gateway stamps on LLM completions
 # responses (including 429 rejections). RPM/TPM are per-minute rate limits;
@@ -68,6 +114,29 @@ def get_default_inference_url() -> str:
         return STAGING_INFERENCE_URL
 
     return DEFAULT_INFERENCE_URL
+
+
+def resolve_credentials(
+    api_key: str | None,
+    api_secret: str | None,
+) -> tuple[str, str]:
+    resolved_api_key = api_key or os.getenv(
+        "LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", "")
+    )
+    if not resolved_api_key:
+        raise ValueError(
+            "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+        )
+
+    resolved_api_secret = api_secret or os.getenv(
+        "LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", "")
+    )
+    if not resolved_api_secret:
+        raise ValueError(
+            "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+        )
+
+    return resolved_api_key, resolved_api_secret
 
 
 def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:

@@ -39,8 +39,9 @@ def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:
 
     Set in the LiveKit Cloud dashboard (or per session with
     ``record={"redaction": True}``) and never weakened from here — when it is on, PII is
-    stripped for every destination, LiveKit Cloud included. ``span_attributes`` lets a
-    span ended off the job's thread resolve from the flag stamped on it at span start.
+    stripped for every destination, LiveKit Cloud included. Simulations ignore the
+    project setting but can opt in with the per-session option. ``span_attributes``
+    lets a span ended off the job's thread resolve from the flag stamped at span start.
 
     Stripping PII for *third-party* exporters is not this flag: that is the default, and
     is lifted per provider with ``set_tracer_provider(..., allow_pii=True)``.
@@ -66,8 +67,16 @@ def participant_attributes(participant: Any) -> dict[str, Any]:
 
 
 def record_exception(
-    span: trace.Span, exception: Exception, *, redacted: NotGivenOr[bool] = NOT_GIVEN
+    span: trace.Span,
+    exception: Exception,
+    *,
+    redacted: NotGivenOr[bool] = NOT_GIVEN,
+    record_event: bool = True,
+    set_status: bool = True,
 ) -> None:
+    """Record an exception with redaction and independent event/status controls."""
+    if not (record_event or set_status) or not span.is_recording():
+        return
     if redacted is NOT_GIVEN:
         redacted = redaction_enabled()
 
@@ -77,18 +86,22 @@ def record_exception(
 
     set_error_type(span, exception)
 
+    if set_status:
+        message = REDACTED_EXCEPTION_MESSAGE if redacted else str(exception)
+        span.set_status(trace.Status(trace.StatusCode.ERROR, message))
+    if not record_event:
+        return
+
     if redacted:
         attrs = {
             trace_types.ATTR_EXCEPTION_TYPE: exception.__class__.__name__,
             trace_types.ATTR_EXCEPTION_MESSAGE: REDACTED_EXCEPTION_MESSAGE,
         }
         span.add_event("exception", attrs)
-        span.set_status(trace.Status(trace.StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE))
         span.set_attributes(attrs)
         return
 
     span.record_exception(exception)
-    span.set_status(trace.Status(trace.StatusCode.ERROR, str(exception)))
     # set the exception in span attributes in case the exception event is not rendered
     span.set_attributes(
         {

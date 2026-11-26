@@ -8,6 +8,9 @@ from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
 from typing import Any
 
+from livekit.protocol import agent
+
+from .. import _hosted_logs
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
@@ -39,6 +42,7 @@ class ProcJobExecutor(SupervisedProc):
         http_proxy: str | None,
         mp_ctx: BaseContext,
         loop: asyncio.AbstractEventLoop,
+        on_join_timing: Callable[[agent.JobJoinTiming], None] | None = None,
     ) -> None:
         super().__init__(
             initialize_timeout=initialize_timeout,
@@ -62,6 +66,7 @@ class ProcJobExecutor(SupervisedProc):
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._inference_executor = inference_executor
+        self._on_join_timing = on_join_timing
         self._inference_tasks: set[asyncio.Task[None]] = set()
         self._id = shortuuid("PCEXEC_")
 
@@ -125,6 +130,8 @@ class ProcJobExecutor(SupervisedProc):
                     task = asyncio.create_task(self._do_inference_task(msg))
                     self._inference_tasks.add(task)
                     task.add_done_callback(self._inference_tasks.discard)
+                if isinstance(msg, proto.JoinTiming) and self._on_join_timing:
+                    self._on_join_timing(msg.timing)
         finally:
             await aio.cancel_and_wait(*self._inference_tasks)
 
@@ -136,6 +143,8 @@ class ProcJobExecutor(SupervisedProc):
             if self._running_job:
                 metrics.job_ended()
                 self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
+            if self._running_job and self.exitcode is not None:
+                _hosted_logs.mark_process_done(self._running_job.job.id)
 
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
@@ -189,5 +198,7 @@ class ProcJobExecutor(SupervisedProc):
             extra["job_id"] = self._running_job.job.id
             extra["room"] = self._running_job.job.room.name
             extra["room_id"] = self._running_job.job.room.sid
+            if self._running_job.job.agent_name:
+                extra["agent_name"] = self._running_job.job.agent_name
 
         return extra

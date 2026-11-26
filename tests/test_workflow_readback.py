@@ -6,6 +6,8 @@ from typing import Any
 import pytest
 
 from livekit.agents import beta
+from livekit.agents.llm.chat_context import Instructions
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 pytestmark = pytest.mark.unit
 
@@ -26,7 +28,61 @@ async def test_email_is_spelled_once_a_confirmation_is_refused() -> None:
 
     assert first is not None and second is not None
     assert first != second
-    assert " ".join("shayne.cole@gmail.com") in second
+    assert "s h a y n e dot c o l e at g m a i l dot c o m" in second
+
+
+@pytest.mark.asyncio
+async def test_email_spelling_speaks_every_allowed_symbol_as_a_word() -> None:
+    task = beta.workflows.GetEmailTask(verify_spelling=True)
+
+    result = await task._update_email_impl("a.b_c-d+e%f@my-mail.co.uk", _audio_ctx())
+
+    assert result is not None
+    assert (
+        "a dot b underscore c dash d plus e percent f at m y dash m a i l dot c o dot u k" in result
+    )
+
+
+@pytest.mark.asyncio
+async def test_email_with_verify_spelling_is_spelled_from_the_start() -> None:
+    task = beta.workflows.GetEmailTask(verify_spelling=True)
+    ctx = _audio_ctx()
+
+    first = await task._update_email_impl("shayne.cole@gmail.com", ctx)
+    second = await task._update_email_impl("shayne.cole@gmail.com", ctx)
+
+    assert first == second
+    assert first is not None
+    assert "s h a y n e dot c o l e at g m a i l dot c o m" in first
+    instructions = task.instructions
+    assert isinstance(instructions, Instructions)
+    assert "spell it out character by character" in (instructions.audio or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("modality", "require_confirmation"),
+    [("text", NOT_GIVEN), ("audio", False), ("text", False)],
+)
+async def test_email_with_verify_spelling_requires_confirmation(
+    modality: str, require_confirmation: NotGivenOr[bool]
+) -> None:
+    task = beta.workflows.GetEmailTask(
+        verify_spelling=True, require_confirmation=require_confirmation
+    )
+    ctx = SimpleNamespace(
+        speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality=modality))
+    )
+
+    result = await task._update_email_impl("alice@example.com", ctx)
+
+    assert result is not None
+    assert "a l i c e at e x a m p l e dot c o m" in result
+    assert not task.done()
+    assert any(t.id == "confirm_email_address" for t in task.tools)
+    instructions = task.instructions
+    assert isinstance(instructions, Instructions)
+    assert "confirm_email_address" in (instructions.text or "")
 
 
 @pytest.mark.asyncio

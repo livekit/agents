@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -23,15 +23,20 @@ from livekit.agents.metrics import (
     STTModelUsage,
     TTSModelUsage,
 )
+from livekit.agents.voice.amd import AMDCategory, AMDCompletedEvent, AMDPredictionEvent
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
+    CloseEvent,
+    CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    FunctionToolsExecutedEvent,
     SessionUsageUpdatedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
 )
 from livekit.agents.voice.remote_session import (
+    NO_ACTIVE_SESSION_ERROR,
     RoomSessionTransport,
     SessionHost,
     SessionTransport,
@@ -49,6 +54,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 FORWARDED_EVENTS = {
     "agent_false_interruption",
     "agent_state_changed",
+    "close",
     "conversation_item_added",
     "debug_message",
     "error",
@@ -338,7 +344,7 @@ class TestSessionHostEvents:
         session.off = MagicMock()
         return session
 
-    def test_register_session(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
+    def test_attach(self, transport: InMemoryTransport, mock_session: MagicMock) -> None:
         host = SessionHost(transport)
         host.register_session(mock_session)
         subscribed = {call.args[0] for call in mock_session.on.call_args_list}
@@ -369,7 +375,16 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_user_state_changed(self, transport: InMemoryTransport) -> None:
+    @pytest.mark.parametrize(
+        ("speech_timestamp", "expected_timestamp_ns"),
+        [(999.25, 999_250_000_000), (None, 1_000_000_000_000), (0.0, 0)],
+    )
+    async def test_user_state_changed(
+        self,
+        transport: InMemoryTransport,
+        speech_timestamp: float | None,
+        expected_timestamp_ns: int,
+    ) -> None:
         host = SessionHost(transport)
         await host.start()
 
@@ -377,17 +392,18 @@ class TestSessionHostEvents:
             type="user_state_changed",
             old_state="listening",
             new_state="speaking",
+            speech_timestamp=speech_timestamp,
             created_at=1000.0,
         )
         host._on_user_state_changed(event)
         await asyncio.sleep(0.1)
+        await host.aclose()
 
         assert len(transport.sent) == 1
         msg = transport.sent[0]
         assert msg.event.user_state_changed.old_state == agent_pb.US_LISTENING
         assert msg.event.user_state_changed.new_state == agent_pb.US_SPEAKING
-
-        await host.aclose()
+        assert msg.event.created_at.ToNanoseconds() == expected_timestamp_ns
 
     @pytest.mark.asyncio
     async def test_tool_execution_updated(self, transport: InMemoryTransport) -> None:
@@ -500,6 +516,124 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("category", list(AMDCategory))
+    async def test_amd_prediction_maps_each_category(
+        self, transport: InMemoryTransport, category: AMDCategory
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            host._on_amd_prediction(
+                AMDPredictionEvent(
+                    category=category,
+                    reason="prediction",
+                    transcript="Please hold.",
+                    speech_duration=1.0,
+                    delay=0.1,
+                )
+            )
+            await asyncio.sleep(0.1)
+            event = transport.sent[0].event.amd_prediction
+            assert agent_pb.AmdCategory.Name(event.category) == f"AMD_{category.name}"
+        finally:
+            await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_amd_prediction_carries_turn_stage_and_inference(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            prediction = AMDPredictionEvent(
+                category=AMDCategory.WAIT,
+                reason="prediction",
+                transcript="Please hold while I connect your call.",
+                speech_duration=1.0,
+                delay=0.1,
+                turn_id=3,
+                stage=AMDCategory.MACHINE_SCREENING,
+                inference_duration=0.25,
+            )
+            host._on_amd_prediction(prediction)
+            host._on_amd_prediction(prediction.model_copy(update={"inference_duration": None}))
+            await asyncio.sleep(0.1)
+            inferred, reused = (msg.event.amd_prediction for msg in transport.sent)
+            assert inferred.turn_id == 3
+            assert inferred.stage == agent_pb.AMD_MACHINE_SCREENING
+            assert inferred.inference_duration.ToMilliseconds() == 250
+            assert inferred.speech_duration.ToMilliseconds() == 1000
+            assert inferred.delay.ToMilliseconds() == 100
+            assert not reused.HasField("inference_duration")
+        finally:
+            await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_amd_completed_carries_the_last_prediction(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            prediction = AMDPredictionEvent(
+                category=AMDCategory.MACHINE_VM,
+                reason="prediction",
+                transcript="Leave a message after the tone.",
+                speech_duration=2.0,
+                delay=0.1,
+                turn_id=2,
+                stage=AMDCategory.MACHINE_VM,
+            )
+            host._on_amd_completed(
+                AMDCompletedEvent(
+                    category=AMDCategory.MACHINE_VM,
+                    reason="timeout",
+                    voicemail_message_played=True,
+                    last_prediction=prediction,
+                )
+            )
+            host._on_amd_completed(
+                AMDCompletedEvent(category=AMDCategory.UNCERTAIN, reason="cancelled")
+            )
+            await asyncio.sleep(0.1)
+            completed, cancelled = (msg.event.amd_completed for msg in transport.sent)
+            assert completed.category == agent_pb.AMD_MACHINE_VM
+            assert completed.reason == "timeout"
+            assert completed.voicemail_message_played
+            assert completed.prediction.turn_id == 2
+            assert completed.prediction.transcript == "Leave a message after the tone."
+            assert cancelled.reason == "cancelled"
+            assert not cancelled.HasField("prediction")
+        finally:
+            await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_function_tools_executed(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        call = FunctionCall(
+            id="item_a1/fnc_0", call_id="call_1", name="lookup", arguments='{"q": "x"}'
+        )
+        output = FunctionCallOutput(
+            id="item_b2", call_id="call_1", name="lookup", output="found", is_error=False
+        )
+        host._on_function_tools_executed(
+            FunctionToolsExecutedEvent(function_calls=[call], function_call_outputs=[output])
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 1
+        executed = transport.sent[0].event.function_tools_executed
+        # a consumer cites these items by id, so they must match the stored transcript's
+        assert executed.function_calls[0] == encode_chat_item(call).function_call
+        assert executed.function_call_outputs[0] == encode_chat_item(output).function_call_output
+        assert executed.function_calls[0].id == "item_a1/fnc_0"
+        assert executed.function_call_outputs[0].id == "item_b2"
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
     async def test_error_event(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         await host.start()
@@ -516,6 +650,21 @@ class TestSessionHostEvents:
         assert len(transport.sent) == 1
         msg = transport.sent[0]
         assert msg.event.error.message == "something went wrong"
+
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_close(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        host._on_close(CloseEvent(reason=CloseReason.TASK_COMPLETED, created_at=1000.0))
+        await asyncio.sleep(0.1)
+
+        assert len(transport.sent) == 1
+        closed = transport.sent[0].event.session_closed
+        assert closed.reason == agent_pb.CloseReason.CR_COMPLETED
+        assert not closed.HasField("error")
 
         await host.aclose()
 
@@ -718,11 +867,164 @@ class TestSessionHostRequests:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_aclose_unregisters_events(self, transport: InMemoryTransport) -> None:
+    async def test_aclose_detaches(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         session = self._make_mock_session()
         host.register_session(session)
         await host.start()
         await host.aclose()
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS
+
+    def test_attach_replaces_the_attached_session(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        first = self._make_mock_session()
+        second = self._make_mock_session()
+        host.register_session(first)
+        host.register_session(second)
+        assert host.session is second
+        assert {call.args[0] for call in first.off.call_args_list} == FORWARDED_EVENTS
+        assert {call.args[0] for call in second.on.call_args_list} == FORWARDED_EVENTS
+
+        host.unregister_session()
+        assert {call.args[0] for call in second.off.call_args_list} == FORWARDED_EVENTS
+
+
+class TestSessionHostWithoutSession:
+    """The host outlives its session: it answers between sessions instead of going quiet."""
+
+    @pytest.fixture
+    def transport(self) -> InMemoryTransport:
+        return InMemoryTransport()
+
+    @pytest.fixture
+    def simulated_job(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        sim_ctx = MagicMock()
+        sim_ctx.user_verdict = None
+        sim_ctx._dispatch.simulation_run_id = "run-1"
+        job_ctx = MagicMock()
+        job_ctx.simulation_context = MagicMock(return_value=sim_ctx)
+
+        def _on_simulation_end(ctx: MagicMock) -> None:
+            ctx.user_verdict = MagicMock(success=False, reason="vetoed")
+
+        job_ctx._simulation_end_fnc = _on_simulation_end
+        monkeypatch.setattr("livekit.agents.job.get_job_context", lambda required=True: job_ctx)
+        return job_ctx
+
+    @pytest.mark.asyncio
+    async def test_session_request_without_session_is_refused(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="hello?")
+            )
+        )
+
+        assert transport.sent[-1].response.request_id == "req-run"
+        assert transport.sent[-1].response.error == NO_ACTIVE_SESSION_ERROR
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_finalize_is_answered_after_detach(
+        self, transport: InMemoryTransport, simulated_job: MagicMock
+    ) -> None:
+        host = SessionHost(transport)
+        host.register_session(TestSessionHostRequests()._make_mock_session())
+        await host.start()
+        host.unregister_session()
+        assert host.session is None
+
+        finalized = asyncio.ensure_future(host.wait_for_simulation_finalized())
+        await asyncio.sleep(0)
+        assert not finalized.done()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-fin",
+                finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                    provisional_success=True
+                ),
+            )
+        )
+
+        resp = transport.sent[-1].response
+        assert resp.request_id == "req-fin"
+        assert resp.finalize_simulation.user_verdict.reason == "vetoed"
+        await asyncio.wait_for(finalized, timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_finalize_whose_reply_fails_to_send_still_ends_the_wait(
+        self, simulated_job: MagicMock
+    ) -> None:
+        # the job waits on this before it shuts down; a reply the transport can't deliver
+        # must not hold the shutdown for the whole session_end_timeout
+        class _BrokenTransport(InMemoryTransport):
+            async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+                raise RuntimeError("room session transport is closed")
+
+        host = SessionHost(_BrokenTransport())
+        await host.start()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-fin",
+                finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                    provisional_success=True
+                ),
+            )
+        )
+
+        await asyncio.wait_for(host.wait_for_simulation_finalized(), timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_a_run_cut_short_by_the_close_fails_after_session_closed(self) -> None:
+        # an event still on the wire holds back the events queued after it
+        class _SlowEventsTransport(InMemoryTransport):
+            async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+                if msg.HasField("event"):
+                    await asyncio.sleep(0.01)
+                await super().send_message(msg)
+
+        transport = _SlowEventsTransport()
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        run: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        session.run = MagicMock(return_value=run)
+        session.interrupt = AsyncMock()
+        host.register_session(session)
+        await host.start()
+
+        request = asyncio.ensure_future(
+            host._handle_request_safe(
+                agent_pb.SessionRequest(
+                    request_id="req-run", run_input=agent_pb.SessionRequest.RunInput(text="bye")
+                )
+            )
+        )
+        await asyncio.sleep(0)
+        host._on_error(ErrorEvent(error=RuntimeError("goodbye failed"), source="llm"))
+        host._on_close(CloseEvent(reason=CloseReason.USER_INITIATED))
+        run.set_exception(RuntimeError("session closed"))
+        await request
+        await asyncio.sleep(0.1)
+
+        assert [m.WhichOneof("message") for m in transport.sent] == ["event", "event", "response"]
+        assert transport.sent[1].event.HasField("session_closed")
+        assert transport.sent[2].response.error == "session closed"
+        await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_detach_stops_forwarding_events(self, transport: InMemoryTransport) -> None:
+        host = SessionHost(transport)
+        session = TestSessionHostRequests()._make_mock_session()
+        host.register_session(session)
+        host.unregister_session()
         unsubscribed = {call.args[0] for call in session.off.call_args_list}
         assert unsubscribed == FORWARDED_EVENTS
