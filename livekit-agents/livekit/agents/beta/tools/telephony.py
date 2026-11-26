@@ -317,10 +317,15 @@ class DTMFKeypadTool(Toolset):
 
         return ToolResult(output=output, reply_required=False)
 
+    def _detach_listener(self) -> None:
+        """Detach the active room listener without altering explicit opt-out state."""
+        if self._subscribed_room is not None:
+            self._subscribed_room.off("sip_dtmf_received", self._handle_sip_dtmf)
+            self._subscribed_room = None
+
     def listen(self, room: rtc.Room) -> None:
         """Begin listening for inbound SIP DTMF events on the provided room."""
-        if self._subscribed_room is not None:
-            self.stop_listening()
+        self._detach_listener()
         self._listening_stopped = False
         self._subscribed_room = room
         room.on("sip_dtmf_received", self._handle_sip_dtmf)
@@ -328,9 +333,7 @@ class DTMFKeypadTool(Toolset):
     def stop_listening(self) -> None:
         """Stop listening for inbound SIP DTMF events."""
         self._listening_stopped = True
-        if self._subscribed_room is not None:
-            self._subscribed_room.off("sip_dtmf_received", self._handle_sip_dtmf)
-            self._subscribed_room = None
+        self._detach_listener()
 
     def _handle_sip_dtmf(self, ev: rtc.SipDTMF) -> None:
         if self._on_dtmf_received:
@@ -355,7 +358,7 @@ class DTMFKeypadTool(Toolset):
         self.stop_listening()
 
     async def aclose(self) -> None:
-        self.stop_listening()
+        self._detach_listener()
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()

@@ -526,6 +526,37 @@ class TestInboundSIPDTMFInterception:
         backing_room.emit("sip_dtmf_received", rtc.SipDTMF(code=8, digit="8", participant=None))
         assert received == []
 
+    @pytest.mark.asyncio
+    async def test_keypad_setup_aclose_setup_resubscribes_after_handoff(self) -> None:
+        """Verify setup() -> aclose() -> setup() re-subscribes on the same keypad after agent handoff."""
+        room = _MockRoom()
+        received: list[str] = []
+        mock_job_ctx = MagicMock(spec=JobContext, room=room)
+
+        keypad = DTMFKeypadTool(on_dtmf_received=lambda ev: received.append(ev.digit))
+
+        with patch(
+            "livekit.agents.beta.tools.telephony.get_job_context", return_value=mock_job_ctx
+        ):
+            await keypad.setup()
+            assert keypad._subscribed_room is room
+            room.emit("sip_dtmf_received", rtc.SipDTMF(code=1, digit="1", participant=None))
+            assert received == ["1"]
+
+            # Simulate AgentActivity.aclose() on handoff
+            await keypad.aclose()
+            assert keypad._subscribed_room is None
+            room.emit("sip_dtmf_received", rtc.SipDTMF(code=2, digit="2", participant=None))
+            assert received == ["1"]
+
+            # Simulate AgentActivity._setup_toolsets() when returning to the agent
+            await keypad.setup()
+            assert keypad._subscribed_room is room
+            room.emit("sip_dtmf_received", rtc.SipDTMF(code=3, digit="3", participant=None))
+            assert received == ["1", "3"]
+
+        await keypad.aclose()
+
     def test_on_sip_dtmf_helper_filtering(self) -> None:
         """Verify on_sip_dtmf helper filters by participant and unregisters cleanly."""
         room = _MockRoom()
