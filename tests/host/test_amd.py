@@ -775,6 +775,22 @@ async def test_prediction_listener_failure_cleans_up_a_deferred_release() -> Non
         await call.replied(1)
 
 
+async def test_failing_listener_of_the_completing_prediction_keeps_finished() -> None:
+    """A ``human`` prediction completes the run before its listeners hear it, as on ``main``
+    (``_record_prediction`` runs the ``COMPLETE`` effect first, and ``_finish`` then ignores
+    the listener's ``internal_error``): the listener's error is logged, the reason stays
+    ``finished``."""
+    async with calling(["Hi, this is Sam."], {"Hi, this is Sam.": "human"}) as call:
+
+        def fail(_event: AMDPredictionEvent) -> None:
+            raise TypeError("listener bug")
+
+        call.amd.on("amd_prediction", fail)
+        call.speak()
+        result = await call.result()
+        assert (result.category, result.reason) == (AMDCategory.HUMAN, AMDReason.FINISHED)
+
+
 async def test_listener_without_a_signature_gets_the_event() -> None:
     """A listener ``inspect.signature`` cannot read is called with the event, as
     ``rtc.EventEmitter.emit`` calls it, instead of failing the run."""
