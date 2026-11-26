@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 import httpx2 as httpx
 
 import openai
-from livekit.agents import llm
+from livekit.agents import APIError, llm
 from livekit.agents.inference.llm import (
     LLMStream as _LLMStream,
     PromptCacheOptions,
@@ -1052,12 +1052,9 @@ class LLM(llm.LLM):
         if is_given(response_format):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
-        if tools and self._opts.model in _TOOLS_REQUIRE_RESPONSES_API_MODELS:
-            raise ValueError(
-                f"{self._opts.model} does not support function tools on /v1/chat/completions; "
-                "use openai.responses.LLM instead"
-            )
-        if tools and self._opts.model in _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS:
+        # hosted tools are dropped on chat completions, so only function tools count
+        has_function_tools = bool(tools and llm.ToolContext(tools).function_tools)
+        if has_function_tools and self._opts.model in _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS:
             if self._opts.reasoning_effort != "none":
                 logger.warning(
                     "%s only supports reasoning_effort='none' with function tools, "
@@ -1078,6 +1075,9 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
+            tools_require_responses_api=(
+                has_function_tools and self._opts.model in _TOOLS_REQUIRE_RESPONSES_API_MODELS
+            ),
         )
 
     def _resolve_prompt_cache_breakpoints(self) -> bool:
@@ -1106,7 +1106,9 @@ class LLMStream(_LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         prompt_cache_breakpoints: bool = False,
+        tools_require_responses_api: bool = False,
     ) -> None:
+        self._tools_require_responses_api = tools_require_responses_api
         super().__init__(
             llm,
             model=model,
@@ -1119,3 +1121,13 @@ class LLMStream(_LLMStream):
             extra_kwargs=extra_kwargs,
             prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
+
+    async def _run(self) -> None:
+        # raised in the stream so AgentSession's error policy counts it like a provider error
+        if self._tools_require_responses_api:
+            raise APIError(
+                f"{self._model} does not support function tools on /v1/chat/completions; "
+                "use openai.responses.LLM instead",
+                retryable=False,
+            )
+        await super()._run()
