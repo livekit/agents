@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import threading
 from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import av
+import numpy as np
 import pytest
 
 from livekit import rtc
@@ -22,6 +26,7 @@ from livekit.agents.voice.room_io._output import (
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
+from livekit.agents.voice.room_io._pre_connect_audio import PreConnectAudioHandler
 from livekit.agents.voice.room_io.room_io import RoomIO
 from livekit.agents.voice.room_io.types import (
     AudioInputOptions,
@@ -992,6 +997,171 @@ async def test_pre_connect_audio_does_not_retry_after_timeout() -> None:
 
     await audio_input.aclose()
     assert pre_connect_audio_handler.wait_for_data.await_count == 1
+
+
+class _FakePreConnectReader:
+    def __init__(
+        self,
+        *,
+        track_id: str,
+        chunks: list[bytes],
+        sample_rate: int = 16000,
+        mime_type: str = "",
+        stall: bool = False,
+    ) -> None:
+        self.info = SimpleNamespace(
+            attributes={"trackId": track_id, "sampleRate": str(sample_rate), "channels": "1"},
+            mime_type=mime_type,
+        )
+        self._chunks = chunks
+        self._stall = stall
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __aiter__(self):
+        return self._iter()
+
+    async def _iter(self):
+        for chunk in self._chunks:
+            yield chunk
+        if self._stall:
+            await asyncio.Event().wait()
+
+
+def _encode_opus(seconds: int) -> bytes:
+    # the opus fixtures live in LFS, which the unit-test checkout does not pull
+    out = io.BytesIO()
+    with av.open(out, "w", format="ogg") as container:
+        stream = container.add_stream("libopus", rate=48000)
+        stream.layout = "mono"
+        frame = av.AudioFrame.from_ndarray(
+            np.zeros((1, 48000 * seconds), dtype=np.int16), format="s16", layout="mono"
+        )
+        frame.sample_rate = 48000
+        for packet in [*stream.encode(frame), *stream.encode(None)]:
+            container.mux(packet)
+    return out.getvalue()
+
+
+async def _read_pre_connect(
+    handler: PreConnectAudioHandler, reader: _FakePreConnectReader, sender: str = "mallory"
+) -> None:
+    await handler._read_audio_task(reader, sender)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_caps_buffers_per_participant() -> None:
+    handler = PreConnectAudioHandler(MagicMock(), timeout=3.0)
+    for i in range(50):
+        reader = _FakePreConnectReader(track_id=f"TR_FAKE_{i}", chunks=[b"\x01\x00" * 1600])
+        await _read_pre_connect(handler, reader)
+    await _read_pre_connect(
+        handler, _FakePreConnectReader(track_id="TR_ALICE", chunks=[b"\x01\x00" * 1600]), "alice"
+    )
+
+    assert list(handler._buffers) == ["TR_FAKE_48", "TR_FAKE_49", "TR_ALICE"]
+    assert len(await handler.wait_for_data("TR_ALICE")) == 1
+
+    await handler.aclose()
+    assert not handler._buffers
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_ignores_stream_when_sender_streams_are_in_flight() -> None:
+    handler = PreConnectAudioHandler(MagicMock(), timeout=3.0)
+    stalled = [
+        _FakePreConnectReader(track_id=f"TR_STALL_{i}", chunks=[b"\x01\x00"], stall=True)
+        for i in range(2)
+    ]
+    tasks = [asyncio.create_task(_read_pre_connect(handler, r)) for r in stalled]
+    await asyncio.sleep(0)
+
+    extra = _FakePreConnectReader(track_id="TR_EXTRA", chunks=[b"\x01\x00" * 1600])
+    await _read_pre_connect(handler, extra)
+
+    assert "TR_EXTRA" not in handler._buffers
+    assert extra.closed
+
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(r.closed for r in stalled)
+
+    # cancelled streams no longer hold the sender's slots
+    retry = _FakePreConnectReader(track_id="TR_RETRY", chunks=[b"\x01\x00" * 1600])
+    await _read_pre_connect(handler, retry)
+    assert "TR_RETRY" in handler._buffers
+    assert isinstance(handler._buffers["TR_STALL_1"].exception(), asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_rejects_stream_over_duration_limit() -> None:
+    handler = PreConnectAudioHandler(MagicMock(), timeout=3.0)
+    one_second = b"\x01\x00" * 16000
+    reader = _FakePreConnectReader(track_id="TR_LONG", chunks=[one_second] * 31)
+    await _read_pre_connect(handler, reader)
+
+    assert isinstance(handler._buffers["TR_LONG"].exception(), ValueError)
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_rejects_stream_over_size_limit() -> None:
+    handler = PreConnectAudioHandler(MagicMock(), timeout=3.0)
+    # a high sample rate keeps the decoded duration under its cap, so the byte cap trips first
+    reader = _FakePreConnectReader(
+        track_id="TR_BIG", chunks=[b"\x01\x00" * 1024 * 1024] * 6, sample_rate=384000
+    )
+    await _read_pre_connect(handler, reader)
+
+    assert isinstance(handler._buffers["TR_BIG"].exception(), ValueError)
+    assert reader.closed
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_caps_decoded_opus_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents.voice.room_io import _pre_connect_audio
+
+    data = _encode_opus(1)
+    # compressed input stays under the cap, its decoded PCM does not
+    monkeypatch.setattr(_pre_connect_audio, "_MAX_STREAM_BYTES", len(data) + 1)
+
+    handler = PreConnectAudioHandler(MagicMock(), timeout=3.0)
+    reader = _FakePreConnectReader(
+        track_id="TR_OPUS", chunks=[data], sample_rate=48000, mime_type="audio/opus"
+    )
+    await _read_pre_connect(handler, reader)
+
+    assert isinstance(handler._buffers["TR_OPUS"].exception(), ValueError)
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_cancel_closes_opus_decoder_thread() -> None:
+    prefix = _encode_opus(1)[:256]
+
+    def decoder_threads() -> set[threading.Thread]:
+        return {t for t in threading.enumerate() if t.name.startswith("AudioDecoder")}
+
+    before = decoder_threads()
+    handler = PreConnectAudioHandler(MagicMock(), timeout=3.0)
+    reader = _FakePreConnectReader(
+        track_id="TR_STALL", chunks=[prefix], mime_type="audio/opus", stall=True
+    )
+    task = asyncio.create_task(_read_pre_connect(handler, reader))
+    for _ in range(100):
+        if started := decoder_threads() - before:
+            break
+        await asyncio.sleep(0)
+    assert started
+
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    # the decoder thread winds down in real time, which the test loop's clock does not track
+    for t in started:
+        t.join(timeout=2)
+    assert not any(t.is_alive() for t in started)
 
 
 @pytest.mark.asyncio
