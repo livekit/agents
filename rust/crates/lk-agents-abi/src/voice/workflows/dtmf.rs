@@ -17,12 +17,17 @@ pub enum ReceiveDtmfError {
 
 /// `send_dtmf_events` sent no key, or not every one. The model and the logs get one fixed
 /// message: the room's own error can carry provider data (`main`'s tool raises
-/// `ToolError("Failed to send DTMF events.") from None`).
+/// `ToolError("Failed to send DTMF events.") from None`). A cancelled publish stays a
+/// cancellation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[crate::host(error(kind = "livekit.agents.llm.tool_context.ToolError"))]
 pub enum SendDtmfError {
     #[error("Failed to send DTMF events.")]
     Failed,
+    /// The host cancelled a key's publish: the tool's caller is cancelled, not told it failed.
+    #[error("the DTMF publish was cancelled")]
+    #[host(kind = "asyncio.CancelledError")]
+    Cancelled,
 }
 
 /// Runtime publication and collection of room keypad tones.

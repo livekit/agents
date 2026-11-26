@@ -14318,11 +14318,18 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::workflows::dtmf
 
 impl crate::py_errors::HostException for ::lk_agents_abi::voice::workflows::dtmf::SendDtmfError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        crate::py_errors::host_exception(
-            "livekit.agents.llm.tool_context",
-            "ToolError",
-            ::std::string::ToString::to_string(self),
-        )
+        match self {
+            Self::Cancelled => crate::py_errors::host_exception(
+                "asyncio",
+                "CancelledError",
+                ::std::string::ToString::to_string(self),
+            ),
+            _ => crate::py_errors::host_exception(
+                "livekit.agents.llm.tool_context",
+                "ToolError",
+                ::std::string::ToString::to_string(self),
+            ),
+        }
     }
 }
 

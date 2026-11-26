@@ -1,4 +1,6 @@
 use crate::telemetry;
+use lk_agents_abi::errors::HostErrorKind;
+use lk_agents_abi::voice::rtc::RtcError;
 use lk_agents_voice::workflows::machine::dtmf::{
     DtmfEvent, DtmfReception, ReceiveDtmfError, SendDtmfError, dtmf_event_to_code, dtmf_sent_answer,
 };
@@ -10,7 +12,8 @@ pub const DTMF_PUBLISH_DELAY: Duration = Duration::from_millis(300);
 
 /// `send_dtmf_events(events)`: each key published as a keypad tone in `room`, 0.3 s apart; the
 /// answer to the model is [`dtmf_sent_answer`]'s. A room that is not connected, or a key it
-/// refused, is [`SendDtmfError::Failed`], without the room's own error.
+/// refused, is [`SendDtmfError::Failed`], without the room's own error. A publish the host
+/// cancelled is [`SendDtmfError::Cancelled`], which the host raises as a cancellation.
 pub async fn send_dtmf_events(
     room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
     events: Vec<DtmfEvent>,
@@ -22,7 +25,12 @@ pub async fn send_dtmf_events(
         room.local()
             .publish_dtmf(&telemetry::Cx::NONE, code, event.as_str().to_owned())
             .await
-            .map_err(|_| SendDtmfError::Failed)?;
+            .map_err(|error| match error {
+                RtcError::Host(error) if error.kind == HostErrorKind::Cancelled => {
+                    SendDtmfError::Cancelled
+                }
+                _ => SendDtmfError::Failed,
+            })?;
         clock.wait_until(clock.now().saturating_add(DTMF_PUBLISH_DELAY)).await;
     }
     Ok(dtmf_sent_answer(&events))

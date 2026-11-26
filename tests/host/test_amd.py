@@ -1596,6 +1596,17 @@ async def test_dtmf_tool_propagates_cancelled_publish() -> None:
         await task
 
 
+async def test_dtmf_tool_propagates_a_publish_cancelled_by_the_room() -> None:
+    """A publish that raises ``CancelledError`` itself, with the tool's task not cancelled, is a
+    cancellation, not a failed send."""
+
+    async def publish(**kwargs: object) -> None:
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await beta.send_dtmf_events(dtmf_context(DtmfRoom(publish)), [DtmfEvent.ONE])
+
+
 # From the implementation's dev tests (`tests/host/test_amd_host.py`).
 async def test_an_ivr_reply_runs_the_dtmf_tool() -> None:
     """The model's ``send_dtmf_events`` call in an IVR reply finds AMD's tool with its policy, so
