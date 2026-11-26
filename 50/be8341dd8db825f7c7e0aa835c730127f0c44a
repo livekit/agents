@@ -1,0 +1,21 @@
+docs/proposals/amd-test-coverage.md
+  s_342953b2c18827::t_3b8a16ddc059b6 24-26,34-40,54,110,128,155,173,175,177,181,214,221
+docs/proposals/amd.md
+  s_342953b2c18827::t_97e7c99f830a8b 695-709,741-752,760-763,767-780,784-786
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "50be8341dd8db825f7c7e0aa835c730127f0c44a",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
