@@ -25,7 +25,15 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from yarl import URL
 
-from livekit.agents import Agent, AgentSession, APIStatusError, function_tool, llm, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIStatusError,
+    ToolResult,
+    function_tool,
+    llm,
+    utils,
+)
 from livekit.agents.telemetry import pii, trace_types, utils as telemetry_utils
 from livekit.agents.telemetry.traces import (
     _DynamicTracer,
@@ -40,6 +48,7 @@ from livekit.agents.types import (
 )
 
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_realtime import FakeRealtimeModel, run_realtime_tool_turn
 
 pytestmark = pytest.mark.unit
 
@@ -292,6 +301,7 @@ SAFE_KEYS = frozenset(
         "lk.agent_label",
         "lk.retry_count",
         "lk.provider_request_ids",
+        "lk.delegation_id",
         "lk.participant_id",
         "lk.participant_kind",
         "lk.job_id",
@@ -337,6 +347,7 @@ SAFE_KEYS = frozenset(
         "lk.llm_metrics",
         "lk.tts_metrics",
         "lk.realtime_model_metrics",
+        "lk.session_usage",
         "lk.e2e_latency",
         # OTEL GenAI semconv (message content rides on event attributes
         # `content`/`tool_calls`, which the collector strips by name)
@@ -1037,3 +1048,75 @@ async def test_xai_tts_redacts_api_key_from_handshake_error() -> None:
         await tts._connect_ws(timeout=5.0, opts=tts._opts)
 
     _assert_redacted(exc_info.value)
+
+
+# realtime failures attach the provider's error as exc_info and keep it out of the log body:
+# redaction drops exception details from exported logs but cannot redact a body
+
+_PRIVATE_REALTIME_ERROR = "private provider response with credentials"
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("context_error", [None, llm.RealtimeError, RuntimeError])
+async def test_realtime_reply_failure_logs_the_error_outside_the_body(
+    caplog: pytest.LogCaptureFixture, context_error: type[Exception] | None
+) -> None:
+    model = FakeRealtimeModel()
+    error = (context_error or llm.RealtimeError)(_PRIVATE_REALTIME_ERROR)
+    async with AgentSession(llm=model) as session:
+        await session.start(Agent(instructions="Test"))
+        rt = model.active_session
+        if context_error is not None:
+            rt.update_error = error
+        handle = session.generate_reply(user_input="hello")
+
+        async def wait_for_reply() -> None:
+            while not handle.done() and not rt._reply_futs:
+                await asyncio.sleep(0)
+            if rt._reply_futs:
+                rt._reply_futs[-1].set_exception(error)
+            await handle
+
+        await asyncio.wait_for(wait_for_reply(), 2)
+        assert handle.exception() is error
+
+    records = [record for record in caplog.records if "failed to" in record.getMessage()]
+    assert len(records) == (2 if context_error is llm.RealtimeError else 1)
+    for record in records:
+        assert record.exc_info is not None and record.exc_info[1] is error
+        assert _PRIVATE_REALTIME_ERROR not in record.getMessage()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_realtime_tool_sync_failure_logs_the_error_outside_the_body(
+    caplog: pytest.LogCaptureFixture, interrupted: bool
+) -> None:
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="Test")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def lookup(self) -> ToolResult:
+            """Look something up."""
+            self.session._activity._rt_session.update_error = llm.RealtimeError(
+                _PRIVATE_REALTIME_ERROR
+            )
+            self.tool_executed.set()
+            return ToolResult("ok", reply_required=False)
+
+    agent = ToolAgent()
+    await run_realtime_tool_turn(agent, tool_executed=agent.tool_executed, interrupt=interrupted)
+    records = [record for record in caplog.records if "failed to" in record.getMessage()]
+    assert len(records) == 1
+    assert records[0].getMessage() == (
+        "failed to sync the tool results of an interrupted generation"
+        if interrupted
+        else "failed to update chat context before generating the function calls results"
+    )
+    exc_info = records[0].exc_info
+    assert exc_info is not None and isinstance(exc_info[1], llm.RealtimeError)
+    assert str(exc_info[1]) == _PRIVATE_REALTIME_ERROR

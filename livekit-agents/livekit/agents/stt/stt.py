@@ -658,6 +658,15 @@ class RecognizeStream(ABC):
         else:
             self._input_ch.send_nowait(frame)
 
+    @property
+    def manual_flush(self) -> bool:
+        """Whether this stream finalizes a turn only when flushed.
+
+        Defaults to the STT's current capability. A stream whose need is fixed when it is
+        created overrides this, so a later STT option change does not stop its flushes.
+        """
+        return self._stt.capabilities.manual_flush
+
     def flush(self) -> None:
         """Mark the end of the current segment"""
         self._check_input_not_ended()

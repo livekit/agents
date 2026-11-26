@@ -58,7 +58,11 @@ def to_chat_ctx(
     cache_at: tuple[list[dict], int] | None = None
 
     for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
-        if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
+        if (
+            msg.type == "message"
+            and msg.role in ("system", "developer")
+            and (text := msg.raw_text_content)
+        ):
             system_messages.append(text)
             continue
 

@@ -113,17 +113,17 @@ def _parse_model_string(model: str) -> tuple[str, str | None]:
 class FallbackModel(TypedDict):
     """Inference Fallback Adapter: configuration for a fallback TTS model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
-    Extra fields are passed through to the provider.
+    Options in ``extra_kwargs`` are passed through to the provider.
 
     Example:
-        >>> FallbackModel(model="cartesia/sonic", voice="")
+        >>> FallbackModel(model="cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc")
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda")."""
+    """Model name (e.g. "cartesia/sonic-3", "inworld/inworld-tts-2", "rime/coda")."""
 
     voice: str
-    """Voice to use for the model."""
+    """Voice to use for the model. An empty string selects the model's default voice."""
 
     extra_kwargs: NotRequired[dict[str, Any]]
     """Extra configuration for the model."""
@@ -539,10 +539,11 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
             http_session (aiohttp.ClientSession, optional): HTTP session to use.
             extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
-            fallback (FallbackModelType, optional): Fallback models - either a list of model names,
-                a list of FallbackModel instances.
-            disable_system_default_fallback (bool, optional): Disable system-configured fallback
-                models.
+            fallback (FallbackModelType | list[FallbackModelType], optional): Fallback models that
+                LiveKit Inference tries in order if the primary model fails. Pass a single entry
+                or a list. Each entry is a "provider/model[:voice]" string or a FallbackModel.
+            disable_system_default_fallback (bool, optional): Opt out of LiveKit Inference's
+                system-default fallback models. Models in ``fallback`` still apply.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
         """
         sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
@@ -821,28 +822,32 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = ""
 
-        # chunking defaults (cap + expressive batch size) live in _provider_format
+        from .. import tokenize
         from ..tts._provider_format import convert_markup, normalize_markup, sentence_tokenizer
 
         provider = self._opts.model.split("/")[0]
-        sent_tokenizer_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
+        text_stream: tokenize.WordStream | tokenize.SentenceStream
+        if provider == "gradium" and not self._expressive:
+            text_stream = tokenize.basic.WordTokenizer(ignore_punctuation=False).stream()
+        else:
+            text_stream = sentence_tokenizer(provider, expressive=self._expressive).stream()
         input_sent_event = asyncio.Event()
 
         async def _input_task() -> None:
             async for data in self._input_ch:
                 if isinstance(data, self._FlushSentinel):
-                    sent_tokenizer_stream.flush()
+                    text_stream.flush()
                     continue
-                sent_tokenizer_stream.push_text(normalize_markup(self._markup_key, data))
+                text_stream.push_text(normalize_markup(self._markup_key, data))
 
-            sent_tokenizer_stream.end_input()
+            text_stream.end_input()
 
-        async def _sentence_stream_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def _send_text_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             base_pkt: dict[str, Any] = {}
             base_pkt["type"] = "input_transcript"
-            async for ev in sent_tokenizer_stream:
+            async for ev in text_stream:
                 token_pkt = base_pkt.copy()
-                # re-normalize at sentence level: tags split across input chunks
+                # Re-normalize the emitted text: tags split across input chunks
                 # aren't caught by the per-chunk normalize in _input_task
                 normalized = normalize_markup(self._markup_key, ev.token)
                 converted = convert_markup(self._markup_key, normalized)
@@ -978,7 +983,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 connection.in_use = True
                 tasks = [
                     asyncio.create_task(_input_task()),
-                    asyncio.create_task(_sentence_stream_task(ws)),
+                    asyncio.create_task(_send_text_task(ws)),
                     asyncio.create_task(_recv_task(connection)),
                 ]
 
@@ -987,7 +992,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     connection.in_use = False
                     input_sent_event.set()
-                    await sent_tokenizer_stream.aclose()
+                    await text_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
                 if connection.handoff_id is not None:
                     await self._tts._retire(connection)

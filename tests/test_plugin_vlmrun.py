@@ -336,6 +336,16 @@ async def test_batch_is_sent_to_system_one_with_a_bearer_key() -> None:
     assert payload["questions"]["frustration"]["criteria"] == QUESTIONS["frustration"].levels
 
 
+async def test_extra_headers_go_out_below_the_client_headers() -> None:
+    model, http = model_for(response_body())
+    await model.evaluate(
+        input="", decisions=QUESTIONS, extra_headers={"X-Feature": "test", "Authorization": "x"}
+    )
+    headers = http.post.call_args.kwargs["headers"]
+    assert (headers["X-Feature"], headers["Authorization"]) == ("test", "Bearer vlm-test")
+    assert "X-Feature" not in model._headers
+
+
 def test_missing_api_key_fails_at_construction() -> None:
     with pytest.raises(ValueError, match="VLMRUN_API_KEY is required"):
         vlmrun.DecisionModel()
