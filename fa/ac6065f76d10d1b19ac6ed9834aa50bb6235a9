@@ -1,0 +1,14 @@
+livekit-agents/livekit/agents/voice/amd/_stt.py
+  h_a827ab16c3c189 71,130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "faac6065f76d10d1b19ac6ed9834aa50bb6235a9",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
