@@ -21,6 +21,7 @@ from livekit.agents import APIConnectOptions, APIStatusError
 from livekit.agents.llm import CacheBreakpoint, ChatContext
 from livekit.agents.llm.chat_context import Instructions
 from livekit.agents.voice.generation import mark_instructions_cache_boundary, update_instructions
+from livekit.plugins import azure
 from livekit.plugins.openai import LLM, STT, TTS, responses
 
 pytestmark = pytest.mark.unit
@@ -470,11 +471,12 @@ def _sdk_default_azure_client(**kwargs: Any) -> openai.AsyncAzureOpenAI:
         (lambda **kw: LLM.with_azure(**kw)._client, 1),
         (lambda **kw: TTS.with_azure(**kw)._client, 1),
         (lambda **kw: STT.with_azure(**kw)._client, 1),
+        (lambda **kw: azure.responses.LLM(**kw)._client, 1),
         # Control: the SDK's default pool must reconnect, or the clock patch below no longer
         # reaches the pool and the cases above would pass without the fix.
         (_sdk_default_azure_client, 2),
     ],
-    ids=["llm", "tts", "stt", "sdk-default-control"],
+    ids=["llm", "tts", "stt", "azure-responses", "sdk-default-control"],
 )
 async def test_with_azure_keeps_its_connection_between_turns(
     make_client: Any, expected_connections: int, monkeypatch: pytest.MonkeyPatch
