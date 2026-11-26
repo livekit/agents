@@ -1,0 +1,19 @@
+tests/test_amd.py
+  s_358564459882e4::t_5214173f16f999 7009-7010,7013-7014,7620-7638
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6eec1b59a6f0889b655a5797099d3d62e3964a51",
+  "prompts": {},
+  "sessions": {
+    "s_358564459882e4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "257e16d1-fdf7-4bf0-9def-7fc17a0e6c1d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
