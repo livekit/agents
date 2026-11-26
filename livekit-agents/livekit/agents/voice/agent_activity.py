@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import functools
 import heapq
 import json
 import time
@@ -1867,7 +1868,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=handle,
                 name="AgentActivity.tts_say",
             )
-            task.add_done_callback(self._on_pipeline_reply_done)
+            task.add_done_callback(functools.partial(self._on_pipeline_reply_done, handle))
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
         return handle
 
@@ -1969,7 +1970,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=handle,
                 name="AgentActivity.pipeline_reply",
             )
-            task.add_done_callback(self._on_pipeline_reply_done)
+            task.add_done_callback(functools.partial(self._on_pipeline_reply_done, handle))
 
         if schedule_speech:
             self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
@@ -2379,9 +2380,11 @@ class AgentActivity(RecognitionHooks):
 
         self._session._on_error(error)
 
-    def _on_end_of_agent_speech(self, *, ended_at: float) -> None:
+    def _on_end_of_agent_speech(self, *, ended_at: float, interrupted: bool) -> None:
         if self._audio_recognition is not None:
-            self._audio_recognition._on_end_of_agent_speech(ended_at=ended_at)
+            self._audio_recognition._on_end_of_agent_speech(
+                ended_at=ended_at, interrupted=interrupted
+            )
 
         self._interruption_detected = False
 
@@ -2620,7 +2623,7 @@ class AgentActivity(RecognitionHooks):
                 self._update_paused_speech(self._current_speech, timeout)
                 audio_output.pause()
                 self._session._update_agent_state("listening")
-                self._on_end_of_agent_speech(ended_at=time.time())
+                self._on_end_of_agent_speech(ended_at=time.time(), interrupted=True)
                 if self.interruption_enabled:
                     self.interruption_by_audio_activity_enabled = True
             else:
@@ -3454,14 +3457,16 @@ class AgentActivity(RecognitionHooks):
             )
         )
 
-    def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
+    def _on_pipeline_reply_done(self, speech_handle: SpeechHandle, _: asyncio.Task[None]) -> None:
         if self._no_pending_speech:
             # a speech awaiting its tool executions keeps the agent busy: stay in
             # "thinking" so the user-away timer isn't armed mid-tool (#6904)
             self._session._update_agent_state(
                 "thinking" if self._has_followup_work else "listening"
             )
-            self._on_end_of_agent_speech(ended_at=time.time())
+            self._on_end_of_agent_speech(
+                ended_at=time.time(), interrupted=speech_handle.interrupted
+            )
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
 
@@ -3717,7 +3722,9 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state(
                 "thinking" if self._has_followup_work else "listening"
             )
-            self._on_end_of_agent_speech(ended_at=time.time())
+            self._on_end_of_agent_speech(
+                ended_at=time.time(), interrupted=speech_handle.interrupted
+            )
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
 
@@ -4286,7 +4293,7 @@ class AgentActivity(RecognitionHooks):
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
-            self._on_end_of_agent_speech(ended_at=time.time())
+            self._on_end_of_agent_speech(ended_at=time.time(), interrupted=False)
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
         elif self._session.agent_state == "speaking":
@@ -4295,7 +4302,9 @@ class AgentActivity(RecognitionHooks):
             self._session._update_agent_state(
                 "thinking" if tool_running or self._has_followup_work else "listening"
             )
-            self._on_end_of_agent_speech(ended_at=time.time())
+            self._on_end_of_agent_speech(
+                ended_at=time.time(), interrupted=speech_handle.interrupted
+            )
             if self.interruption_enabled:
                 self.interruption_by_audio_activity_enabled = True
 
@@ -4458,7 +4467,9 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=speech_handle,
                     name="AgentActivity.pipeline_reply",
                 )
-                tool_response_task.add_done_callback(self._on_pipeline_reply_done)
+                tool_response_task.add_done_callback(
+                    functools.partial(self._on_pipeline_reply_done, speech_handle)
+                )
                 self._schedule_speech(
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
@@ -4960,7 +4971,7 @@ class AgentActivity(RecognitionHooks):
         if function_calls and not speech_handle.interrupted:
             self._background_speeches.add(speech_handle)
         self._session._update_agent_state("thinking" if self._has_followup_work else "listening")
-        self._on_end_of_agent_speech(ended_at=time.time())
+        self._on_end_of_agent_speech(ended_at=time.time(), interrupted=speech_handle.interrupted)
         if self.interruption_enabled:
             self.interruption_by_audio_activity_enabled = True
 

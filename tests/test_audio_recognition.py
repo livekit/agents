@@ -5,12 +5,13 @@ import logging
 import time
 from collections.abc import AsyncIterable
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, call
 
 import pytest
 
 from livekit import rtc
 from livekit.agents import AMD, Agent, AgentSession, AMDLifecycle
+from livekit.agents.inference.eot.base import TurnDetectorOptions, _BaseStreamingTurnDetectorStream
 from livekit.agents.utils import aio
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.agent import ModelSettings
@@ -455,6 +456,18 @@ def _vad_recognition() -> AudioRecognition:
     ar._session._root_span_context = None
     ar._session._room_io = None
     ar._session.options.transcription_timeout = None
+    # agent speech hooks, with backchannel boundaries and adaptive interruption off
+    ar._agent_speech_started_at = None
+    ar._agent_speech_ended_at = None
+    ar._endpointing = MagicMock()
+    ar._backchannel_boundary = None
+    ar._backchannel_boundary_timer = None
+    ar._backchannel_boundary_callback = None
+    ar._interruption_enabled = False
+    ar._interruption_ch = None
+    ar._transcript_gate_active = False
+    ar._overlap_open = False
+    ar._flush_held_transcripts = MagicMock()  # type: ignore[method-assign]
     return ar
 
 
@@ -477,18 +490,133 @@ async def test_user_turn_start_persists_across_vad_bursts_in_one_turn() -> None:
     assert ar._speech_start_time > first_burst_start
 
 
-async def test_turn_detector_hears_the_user_turn_start_once() -> None:
-    """The audio turn detector counts the turn length from ``_user_turn_start``, so it gets
-    that value on the first start of speech and nothing on later bursts of the same turn."""
+async def test_turn_detector_hears_every_start_of_speech() -> None:
+    """The first burst opens the turn; later bursts reach the detector with their own onset.
+    ``_user_turn_start`` stays at the first burst."""
     ar = _vad_recognition()
     stream = MagicMock()
     ar._turn_detector_stream = stream
 
     await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=5.0))
+    turn_start = ar._user_turn_start
     await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH, speech_duration=5.0))
+    await asyncio.sleep(0.05)
     await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH))
 
-    stream.on_start_of_turn.assert_called_once_with(ar._user_turn_start)
+    assert ar._user_turn_start == turn_start
+    assert stream.on_start_of_user_speech.call_args_list == [
+        call(turn_start, new_turn=True),
+        call(ar._speech_start_time, new_turn=False),
+    ]
+
+
+async def test_turn_detector_hears_agent_speech() -> None:
+    """Agent speech reaches the detector, with ``interrupted``."""
+    ar = _vad_recognition()
+    stream = MagicMock()
+    ar._turn_detector_stream = stream
+
+    ar._on_start_of_agent_speech(started_at=10.0)
+    ar._on_end_of_agent_speech(ended_at=12.0, interrupted=True)
+
+    stream.on_start_of_agent_speech.assert_called_once_with(10.0)
+    stream.on_end_of_agent_speech.assert_called_once_with(12.0, interrupted=True)
+
+
+async def test_turn_detector_hears_the_user_end_of_speech_back_dated() -> None:
+    """The user's end of speech reaches the detector, back-dated from the VAD report."""
+    ar = _vad_recognition()
+    stream = MagicMock()
+    ar._turn_detector_stream = stream
+
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.5))
+    reported_at = time.time()
+    await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH, speech_duration=0.5))
+
+    stream.on_end_of_user_speech.assert_called_once()
+    ended_at = stream.on_end_of_user_speech.call_args.args[0]
+    assert reported_at - ended_at == pytest.approx(0.6, abs=1e-3)  # the silence_duration
+
+
+class _TurnStartTransport:
+    """Records each turn start the stream hands its transport, in seconds before the end of
+    the audio queued so far."""
+
+    def __init__(self) -> None:
+        self.turn_starts: list[float] = []
+
+    def attach(self, stream: object) -> None:
+        self._stream = stream
+
+    async def run(self) -> None:
+        await self._stream._drain_audio_channel()  # type: ignore[attr-defined]
+
+    def run_inference(self, request_id: str, *, chat_ctx: object = None) -> None: ...
+    def push_frame(self, frame: object) -> None: ...
+    def flush(self) -> None: ...
+    def detach(self) -> None: ...
+
+    def on_start_of_turn(self, elapsed: float) -> None:
+        self.turn_starts.append(elapsed)
+
+
+async def _turn_starts_through(ar: AudioRecognition, transport: _TurnStartTransport) -> list[float]:
+    stream = ar._turn_detector_stream
+    assert isinstance(stream, _BaseStreamingTurnDetectorStream)
+    stream.end_input()
+    await stream._task
+    return [round(t, 3) for t in transport.turn_starts]
+
+
+def _recognition_with_detector() -> tuple[AudioRecognition, _TurnStartTransport]:
+    ar = _vad_recognition()
+    transport = _TurnStartTransport()
+    detector = MagicMock()
+    opts = TurnDetectorOptions(sample_rate=16000, thresholds=MagicMock())
+    ar._turn_detector_stream = _BaseStreamingTurnDetectorStream(
+        detector=detector, opts=opts, transport=transport, model="turn-detector-v1-mini"
+    )
+    return ar, transport
+
+
+async def test_reply_after_a_backchannel_starts_at_the_agent_end() -> None:
+    """End to end: a backchannel during agent speech opens the turn; the reply after the
+    agent finishes moves the turn start to the agent's end."""
+    ar, transport = _recognition_with_detector()
+
+    ar._on_start_of_agent_speech(started_at=time.time())
+    await asyncio.sleep(2.0)
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.3))
+    await asyncio.sleep(0.6)  # "mm-hm" ends 0.6 s before VAD reports it
+    await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH))
+    await asyncio.sleep(1.0)
+    agent_end = time.time()
+    ar._on_end_of_agent_speech(ended_at=agent_end, interrupted=False)
+    await asyncio.sleep(1.5)
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.3))
+    reply_seen_at = time.time()
+
+    first, reply = await _turn_starts_through(ar, transport)
+    assert first == pytest.approx(0.3 + 2.0)  # 2 s before the backchannel onset
+    assert reply == pytest.approx(round(reply_seen_at - agent_end, 3))
+
+
+async def test_reply_started_over_the_agent_keeps_its_start() -> None:
+    """End to end: the user starts replying 0.3 s before the agent finishes and pauses; the
+    next burst continues the reply, so the turn keeps its start."""
+    ar, transport = _recognition_with_detector()
+
+    ar._on_start_of_agent_speech(started_at=time.time())
+    await asyncio.sleep(2.0)
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.1))
+    await asyncio.sleep(0.2)
+    ar._on_end_of_agent_speech(ended_at=time.time(), interrupted=False)
+    await asyncio.sleep(1.4)  # still speaking 0.8 s past the agent end, then silence
+    await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH))
+    await asyncio.sleep(1.0)
+    await ar._on_vad_event(_vad_event(VADEventType.START_OF_SPEECH, speech_duration=0.3))
+
+    assert await _turn_starts_through(ar, transport) == [pytest.approx(0.1 + 2.0)]
 
 
 async def test_turn_without_a_known_start_keeps_the_detector_count() -> None:
@@ -502,4 +630,4 @@ async def test_turn_without_a_known_start_keeps_the_detector_count() -> None:
     await ar._on_vad_event(_vad_event(VADEventType.END_OF_SPEECH, speech_duration=3.0))
 
     assert ar._user_turn_start is not None
-    stream.on_start_of_turn.assert_not_called()
+    stream.on_start_of_user_speech.assert_not_called()

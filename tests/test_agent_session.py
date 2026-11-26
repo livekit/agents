@@ -314,11 +314,13 @@ async def test_tool_call() -> None:
         recognition: AudioRecognition,
         *,
         ended_at: float,
+        interrupted: bool = False,
     ) -> None:
         agent_speech_end_states.append(session.agent_state)
         on_end_of_agent_speech(
             recognition,
             ended_at=ended_at,
+            interrupted=interrupted,
         )
 
     with patch.object(
@@ -1595,7 +1597,7 @@ async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
                 created_at=9.75,
             )
         )
-        recognition._on_end_of_agent_speech(ended_at=10.0)
+        recognition._on_end_of_agent_speech(ended_at=10.0, interrupted=False)
         await recognition._on_stt_event(
             _final_transcript_event(
                 text="after agent", start_time=0.0, end_time=0.0, created_at=10.1

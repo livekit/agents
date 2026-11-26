@@ -37,6 +37,7 @@ def _make_recognition(
     recognition._process_stt_event = MagicMock()  # type: ignore[method-assign]
     # overlap tracking, read once the agent speaks
     recognition._endpointing = MagicMock()
+    recognition._turn_detector_stream = None
     recognition._interruption_ch = MagicMock(closed=False)
     recognition._overlap_in_current_turn = False
     recognition._overlap_open = False

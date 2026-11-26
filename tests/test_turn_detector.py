@@ -16,6 +16,7 @@ from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError, APIError
 from livekit.agents.inference.eot import TurnDetector
 from livekit.agents.inference.eot.base import (
+    PREFIX_PADDING,
     TurnDetectorOptions,
     _BaseStreamingTurnDetectorStream,
     _StreamingTurnDetectionTransport,
@@ -173,6 +174,195 @@ async def stream() -> Any:
     await s.aclose()
 
 
+_NOW = 1000.0
+
+
+async def _turn_starts(
+    s: _BaseStreamingTurnDetectorStream, transport: _ScriptedTransport
+) -> list[float]:
+    """Close the stream and return each turn start the transport heard, in seconds before now."""
+    s.end_input()
+    await s._task
+    return [round(v, 6) for name, v in transport.events if name == "on_start_of_turn"]
+
+
+class TestTurnStart:
+    """Where the turn starts: the agent's natural end of speech, else PREFIX_PADDING (2 s)
+    before the speech. The transport never counts from before the last flush."""
+
+    @pytest.fixture(autouse=True)
+    def _clock(self) -> Any:
+        with patch("livekit.agents.inference.eot.base.time.time", return_value=_NOW):
+            yield
+
+    async def test_pads_speech_with_no_agent_speech(self, stream: _Stream) -> None:
+        s, transport = stream
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [2.5]
+
+    async def test_reply_counts_from_the_agent_end_of_speech(self, stream: _Stream) -> None:
+        """A pause longer than the padding stays in the turn."""
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 15.0)
+        s.on_end_of_agent_speech(_NOW - 8.0, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [8.0]
+
+    async def test_fast_reply_counts_from_the_agent_end_of_speech(self, stream: _Stream) -> None:
+        """A reply 200 ms after the agent gets 200 ms before its onset, not the padding."""
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 0.7, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [0.7]
+
+    async def test_agent_end_at_the_onset_starts_the_turn(self, stream: _Stream) -> None:
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 0.5, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [0.5]
+
+    async def test_agent_end_after_the_onset_pads(self, stream: _Stream) -> None:
+        """Speech over the agent pads, and a later burst cannot move the start into it."""
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 0.4, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        s.on_end_of_user_speech(_NOW - 0.3)
+        s.on_start_of_user_speech(_NOW - 0.1, new_turn=False)
+        assert await _turn_starts(s, transport) == [2.5]
+
+    async def test_user_speaking_as_the_agent_finished_keeps_the_count(
+        self, stream: _Stream
+    ) -> None:
+        """A reply started over the agent's last words keeps its start after a pause."""
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 10.0)
+        s.on_start_of_user_speech(_NOW - 5.0, new_turn=True)
+        s.on_end_of_agent_speech(_NOW - 4.7, interrupted=False)
+        s.on_end_of_user_speech(_NOW - 4.5)
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [7.0]
+
+    async def test_interrupted_agent_does_not_start_the_turn(self, stream: _Stream) -> None:
+        """An interrupted agent gives no turn, even when the interrupt lands after the user's
+        end of speech."""
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 10.0)
+        s.on_start_of_user_speech(_NOW - 5.0, new_turn=True)  # "wait, actually"
+        s.on_end_of_user_speech(_NOW - 4.6)
+        s.on_end_of_agent_speech(_NOW - 4.0, interrupted=True)  # a final transcript interrupts
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [7.0]
+
+    async def test_late_start_of_a_backchannel_keeps_the_agent_end(self, stream: _Stream) -> None:
+        """A backchannel ended before the agent finished, but its start of speech event came
+        after the agent end. The reply still starts at the agent's end."""
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 10.0)
+        s.on_end_of_agent_speech(_NOW - 3.0, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 3.2, new_turn=True)  # "mm-hm", reported late
+        s.on_end_of_user_speech(_NOW - 3.05)
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [5.2, 3.0]
+
+    async def test_user_end_at_the_agent_end_starts_the_turn(self, stream: _Stream) -> None:
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 10.0)
+        s.on_start_of_user_speech(_NOW - 6.0, new_turn=True)
+        s.on_end_of_user_speech(_NOW - 3.0)
+        s.on_end_of_agent_speech(_NOW - 3.0, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [8.0, 3.0]
+
+    async def test_agent_start_and_end_at_one_instant_is_one_turn(self, stream: _Stream) -> None:
+        """Equal timestamps: call order tells a single utterance from a restart."""
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 3.0)
+        s.on_end_of_agent_speech(_NOW - 3.0, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [3.0]
+
+    async def test_reply_after_two_agent_utterances_starts_at_the_second(
+        self, stream: _Stream
+    ) -> None:
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 10.0)
+        s.on_end_of_agent_speech(_NOW - 8.0, interrupted=False)
+        s.on_start_of_agent_speech(_NOW - 6.0)
+        s.on_end_of_agent_speech(_NOW - 4.0, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [4.0]
+
+    async def test_reply_after_a_resumed_agent_starts_at_its_end(self, stream: _Stream) -> None:
+        """The user's "mm" paused the agent (an interrupted end); the agent resumed and
+        finished. The reply starts at that natural end."""
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 10.0)
+        s.on_start_of_user_speech(_NOW - 7.0, new_turn=True)  # "mm"
+        s.on_end_of_agent_speech(_NOW - 6.8, interrupted=True)  # paused
+        s.on_end_of_user_speech(_NOW - 6.7)
+        s.on_start_of_agent_speech(_NOW - 5.0)  # resumed
+        s.on_end_of_agent_speech(_NOW - 3.0, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [9.0, 3.0]
+
+    async def test_agent_restart_at_its_end_of_speech_pads(self, stream: _Stream) -> None:
+        """A restart at the instant the agent stopped still counts as a restart."""
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 3.0, interrupted=False)
+        s.on_start_of_agent_speech(_NOW - 3.0)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [2.5]
+
+    async def test_agent_restart_before_the_onset_pads(self, stream: _Stream) -> None:
+        """The agent spoke again first, so the user spoke over it."""
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 8.0, interrupted=False)
+        s.on_start_of_agent_speech(_NOW - 3.0)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [2.5]
+
+    async def test_agent_restart_after_the_onset_keeps_the_turn(self, stream: _Stream) -> None:
+        """A restart after the onset (a late VAD event) does not take the turn back."""
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 8.0, interrupted=False)
+        s.on_start_of_agent_speech(_NOW - 0.2)
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [8.0]
+
+    async def test_reply_after_an_open_burst_moves_the_count(self, stream: _Stream) -> None:
+        """A backchannel opened the turn; the reply after the agent stops starts at its end."""
+        s, transport = stream
+        s.on_start_of_agent_speech(_NOW - 10.0)
+        s.on_start_of_user_speech(_NOW - 6.0, new_turn=True)  # "mm-hm" over the agent
+        s.on_end_of_agent_speech(_NOW - 3.0, interrupted=False)  # the user was silent by then
+        # VAD reports the end of "mm-hm" after the agent finished, back-dated to before it
+        s.on_end_of_user_speech(_NOW - 5.6)
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [8.0, 3.0]
+
+    async def test_later_burst_without_an_agent_end_keeps_the_start(self, stream: _Stream) -> None:
+        s, transport = stream
+        s.on_start_of_user_speech(_NOW - 3.0, new_turn=True)
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [5.0]
+
+    async def test_an_agent_end_is_taken_once(self, stream: _Stream) -> None:
+        """Later bursts of the reply keep its count."""
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 8.0, interrupted=False)
+        s.on_start_of_user_speech(_NOW - 5.0, new_turn=True)
+        s.on_start_of_user_speech(_NOW - 1.0, new_turn=False)
+        assert await _turn_starts(s, transport) == [8.0]
+
+    async def test_flush_forgets_the_agent_end_of_speech(self, stream: _Stream) -> None:
+        """A flush drops the earlier agent end, so the next turn pads."""
+        s, transport = stream
+        s.on_end_of_agent_speech(_NOW - 8.0, interrupted=False)
+        s.flush()
+        s.on_start_of_user_speech(_NOW - 0.5, new_turn=True)
+        assert await _turn_starts(s, transport) == [2.5]
+
+
 class TestStreamRequests:
     async def test_start_of_turn_reaches_transport_in_audio_order(self, stream: _Stream) -> None:
         """The turn length is measured when the start is queued, and it lands between the
@@ -180,13 +370,13 @@ class TestStreamRequests:
         s, transport = stream
         s.push_audio(_frame())
         with patch("livekit.agents.inference.eot.base.time.time", return_value=1000.25):
-            s.on_start_of_turn(1000.0)
+            s.on_start_of_user_speech(1000.0, new_turn=True)
         s.push_audio(_frame())
         s.end_input()
         await s._task
         assert _audio_events(transport) == [
             ("push_frame", 160),
-            ("on_start_of_turn", 0.25),
+            ("on_start_of_turn", 0.25 + PREFIX_PADDING),
             ("push_frame", 160),
             ("flush", None),
         ]
