@@ -279,6 +279,17 @@ def test_prewarm_is_noop_with_injected_client() -> None:
     assert t._prewarm_task is None
 
 
+def test_prewarm_without_running_loop_warns_instead_of_raising(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    t = sfy_tts.TTS(api_key="sk-test")
+    with caplog.at_level("WARNING"):
+        t.prewarm()
+
+    assert t._prewarm_task is None
+    assert "needs a running event loop" in caplog.text
+
+
 async def test_list_voices_reads_every_page() -> None:
     voices = await _make_tts("simba-3.2", _FakeClient()).list_voices()
 

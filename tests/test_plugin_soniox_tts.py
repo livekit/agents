@@ -11,7 +11,9 @@ Idle-timeout tests use ``virtual_time`` so timers advance deterministically.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import warnings
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -340,3 +342,14 @@ async def test_reduce_silence_rejected_on_unsupported_model() -> None:
     with pytest.raises(ValueError, match="reduce_silence"):
         tts.update_options(model="tts-rt-v1")
     assert tts._opts.model == "tts-rt-v2"
+
+
+def test_prewarm_without_running_loop_does_not_leak_a_coroutine() -> None:
+    tts = soniox.TTS(api_key="fake-key")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tts.prewarm()
+        gc.collect()
+
+    assert tts._prewarm_task is None
+    assert not [w for w in caught if "was never awaited" in str(w.message)]

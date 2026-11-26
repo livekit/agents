@@ -851,6 +851,15 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "prewarm() needs a running event loop and was skipped; "
+                "call it from the job entrypoint"
+            )
+            return
+
         # Don't replace a prewarm still in flight: the old task would lose its only
         # reference, and aclose() cancels just the latest one, so it could open a
         # connection after shutdown. Same guard as the soniox plugin.

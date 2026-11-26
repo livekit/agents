@@ -584,3 +584,14 @@ async def test_timed_out_stream_waiter_is_not_failed_later():
     assert conn._closed
     assert waiters[0].cancelled()
     await tts.aclose()
+
+
+def test_prewarm_without_running_loop_warns_instead_of_raising(caplog):
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key")
+    with caplog.at_level("WARNING"):
+        tts.prewarm()
+
+    assert tts._prewarm_task is None
+    assert "needs a running event loop" in caplog.text
