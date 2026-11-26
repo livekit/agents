@@ -628,28 +628,19 @@ async fn the_report_belongs_to_the_starting_job_and_a_redacted_one_keeps_no_cont
     assert!(owner.accepts_event("error".into()) && owner.accepts_event("close".into()));
 }
 
-// Catches: `update_options`, `override_options` or a background audio player not counted for
-// their session, one of them counted again on its second use, or one hiding another.
+// Catches: `update_options`, `override_options` or a background audio player not noted for
+// their session's summary, which a session that starts later is handed.
 #[tokio::test]
-async fn a_session_counts_each_options_feature_it_uses_once() {
-    let stats = lk_agents_net::export::productstats::testkit::Capture::start();
-    let counted = || stats.take().into_iter().map(|(metric, ..)| metric).collect::<Vec<_>>();
+async fn a_session_notes_each_options_feature_used_on_it() {
     let owner = owner();
     use Maybe::NotGiven as N;
     for _ in 0..2 {
         owner.update_options(Maybe::Given(None), N, N, N, N, N, N).unwrap();
     }
-    assert_eq!(counted(), ["lk.product.agents.feature.update_options"]);
-    for _ in 0..2 {
-        let layer = owner.override_options(N, Maybe::Given(None), N, N, N).unwrap();
-        owner.release_override(layer).unwrap();
-        owner.background_audio();
-    }
-    assert_eq!(
-        counted(),
-        [
-            "lk.product.agents.feature.override_options",
-            "lk.product.agents.feature.background_audio"
-        ]
-    );
+    assert_eq!(*owner.0.features.lock(), BTreeSet::from([Feature::UpdateOptions]));
+    let layer = owner.override_options(N, Maybe::Given(None), N, N, N).unwrap();
+    owner.release_override(layer).unwrap();
+    owner.background_audio();
+    let used = [Feature::UpdateOptions, Feature::OverrideOptions, Feature::BackgroundAudio];
+    assert_eq!(*owner.0.features.lock(), BTreeSet::from(used));
 }

@@ -10,6 +10,7 @@ use crate::audio_recognition::{EndOfTurnInfo, TurnDetectionMode, TurnId, TurnSna
 use crate::events::SessionEvent;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::metrics::base::{AgentMetrics, RealtimeModelMetrics};
+use lk_agents_abi::productstats::features::Feature;
 use lk_agents_abi::productstats::models::EndpointedBy;
 use lk_agents_abi::productstats::testkit::{Stat, stat};
 use lk_agents_abi::resources::{LlmRef, ResourceId, SttRef, TtsRef};
@@ -269,6 +270,12 @@ fn llm(id: u64, name: &str) -> LlmRef {
     LlmRef { id: ResourceId(id), provider: model("livekit.plugins.acme.llm.LLM", name) }
 }
 
+/// The features the session counts when it ends.
+fn ended_features(session: &mut VoiceDriver) -> Vec<(String, Vec<String>)> {
+    session.close_spans();
+    features(&taken(session))
+}
+
 /// The features counted among `stats`: each metric's last name, with its labels' values.
 fn features(stats: &[Stat]) -> Vec<(String, Vec<String>)> {
     let named = stats.iter().filter_map(|(metric, labels, value)| {
@@ -299,17 +306,16 @@ fn a_model_switch_is_counted_once_for_each_kind_changed() {
         given(llm(4, "gpt-4o-mini")),
         given(tts(3, "sonic-2")),
     );
-    assert_eq!(features(&taken(&mut session)), []);
+    assert!(session.session.stats.features.is_empty());
     session.update_models(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, given(tts(5, "v3")));
     session.update_models(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, given(tts(6, "v4")));
     // An agent that brings its own LLM.
     let mut update = agent_update("billing", None);
     update.llm = given(llm(7, "gpt-4.1"));
     session.handoff_step(HandoffEvent::Asked { update: Box::new(update), run: None });
-    let mut stats = taken(&mut session);
-    stats.extend(handed_over(session.settle_step()));
+    session.settle_step();
     let switched = |kind: &str| ("model_switch".to_owned(), vec![kind.to_owned()]);
-    assert_eq!(features(&stats), [switched("tts"), switched("llm")]);
+    assert_eq!(ended_features(&mut session), [switched("tts"), switched("llm")]);
 }
 
 // Catches: the person's first language counted as a switch, a region or an unspecific code
@@ -324,11 +330,29 @@ fn a_language_switch_is_counted_once_when_the_stt_reports_another_language() {
         let mut heard = SpeechEvent::new(SpeechEventType::FinalTranscript);
         heard.alternatives.push(SpeechData::new(language, "a sentence long enough to tell"));
         session.on_stt(Ts::ZERO, Tagged { stream: ResourceId(7), item: heard });
-        features(&taken(session))
+        session.session.stats.features.contains(&Feature::LanguageSwitch)
     };
     for same in ["", "en", "en-US", "multi", "en-GB"] {
-        assert_eq!(hear(&mut session, same), [], "{same}");
+        assert!(!hear(&mut session, same), "{same}");
     }
-    assert_eq!(hear(&mut session, "fr"), [("language_switch".to_owned(), vec![])]);
-    assert_eq!(hear(&mut session, "en"), []);
+    assert!(hear(&mut session, "fr"));
+    hear(&mut session, "en");
+    assert_eq!(ended_features(&mut session), [("language_switch".to_owned(), vec![])]);
+}
+
+// Catches: a feature the session's executor saw (an options call, a background audio player, an
+// MCP toolset it activated) missing from the session's one summary, counted more than once for
+// a feature used twice, or counted before the session ends.
+#[test]
+fn features_the_executor_reports_are_counted_once_when_the_session_ends() {
+    let mut session = driver();
+    taken(&mut session);
+    let seen = [Feature::Mcp, Feature::OverrideOptions, Feature::Mcp, Feature::BackgroundAudio];
+    for feature in seen.into_iter().chain([Feature::UpdateOptions, Feature::UpdateOptions]) {
+        session.on_api(Ts::ZERO, crate::agent_session::Command::FeatureUsed(feature));
+    }
+    assert_eq!(features(&taken(&mut session)), []);
+    let counted = ended_features(&mut session);
+    let names: Vec<&str> = counted.iter().map(|(feature, _)| feature.as_str()).collect();
+    assert_eq!(names, ["mcp", "update_options", "override_options", "background_audio"]);
 }

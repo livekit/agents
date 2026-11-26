@@ -608,7 +608,7 @@ impl VoiceDriver {
         }
     }
 
-    pub(super) fn on_api(&mut self, now: Ts, cmd: Command) {
+    pub(crate) fn on_api(&mut self, now: Ts, cmd: Command) {
         match cmd {
             Command::Speech(cmd) => self.on_speech(now, cmd),
             Command::Activity(cmd) => self.on_frame(now, cmd),

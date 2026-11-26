@@ -10,6 +10,8 @@ license.workspace = true
 # WebSocket seam, LiveKit token signing, the delegation A2A client and telemetry's export.
 [lib]
 
+doctest = false
+
 [dependencies]
 parking_lot.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi" }

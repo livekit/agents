@@ -209,38 +209,34 @@ temporality the user endpoint requests (cumulative by default).
 
 ### Product statistics
 
-LiveKit's own statistics, never customer data. The list and its definitions are
-[telemetry.md](../telemetry.md#what-is-collected); this is where each is made.
+LiveKit's own statistics, never customer data; the list is
+[telemetry.md](../telemetry.md#what-is-collected). They are laid out like observability:
 
 - Declared in `abi::productstats` (`models`, `sessions`, `features`, `runner`), every key under
   `lk.product.agents.`. `lk-agents-codegen --check` refuses a declaration there without the
   prefix, any other declaration with it, and a label that is not a closed enum or a `Label`.
-- One process singleton: `EXPORTER` in `lk_agents_net::export::productstats`, installed by the
-  host's telemetry installation with the runtime and the command that started the process, and
-  told the storage the process opens (`storage_opened`). A forked child forgets its parent's.
-- An async crate records with `productstats::measure` (or `record` for a `ProductStat` made
-  elsewhere). A sans-I/O machine makes a `ProductStat` where the fact is known and hands it to
-  its `Trace` (`product_stats`); it leaves with the session's telemetry records as
-  `Record::ProductStat`, which the customer exporter's `record` hands to the product statistics
-  exporter and never queues.
+- Recorded through `lk-agents-telemetry`, by two entry points and no state:
+  `productstats::measure(cx, &metric, value)` in async code, beside `measure(cx, ..)`, and
+  `Trace::measure_product(&metric, value)` in a sans-I/O machine, beside `Trace::measure`. Both
+  make a `Record::ProductStat` for the context's recorder. The emitters machines and async code
+  share (`ModelUsage::measure`, `SessionStats::emit`) take either as a `MeasureProduct`.
+- Exported by `lk_agents_net::export::otlp`, as the exporter's third destination
+  (`otlp/product_stats.rs`): see [Destinations](#destinations).
 - Models: `ModelLabels::of(kind, &ProviderId)` derives the four labels. Requests, tokens,
   characters, audio and first-output times are recorded where the request's span ends
   (`lk-agents-inference/src/telemetry.rs`, `stt/retrying.rs`); what only a session knows (the
-  audio its STT reported, a realtime response, the transcription delay) in
+  audio its STT reported, a realtime response, the transcription delay, its own start) in
   `lk-agents-voice/src/agent_session/product_stats.rs`.
-- Sessions: the machines note `SessionFacts` (a handoff landed, a tool body started for a local
-  agent or a `RemoteAgent`). A voice session counts itself when its
-  spans close; a text request's runs report their facts to their turn (`HandlerPort::session_facts`),
-  which counts the request when it ends.
-- Features: `SessionFeatures::used(feature)` returns a count the first time only. The voice
-  machine holds it for language and model switches; the session owner for `update_options`,
-  `override_options` and background audio; the session's toolset scopes for MCP.
+- Sessions and features: one `SessionStats` per session holds what its agents did (a handoff
+  landed, a tool body started for a local agent or a `RemoteAgent`) and each feature it used,
+  once. A voice session's machine fills it, told by its executor of what only the executor sees
+  (`Command::FeatureUsed`: an options call, a background audio player, an MCP toolset
+  activated), and emits it when its spans close. A text request's runs report theirs to their
+  turn (`HandlerPort::session_stats`), which emits it when the request ends.
 - MCP: an `MCPToolset`'s lifecycle marks its toolset's lifetime port when it sets it up; a
   toolset group knows after its start whether one of its toolsets, or one nested in them, is
-  marked. A voice session's scopes count it; a text request's run resources report it to the
-  turn.
-- Tests read what was recorded with `productstats::testkit::Capture` (the thread's own: tests
-  of one binary share the process, so an installed exporter would mix theirs), or from the
+  marked.
+- Tests record under a tracer of their own (`productstats::testkit::Recorded`), or read the
   machine's drained records.
 
 ### Report records
@@ -321,17 +317,24 @@ the recording decision separately from the application endpoint's admission.
 
 ## Destinations
 
-| | LiveKit Cloud | User endpoint |
-| --- | --- | --- |
-| Enabled by | hosted or Cloud-connected job | `OTEL_EXPORTER_OTLP_*` or `telemetry.configure(...)` |
-| Signals | traces, metrics, report logs | traces, metrics |
-| Scope | per job: a record is exported only while its job is registered and recording that signal | process |
-| Before the recording decision | spans of the job are held, bounded, and released or dropped with the decision | exported |
-| Content | sent as recorded, keyed for Cloud's redaction ([reference](telemetry-reference.md#cloud-ingest-and-redaction)) | `allow_pii` |
-| Identity | the job's identity on every span, log and measurement, and on the resource (below) | the same on spans; measurements carry only declared labels |
-| Batching | one job per request: a request never mixes jobs, so Cloud's per-batch session flags apply to one session | any |
-| Temporality | delta | cumulative unless configured |
-| Transport | OTLP/HTTP protobuf, gzip, with the job's Cloud token | OTLP/HTTP protobuf with configured headers |
+One exporter (`lk_agents_net::export::otlp::Exporter`: one task loop, one flush, one shutdown)
+with three destinations. Each has its own queue or aggregator and its own policy.
+
+| | LiveKit Cloud | User endpoint | Product statistics |
+| --- | --- | --- | --- |
+| Whose data | the customer's | the customer's | LiveKit's |
+| Enabled by | hosted or Cloud-connected job | `OTEL_EXPORTER_OTLP_*` or `telemetry.configure(...)` | on unless `LIVEKIT_PRODUCT_STATS=0` or `DO_NOT_TRACK=1`; sent only to a LiveKit Cloud host |
+| Takes | spans, measurements, report logs | spans, measurements | `Record::ProductStat` only, and no other destination takes one |
+| Signals | traces, metrics, report logs | traces, metrics | metrics |
+| Scope | per job: a record is exported only while its job is registered and recording that signal | process | process: no job, no recording decision, no project observability flag |
+| Before the recording decision | spans of the job are held, bounded, and released or dropped with the decision | exported | not applicable; before a credential, the last window is held |
+| Content | sent as recorded, keyed for Cloud's redaction ([reference](telemetry-reference.md#cloud-ingest-and-redaction)) | `allow_pii` | closed enums and bounded labels only, by declaration |
+| Identity | the job's identity on every span, log and measurement, and on the resource (below) | the same on spans; measurements carry only declared labels | none; its own resource (framework, runtime, platform, runner, storage), never the customer's |
+| Batching | one job per request: a request never mixes jobs, so Cloud's per-batch session flags apply to one session | any | one window per request; an empty window is no request |
+| Interval | spans each second or per full batch, metrics every 30 s | the same | one minute |
+| Temporality | delta | cumulative unless configured | delta |
+| Transport | OTLP/HTTP protobuf, gzip, with the job's Cloud token | OTLP/HTTP protobuf with configured headers | OTLP/HTTP protobuf, gzip, to `/observability/productstats/agents/metrics/otlp/v0` with the project key's observability bearer |
+| A refusal | a 401 "recording disabled" stops that job's Cloud export | logged | dropped; neither product's failure stops the other |
 
 The identity stamp is the one place job identity is written. It uses protocol's
 shared keys, and also the spellings Cloud's consumers read today, until they read

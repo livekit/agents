@@ -132,6 +132,7 @@ pub(crate) fn exporter(limits: Limits) -> Exporter {
         Arc::new(crate::clock::RealClock::new()),
         process(),
         limits,
+        None,
     )
 }
 

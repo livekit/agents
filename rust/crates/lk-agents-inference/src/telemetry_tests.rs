@@ -7,6 +7,7 @@ use lk_agents_abi::{
     ChatContext, ChatMessage, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, Role,
     StreamOutput, Ts, VirtualClock,
 };
+use lk_agents_telemetry::productstats::testkit::Recorded;
 use lk_agents_telemetry::{Cx, Tracer};
 use parking_lot::Mutex;
 
@@ -495,14 +496,16 @@ fn model_stat(
 #[tokio::test]
 async fn a_model_request_is_counted_once_with_what_it_was_measured_in() {
     use lk_agents_abi::usage::TokenUsage;
-    let stats = lk_agents_net::export::productstats::testkit::Capture::start();
-    // To the millisecond: a span's clock is the wall's, in nanoseconds.
+    let records = Arc::new(Records::default());
+    // The product statistics recorded under the test's own tracer since the last call, to the
+    // millisecond: a span's clock is the wall's, in nanoseconds.
     let taken = || {
-        let rounded = stats.take().into_iter().map(|(m, l, v)| (m, l, (v * 1e3).round() / 1e3));
+        let stats = Recorded::stats(std::mem::take(&mut *records.0.lock()));
+        let rounded = stats.into_iter().map(|(m, l, v)| (m, l, (v * 1e3).round() / 1e3));
         rounded.collect::<Vec<_>>()
     };
     let clock = Arc::new(VirtualClock::new());
-    let tracer = Tracer::new(Arc::new(Records::default()), clock.clone(), 11);
+    let tracer = Tracer::new(records.clone(), clock.clone(), 11);
     let cx = tracer.root().continuing(Some(PARENT));
 
     let llm = Declared(lk_agents_abi::ProviderId {

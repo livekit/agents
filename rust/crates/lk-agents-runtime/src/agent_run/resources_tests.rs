@@ -287,9 +287,9 @@ impl lk_agents_abi::a2a::turn::HandlerPort for Turn {
 #[tokio::test]
 async fn a_runs_mcp_toolset_is_reported_to_its_text_request() {
     use lk_agents_abi::productstats::sessions::SessionStats;
-    for (mcp, reported) in
-        [(false, vec![]), (true, vec![SessionStats { mcp: true, ..SessionStats::default() }])]
-    {
+    let mut with_mcp = SessionStats::default();
+    with_mcp.used(lk_agents_abi::productstats::features::Feature::Mcp);
+    for (mcp, reported) in [(false, vec![]), (true, vec![with_mcp])] {
         let hooks = Arc::new(Hooks::new());
         if mcp {
             // As an `MCPToolset`'s lifecycle marks its toolset when it sets it up.

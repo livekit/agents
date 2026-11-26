@@ -327,26 +327,21 @@ async fn lifetime_replies_resolve_when_their_operation_dies() {
     assert!(released.is_ok(), "the release outlived its close");
 }
 
-// Catches: an MCP toolset not counted for the session that activates it (the session's own, an
-// agent's, or one nested in another toolset), a session without one counted, or a second agent's
-// MCP toolset counted again.
+// Catches: a session's scopes not knowing they activated an MCP toolset (the session's own, an
+// agent's, or one nested in another toolset), or taking a plain toolset for one.
 #[tokio::test]
-async fn a_session_counts_mcp_once_when_a_toolset_it_activates_is_an_mcp_toolset() {
-    let stats = lk_agents_net::export::productstats::testkit::Capture::start();
-    let counted = || stats.take().into_iter().map(|(metric, ..)| metric).collect::<Vec<_>>();
+async fn scopes_know_when_a_toolset_they_activated_is_an_mcp_toolset() {
     let mcp = || Arc::new(Hooks { mcp: true, ..Hooks::new() });
     let scopes = Scopes::new(&ProcessEnv::current_runtime());
     scopes.acquire(0, vec![Arc::new(Hooks::new())]).await.unwrap();
-    assert_eq!(counted(), [""; 0]);
+    assert!(!toolsets::ScopesPort::mcp(&scopes));
     let wrapper = Arc::new(Hooks { children: Some(group(vec![mcp()])), ..Hooks::new() });
     scopes.acquire(1, vec![wrapper]).await.unwrap();
-    assert_eq!(counted(), ["lk.product.agents.feature.mcp"]);
-    scopes.acquire(2, vec![mcp()]).await.unwrap();
-    assert_eq!(counted(), [""; 0]);
+    assert!(toolsets::ScopesPort::mcp(&scopes), "a nested MCP toolset");
     scopes.release(None).await.unwrap();
 
     let own = Scopes::new(&ProcessEnv::current_runtime());
     own.acquire(0, vec![mcp()]).await.unwrap();
-    assert_eq!(counted(), ["lk.product.agents.feature.mcp"]);
+    assert!(toolsets::ScopesPort::mcp(&own), "the session's own MCP toolset");
     own.release(None).await.unwrap();
 }
