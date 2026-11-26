@@ -607,6 +607,10 @@ class _RunnerOutput(QueueAudioOutput):
     def detach(self) -> None:
         self._detached = True
 
+    @property
+    def capturing(self) -> bool:
+        return self._capturing
+
     def emit(self, event: str, *args: object) -> None:
         if self._detached and event == "clear_buffer":
             return
@@ -614,34 +618,47 @@ class _RunnerOutput(QueueAudioOutput):
 
 
 class _DrainOutput(QueueAudioOutput):
-    """Output for the degraded drain that counts segment ends still waiting in the queue.
+    """Output for the degraded drain that tracks which queued segment ends still owe a report.
 
-    A clear that lands after `flush()` empties the queue, end marker included, and
-    `QueueAudioOutput` queues no interrupted marker for a segment that was already
-    flushed. The drain would then never learn that segment existed.
+    A clear empties the queue, end markers included, and `QueueAudioOutput` queues no
+    interrupted marker for a segment that was already flushed, so the drain would never
+    learn that segment existed. Each queued end carries whether its segment still needs
+    a `playback_finished` report: a segment the drain already reported when a clear hit
+    it mid-way does not.
     """
 
     def __init__(self, *, sample_rate: int | None = None, wait_playback_start: bool = False):
         super().__init__(sample_rate=sample_rate, wait_playback_start=wait_playback_start)
-        self.queued_ends = 0
-        self.lost_ends = 0
+        self._ends_owing: deque[bool] = deque()
+        self._lost_ends = 0
+        self._segment_reported = False
 
     def flush(self) -> None:
         was_capturing = self._capturing
         super().flush()
         if was_capturing:
-            self.queued_ends += 1
+            self._ends_owing.append(not self._segment_reported)
+            self._segment_reported = False
 
     def clear_buffer(self) -> None:
         # Counted here, not in the drain's clear handler, because a clear can land
         # before the drain task has started and registered that handler.
-        self.lost_ends += self.queued_ends
-        self.queued_ends = 0
+        self._lost_ends += sum(self._ends_owing)
+        self._ends_owing.clear()
         super().clear_buffer()
 
     def take_lost_ends(self) -> int:
-        lost, self.lost_ends = self.lost_ends, 0
+        """Segments flushed and then cleared, whose end marker the drain will never read."""
+        lost, self._lost_ends = self._lost_ends, 0
         return lost
+
+    def take_end_owes_report(self) -> bool:
+        """Whether the end marker the drain just read still owes its segment's report."""
+        return self._ends_owing.popleft() if self._ends_owing else True
+
+    def mark_segment_reported(self) -> None:
+        """The segment being written was reported by a clear; its end will owe nothing."""
+        self._segment_reported = True
 
 
 class AvatarSession(BaseAvatarSession):
@@ -1034,14 +1051,16 @@ class AvatarSession(BaseAvatarSession):
             # runner's clear_buffer handler.
             return
 
-        if owed:
+        mid_segment = isinstance(previous_output, _RunnerOutput) and previous_output.capturing
+        if owed and not mid_segment:
             # The runner had already taken this segment's audio and its
             # AudioSegmentEnd off the queue, so the drain below - which only ever
             # sees what arrives next - cannot complete it, and the session would
             # block in wait_for_playout() for good. The position is reported as
             # zero: the runner tracked the real one and has just been closed, and
             # the avatar carried the only audio track, so nothing was still
-            # audible to account for.
+            # audible to account for. A segment the agent is still writing is not owed
+            # yet: swapping the tail below flushes it, and the new tail reports it.
             previous_output.notify_playback_finished(playback_position=0.0, interrupted=False)
 
         # The runner remains registered for clear_buffer on its original output.
@@ -1057,14 +1076,12 @@ class AvatarSession(BaseAvatarSession):
     async def _null_drain(self, audio_output: _DrainOutput) -> None:
         position = 0.0
         started = False
-        cleared_reported = False
 
         def on_clear(*_: object) -> None:
             # Core may emit clear_buffer more than once for one interruption.
-            # Report only if this drain has actually started a segment.
-            nonlocal position, started, cleared_reported
+            nonlocal position, started
             # A flushed segment's end marker is discarded by the clear itself, so
-            # nothing later reports it: count those here. The segment this drain
+            # nothing later reports it: report those here. The segment this drain
             # started is one of them when its end was already queued.
             lost = audio_output.take_lost_ends()
             owed = max(lost, 1) if started else lost
@@ -1073,8 +1090,9 @@ class AvatarSession(BaseAvatarSession):
                     playback_position=position if index == 0 and started else 0.0,
                     interrupted=True,
                 )
-            # An unflushed started segment still gets an interrupted end later.
-            cleared_reported = started and lost == 0
+            if started and lost == 0:
+                # Still being written: its end arrives later and must not report again.
+                audio_output.mark_segment_reported()
             position, started = 0.0, False
 
         receiver: AudioReceiver = audio_output
@@ -1085,26 +1103,16 @@ class AvatarSession(BaseAvatarSession):
                 audio_output.notify_playback_finished(playback_position=0.0, interrupted=True)
             async for frame in audio_output:
                 if isinstance(frame, AudioSegmentEnd):
-                    audio_output.queued_ends = max(0, audio_output.queued_ends - 1)
-                    if frame.interrupted:
-                        # A clear discarded this segment. on_clear reports it if
-                        # the drain had started it; a segment cleared before the
-                        # drain read any of it still counts as captured and
-                        # would otherwise leave wait_for_playout() blocked.
-                        if not cleared_reported:
-                            audio_output.notify_playback_finished(
-                                playback_position=0.0, interrupted=True
-                            )
-                    else:
+                    if audio_output.take_end_owes_report():
                         audio_output.notify_playback_finished(
-                            playback_position=position, interrupted=False
+                            playback_position=0.0 if frame.interrupted else position,
+                            interrupted=frame.interrupted,
                         )
-                    position, started, cleared_reported = 0.0, False, False
+                    position, started = 0.0, False
                     continue
 
                 if not started:
                     started = True
-                    cleared_reported = False
                     audio_output.notify_playback_started()
                 position += frame.duration
         finally:

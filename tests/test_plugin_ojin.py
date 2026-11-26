@@ -21,6 +21,7 @@ from ojin.stv import FrameType, STVAudioFrame, STVEvent, STVVideoFrame
 
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioReceiver, AudioSegmentEnd, QueueAudioOutput
+from livekit.agents.voice.io import AgentOutput, AudioOutput, AudioOutputCapabilities
 from livekit.plugins.ojin.avatar import (
     AvatarSession,
     OjinVideoGenerator,
@@ -598,6 +599,100 @@ async def test_degraded_drain_reports_a_flushed_segment_cleared_before_it_starte
 
         assert ev.interrupted is True
         assert events == [True]
+    finally:
+        await session.aclose()
+
+
+async def _degraded_drain(monkeypatch: pytest.MonkeyPatch):
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+    await session._degrade()
+    drain_output = fake_session.output.tails[0]
+    events: list[bool] = []
+    drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+    return session, drain_output, events
+
+
+async def test_degraded_drain_reports_a_segment_once_across_repeated_clears(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Core can clear twice for one interruption, even around the flush."""
+    session, drain_output, events = await _degraded_drain(monkeypatch)
+    try:
+        await drain_output.capture_frame(tts_chunk())
+        await asyncio.sleep(0.05)  # the drain has started the segment
+        drain_output.clear_buffer()
+        drain_output.clear_buffer()
+        drain_output.flush()
+        await asyncio.wait_for(drain_output.wait_for_playout(), 2)
+        drain_output.clear_buffer()  # a clear after the flush discards the interrupted end
+        await asyncio.sleep(0.05)
+        assert events == [True]
+        # A second report for the same segment is rejected with this warning.
+        assert not [r for r in caplog.records if "more times" in r.message]
+    finally:
+        await session.aclose()
+
+
+async def test_degrade_mid_segment_does_not_finish_the_segment_early(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The agent is still writing when the fatal lands: the new tail, not the old, reports it."""
+
+    class _Wrap(AudioOutput):
+        def __init__(self, next_in_chain: AudioOutput) -> None:
+            super().__init__(
+                label="wrap",
+                capabilities=AudioOutputCapabilities(pause=True),
+                next_in_chain=next_in_chain,
+            )
+
+        async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+            await super().capture_frame(frame)
+            await self.next_in_chain.capture_frame(frame)  # type: ignore[union-attr]
+
+        def flush(self) -> None:
+            super().flush()
+            self.next_in_chain.flush()  # type: ignore[union-attr]
+
+        def clear_buffer(self) -> None:
+            self.next_in_chain.clear_buffer()  # type: ignore[union-attr]
+
+    class _OwingSink:
+        owes_segment_end = True
+
+    class _Session:
+        def __init__(self, output: AgentOutput) -> None:
+            self.output = output
+
+        def off(self, *_: Any) -> None:
+            pass
+
+    session = _avatar_session(monkeypatch)
+    runner_output = _RunnerOutput(sample_rate=24000, wait_playback_start=True)
+    agent_output = AgentOutput(lambda: None, lambda: None, lambda: None)
+    top = _Wrap(runner_output)
+    agent_output.audio = top
+    session._audio_output = runner_output
+    session._agent_session = _Session(agent_output)  # type: ignore[assignment]
+    session._sink = _OwingSink()  # type: ignore[assignment]
+    finished: list[bool] = []
+    top.on("playback_finished", lambda ev: finished.append(ev.interrupted))
+
+    await top.capture_frame(tts_chunk())  # the agent is mid-segment
+    await session._degrade()
+    try:
+        waiter = asyncio.create_task(top.wait_for_playout())
+        await asyncio.sleep(0.05)
+        assert not waiter.done(), "the segment is still being written"
+
+        await top.capture_frame(tts_chunk())  # the rest goes to the new tail
+        top.flush()
+        await asyncio.wait_for(waiter, 2)
+        assert finished == [False]
+        assert not [r for r in caplog.records if "more times" in r.message]
     finally:
         await session.aclose()
 
