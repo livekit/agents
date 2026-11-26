@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import httpx2 as httpx
 import pytest
+from openai import AsyncOpenAI
 from openai.types import Reasoning
 from openai.types.responses import ResponseCreatedEvent, ResponseIncompleteEvent
 
@@ -775,6 +776,78 @@ async def test_completed_response_without_cache_write_reports_zero() -> None:
     assert usage.cache_creation_tokens == 0
 
 
+@pytest.mark.parametrize(
+    ("input_details", "output_details", "cached", "written", "reasoning"),
+    [
+        ({"cached_tokens": None, "cache_write_tokens": None}, {"reasoning_tokens": None}, 0, 0, 0),
+        (None, None, 0, 0, 0),
+        ({"cached_tokens": 20, "cache_write_tokens": 30}, {"reasoning_tokens": 3}, 20, 30, 3),
+    ],
+    ids=["null-counters", "no-details", "reported"],
+)
+async def test_http_completed_response_normalizes_optional_usage_counters(
+    input_details: dict[str, int | None] | None,
+    output_details: dict[str, int | None] | None,
+    cached: int,
+    written: int,
+    reasoning: int,
+) -> None:
+    """OpenAI-compatible providers can send null counters that the SDK leaves as None."""
+    frames = [
+        _RESPONSE_CREATED,
+        _TEXT_DELTA,
+        _response_completed_with_usage(
+            input_tokens=100,
+            output_tokens=10,
+            total_tokens=110,
+            input_tokens_details=input_details,
+            output_tokens_details=output_details,
+        ),
+    ]
+    wire = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames)
+    requests = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            content=wire,
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        async with AsyncOpenAI(api_key="test-key", http_client=http_client) as client:
+            llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+            chat_ctx = agents_llm.ChatContext.empty()
+            chat_ctx.add_message(role="user", content="hi")
+            text = ""
+            usage = None
+            try:
+                async with asyncio.timeout(5):
+                    async with llm_model.chat(
+                        chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0)
+                    ) as stream:
+                        async for chunk in stream:
+                            if chunk.delta and chunk.delta.content:
+                                text += chunk.delta.content
+                            if chunk.usage is not None:
+                                usage = chunk.usage
+            finally:
+                await llm_model.aclose()
+
+    assert requests == 1
+    assert text == _TEXT_DELTA["delta"]
+    assert usage is not None
+    assert usage.prompt_cached_tokens == cached
+    assert usage.cache_creation_tokens == written
+    assert usage.reasoning_tokens == reasoning
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 10
+    assert usage.total_tokens == 110
+
+
 class _ScriptedResponsesWS:
     """Answers each request with its own scripted response and records the payloads."""
 
@@ -1021,3 +1094,89 @@ async def test_released_commentary_is_not_retried() -> None:
     await llm_model.aclose()
 
     assert ws.attempts == 1
+
+
+def _function_call_done(status: str | None, arguments: str) -> dict:
+    item = {**_output_function_call("call_1", "set_temperature"), "arguments": arguments}
+    if status is None:
+        del item["status"]
+    else:
+        item["status"] = status
+    return {
+        "type": "response.output_item.done",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": item,
+    }
+
+
+async def _replay_tool_calls(
+    transport_kind: str, frames: list[dict]
+) -> tuple[list[agents_llm.FunctionToolCall], Exception | None]:
+    if transport_kind == "websocket":
+        llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+        llm_model._ws = _ReplayResponsesWS(frames)  # type: ignore[assignment]
+    else:
+        client = MagicMock()
+        client._base_url = httpx.URL("https://api.openai.com/v1")
+        events = [LLMStream._parse_ws_event(object(), f) for f in frames]  # type: ignore[arg-type]
+        client.responses.create = AsyncMock(side_effect=lambda **_: _ReplayHTTPStream(events))
+        llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Set the temperature to 21 degrees.")
+
+    tool_calls: list[agents_llm.FunctionToolCall] = []
+    error: Exception | None = None
+    try:
+        async with llm_model.chat(
+            chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0)
+        ) as stream:
+            async for chunk in stream:
+                if chunk.delta:
+                    tool_calls.extend(chunk.delta.tool_calls)
+    except APIStatusError as e:
+        error = e
+    finally:
+        await llm_model.aclose()
+    return tool_calls, error
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("status", ["incomplete", "in_progress"])
+async def test_function_call_cut_off_by_incomplete_response_is_not_emitted(
+    transport_kind: str, status: str
+) -> None:
+    """A call truncated by max_output_tokens must not reach the tool executor, where
+    JSON repair would turn `{"temperature": 2` into a callable `{"temperature": 2}`."""
+    frames = [
+        _RESPONSE_CREATED,
+        _function_call_done(status, '{"temperature": 2'),
+        _response_incomplete("max_output_tokens"),
+    ]
+
+    tool_calls, error = await _replay_tool_calls(transport_kind, frames)
+
+    assert tool_calls == []
+    assert isinstance(error, APIStatusError)
+    assert "max_output_tokens" in error.message
+
+
+@pytest.mark.parametrize("transport_kind", ["websocket", "http"])
+@pytest.mark.parametrize("status", ["completed", None], ids=["completed", "no-status"])
+async def test_completed_function_call_is_emitted(transport_kind: str, status: str | None) -> None:
+    frames = [
+        _RESPONSE_CREATED,
+        _function_call_done(status, '{"temperature": 21}'),
+        {
+            "type": "response.completed",
+            "sequence_number": 2,
+            "response": {**_RESPONSE_CREATED["response"], "status": "completed"},
+        },
+    ]
+
+    tool_calls, error = await _replay_tool_calls(transport_kind, frames)
+
+    assert error is None
+    assert [(c.name, c.arguments) for c in tool_calls] == [
+        ("set_temperature", '{"temperature": 21}')
+    ]
