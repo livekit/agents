@@ -1,0 +1,19 @@
+rust/crates/lk-agents-runtime/src/voice/amd/executor_tests.rs
+  s_342953b2c18827::t_756b202ffbd88f 11,17,22-23,25,39-43,57,569-687
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b414607ce5315fe0bcef27b9dc46ac952e41ecc1",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
