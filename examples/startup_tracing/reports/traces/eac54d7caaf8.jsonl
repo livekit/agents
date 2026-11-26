@@ -1,0 +1,76 @@
+{"kind": "mark", "name": "token_request", "at_ms": 1795458373512.647, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "entrypoint", "at_ms": 1795458373940.621, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "received_at", "at_ms": 1795458373870.725, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "accepted_at", "at_ms": 1795458373870.9868, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "assigned_at", "at_ms": 1795458373937.5452, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "launched_at", "at_ms": 1795458373937.56, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "process_assignment", "at_ms": 1795458373941.2632, "run_id": "eac54d7caaf8", "pid": 20163, "launched_warm": true}
+{"kind": "mark", "name": "room_connect_begin", "at_ms": 1795458373941.872, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "span", "at_ms": 1795458374498.9, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "room_connect", "start_ms": 1795458373942.2158, "end_ms": 1795458374498.804, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "6cc6d2c2c55163d7", "parent_id": "262418ab76e466af", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.room_sid": "RM_AoDDsfU7PCQT", "lk.room.auto_subscribe": "subscribe_all", "lk.room.e2ee": false, "lk.participant_id": "PA_4bDpjEW8yFCr", "lk.room.remote_participant_count": 1}, "status": "UNSET"}
+{"kind": "mark", "name": "room_connect_end", "at_ms": 1795458374499.25, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "participant_wait_begin", "at_ms": 1795458374499.367, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "span", "at_ms": 1795458374499.5898, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "wait_for_participant", "start_ms": 1795458374499.5168, "end_ms": 1795458374499.553, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "d9fe29b9c8bd806a", "parent_id": "262418ab76e466af", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.room_io.participant_filter": false, "lk.participant_id": "PA_jdjUPGQiFQQW", "lk.participant_kind": "PARTICIPANT_KIND_STANDARD"}, "status": "UNSET"}
+{"kind": "mark", "name": "participant_wait_end", "at_ms": 1795458374499.769, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "model_construction_begin", "at_ms": 1795458374499.86, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "model_construction_end", "at_ms": 1795458374499.9248, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "session_start_begin", "at_ms": 1795458374501.141, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "roomio_setup_begin", "at_ms": 1795458374501.39, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "roomio_setup_end", "at_ms": 1795458374501.502, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "audio_output_start_begin", "at_ms": 1795458374501.59, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "track_publish_begin", "at_ms": 1795458374501.7322, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "span", "at_ms": 1795458374501.943, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "wait_for_participant", "start_ms": 1795458374501.8838, "end_ms": 1795458374501.914, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "92fff217ad254623", "parent_id": "d26e0e0c842a0c3b", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.room_io.participant_filter": false, "lk.participant_id": "PA_jdjUPGQiFQQW", "lk.participant_kind": "PARTICIPANT_KIND_STANDARD"}, "status": "UNSET"}
+{"kind": "mark", "name": "room_connect_begin", "at_ms": 1795458374502.136, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "room_connect_end", "at_ms": 1795458374502.1912, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "activity_start_begin", "at_ms": 1795458374502.465, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "toolsets_setup_begin", "at_ms": 1795458374502.614, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "injected_activity_delay_begin", "at_ms": 1795458374502.6838, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "track_publish_end", "at_ms": 1795458374655.8342, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "output_subscription_begin", "at_ms": 1795458374656.018, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "track_subscription_event", "at_ms": 1795458374825.3428, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "output_subscription_end", "at_ms": 1795458374825.5461, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "span", "at_ms": 1795458374825.6562, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "publish_audio_output", "start_ms": 1795458374501.6729, "end_ms": 1795458374825.615, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "a20dc60db787c48a", "parent_id": "262418ab76e466af", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.track_sid": "TR_AMcuB6yxuPj8v3"}, "status": "UNSET"}
+{"kind": "mark", "name": "audio_output_start_end", "at_ms": 1795458374825.723, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "injected_activity_delay_end", "at_ms": 1795458375703.0488, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "toolsets_setup_end", "at_ms": 1795458375703.822, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "span", "at_ms": 1795458375704.509, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "setup_toolsets", "start_ms": 1795458374502.612, "end_ms": 1795458375704.352, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "55ac948dfb3d0cce", "parent_id": "8f1d1c4060317d15", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT"}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458375773.681, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "start_agent_activity", "start_ms": 1795458374502.541, "end_ms": 1795458375773.6262, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "8f1d1c4060317d15", "parent_id": "d26e0e0c842a0c3b", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.agent_label": "greeter", "gen_ai.operation.name": "create_agent", "gen_ai.agent.name": "greeter"}, "status": "UNSET"}
+{"kind": "mark", "name": "activity_start_end", "at_ms": 1795458375774.0159, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "on_enter", "at_ms": 1795458375774.4949, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "span", "at_ms": 1795458375774.844, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "on_enter", "start_ms": 1795458375774.483, "end_ms": 1795458375774.805, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "ce06ded09cad9465", "parent_id": "8f1d1c4060317d15", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.agent_label": "greeter"}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458375775.309, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "session_start", "start_ms": 1795458374501.3572, "end_ms": 1795458375775.279, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "d26e0e0c842a0c3b", "parent_id": "d15f8ed8aa978a5c", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT"}, "status": "UNSET"}
+{"kind": "mark", "name": "agent_state", "at_ms": 1795458375775.538, "run_id": "eac54d7caaf8", "pid": 20163, "state": "listening"}
+{"kind": "mark", "name": "session_start_end", "at_ms": 1795458375775.671, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "entrypoint_returned", "at_ms": 1795458375776.0378, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "first_pcm_generated", "at_ms": 1795458375776.374, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "first_pcm_at_output", "at_ms": 1795458375776.782, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "first_nonsilent_pcm_at_output", "at_ms": 1795458375776.918, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "first_output_frame_accepted", "at_ms": 1795458375777.001, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "agent_state", "at_ms": 1795458375777.556, "run_id": "eac54d7caaf8", "pid": 20163, "state": "speaking"}
+{"kind": "mark", "name": "agent_transport_stats", "at_ms": 1795458376179.026, "run_id": "eac54d7caaf8", "pid": 20163, "publisher_stat_count": 15, "subscriber_stat_count": 0}
+{"kind": "mark", "name": "client_click", "at_ms": 1795458373511.2, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_credentials_ready", "at_ms": 1795458373537, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_connecting_ui_painted", "at_ms": 1795458373547.2, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_room_connected", "at_ms": 1795458373941.9001, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_connect_returned", "at_ms": 1795458373942.3, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_connected_ui_painted", "at_ms": 1795458373975.7, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_agent_visible", "at_ms": 1795458374423.2, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_agent_visible_ui_painted", "at_ms": 1795458374442.2, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_track_subscribed", "at_ms": 1795458374828.7, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_audio_element_playing", "at_ms": 1795458374831.7, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_agent_state_listening", "at_ms": 1795458375840, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_agent_state_listening_painted", "at_ms": 1795458375858.9001, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_agent_state_speaking", "at_ms": 1795458375899.8, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_first_rendered_audio", "at_ms": 1795458375906.7, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_agent_state_speaking_painted", "at_ms": 1795458375925.3, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "client_audio_playing_ui_painted", "at_ms": 1795458375925.3, "run_id": "eac54d7caaf8"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376605.6409, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "agent_speaking", "start_ms": 1795458375777.2742, "end_ms": 1795458376605.5989, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "7462c9fe2b11f611", "parent_id": "8fd4a5e278bb8b35", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.participant_id": "PA_4bDpjEW8yFCr", "lk.participant_kind": "PARTICIPANT_KIND_AGENT"}, "status": "UNSET"}
+{"kind": "mark", "name": "agent_state", "at_ms": 1795458376605.9202, "run_id": "eac54d7caaf8", "pid": 20163, "state": "listening"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376606.1812, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "agent_turn", "start_ms": 1795458375775.1118, "end_ms": 1795458376606.129, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "8fd4a5e278bb8b35", "parent_id": "d15f8ed8aa978a5c", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "greeter", "lk.generation_id": "speech_42def3bbd7ef_1", "lk.generation_count": 1, "lk.speech_id": "speech_42def3bbd7ef", "lk.speech.queue_wait": 0.00041358405724167824, "lk.interrupted": true, "lk.interruption.source": "programmatic", "lk.playout.position": 0.8265287079848351}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376606.6282, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "on_exit", "start_ms": 1795458376606.602, "end_ms": 1795458376606.608, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "64e955be1e802e5f", "parent_id": "82aa5719c953a96f", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.agent_label": "greeter"}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376606.8262, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "drain_agent_activity", "start_ms": 1795458376606.51, "end_ms": 1795458376606.809, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "82aa5719c953a96f", "parent_id": "34fc88a040553681", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.agent_label": "greeter"}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376607.5872, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "session_close", "start_ms": 1795458376603.432, "end_ms": 1795458376607.5679, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "34fc88a040553681", "parent_id": "d15f8ed8aa978a5c", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.close_reason": "job_shutdown", "lk.close.drain": false}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376607.706, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "agent_session", "start_ms": 1795458374501.3188, "end_ms": 1795458376607.666, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "d15f8ed8aa978a5c", "parent_id": "262418ab76e466af", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT", "lk.agent_label": "greeter", "gen_ai.operation.name": "invoke_workflow", "gen_ai.workflow.name": "agent_session", "lk.job_id": "AJ_XdiXJk2AP79V", "lk.agent_name": "startup-trace-c77b79ca9332", "lk.room_sid": "RM_AoDDsfU7PCQT", "lk.dispatch_id": "AD_yryj3Ru6qZh4", "lk.job.worker_id": "AW_wdQumN6i7LPn", "lk.job.agent_id": "A_qFy5shBF2M8d"}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376609.085, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "session_end_upload", "start_ms": 1795458376607.8132, "end_ms": 1795458376609.06, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "f653619e4c1abbc6", "parent_id": "9e8d409bc4eb5527", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT"}, "status": "UNSET"}
+{"kind": "mark", "name": "span", "at_ms": 1795458376609.355, "run_id": "eac54d7caaf8", "pid": 20163, "span_name": "room_disconnect", "start_ms": 1795458376609.321, "end_ms": 1795458376609.335, "trace_id": "e40e4ef83760fbbdf048f19954740267", "span_id": "85611458367a8ccc", "parent_id": "9e8d409bc4eb5527", "attributes": {"gen_ai.conversation.id": "RM_AoDDsfU7PCQT"}, "status": "UNSET"}
+{"kind": "mark", "name": "session_cleanup_begin", "at_ms": 1795458376609.5469, "run_id": "eac54d7caaf8", "pid": 20163}
+{"kind": "mark", "name": "session_cleanup_end", "at_ms": 1795458376609.7642, "run_id": "eac54d7caaf8", "pid": 20163}

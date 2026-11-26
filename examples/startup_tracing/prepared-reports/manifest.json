@@ -1,0 +1,28 @@
+{
+  "agents_source_revision": "31283579d42ed6735835ea8eef3673dbe451703d",
+  "browser_version": "158.0.8127.36",
+  "livekit_url": "wss://xianstaging-hixkk74p.staging.livekit.cloud",
+  "idle_processes": 1,
+  "packages": {
+    "livekit-agents": "1.8.13",
+    "livekit": "1.2.1",
+    "livekit-api": "1.2.3",
+    "livekit-local-inference": "0.3.2",
+    "livekit-plugins-openai": "1.8.13",
+    "playwright": "1.65.2"
+  },
+  "source_sha256": {
+    "run.py": "8048f316567600bc137364b5bb82c457ec50b8ca1a4f152d5e083dd8c99693ea",
+    "agent.py": "2581ad523834c6023ca366d936cedce9a00462d907af7fd02aaa1492347824e4",
+    "analyze.py": "6405c2a54b19034496f80eb6a88d3e341f3132a6dd3f4d2ea6263d0b9c2d7c6f",
+    "web/client.js": "d7cb9d3a24f0e416c9b9363c729e4a05a4a21973baa679a0bf5ec87688d8e3ec",
+    "web/index.html": "28c0d2192a1ff9dd1385e36814a1c48ac6b84b49b4b25474153e8ef975ad63f0",
+    "web/server.mjs": "8710138bd4a42bc2f1c5d6609f9938faf06b4f8018381aac7930f7b12ed21f42"
+  },
+  "method": "loaded browser UI; real token-triggered Cloud dispatch; synthetic tone in controlled cases; no artificial network relay",
+  "audio_input": false,
+  "requested_single_pc": true,
+  "warmup_sample": -1,
+  "native_ffi_sha256": "72bd28d6e9e42f7092318bb8f52fe3bc0d41eccf0381ff9f4a475791764a0de7",
+  "native_build": "cargo build -p livekit-ffi (dev profile)"
+}

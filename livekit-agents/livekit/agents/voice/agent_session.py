@@ -1063,6 +1063,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             tasks: list[asyncio.Task[None]] = []
 
+            from .room_io._output import _ParticipantAudioOutput
+
+            initial_audio: list[rtc.AudioTrackToPublish] = []
+            if isinstance(self.output.audio, _ParticipantAudioOutput):
+                if description := self.output.audio._publication_for_connect():
+                    initial_audio.append(description)
+
             c = cli.AgentsConsole.get_instance()
             if c.enabled and not c.io_acquired:
                 if self.input.audio is not None or self.output.audio is not None:
@@ -1170,7 +1177,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if self._room_io:
                     # automatically connect to the room when room io is used; room_connect
                     # finds session_start through the primary session (telemetry.session_context)
-                    tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
+                    if self._room_io._audio_output is not None:
+                        if description := self._room_io._audio_output._publication_for_connect():
+                            initial_audio.append(description)
+                    tasks.append(
+                        asyncio.create_task(
+                            job_ctx.connect(
+                                publish_audio_tracks=initial_audio,
+                            ),
+                            name="_job_ctx_connect",
+                        )
+                    )
 
                 # session can be restarted, register the callbacks only once
                 if not self._job_context_cb_registered:

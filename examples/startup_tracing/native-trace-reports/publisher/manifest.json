@@ -1,0 +1,46 @@
+{
+  "agents_source_revision": "4e743fba2b91971f88a931c3c09a3d3b4a362ef8",
+  "browser_version": "158.0.8127.37",
+  "livekit_url": "wss://xianstaging-hixkk74p.staging.livekit.cloud",
+  "idle_processes": 1,
+  "packages": {
+    "livekit-agents": "1.8.13",
+    "livekit": "1.2.1",
+    "livekit-api": "1.2.3",
+    "livekit-local-inference": "0.3.2",
+    "livekit-plugins-openai": "1.8.13",
+    "playwright": "1.65.2"
+  },
+  "source_sha256": {
+    "run.py": "2c4e9df25fb19d0de7727bc1c6ca9324ebbe01e183cd0fdd89f21629085789de",
+    "agent.py": "d4b55b188f02fcb0ecd1a1896d38910dbc28ed271fbeec903a9b403287f478c0",
+    "compare.py": "3642df2ed32a8639cd9d14d292f19b6527997c5c80067615052ff1b69d113b1e",
+    "analyze.py": "aa3b99fb90668ac77cf6faa2405133defa778d8681cd997c9c9ba092e31f2142",
+    "web/client.js": "029dc035fbd077a648e478f6851b585965aae731fd0d8ea15bd570484b2911f3",
+    "web/index.html": "28c0d2192a1ff9dd1385e36814a1c48ac6b84b49b4b25474153e8ef975ad63f0",
+    "web/server.mjs": "8710138bd4a42bc2f1c5d6609f9938faf06b4f8018381aac7930f7b12ed21f42",
+    "prepared-reports/timeline.html": "571064351057dfa9e5c785ad16cb53cc9b4f9f41a3b945c60e070e48bc39a266",
+    "before-after-reports/timeline.html": "3441e30a65a6b7b1762f87a002411624e7d2f1b26fcc5c642037d6d6ed767b79"
+  },
+  "after_source_revisions": {
+    "agents": "4e743fba2b91971f88a931c3c09a3d3b4a362ef8",
+    "rtc": "0a9a8df615a46b240560070e3ca93f42b1f55425"
+  },
+  "native_revisions": {
+    "before": null,
+    "after": null
+  },
+  "before_source_revisions": null,
+  "worker_variants": {
+    "after": {
+      "worker_name": "startup-trace-3926903e8a29",
+      "pythonpath": "/Users/shijing/dev/agents-session-publication/livekit-agents:/Users/shijing/dev/python-sdks-session-publication/livekit-rtc",
+      "native_path": "/tmp/agent-before-after-binaries/trace.dylib",
+      "native_sha256": "4064e7e6479f687e36dde3416adcecaf81650fd4a06c30c611e3b5282edbfc05"
+    }
+  },
+  "method": "loaded browser UI; real token-triggered Cloud dispatch; synthetic tone in controlled cases; no artificial network relay",
+  "audio_input": false,
+  "requested_single_pc": true,
+  "warmup_sample": -1
+}

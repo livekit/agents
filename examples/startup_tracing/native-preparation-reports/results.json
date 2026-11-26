@@ -1,0 +1,1099 @@
+{
+  "summary": [
+    {
+      "case": "controlled-activity-1200",
+      "variant": "after",
+      "profile": "prepared",
+      "n": 4,
+      "sample": {
+        "median": 1.5,
+        "p95": 3
+      },
+      "connecting_paint_ms": {
+        "median": 37.4,
+        "p95": 44.1
+      },
+      "client_connected_ms": {
+        "median": 426.1,
+        "p95": 434.7
+      },
+      "agent_ready_ui_ms": {
+        "median": 1765.2,
+        "p95": 1865.1
+      },
+      "first_message_ack_ms": {
+        "median": 1874.9,
+        "p95": 1970.3
+      },
+      "entrypoint_ms": {
+        "median": 424.6,
+        "p95": 515.0
+      },
+      "agent_room_connected_ms": {
+        "median": 1043.9,
+        "p95": 1145.9
+      },
+      "activity_ready_ms": {
+        "median": 1673.0,
+        "p95": 1763.5
+      },
+      "activity_start_delay_ms": {
+        "median": 4.1,
+        "p95": 4.6
+      },
+      "session_returned_ms": {
+        "median": 1674.3,
+        "p95": 1764.3
+      },
+      "first_pcm_ms": {
+        "median": 1675.0,
+        "p95": 1764.8
+      },
+      "subscription_ready_ms": {
+        "median": 1200.8,
+        "p95": 1307.4
+      },
+      "first_rendered_audio_ms": {
+        "median": 1808.4,
+        "p95": 1912.2
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 472.3,
+        "p95": 481.6
+      },
+      "post_join_media_setup_ms": {
+        "median": 156.9,
+        "p95": 161.5
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 63.0,
+        "p95": 65
+      }
+    },
+    {
+      "case": "controlled-activity-1200",
+      "variant": "before",
+      "profile": "prepared",
+      "n": 4,
+      "sample": {
+        "median": 1.5,
+        "p95": 3
+      },
+      "connecting_paint_ms": {
+        "median": 41.5,
+        "p95": 49.5
+      },
+      "client_connected_ms": {
+        "median": 443.6,
+        "p95": 451.0
+      },
+      "agent_ready_ui_ms": {
+        "median": 1889.0,
+        "p95": 1897.6
+      },
+      "first_message_ack_ms": {
+        "median": 1999.3,
+        "p95": 2003.5
+      },
+      "entrypoint_ms": {
+        "median": 448.9,
+        "p95": 455.9
+      },
+      "agent_room_connected_ms": {
+        "median": 1035.4,
+        "p95": 1077.1
+      },
+      "activity_ready_ms": {
+        "median": 1804.0,
+        "p95": 1808.9
+      },
+      "activity_start_delay_ms": {
+        "median": 104.5,
+        "p95": 105.5
+      },
+      "session_returned_ms": {
+        "median": 1805.3,
+        "p95": 1810.4
+      },
+      "first_pcm_ms": {
+        "median": 1806.1,
+        "p95": 1811.2
+      },
+      "subscription_ready_ms": {
+        "median": 1198.1,
+        "p95": 1232.4
+      },
+      "first_rendered_audio_ms": {
+        "median": 1929.2,
+        "p95": 1941.3
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 608.0,
+        "p95": 644.7
+      },
+      "post_join_media_setup_ms": {
+        "median": 158.0,
+        "p95": 165.0
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 62.5,
+        "p95": 66
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "variant": "after",
+      "profile": "prepared",
+      "n": 4,
+      "sample": {
+        "median": 1.5,
+        "p95": 3
+      },
+      "connecting_paint_ms": {
+        "median": 37.4,
+        "p95": 40.1
+      },
+      "client_connected_ms": {
+        "median": 432.8,
+        "p95": 448.6
+      },
+      "agent_ready_ui_ms": {
+        "median": 1147.8,
+        "p95": 1197.2
+      },
+      "first_message_ack_ms": {
+        "median": 1254.5,
+        "p95": 1304.1
+      },
+      "entrypoint_ms": {
+        "median": 422.9,
+        "p95": 436.2
+      },
+      "agent_room_connected_ms": {
+        "median": 1010.1,
+        "p95": 1070.2
+      },
+      "activity_ready_ms": {
+        "median": 478.3,
+        "p95": 492.0
+      },
+      "activity_start_delay_ms": {
+        "median": 3.3,
+        "p95": 4.1
+      },
+      "session_returned_ms": {
+        "median": 1011.6,
+        "p95": 1071.5
+      },
+      "first_pcm_ms": {
+        "median": 479.2,
+        "p95": 493.0
+      },
+      "subscription_ready_ms": {
+        "median": 1172.7,
+        "p95": 1242.6
+      },
+      "first_rendered_audio_ms": {
+        "median": 1301.6,
+        "p95": 1354.4
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 701.8,
+        "p95": 749.6
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 167.0,
+        "p95": 172.4
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 167.0,
+        "p95": 172.4
+      },
+      "browser_ice_rtt_ms": {
+        "median": 65.0,
+        "p95": 66
+      }
+    },
+    {
+      "case": "controlled-fast",
+      "variant": "before",
+      "profile": "prepared",
+      "n": 4,
+      "sample": {
+        "median": 1.5,
+        "p95": 3
+      },
+      "connecting_paint_ms": {
+        "median": 42.1,
+        "p95": 44.3
+      },
+      "client_connected_ms": {
+        "median": 443.0,
+        "p95": 459.5
+      },
+      "agent_ready_ui_ms": {
+        "median": 1156.3,
+        "p95": 1181.7
+      },
+      "first_message_ack_ms": {
+        "median": 1265.2,
+        "p95": 1281.9
+      },
+      "entrypoint_ms": {
+        "median": 434.2,
+        "p95": 458.3
+      },
+      "agent_room_connected_ms": {
+        "median": 1018.7,
+        "p95": 1038.1
+      },
+      "activity_ready_ms": {
+        "median": 582.2,
+        "p95": 603.7
+      },
+      "activity_start_delay_ms": {
+        "median": 101.3,
+        "p95": 106.9
+      },
+      "session_returned_ms": {
+        "median": 1020.2,
+        "p95": 1039.3
+      },
+      "first_pcm_ms": {
+        "median": 586.0,
+        "p95": 608.6
+      },
+      "subscription_ready_ms": {
+        "median": 1176.6,
+        "p95": 1196.0
+      },
+      "first_rendered_audio_ms": {
+        "median": 1302.4,
+        "p95": 1321.3
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 574.6,
+        "p95": 626.1
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "post_join_media_setup_ms": {
+        "median": 156.8,
+        "p95": 161.0
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 156.8,
+        "p95": 161.0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 63.5,
+        "p95": 64
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "variant": "after",
+      "profile": "prepared",
+      "n": 4,
+      "sample": {
+        "median": 1.5,
+        "p95": 3
+      },
+      "connecting_paint_ms": {
+        "median": 36.9,
+        "p95": 44.8
+      },
+      "client_connected_ms": {
+        "median": 436.5,
+        "p95": 523.6
+      },
+      "agent_ready_ui_ms": {
+        "median": 1164.1,
+        "p95": 1214.8
+      },
+      "first_message_ack_ms": {
+        "median": 1274.1,
+        "p95": 1330.1
+      },
+      "entrypoint_ms": {
+        "median": 422.6,
+        "p95": 475.8
+      },
+      "agent_room_connected_ms": {
+        "median": 1043.8,
+        "p95": 1101.3
+      },
+      "activity_ready_ms": {
+        "median": 479.8,
+        "p95": 536.7
+      },
+      "activity_start_delay_ms": {
+        "median": 3.8,
+        "p95": 4.0
+      },
+      "session_returned_ms": {
+        "median": 1045.0,
+        "p95": 1102.6
+      },
+      "first_pcm_ms": {
+        "median": 1681.8,
+        "p95": 1738.6
+      },
+      "subscription_ready_ms": {
+        "median": 1204.2,
+        "p95": 1258.8
+      },
+      "first_rendered_audio_ms": {
+        "median": 1808.0,
+        "p95": 1866.1
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 480.0,
+        "p95": 539.7
+      },
+      "post_join_media_setup_ms": {
+        "median": 158.8,
+        "p95": 160.7
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 61.0,
+        "p95": 62
+      }
+    },
+    {
+      "case": "controlled-pcm-1200",
+      "variant": "before",
+      "profile": "prepared",
+      "n": 4,
+      "sample": {
+        "median": 1.5,
+        "p95": 3
+      },
+      "connecting_paint_ms": {
+        "median": 39.4,
+        "p95": 44.7
+      },
+      "client_connected_ms": {
+        "median": 430.2,
+        "p95": 431.9
+      },
+      "agent_ready_ui_ms": {
+        "median": 1172.3,
+        "p95": 2164.4
+      },
+      "first_message_ack_ms": {
+        "median": 1274.2,
+        "p95": 2271.4
+      },
+      "entrypoint_ms": {
+        "median": 427.8,
+        "p95": 1416.5
+      },
+      "agent_room_connected_ms": {
+        "median": 1052.7,
+        "p95": 2038.7
+      },
+      "activity_ready_ms": {
+        "median": 574.3,
+        "p95": 1548.2
+      },
+      "activity_start_delay_ms": {
+        "median": 98.2,
+        "p95": 103.7
+      },
+      "session_returned_ms": {
+        "median": 1054.0,
+        "p95": 2039.9
+      },
+      "first_pcm_ms": {
+        "median": 1777.9,
+        "p95": 2755.0
+      },
+      "subscription_ready_ms": {
+        "median": 1211.0,
+        "p95": 2198.0
+      },
+      "first_rendered_audio_ms": {
+        "median": 1909.2,
+        "p95": 2874.1
+      },
+      "pcm_waiting_for_media_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "media_slack_before_pcm_ms": {
+        "median": 567.3,
+        "p95": 611.2
+      },
+      "post_join_media_setup_ms": {
+        "median": 161.2,
+        "p95": 163.6
+      },
+      "instant_post_join_media_saving_bound_ms": {
+        "median": 0.0,
+        "p95": 0
+      },
+      "browser_ice_rtt_ms": {
+        "median": 60.0,
+        "p95": 61
+      }
+    }
+  ],
+  "samples": [
+    {
+      "run_id": "c7db9c4a62eb",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 0,
+      "connecting_paint_ms": 44.199951171875,
+      "client_connected_ms": 439.0,
+      "agent_ready_ui_ms": 1147.699951171875,
+      "first_message_ack_ms": 1260.599853515625,
+      "entrypoint_ms": 426.034912109375,
+      "agent_room_connected_ms": 1038.1259765625,
+      "activity_ready_ms": 563.98486328125,
+      "activity_start_delay_ms": 95.701904296875,
+      "session_returned_ms": 1039.340087890625,
+      "first_pcm_ms": 569.8359375,
+      "publication_ms": null,
+      "subscription_ready_ms": 1195.982666015625,
+      "first_rendered_audio_ms": 1321.2998046875,
+      "pcm_waiting_for_media_ms": 626.146728515625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 157.856689453125,
+      "instant_post_join_media_saving_bound_ms": 157.856689453125,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "b4bc47d3eadd",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 0,
+      "connecting_paint_ms": 38.89990234375,
+      "client_connected_ms": 432.199951171875,
+      "agent_ready_ui_ms": 1147.699951171875,
+      "first_message_ack_ms": 1260.300048828125,
+      "entrypoint_ms": 416.713134765625,
+      "agent_room_connected_ms": 1030.0009765625,
+      "activity_ready_ms": 469.739013671875,
+      "activity_start_delay_ms": 3.230224609375,
+      "session_returned_ms": 1031.311767578125,
+      "first_pcm_ms": 470.651123046875,
+      "publication_ms": null,
+      "subscription_ready_ms": 1192.01220703125,
+      "first_rendered_audio_ms": 1326.699951171875,
+      "pcm_waiting_for_media_ms": 721.361083984375,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 162.01123046875,
+      "instant_post_join_media_saving_bound_ms": 162.01123046875,
+      "browser_ice_rtt_ms": 65
+    },
+    {
+      "run_id": "3976fddea8a4",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 1,
+      "connecting_paint_ms": 40.099853515625,
+      "client_connected_ms": 448.599853515625,
+      "agent_ready_ui_ms": 1197.199951171875,
+      "first_message_ack_ms": 1304.099853515625,
+      "entrypoint_ms": 436.175048828125,
+      "agent_room_connected_ms": 1070.2158203125,
+      "activity_ready_ms": 492.0126953125,
+      "activity_start_delay_ms": 3.361083984375,
+      "session_returned_ms": 1071.52099609375,
+      "first_pcm_ms": 492.966064453125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1242.60009765625,
+      "first_rendered_audio_ms": 1354.39990234375,
+      "pcm_waiting_for_media_ms": 749.634033203125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 172.38427734375,
+      "instant_post_join_media_saving_bound_ms": 172.38427734375,
+      "browser_ice_rtt_ms": 65
+    },
+    {
+      "run_id": "d130ef6c96db",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 1,
+      "connecting_paint_ms": 36.60009765625,
+      "client_connected_ms": 446.900146484375,
+      "agent_ready_ui_ms": 1164.900146484375,
+      "first_message_ack_ms": 1269.800048828125,
+      "entrypoint_ms": 442.17919921875,
+      "agent_room_connected_ms": 1015.389892578125,
+      "activity_ready_ms": 593.7041015625,
+      "activity_start_delay_ms": 106.9130859375,
+      "session_returned_ms": 1016.9921875,
+      "first_pcm_ms": 597.775146484375,
+      "publication_ms": null,
+      "subscription_ready_ms": 1170.19921875,
+      "first_rendered_audio_ms": 1298.300048828125,
+      "pcm_waiting_for_media_ms": 572.424072265625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 154.809326171875,
+      "instant_post_join_media_saving_bound_ms": 154.809326171875,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "bdf126aa338d",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 2,
+      "connecting_paint_ms": 40.099853515625,
+      "client_connected_ms": 459.5,
+      "agent_ready_ui_ms": 1181.699951171875,
+      "first_message_ack_ms": 1281.89990234375,
+      "entrypoint_ms": 458.264892578125,
+      "agent_room_connected_ms": 1021.940673828125,
+      "activity_ready_ms": 603.666748046875,
+      "activity_start_delay_ms": 101.4150390625,
+      "session_returned_ms": 1023.427978515625,
+      "first_pcm_ms": 608.554931640625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1182.928955078125,
+      "first_rendered_audio_ms": 1306.5,
+      "pcm_waiting_for_media_ms": 574.3740234375,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 160.98828125,
+      "instant_post_join_media_saving_bound_ms": 160.98828125,
+      "browser_ice_rtt_ms": 63
+    },
+    {
+      "run_id": "b6cd44af1227",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 2,
+      "connecting_paint_ms": 36.0,
+      "client_connected_ms": 433.300048828125,
+      "agent_ready_ui_ms": 1147.800048828125,
+      "first_message_ack_ms": 1248.60009765625,
+      "entrypoint_ms": 429.132080078125,
+      "agent_room_connected_ms": 990.117919921875,
+      "activity_ready_ms": 486.222900390625,
+      "activity_start_delay_ms": 3.307373046875,
+      "session_returned_ms": 991.7939453125,
+      "first_pcm_ms": 487.176025390625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1150.927978515625,
+      "first_rendered_audio_ms": 1276.400146484375,
+      "pcm_waiting_for_media_ms": 663.751953125,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 160.81005859375,
+      "instant_post_join_media_saving_bound_ms": 160.81005859375,
+      "browser_ice_rtt_ms": 66
+    },
+    {
+      "run_id": "006d62e0ab51",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 3,
+      "connecting_paint_ms": 34.60009765625,
+      "client_connected_ms": 425.699951171875,
+      "agent_ready_ui_ms": 1147.10009765625,
+      "first_message_ack_ms": 1243.5,
+      "entrypoint_ms": 410.5810546875,
+      "agent_room_connected_ms": 981.394775390625,
+      "activity_ready_ms": 470.295166015625,
+      "activity_start_delay_ms": 4.083984375,
+      "session_returned_ms": 982.615234375,
+      "first_pcm_ms": 471.291015625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1153.465087890625,
+      "first_rendered_audio_ms": 1276.5,
+      "pcm_waiting_for_media_ms": 682.174072265625,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 172.0703125,
+      "instant_post_join_media_saving_bound_ms": 172.0703125,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "86fce6315126",
+      "case": "controlled-fast",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 3,
+      "connecting_paint_ms": 44.300048828125,
+      "client_connected_ms": 422.39990234375,
+      "agent_ready_ui_ms": 1147.10009765625,
+      "first_message_ack_ms": 1246.300048828125,
+      "entrypoint_ms": 426.250244140625,
+      "agent_room_connected_ms": 993.27294921875,
+      "activity_ready_ms": 570.669921875,
+      "activity_start_delay_ms": 101.1201171875,
+      "session_returned_ms": 994.7119140625,
+      "first_pcm_ms": 574.251953125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1149.06005859375,
+      "first_rendered_audio_ms": 1268.60009765625,
+      "pcm_waiting_for_media_ms": 574.80810546875,
+      "media_slack_before_pcm_ms": 0,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 155.787109375,
+      "instant_post_join_media_saving_bound_ms": 155.787109375,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "61689bb7ccfa",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 0,
+      "connecting_paint_ms": 49.5,
+      "client_connected_ms": 451.0,
+      "agent_ready_ui_ms": 1896.900146484375,
+      "first_message_ack_ms": 2000.800048828125,
+      "entrypoint_ms": 451.71484375,
+      "agent_room_connected_ms": 1070.774169921875,
+      "activity_ready_ms": 1808.5859375,
+      "activity_start_delay_ms": 104.4072265625,
+      "session_returned_ms": 1809.72802734375,
+      "first_pcm_ms": 1810.39208984375,
+      "publication_ms": null,
+      "subscription_ready_ms": 1231.1572265625,
+      "first_rendered_audio_ms": 1940.0,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 579.23486328125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 160.383056640625,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "49ad2b4bfc71",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 0,
+      "connecting_paint_ms": 36.699951171875,
+      "client_connected_ms": 420.89990234375,
+      "agent_ready_ui_ms": 1765.0,
+      "first_message_ack_ms": 1886.199951171875,
+      "entrypoint_ms": 424.837646484375,
+      "agent_room_connected_ms": 1046.719970703125,
+      "activity_ready_ms": 1672.582763671875,
+      "activity_start_delay_ms": 4.197021484375,
+      "session_returned_ms": 1673.466064453125,
+      "first_pcm_ms": 1674.0517578125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1203.325927734375,
+      "first_rendered_audio_ms": 1815.099853515625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 470.725830078125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 156.60595703125,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 65
+    },
+    {
+      "run_id": "5a7451ce99f3",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 1,
+      "connecting_paint_ms": 37.60009765625,
+      "client_connected_ms": 422.0,
+      "agent_ready_ui_ms": 1865.10009765625,
+      "first_message_ack_ms": 1970.300048828125,
+      "entrypoint_ms": 514.968994140625,
+      "agent_room_connected_ms": 1145.862060546875,
+      "activity_ready_ms": 1763.51708984375,
+      "activity_start_delay_ms": 4.637939453125,
+      "session_returned_ms": 1764.33203125,
+      "first_pcm_ms": 1764.77783203125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1307.390869140625,
+      "first_rendered_audio_ms": 1912.2001953125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 457.386962890625,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 161.52880859375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "4dbbba2e60c2",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 1,
+      "connecting_paint_ms": 43.5,
+      "client_connected_ms": 428.39990234375,
+      "agent_ready_ui_ms": 1881.099853515625,
+      "first_message_ack_ms": 1997.800048828125,
+      "entrypoint_ms": 446.177978515625,
+      "agent_room_connected_ms": 1000.0,
+      "activity_ready_ms": 1799.3720703125,
+      "activity_start_delay_ms": 102.866943359375,
+      "session_returned_ms": 1800.906005859375,
+      "first_pcm_ms": 1801.773193359375,
+      "publication_ms": null,
+      "subscription_ready_ms": 1164.98681640625,
+      "first_rendered_audio_ms": 1918.300048828125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 636.786376953125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 164.98681640625,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "b2530e827c40",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 2,
+      "connecting_paint_ms": 36.199951171875,
+      "client_connected_ms": 439.199951171875,
+      "agent_ready_ui_ms": 1864.300048828125,
+      "first_message_ack_ms": 1964.0,
+      "entrypoint_ms": 419.98095703125,
+      "agent_room_connected_ms": 973.550048828125,
+      "activity_ready_ms": 1771.447998046875,
+      "activity_start_delay_ms": 105.469970703125,
+      "session_returned_ms": 1772.844970703125,
+      "first_pcm_ms": 1773.865966796875,
+      "publication_ms": null,
+      "subscription_ready_ms": 1129.2099609375,
+      "first_rendered_audio_ms": 1894.5,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 644.656005859375,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 155.659912109375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 58
+    },
+    {
+      "run_id": "071d5b56106f",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 2,
+      "connecting_paint_ms": 44.099853515625,
+      "client_connected_ms": 434.699951171875,
+      "agent_ready_ui_ms": 1765.5,
+      "first_message_ack_ms": 1863.0,
+      "entrypoint_ms": 420.34814453125,
+      "agent_room_connected_ms": 1038.35302734375,
+      "activity_ready_ms": 1673.366943359375,
+      "activity_start_delay_ms": 4.001220703125,
+      "session_returned_ms": 1675.080810546875,
+      "first_pcm_ms": 1675.888916015625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1194.2529296875,
+      "first_rendered_audio_ms": 1801.800048828125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 481.635986328125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 155.89990234375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 64
+    },
+    {
+      "run_id": "a9a565edf2de",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 3,
+      "connecting_paint_ms": 37.199951171875,
+      "client_connected_ms": 430.199951171875,
+      "agent_ready_ui_ms": 1764.5,
+      "first_message_ack_ms": 1863.699951171875,
+      "entrypoint_ms": 424.291259765625,
+      "agent_room_connected_ms": 1040.989013671875,
+      "activity_ready_ms": 1670.859130859375,
+      "activity_start_delay_ms": 3.28125,
+      "session_returned_ms": 1671.72607421875,
+      "first_pcm_ms": 1672.19091796875,
+      "publication_ms": null,
+      "subscription_ready_ms": 1198.218017578125,
+      "first_rendered_audio_ms": 1800.89990234375,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 473.972900390625,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 157.22900390625,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "8d44f6724bd9",
+      "case": "controlled-activity-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 3,
+      "connecting_paint_ms": 39.5,
+      "client_connected_ms": 448.0,
+      "agent_ready_ui_ms": 1897.60009765625,
+      "first_message_ack_ms": 2003.5,
+      "entrypoint_ms": 455.948974609375,
+      "agent_room_connected_ms": 1077.05908203125,
+      "activity_ready_ms": 1808.85986328125,
+      "activity_start_delay_ms": 104.585693359375,
+      "session_returned_ms": 1810.402099609375,
+      "first_pcm_ms": 1811.2158203125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1232.432861328125,
+      "first_rendered_audio_ms": 1941.300048828125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 578.782958984375,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 155.373779296875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 66
+    },
+    {
+      "run_id": "2765f818afdb",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 0,
+      "connecting_paint_ms": 44.699951171875,
+      "client_connected_ms": 429.10009765625,
+      "agent_ready_ui_ms": 2164.39990234375,
+      "first_message_ack_ms": 2271.39990234375,
+      "entrypoint_ms": 1416.5078125,
+      "agent_room_connected_ms": 2038.6650390625,
+      "activity_ready_ms": 1548.172119140625,
+      "activity_start_delay_ms": 83.985107421875,
+      "session_returned_ms": 2039.92919921875,
+      "first_pcm_ms": 2755.0361328125,
+      "publication_ms": null,
+      "subscription_ready_ms": 2198.000244140625,
+      "first_rendered_audio_ms": 2874.10009765625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 557.035888671875,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 159.335205078125,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "662d02ce6558",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 0,
+      "connecting_paint_ms": 35.800048828125,
+      "client_connected_ms": 424.900146484375,
+      "agent_ready_ui_ms": 1114.60009765625,
+      "first_message_ack_ms": 1228.199951171875,
+      "entrypoint_ms": 413.347900390625,
+      "agent_room_connected_ms": 976.550048828125,
+      "activity_ready_ms": 470.85302734375,
+      "activity_start_delay_ms": 3.107177734375,
+      "session_returned_ms": 977.784912109375,
+      "first_pcm_ms": 1672.6318359375,
+      "publication_ms": null,
+      "subscription_ready_ms": 1132.93798828125,
+      "first_rendered_audio_ms": 1800.5,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 539.69384765625,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 156.387939453125,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "d38992412e60",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 1,
+      "connecting_paint_ms": 36.89990234375,
+      "client_connected_ms": 418.0,
+      "agent_ready_ui_ms": 1163.89990234375,
+      "first_message_ack_ms": 1275.699951171875,
+      "entrypoint_ms": 406.8046875,
+      "agent_room_connected_ms": 1037.521728515625,
+      "activity_ready_ms": 466.1376953125,
+      "activity_start_delay_ms": 4.030029296875,
+      "session_returned_ms": 1038.578857421875,
+      "first_pcm_ms": 1668.5009765625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1197.60205078125,
+      "first_rendered_audio_ms": 1796.599853515625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 470.89892578125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 160.080322265625,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "9d834c8af21c",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 1,
+      "connecting_paint_ms": 43.300048828125,
+      "client_connected_ms": 425.800048828125,
+      "agent_ready_ui_ms": 1180.699951171875,
+      "first_message_ack_ms": 1278.699951171875,
+      "entrypoint_ms": 428.2822265625,
+      "agent_room_connected_ms": 1053.3349609375,
+      "activity_ready_ms": 580.712890625,
+      "activity_start_delay_ms": 103.731201171875,
+      "session_returned_ms": 1054.68603515625,
+      "first_pcm_ms": 1784.469970703125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1206.824951171875,
+      "first_rendered_audio_ms": 1923.300048828125,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 577.64501953125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 153.489990234375,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 60
+    },
+    {
+      "run_id": "a298b236db06",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 2,
+      "connecting_paint_ms": 34.699951171875,
+      "client_connected_ms": 431.89990234375,
+      "agent_ready_ui_ms": 1163.89990234375,
+      "first_message_ack_ms": 1269.800048828125,
+      "entrypoint_ms": 427.318115234375,
+      "agent_room_connected_ms": 1052.052978515625,
+      "activity_ready_ms": 567.865966796875,
+      "activity_start_delay_ms": 97.386962890625,
+      "session_returned_ms": 1053.274169921875,
+      "first_pcm_ms": 1771.3359375,
+      "publication_ms": null,
+      "subscription_ready_ms": 1215.14794921875,
+      "first_rendered_audio_ms": 1888,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 556.18798828125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 163.094970703125,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 60
+    },
+    {
+      "run_id": "6edcd4da50da",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 2,
+      "connecting_paint_ms": 36.89990234375,
+      "client_connected_ms": 448.099853515625,
+      "agent_ready_ui_ms": 1164.2998046875,
+      "first_message_ack_ms": 1272.5,
+      "entrypoint_ms": 431.925048828125,
+      "agent_room_connected_ms": 1049.993896484375,
+      "activity_ready_ms": 488.76904296875,
+      "activity_start_delay_ms": 3.6689453125,
+      "session_returned_ms": 1051.464111328125,
+      "first_pcm_ms": 1691.011962890625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1210.719970703125,
+      "first_rendered_audio_ms": 1815.5,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 480.2919921875,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 160.72607421875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 61
+    },
+    {
+      "run_id": "7ba4dfe84f41",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "after",
+      "sample": 3,
+      "connecting_paint_ms": 44.800048828125,
+      "client_connected_ms": 523.599853515625,
+      "agent_ready_ui_ms": 1214.800048828125,
+      "first_message_ack_ms": 1330.099853515625,
+      "entrypoint_ms": 475.802734375,
+      "agent_room_connected_ms": 1101.27978515625,
+      "activity_ready_ms": 536.748046875,
+      "activity_start_delay_ms": 4.031005859375,
+      "session_returned_ms": 1102.577880859375,
+      "first_pcm_ms": 1738.558837890625,
+      "publication_ms": null,
+      "subscription_ready_ms": 1258.77294921875,
+      "first_rendered_audio_ms": 1866.099853515625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 479.785888671875,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 157.4931640625,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 62
+    },
+    {
+      "run_id": "0b3ad6a8f45e",
+      "case": "controlled-pcm-1200",
+      "profile": "prepared",
+      "variant": "before",
+      "sample": 3,
+      "connecting_paint_ms": 35.5,
+      "client_connected_ms": 431.2998046875,
+      "agent_ready_ui_ms": 1147.599853515625,
+      "first_message_ack_ms": 1254.199951171875,
+      "entrypoint_ms": 418.027099609375,
+      "agent_room_connected_ms": 992.39111328125,
+      "activity_ready_ms": 563.1279296875,
+      "activity_start_delay_ms": 98.991943359375,
+      "session_returned_ms": 994.028076171875,
+      "first_pcm_ms": 1767.18798828125,
+      "publication_ms": null,
+      "subscription_ready_ms": 1156.012939453125,
+      "first_rendered_audio_ms": 1895.099853515625,
+      "pcm_waiting_for_media_ms": 0,
+      "media_slack_before_pcm_ms": 611.175048828125,
+      "instant_registration_saving_bound_ms": null,
+      "post_join_media_setup_ms": 163.621826171875,
+      "instant_post_join_media_saving_bound_ms": 0,
+      "browser_ice_rtt_ms": 60
+    }
+  ],
+  "comparisons": []
+}

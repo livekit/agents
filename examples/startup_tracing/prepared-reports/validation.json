@@ -1,0 +1,278 @@
+{
+  "measured_sessions": 36,
+  "warmups": 12,
+  "browser_errors": 0,
+  "median_ice_rtt_ms": 63.5,
+  "recordings": [
+    {
+      "run_id": "ccdbb3ad084c",
+      "decoded_peak": 9971,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "94127e0c098d",
+      "decoded_peak": 9894,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "eb13e35293ef",
+      "decoded_peak": 9971,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "b465f29299cf",
+      "decoded_peak": 9897,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "ef3f045bb6e4",
+      "decoded_peak": 10087,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "a0d5781f7b67",
+      "decoded_peak": 9894,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "639e3d13914d",
+      "decoded_peak": 9953,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "f848619d3b79",
+      "decoded_peak": 9894,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "7125659d9207",
+      "decoded_peak": 9846,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "9260f2381548",
+      "decoded_peak": 9941,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "26274fd5b328",
+      "decoded_peak": 9894,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "2fc6c0aaf85b",
+      "decoded_peak": 9934,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "48803b71ef60",
+      "decoded_peak": 9971,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "134f023c9c6d",
+      "decoded_peak": 9870,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "21280e2c402b",
+      "decoded_peak": 9782,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "1cbe54ac6628",
+      "decoded_peak": 9766,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "3a8b147664f5",
+      "decoded_peak": 9822,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "53422297298c",
+      "decoded_peak": 9730,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "5f41b5a701b2",
+      "decoded_peak": 9877,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "49c2423ba41e",
+      "decoded_peak": 9911,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "15f5c3f3eec0",
+      "decoded_peak": 9893,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "3bc53ba3fc27",
+      "decoded_peak": 9877,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "df7708853f52",
+      "decoded_peak": 9856,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "065cd13bce92",
+      "decoded_peak": 9860,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "02083173d607",
+      "decoded_peak": 9730,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "8b06278c258f",
+      "decoded_peak": 9822,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "b0cdd1e20a44",
+      "decoded_peak": 9995,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "19ffae81cbd7",
+      "decoded_peak": 9880,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "52dd7a900c1e",
+      "decoded_peak": 9569,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "e3e27287b99b",
+      "decoded_peak": 9782,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "7e54ebe231e0",
+      "decoded_peak": 9880,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "e4eeaa1105d2",
+      "decoded_peak": 9866,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "a31db06ce5ab",
+      "decoded_peak": 9730,
+      "initial_track_counts": [
+        0
+      ]
+    },
+    {
+      "run_id": "302f935a1e39",
+      "decoded_peak": 9844,
+      "initial_track_counts": [
+        1
+      ]
+    },
+    {
+      "run_id": "5b30d066b63d",
+      "decoded_peak": 9771,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    },
+    {
+      "run_id": "9a1c164a936b",
+      "decoded_peak": 9902,
+      "initial_track_counts": [
+        0,
+        1
+      ]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "agents_source_revision": "2aef45d51d9456e3a6de75bb0d0753082017f962",
+  "browser_version": "158.0.8127.37",
+  "livekit_url": "wss://xianstaging-hixkk74p.staging.livekit.cloud",
+  "idle_processes": 1,
+  "packages": {
+    "livekit-agents": "1.8.13",
+    "livekit": "1.2.1",
+    "livekit-api": "1.2.3",
+    "livekit-local-inference": "0.3.2",
+    "livekit-plugins-openai": "1.8.13",
+    "playwright": "1.65.2"
+  },
+  "source_sha256": {
+    "run.py": "16d78327a05f393f3ef806cbfdc124a5b88f74d68afb4088e71d2204cefa1c60",
+    "agent.py": "71d70801dbaee02da7996519dfb8565ac4a047501db6da1a675eda741dcd3021",
+    "compare.py": "3642df2ed32a8639cd9d14d292f19b6527997c5c80067615052ff1b69d113b1e",
+    "analyze.py": "aa3b99fb90668ac77cf6faa2405133defa778d8681cd997c9c9ba092e31f2142",
+    "web/client.js": "e0f588025da9863166409b48dfcdf22843fb525b900b10d372e8eabe642c60d4",
+    "web/index.html": "28c0d2192a1ff9dd1385e36814a1c48ac6b84b49b4b25474153e8ef975ad63f0",
+    "web/server.mjs": "8710138bd4a42bc2f1c5d6609f9938faf06b4f8018381aac7930f7b12ed21f42",
+    "prepared-reports/timeline.html": "571064351057dfa9e5c785ad16cb53cc9b4f9f41a3b945c60e070e48bc39a266",
+    "before-after-reports/timeline.html": "3441e30a65a6b7b1762f87a002411624e7d2f1b26fcc5c642037d6d6ed767b79"
+  },
+  "after_source_revisions": {
+    "agents": "2aef45d51d9456e3a6de75bb0d0753082017f962",
+    "rtc": "0a9a8df615a46b240560070e3ca93f42b1f55425"
+  },
+  "native_revisions": {
+    "before": "34d114b0d103e97cba3eb44baeb9e976d97be500",
+    "after": "3b615c8f5fa3b26ef87db207452266661b82f81b"
+  },
+  "before_source_revisions": {
+    "agents": "29411e468b1da132bf07d1b85283c92a0d4ecd41",
+    "rtc": "0a9a8df615a46b240560070e3ca93f42b1f55425"
+  },
+  "worker_variants": {
+    "after": {
+      "worker_name": "startup-trace-4be890b97a1f",
+      "pythonpath": "/Users/shijing/dev/agents-session-publication/livekit-agents:/Users/shijing/dev/python-sdks-session-publication/livekit-rtc",
+      "native_path": "/tmp/agent-before-after-binaries/native-source.dylib",
+      "native_sha256": "6174e731f31ab4c888ea768aef34804eeaed8792860149eb620d6e37dc335569"
+    },
+    "before": {
+      "worker_name": "startup-trace-4be890b97a1f-before",
+      "pythonpath": "/Users/shijing/dev/agents-before-native-preparation/livekit-agents:/Users/shijing/dev/python-sdks-before-native-preparation/livekit-rtc",
+      "native_path": "/private/tmp/agent-before-after-binaries/after.dylib",
+      "native_sha256": "72bd28d6e9e42f7092318bb8f52fe3bc0d41eccf0381ff9f4a475791764a0de7"
+    }
+  },
+  "method": "loaded browser UI; real token-triggered Cloud dispatch; synthetic tone in controlled cases; no artificial network relay",
+  "audio_input": false,
+  "requested_single_pc": true,
+  "warmup_sample": -1,
+  "native_sha256": {
+    "before": "72bd28d6e9e42f7092318bb8f52fe3bc0d41eccf0381ff9f4a475791764a0de7",
+    "after": "6174e731f31ab4c888ea768aef34804eeaed8792860149eb620d6e37dc335569"
+  },
+  "validated_implementation_revisions": {
+    "agents": "50932a218",
+    "python_rtc": "816a63d",
+    "rust_ffi": "3b615c8f5fa3b26ef87db207452266661b82f81b"
+  },
+  "revision_note": "After sources were modified working trees during measurement; validated_implementation_revisions identify the committed implementation matching those snapshots."
+}
