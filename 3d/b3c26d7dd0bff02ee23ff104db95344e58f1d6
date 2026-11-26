@@ -1,0 +1,21 @@
+rust/crates/lk-agents-runtime/src/voice/amd/classifier.rs
+  s_342953b2c18827::t_84eb4ed2032600 328-329,333-340
+tests/host/test_amd.py
+  s_342953b2c18827::t_7cba7d3e43e526 852-855
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3db3c26d7dd0bff02ee23ff104db95344e58f1d6",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
