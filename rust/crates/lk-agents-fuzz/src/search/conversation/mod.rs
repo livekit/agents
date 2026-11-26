@@ -23,6 +23,7 @@ use crate::{
     record::{Detail, Kind, Sink, Tag},
 };
 
+mod answerer;
 mod microphone;
 mod providers;
 mod speaker;
@@ -452,6 +453,7 @@ async fn converse_in(
         call_length_ms: dials.call_length_ms,
         ending: false,
         tasks: Rng::with_seed(seed ^ 0x0000_0056_5461_736b),
+        amd: answerer::Answerer::draw(seed),
     };
     talk.speaker = talk.draw::<Option<Speaker>>();
     match talk.converse().await {
@@ -509,6 +511,8 @@ struct Talk {
     ending: bool,
     /// The `VoiceTask` coins, a stream of their own: a run without tasks draws as it always did.
     tasks: Rng,
+    /// AMD on the call, scripted: its own stream, so a run without it draws as it always did.
+    amd: answerer::Answerer,
 }
 
 /// Plumbing: how an input reaches the driver, and the small draws.
@@ -682,6 +686,7 @@ impl Talk {
         self.finish_played().await?;
         self.hear().await?;
         self.report_progress().await?;
+        self.answer_amd().await?;
         let hearing = self.hearing();
         let rate = if hearing { self.host.speaking } else { self.host.during };
         if self.rng.u8(0..100) < rate {

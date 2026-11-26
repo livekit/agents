@@ -82,6 +82,12 @@ impl Run {
             Input::Drain { .. } | Input::Close { .. } | Input::Run { .. } => {
                 self.call_lifecycle(input)
             }
+            Input::AmdAttach { .. }
+            | Input::AmdActivate { .. }
+            | Input::AmdDecide { .. }
+            | Input::AmdDecideAhead { .. }
+            | Input::AmdDetach { .. } => self.call_amd(input),
+            Input::AmdEnter { .. } | Input::AmdClose { .. } => self.call_amd_executor(input),
             _ => unreachable!("{input:?} is not a call"),
         };
         let Some(pending) = pending else { return false };
@@ -541,6 +547,114 @@ impl Run {
             },
             _ => unreachable!(),
         }
+        Some(Pending::default())
+    }
+
+    /// AMD through the runtime's executor: `enter` with the setup's fakes, and `aclose()`.
+    fn call_amd_executor(&mut self, input: &Input) -> Option<Pending> {
+        match input {
+            Input::AmdEnter {} => {
+                let setup = self.setup.amd.clone()?;
+                let config =
+                    crate::fakes::amd::config(&setup, &self.registry, self.setup.stt_speech);
+                let (api, entered) = (self.api.clone(), self.entered.clone());
+                let reply = async move {
+                    let result = lk_agents_runtime::voice::amd::enter(&api, config).await;
+                    let mut entered = entered.lock().unwrap();
+                    match result {
+                        Ok(run) => {
+                            let id = run.id();
+                            let (events, execute) = (run.events(), Some(run.execute()));
+                            let run = Some(run);
+                            let close = None;
+                            let result = Ok(id);
+                            entered.push(super::super::Entered {
+                                result,
+                                recorded: false,
+                                run,
+                                events,
+                                execute,
+                                close,
+                            });
+                            Ok(id.0)
+                        }
+                        Err(error) => {
+                            let refused = error.to_string();
+                            entered.push(super::super::Entered {
+                                result: Err(refused.clone()),
+                                recorded: false,
+                                run: None,
+                                events: None,
+                                execute: None,
+                                close: None,
+                            });
+                            Err(refused)
+                        }
+                    }
+                };
+                Some(Pending::answer(AnswerWait::reply(reply, Answer::AmdEnter)))
+            }
+            Input::AmdClose {} => {
+                let mut entered = self.entered.lock().unwrap();
+                let last = entered.iter_mut().rev().find(|e| e.run.is_some())?;
+                last.close = Some(last.run.as_ref()?.close());
+                Some(Pending::default())
+            }
+            _ => unreachable!("{input:?} is not AMD's executor's"),
+        }
+    }
+
+    /// The scripted AMD answerer: its attach and its answers, keyed by its run, which is the
+    /// latest one attached; a decision names the run and turn of the turn it was made for.
+    fn call_amd(&mut self, input: &Input) -> Option<Pending> {
+        use crate::fakes::amd;
+        use lk_agents_voice::amd::{AmdAnswer, AmdCommand, AmdRunId};
+        let run = AmdRunId(self.amd_runs);
+        let answer = match input {
+            Input::AmdAttach {} => {
+                self.amd_runs += 1;
+                let run = AmdRunId(self.amd_runs);
+                let attach = AmdCommand::Attach {
+                    run,
+                    dtmf_tool: amd::dtmf_tool(),
+                    amd_stt: false,
+                    call: None,
+                };
+                self.api.send(Command::Amd(attach)).ok()?;
+                return Some(Pending::default());
+            }
+            _ if self.amd_runs == 0 => return None,
+            Input::AmdActivate { opening } => {
+                AmdAnswer::Activated { run, opening: opening.map(amd::opening) }
+            }
+            Input::AmdDecide { turn, verdict } => {
+                let Detail::AmdTurn { run, turn } =
+                    *self.record.resource(Kind::AmdTurn, turn.nth)?.detail()
+                else {
+                    return None;
+                };
+                AmdAnswer::ReplyDecided {
+                    run: AmdRunId(run),
+                    turn: lk_agents_voice::audio_recognition::TurnId(turn),
+                    decision: amd::decision(*verdict),
+                }
+            }
+            Input::AmdDecideAhead { verdict } => AmdAnswer::ReplyDecided {
+                run,
+                turn: lk_agents_voice::audio_recognition::TurnId(
+                    self.record.amd_view().turn_ahead(run.0, Observed::END),
+                ),
+                decision: amd::decision(*verdict),
+            },
+            Input::AmdDetach { category, forbid } => AmdAnswer::Detach {
+                run,
+                pending: amd::pending(*category, *forbid),
+                cancel: amd::cancel(*forbid),
+            },
+            _ => unreachable!("{input:?} is not AMD's"),
+        };
+        // AMD's answers are session inputs, as its executor will send them.
+        self.api.answer_amd(answer).ok()?;
         Some(Pending::default())
     }
 

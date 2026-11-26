@@ -246,6 +246,8 @@ pub struct Server {
     answered: Ts,
     last_user: Option<String>,
     committed: u64,
+    /// The model transcribes user items (`capabilities.user_transcription`).
+    pub transcribes: bool,
 }
 
 impl Server {
@@ -277,6 +279,7 @@ impl Server {
             answered: Ts::ZERO,
             last_user: None,
             committed: 0,
+            transcribes: true,
         }
     }
 
@@ -749,6 +752,9 @@ impl Server {
         self.items.push(Item::of(&user));
         self.last_user = Some(item.clone());
         self.put(later(now, 1), Happening::ItemAdded { item: Box::new(user), previous });
+        if !self.transcribes {
+            return;
+        }
         let spoken: Vec<&str> = USER_TURNS.iter().copied().filter(|t| !t.is_empty()).collect();
         let text = spoken[self.rng.usize(0..spoken.len())];
         let configured = if self.committed == 0 {

@@ -313,7 +313,10 @@ impl SttStreamExecutor {
     fn connection_headers(&self) -> Result<(Headers, String), ApiError> {
         let token =
             lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
-        let headers = gateway_headers(&self.cx, None, None, &token);
+        let mut headers = gateway_headers(&self.cx, None, None, &token);
+        for (name, value) in &self.opts.extra_headers {
+            headers.insert(name.as_str(), value.as_str());
+        }
         let request_id = crate::ids::shortuuid(crate::ids::STT_REQUEST_ID_PREFIX);
         Ok((headers, request_id))
     }

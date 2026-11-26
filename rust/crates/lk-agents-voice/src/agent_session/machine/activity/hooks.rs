@@ -153,6 +153,7 @@ impl VoiceDriver {
         now: Ts,
         info: crate::audio_recognition::EndOfTurnInfo,
         span: telemetry::UserTurnSpan,
+        settled: Option<crate::amd::ReplyDecision>,
     ) {
         let id = self.activity.hooks.mint();
         let call = HookCall::OnUserTurnCompleted {
@@ -166,7 +167,7 @@ impl VoiceDriver {
             span: None,
         };
         self.activity.pending_turn =
-            Some(PendingTurn { info, span, issued_at: now, hook: Some(id) });
+            Some(PendingTurn { info, span, issued_at: now, hook: Some(id), settled });
         self.issue_hook(now, call, None);
     }
 
@@ -329,8 +330,9 @@ impl VoiceDriver {
                 };
                 // Matched to its parked turn; a late answer is dropped.
                 if let Some(pending) = self.activity.pending_turn.take_if(|p| p.hook == Some(id)) {
+                    let settled = pending.settled.clone();
                     let info = if local { pending.info } else { pending.finished(now) };
-                    self.finish_turn(now, info, edits);
+                    self.finish_turn(now, info, edits, settled);
                     if !local {
                         self.next_turn(now);
                     }
@@ -469,6 +471,8 @@ pub(crate) enum TurnLimit {
 pub enum TurnLimitSkip {
     /// Scheduling is paused, a handoff blocks new turns, or the session closes.
     Paused,
+    /// An AMD run is attached: it owns replies.
+    AmdAttached,
     /// The callback is still running.
     Busy,
     /// The agent started speaking: the end of turn replied.
@@ -485,7 +489,10 @@ impl VoiceDriver {
     ) {
         // An open user turn ends as a release would, whatever the callback is doing.
         let user_turn = self.user_turn_limit_reached(self.step.now);
-        let skip = if self.turn_limit_blocked() {
+        // AMD owns replies while it runs, and a voicemail greeting runs long.
+        let skip = if self.activity.amd_attached() {
+            Some(TurnLimitSkip::AmdAttached)
+        } else if self.turn_limit_blocked() {
             Some(TurnLimitSkip::Paused)
         } else if matches!(self.activity.turn_limit, TurnLimit::Running(_)) {
             return self.record_trace(TurnStep::TurnLimitSkipped(TurnLimitSkip::Busy));

@@ -31,10 +31,19 @@ struct EndOfSpeech {
 /// exists.
 pub(crate) const SAY_WITHOUT_TTS_REFUSED: &str = "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); add a TTS model to AgentSession to enable say()";
 
+/// `say()` while an AMD run is attached: AMD would hold the speech and play it after detection.
+pub(crate) const SAY_UNDER_AMD_REFUSED: &str = "say() is not supported while AMD is running";
+/// `generate_reply()` while an AMD run is attached.
+pub(crate) const GENERATE_REPLY_UNDER_AMD_REFUSED: &str =
+    "generate_reply() is not supported while AMD is running";
+
 pub(crate) struct SpeechSpec {
     pub(crate) voice_run: VoiceRunParticipation,
     pub(crate) new_message: Option<ChatMessage>,
     pub(crate) turn_instructions: Option<String>,
+    /// Whether `turn_instructions` stay for the reply's tool follow-ups, as AMD's stage
+    /// instructions do (spec §10.2).
+    pub(crate) turn_instructions_scope: crate::generation::TurnInstructionsScope,
     pub(crate) source: ReplySource,
     /// Already resolved against the session default: the loop does not re-resolve options.
     pub(crate) allow_interruptions: bool,
@@ -68,6 +77,7 @@ impl SpeechSpec {
             voice_run: kind.voice_run(),
             new_message: None,
             turn_instructions: None,
+            turn_instructions_scope: crate::generation::TurnInstructionsScope::Once,
             source,
             allow_interruptions,
             add_to_chat_ctx: true,
@@ -106,6 +116,19 @@ impl VoiceDriver {
             && self.activity.handoff.draining()
         {
             return self.activity.handoff.held_speech.push(cmd);
+        }
+        // AMD owns replies while it runs; only its opening speaks before a prediction.
+        if self.activity.amd_attached() {
+            match cmd {
+                SpeechCommand::Say { call, .. } => {
+                    return self.fail_waiter(call, SpeechKind::Say, SAY_UNDER_AMD_REFUSED);
+                }
+                SpeechCommand::GenerateReply(request) => {
+                    let kind = SpeechKind::GenerateReply;
+                    return self.fail_waiter(request.call, kind, GENERATE_REPLY_UNDER_AMD_REFUSED);
+                }
+                _ => {}
+            }
         }
         match cmd {
             SpeechCommand::GenerateReply(request) => self.generate_reply(now, request),
@@ -291,22 +314,37 @@ impl VoiceDriver {
     }
 
     /// The reply to a decided user turn. A preemptive generation for another turn is discarded;
-    /// adopted, the user item enters the conversation stamped at the turn's onset.
-    pub(crate) fn reply_to_turn(&mut self, now: Ts, info: &EndOfTurnInfo, edits: TurnEdits) {
+    /// adopted, the user item enters the conversation stamped at the turn's onset. `gate` is
+    /// what AMD's decision for the turn adds to the reply's request. The reply, when one was
+    /// admitted.
+    pub(crate) fn reply_to_turn(
+        &mut self,
+        now: Ts,
+        info: &EndOfTurnInfo,
+        edits: TurnEdits,
+        gate: Option<super::amd_gate::ReplyPayload>,
+    ) -> Option<SpeechId> {
         self.activity.last_turn = Some(info.turn_id);
         // A realtime session answers from the audio it heard: the STT's words are neither sent
-        // nor kept; the server's own transcript fills the user item.
+        // nor kept; the server's own transcript fills the user item. A gated turn keeps them for
+        // a model without user transcription.
         if self.activity.realtime().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+            if gate.is_some() {
+                self.commit_gated_turn_item(info, edits.user_text.as_deref());
+            }
             // Its speech is announced now, so the metrics name it.
-            let speech = self.realtime_user_turn(now);
+            let speech = self.realtime_user_turn(now, gate.map(|payload| payload.realtime()));
             self.emit_eou_metrics(info, speech);
-            return;
+            return speech;
         }
         // A preemptive generation for another turn, against a record since changed, or whose
-        // request the hook edited, answers a question this turn is not asking.
-        let edited =
-            edits.instructions.is_some() || edits.chat_ctx.is_some() || edits.user_text.is_some();
+        // request the hook edited, answers a question this turn is not asking. Nor does one when
+        // AMD's decision adds instructions or DTMF to the request.
+        let edited = edits.instructions.is_some()
+            || edits.chat_ctx.is_some()
+            || edits.user_text.is_some()
+            || gate.as_ref().is_some_and(super::amd_gate::ReplyPayload::changes_request);
         if let Some(preemptive) = self.activity.preemptive.take()
             && (preemptive.turn != info.turn_id
                 || edited
@@ -329,23 +367,26 @@ impl VoiceDriver {
             );
             self.set_agent_state(self.step.now, AgentState::Thinking);
             self.emit_eou_metrics(info, Some(preemptive));
-            return;
+            return Some(preemptive);
         }
-        self.start_speech(
-            now,
-            SpeechSpec {
-                new_message: Some(user),
-                chat_ctx,
-                turn: Some(info.turn_id),
-                instructions_override: instructions,
-                end_of_turn: Some(info.clone()),
-                ..SpeechSpec::new(
-                    SpeechKind::TurnReply,
-                    ReplySource::Llm,
-                    self.session.config.effective.turn.interruption.enabled(),
-                )
-            },
-        );
+        let spec = SpeechSpec {
+            new_message: Some(user),
+            chat_ctx,
+            turn: Some(info.turn_id),
+            instructions_override: instructions,
+            end_of_turn: Some(info.clone()),
+            ..SpeechSpec::new(
+                SpeechKind::TurnReply,
+                ReplySource::Llm,
+                self.session.config.effective.turn.interruption.enabled(),
+            )
+        };
+        let spec = match gate {
+            Some(payload) => payload.onto(spec),
+            None => spec,
+        };
+        let speech = self.start_speech(now, spec);
+        self.activity.speech_scheduler.contains(speech).then_some(speech)
     }
 
     /// Emitted once the reply speech exists so it carries its id; never for a turn with no reply.
@@ -429,6 +470,7 @@ impl VoiceDriver {
             new_message: spec.new_message.clone(),
             instructions: spec.instructions_override.clone(),
             turn_instructions: spec.turn_instructions.clone(),
+            turn_instructions_scope: spec.turn_instructions_scope,
             // Snapshotted for this request: handoffs replace the list, replies overlap.
             tools: turn_toolset.specs.clone(),
             on_enter: spec.on_enter,
@@ -828,6 +870,7 @@ impl VoiceDriver {
             }
         }
         self.agent_turn_speaking(speech, wall);
+        self.observe_speech(speech, crate::amd::SpeechObservation::PlayoutAdvanced);
         // The labels arm the AEC warmup at the session's first `speaking` edge with audio output.
         self.set_agent_state(now, AgentState::Speaking);
         let eff = self.activity.audio_recognition.on_start_of_agent_speech(now, now);
@@ -992,6 +1035,7 @@ impl VoiceDriver {
             }
         } else if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
             state.item_added(&item);
+            self.observe_reply_item(speech, &item);
         }
     }
 
@@ -1105,6 +1149,12 @@ impl VoiceDriver {
             let (outcome, error) = (view.outcome(), view.error().cloned());
             self.agent_turn_done(speech, outcome, error.clone());
             self.publish_event(SessionEvent::SpeechDone { speech, outcome });
+            let interrupted = outcome == crate::events::SpeechOutcome::Interrupted;
+            let failed = outcome == crate::events::SpeechOutcome::Failed;
+            self.observe_speech(
+                speech,
+                crate::amd::SpeechObservation::Done { interrupted, failed },
+            );
             self.run_speech_ended(speech, error);
         }
         self.tool_reply_done(speech);
@@ -1114,6 +1164,9 @@ impl VoiceDriver {
         self.storage_speech_released(now, speech);
         self.speech_finished(now, speech);
         self.voice_task_speech_released(now, speech);
+        // A gated realtime reply's tools leave the server once its speech is done: a reply with
+        // no tool call ends with no player report.
+        self.realtime_response_closed(speech);
         // A realtime session swapped meanwhile gets its frame once what it cut is released.
         self.realtime_replay(now, Some(speech));
     }

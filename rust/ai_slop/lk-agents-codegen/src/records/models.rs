@@ -463,11 +463,12 @@ fn model_tree(
             });
         }
     }
-    model(r, module, own, &nested, runtime, typing)
+    model(r, records, module, own, &nested, runtime, typing)
 }
 
 fn model(
     r: &RecordDecl,
+    records: &[&RecordDecl],
     module: &str,
     own: &[String],
     nested: &str,
@@ -619,6 +620,13 @@ fn model(
                     Some(_) => format!(" = Field(default_factory={})", factory(f)),
                     None => format!(" = field(default_factory={})", factory(f)),
                 },
+                // A member of an `Enum` record of this module: the member, not its string, so
+                // the default is the value a validated one would be.
+                (Some(crate::decl::Literal::Str(wire)), _)
+                    if let Some(name) = enum_class(&f.ty, records) =>
+                {
+                    format!(" = {name}({wire:?})")
+                }
                 (Some(d), _) => format!(" = {}", py_literal(d)),
                 // Computed in `__post_init__` when left out: the field is never `None` after.
                 (None, Some(_)) => " = None  # type: ignore[assignment]".to_owned(),
@@ -977,6 +985,14 @@ fn model(
 }
 
 /// A record's computed views: answered by `_core`, or a pydantic model's host hooks.
+/// The class of an `enum` record of this module that `ty` names.
+fn enum_class<'a>(ty: &Ty, records: &[&'a RecordDecl]) -> Option<&'a str> {
+    let Ty::Record(crate::decl::Record { host: HostForm::Record { name, .. }, .. }) = ty else {
+        return None;
+    };
+    records.iter().find(|r| r.enumeration && r.name == *name).map(|r| r.name.as_str())
+}
+
 fn properties(r: &RecordDecl, runtime: &mut Imports, typing: &mut Imports) -> String {
     let mut s = String::new();
     for member in &r.members {

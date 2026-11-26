@@ -202,6 +202,8 @@ pub struct DriverBuilder {
     pub delegation: Option<lk_agents_abi::delegation::DelegationOptions>,
     /// Where the driver's steps go: nowhere in production.
     pub journal: Journal,
+    /// Where the gate's AMD observations go.
+    pub amd: super::shared::AmdTap,
     /// Where the session's spans and measurements go: the process tracer in production.
     pub tracer: telemetry::Tracer,
     /// The span the session continues, the job it records for and its conversation.
@@ -278,6 +280,7 @@ impl DriverBuilder {
             session_sink: None,
             delegation: None,
             journal: Default::default(),
+            amd: Default::default(),
             trace: tracer.root(),
             tracer,
             job_ids: Default::default(),
@@ -470,8 +473,14 @@ impl DriverBuilder {
         });
         let keyterms_pushed = shared.keyterms.clone();
         let chat_ctx = shared.chat_ctx.clone();
-        let peer =
-            PeerHandle { queue: queue.clone(), events: ev_tx, journal, time, session: session_cx };
+        let peer = PeerHandle {
+            queue: queue.clone(),
+            events: ev_tx,
+            journal,
+            time,
+            session: session_cx,
+            amd: self.amd.clone(),
+        };
 
         let (conversation, commands) = crate::session::CommandPort::channel(
             32,
@@ -560,6 +569,7 @@ impl DriverBuilder {
             chat_ctx: publications.chat_ctx.cell(),
             keyterms: publications.keyterms.cell(),
             journal: self.journal.clone(),
+            amd: self.amd.clone(),
             trace,
             realtime_spans: Default::default(),
             realtime_tools: self.realtime_tools.clone(),

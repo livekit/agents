@@ -24,7 +24,12 @@ impl Rule for ForwardedWhileEnabled {
         id: "forwarded_while_enabled",
         guarantee: "Every microphone frame pushed while audio input was enabled reached every open STT and VAD stream; none reached a stream while input was disabled.",
         examples: &[reaches_both_legs, late_delivery_after_disable, crossed_a_recogniser_swap],
-        counterexamples: &[stt_never_heard, forwarded_while_disabled],
+        counterexamples: &[
+            stt_never_heard,
+            forwarded_while_disabled,
+            discarded_then_delivered,
+            discarded_after_64_allowed_pushes,
+        ],
         probe: None,
     };
 
@@ -102,6 +107,9 @@ impl Rule for ForwardedWhileEnabled {
             .map(|(at, ())| at)
             .collect();
         let unheard = push_to_talk_idle(r);
+        // An attached AMD run that is not active yet discards participant audio, from the step
+        // that attached it to the one that activated or detached it (spec §5.2).
+        let amd_discards = amd_discard_windows(r);
         for sent in inputs.accepted() {
             let Input::MicFrames { mic, chunks: Count(chunks) } = &sent.input else { continue };
             // Ignored outside a push-to-talk turn, or racing a turn's edge in its driver turn; its
@@ -111,12 +119,14 @@ impl Rule for ForwardedWhileEnabled {
             let ignored = idle_within(&unheard, sent.at, ends.unwrap_or(sent.at));
             let counter = next_chunk.entry(mic.nth).or_default();
             for _ in 0..*chunks {
-                let chunk = *counter % (Tag::MAX_CHUNK + 1);
+                let chunk = *counter % (Tag::MAX_MIC_CHUNK + 1);
                 *counter = counter.wrapping_add(1);
                 pushed_at.entry((mic.nth, chunk)).or_default().push(sent.at);
                 // Nothing pushed while input was disabled or the microphone detached is owed to
                 // any stream.
-                if !audio_input.on_at(sent.at) {
+                if !audio_input.on_at(sent.at)
+                    || amd_discards.iter().any(|(from, to)| *from <= sent.at && sent.at < *to)
+                {
                     continue;
                 }
                 pushed_enabled.entry((mic.nth, chunk)).or_insert(sent.at);
@@ -131,6 +141,7 @@ impl Rule for ForwardedWhileEnabled {
                     .into_iter()
                     .chain(detached)
                     .chain(dropped)
+                    .chain(amd_discards.iter().map(|(from, _)| *from).find(|from| *from > sent.at))
                     .min();
                 let frame = (mic.nth, chunk);
                 expect_reached(
@@ -150,6 +161,37 @@ impl Rule for ForwardedWhileEnabled {
         // A frame heard while input was disabled can only be one pushed earlier, while it was
         // enabled, still moving through the pump. Anything else got past a closed microphone.
         for heard in inference.frames_heard() {
+            // Pushed inside an AMD discard window and heard, then or after it closed: it got
+            // past the discard. A frame pushed in the instant the run started listening may cross
+            // the enable in the pump. Only a stream fed frame by frame is judged after the window:
+            // the turn and interruption detectors read audio they buffered before it.
+            // A frame's number wraps only after 5.12 s of pushes (`Tag::MAX_MIC_CHUNK`): the frame
+            // heard is the latest push of its number before the hearing.
+            for tag in heard.tags {
+                let Tag::Mic { mic, chunk } = *tag else { continue };
+                let Some(pushes) = pushed_at.get(&(mic, chunk)) else { continue };
+                let fed = matches!(heard.kind, Kind::Stt | Kind::Vad);
+                let Some(pushed) = pushes.iter().rfind(|pushed| **pushed < heard.at) else {
+                    continue;
+                };
+                let window = amd_discards.iter().find(|(from, to)| {
+                    from <= pushed
+                        && pushed < to
+                        && (heard.at < *to || (fed && pushed.at_ms < to.at_ms))
+                });
+                check.expect_with(
+                    Subject::Resource(Kind::Mic, mic),
+                    window.is_none(),
+                    || {
+                        format!(
+                            "{:?} stream {} heard mic {mic} chunk {chunk} (seq {}, {} ms), pushed \
+                             at seq {} ({} ms) while AMD discarded participant audio ({window:?})",
+                            heard.kind, heard.stream, heard.at.seq, heard.at.at_ms, pushed.seq,
+                            pushed.at_ms
+                        )
+                    },
+                );
+            }
             if audio_input.on_at(heard.at) {
                 continue;
             }
@@ -190,7 +232,7 @@ fn on_its_way(inference: &InferenceView, (mic, chunk): (u32, u16), pushed: Obser
     let arrived = streams().filter_map(|s| after(s.heard_at(mic, chunk))).min();
     let forwarding = || {
         streams()
-            .flat_map(|s| (0..=Tag::MAX_CHUNK).filter_map(move |c| after(s.heard_at(mic, c))))
+            .flat_map(|s| (0..=Tag::MAX_MIC_CHUNK).filter_map(move |c| after(s.heard_at(mic, c))))
             .min()
     };
     arrived.or_else(forwarding).unwrap_or(Observed::END)
@@ -295,8 +337,9 @@ fn expect_reached(
         for stream in inference.streams(kind) {
             // A plugin's detector drops to current audio past its lag: not this path's to owe. A
             // stream closed before the turn that moves the frame (a recogniser failing) is owed
-            // nothing (seed 149497).
-            let own_path = matches!(stream.detail(), Detail::PluginVad);
+            // nothing (seed 149497). AMD's recogniser has a feed of its own, from activation to
+            // completion, that the gate never silences: AMD's stories judge it.
+            let own_path = matches!(stream.detail(), Detail::PluginVad | Detail::AmdStt { .. });
             if !stream.listening_throughout(pushed, moved_by) || own_path {
                 continue;
             }
@@ -382,6 +425,22 @@ fn stt_never_heard() -> Recording {
 }
 
 /// Input disabled and applied, a frame pushed after, and the recognition stream heard it anyway.
+/// A frame pushed while an attached AMD run discarded participant audio, delivered once it
+/// started listening.
+fn discarded_then_delivered() -> Recording {
+    use lk_agents_voice::amd::AmdRunId;
+    use lk_agents_voice::trace::GateStep;
+    mic_stt_vad()
+        .journal(Step::Gate(GateStep::Attached { run: AmdRunId(1) }))
+        .then_act()
+        .sent(frames(1))
+        .then_act()
+        .journal(Step::Gate(GateStep::Activated { run: AmdRunId(1) }))
+        .then_act()
+        .forwarded(Kind::Stt, 0, heard(0))
+        .done()
+}
+
 fn forwarded_while_disabled() -> Recording {
     mic_stt_vad()
         .sent(audio_input(false))
@@ -389,5 +448,47 @@ fn forwarded_while_disabled() -> Recording {
         .sent(frames(1))
         .then_act()
         .forwarded(Kind::Stt, 0, heard(0))
+        .done()
+}
+
+/// When an attached AMD run discarded participant audio: from the session's `Attached` to its
+/// `Activated` or `Detached`, whichever came first.
+fn amd_discard_windows(r: &Recording) -> Vec<(Observed, Observed)> {
+    use lk_agents_voice::trace::GateStep;
+    let mut windows = Vec::new();
+    let mut open = None;
+    for (at, step) in r.journal() {
+        match step {
+            Step::Gate(GateStep::Attached { .. }) => open = Some(*at),
+            Step::Gate(GateStep::Activated { .. } | GateStep::Detached { .. }) => {
+                if let Some(from) = open.take() {
+                    windows.push((from, *at));
+                }
+            }
+            _ => {}
+        }
+    }
+    windows.extend(open.map(|from| (from, Observed::END)));
+    windows
+}
+
+/// 64 frames pushed and heard before the attach, then the 65th pushed inside the discard and
+/// heard: a counter that wrapped at 64 would read it as an allowed push of the first.
+fn discarded_after_64_allowed_pushes() -> Recording {
+    use lk_agents_voice::amd::AmdRunId;
+    use lk_agents_voice::trace::GateStep;
+    let allowed: Vec<Tag> = (0..64).map(|chunk| Tag::Mic { mic: 0, chunk }).collect();
+    mic_stt_vad()
+        .sent(frames(64))
+        .then_act()
+        .forwarded(Kind::Stt, 0, allowed.clone())
+        .forwarded(Kind::Vad, 0, allowed)
+        .journal(Step::Gate(GateStep::Attached { run: AmdRunId(1) }))
+        .then_act()
+        .sent(frames(1))
+        .then_act()
+        .journal(Step::Gate(GateStep::Activated { run: AmdRunId(1) }))
+        .then_act()
+        .forwarded(Kind::Stt, 0, heard(64))
         .done()
 }

@@ -454,7 +454,7 @@ impl Run {
             burst.1 += chunks;
         }
         for _ in 0..chunks {
-            let sample = Tag::mic(mic, *count % (Tag::MAX_CHUNK + 1));
+            let sample = Tag::mic(mic, *count % (Tag::MAX_MIC_CHUNK + 1));
             let data = sample.to_le_bytes().repeat(SAMPLES_PER_CHUNK);
             let frame = AudioFrame::new(data, SAMPLE_RATE, 1, SAMPLES_PER_CHUNK as u32);
             // A track nobody reads yet (the room io has not subscribed) carries the words nowhere.
@@ -626,6 +626,7 @@ impl Run {
             Input::RealtimeEvent { socket, .. } => {
                 (Slot { kind: Kind::Realtime, nth: socket.nth }, None)
             }
+            Input::AmdReply { ask, .. } => (Slot { kind: Kind::AmdAsk, nth: ask.nth }, None),
             _ => return false,
         };
         // an expressive model opens its reply with reasoning and a delivery marker
@@ -646,7 +647,17 @@ impl Run {
             }
             _ => input,
         };
-        if !self.record.live().has(slot.kind, slot.nth) || !self.deliver_to(slot, input) {
+        let delivered = self.record.live().has(slot.kind, slot.nth) && self.deliver_to(slot, input);
+        if let Input::AmdReply { ask, says } = input {
+            let reply = crate::record::amd_run::Reply {
+                at,
+                ask: ask.nth,
+                says: *says,
+                accepted: delivered,
+            };
+            self.record.record_amd_reply(reply);
+        }
+        if !delivered {
             return false;
         }
         match input {

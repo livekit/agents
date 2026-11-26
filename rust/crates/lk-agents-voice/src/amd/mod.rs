@@ -1,0 +1,252 @@
+//! Answering-machine detection (AMD): the protocol between the session's reply gate and an AMD
+//! run. Each direction is FIFO; every answer names its run and every decision its turn.
+//!
+//! The session and AMD talk only through effects and inputs, each direction FIFO:
+//!
+//! - [`AmdObservation`]: produced by the session's reply gate
+//!   (`agent_session::machine::activity::amd_gate`) while a run is attached, as
+//!   [`VoiceEffect::Amd`](crate::agent_session::effects::VoiceEffect::Amd). Handled by the AMD
+//!   executor in `lk-agents-runtime`.
+//! - [`AmdAnswer`]: produced by the AMD machine, delivered to the session as
+//!   [`VoiceEvent::Amd`](crate::agent_session::VoiceEvent::Amd). The gate owns the state it
+//!   changes.
+//!
+//! Attaching a run is a session command, [`AmdCommand::Attach`].
+//!
+//! The run's own policy is the pure [`machine::Amd`]: observations, leg results and deadlines in,
+//! [`effects::AmdEffect`]s out. Its public notifications are in [`events`], its options in
+//! [`options`].
+
+pub mod effects;
+pub mod events;
+pub mod machine;
+pub mod options;
+pub mod steps;
+
+use crate::agent_session::RequestId;
+pub use crate::agent_session::machine::activity::amd_gate::Hold;
+use crate::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind};
+use crate::audio_recognition::TurnId;
+use lk_agents_abi::Ts;
+use std::time::Duration;
+
+/// One AMD run. A run attaches once; only one is attached to a session at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AmdRunId(pub u64);
+
+/// What the session tells the attached run. Each carries the time it describes, so AMD does not
+/// depend on when it receives them.
+#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
+pub enum AmdObservation {
+    /// A turn committed. The session already holds authorization for it.
+    TurnCommitted {
+        turn: TurnId,
+        transcript: String,
+        /// The endpointing delay. With no speech boundary since the previous commit, the
+        /// participant's silence counts from `at` minus this delay.
+        eot_delay: Option<Duration>,
+        /// The turn asked for no reply.
+        skip_reply: bool,
+        /// The gate was active at commit, so this turn's decision moves the hold. An unbound turn
+        /// gets the first row of the reply table.
+        bound: bool,
+        /// The participant was still speaking at commit (spec §7.1 speech duration).
+        speaking: bool,
+        /// The agent that was running when the turn committed.
+        agent: String,
+        at: Ts,
+    },
+    /// The turn left the activity by any path, including local supersession.
+    TurnEnded { turn: TurnId, how: TurnEnd },
+    /// A reply exists for the turn: created, adopted from a preemptive generation, or rebuilt
+    /// after a correction.
+    ReplyCreated { turn: TurnId, speech: SpeechId },
+    /// A speech's life. At attach the session also reports each speech already queued or
+    /// playing.
+    Speech { speech: SpeechId, event: SpeechObservation, at: Ts },
+    /// Whether the agent is busy for the idle timer: a held or playing speech, a paused speech,
+    /// thinking, a pending false interruption, or a turn waiting on its hook or decision. Sent at
+    /// attach, then on change.
+    AgentBusy { busy: bool, at: Ts },
+    /// The session entered or left `Hold::Silence` for a turn.
+    SilenceHold { turn: TurnId, held: bool, at: Ts },
+    /// Participant speech boundaries and session STT finals.
+    UserSpeech(UserSpeechObservation),
+    /// Executed tool calls, for DTMF in classifier history (spec §11.1).
+    ToolsExecuted { calls: Vec<ToolCallRecord> },
+    /// The session applied `Detach` and removed the gate.
+    Detached { run: AmdRunId },
+}
+
+/// How a turn committed under the gate left the activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum TurnEnd {
+    /// An allowed decision made (or adopted) its reply; `ReplyCreated` came before.
+    Replied,
+    /// The decision denied it: its words were committed with no reply.
+    Denied,
+    /// `on_user_turn_completed` raised `StopResponse` or failed.
+    Stopped,
+    /// The turn asked for no reply.
+    SkipReply,
+    /// A newer turn committed first: by `supersede_turn` behind a hook, or by the gate's local
+    /// supersession of a parked turn or a held reply.
+    Superseded,
+    /// Dropped behind an uninterruptible speech, or its reply was refused by scheduling.
+    Dropped,
+    /// The session closed before the turn finished.
+    Abandoned,
+}
+
+/// One speech's life, as AMD's classifier history and voicemail record need it.
+#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
+pub enum SpeechObservation {
+    /// Created, or found queued or playing at attach (`playing`).
+    Created { kind: SpeechKind, add_to_chat_ctx: bool, playing: bool },
+    /// An assistant message of the speech: its words and whether it was cut.
+    ItemAdded { text: Option<String>, interrupted: bool },
+    /// A step's first frame went out: playout advanced.
+    PlayoutAdvanced,
+    /// The speech ended.
+    Done { interrupted: bool, failed: bool },
+}
+
+/// Participant speech, dated to its boundary rather than to when the session saw it.
+#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
+pub enum UserSpeechObservation {
+    /// The VAD (or STT) onset, back-dated as the session's user state is.
+    Started { at: Ts },
+    /// The end of speech, back-dated by the silence already elapsed.
+    Ended { at: Ts },
+    /// A non-empty session STT final.
+    Final { text: String, at: Ts },
+}
+
+/// One executed tool call and its output, if it produced one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCallRecord {
+    pub call: lk_agents_abi::FunctionCall,
+    pub output: Option<lk_agents_abi::FunctionCallOutput>,
+}
+
+/// What an AMD run tells the session. Every answer names its run; the session drops one for
+/// another run.
+#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
+pub enum AmdAnswer {
+    /// Listening starts (spec §5.2). Applying it is the activation instant: the session stops
+    /// discarding participant audio there. The opening, if any, comes with it and is checked at
+    /// the same point.
+    Activated { run: AmdRunId, opening: Option<Opening> },
+    /// The decision for a committed turn. It may arrive before or after the customer hook
+    /// returns.
+    ReplyDecided { run: AmdRunId, turn: TurnId, decision: ReplyDecision },
+    /// A turn's transcript on a realtime session (spec §7.2), also for an older turn's late final
+    /// and a turn whose prediction was reused. The session keeps it only for a model without user
+    /// transcription and without session STT, read when it arrives.
+    InsertUserItem { run: AmdRunId, turn: TurnId, text: String },
+    /// AMD completed. `pending` settles every turn committed under the gate whose decision is
+    /// not applied yet.
+    Detach { run: AmdRunId, pending: ReplyDecision, cancel: DetachCancel },
+}
+
+/// Whether and how the agent replies to one turn. Policy only: live facts (speaking, silence,
+/// the latest turn) stay in the session.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReplyDecision {
+    pub allow: bool,
+    /// Stage instructions for this reply and its tool follow-ups. Never saved in history.
+    pub instructions: Option<String>,
+    /// AMD may add the built-in `send_dtmf_events` to this reply (`machine-ivr`, spec §11.1).
+    pub dtmf: bool,
+    /// Silence the participant must keep before the reply plays (spec §10.3). The session times
+    /// it.
+    pub silence: Option<Duration>,
+}
+
+impl ReplyDecision {
+    /// No reply.
+    pub fn deny() -> Self {
+        ReplyDecision::default()
+    }
+
+    /// A reply under the agent's own instructions, at once.
+    pub fn allow() -> Self {
+        ReplyDecision { allow: true, ..ReplyDecision::default() }
+    }
+
+    /// Whether the reply's request differs from the one a plain reply would send: then it never
+    /// adopts the preemptive generation.
+    pub fn changes_request(&self) -> bool {
+        self.instructions.is_some() || self.dtmf
+    }
+}
+
+/// What the agent says first, before any prediction allows a reply (spec §10.6). It bypasses the
+/// hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Opening {
+    /// Said as written (`opening_text`).
+    Text(String),
+    /// Generated with no tools (`opening_instructions`).
+    Instructions(String),
+}
+
+/// What `Detach` cancels (spec §12.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
+pub enum DetachCancel {
+    /// Replies stay allowed: keep every speech, including the preemptive generation.
+    Keep,
+    /// `machine-unavailable` or a stage the application handles: cancel every speech with no
+    /// playout yet.
+    ForbidReplies,
+}
+
+/// Session commands for AMD. Producer: the host or a test; handler: the session's gate.
+#[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = AmdCommandKind)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one attach and at most one check per run: the size is paid twice per AMD entry"
+)]
+pub enum AmdCommand {
+    /// Install the gate for `run`, hold authorization, and set the attached rules. Answered with
+    /// [`Answer::AmdAttach`](crate::agent_session::Answer::AmdAttach). `dtmf_tool` declares
+    /// AMD's built-in `send_dtmf_events`, which the host runs: a reply whose decision allows DTMF
+    /// offers it, unless the agent has a tool by that name. `amd_stt` says the run has its own STT,
+    /// which a realtime model without session STT needs (spec §5.1).
+    Attach {
+        run: AmdRunId,
+        dtmf_tool: lk_agents_abi::ToolSpec,
+        amd_stt: bool,
+        call: Option<RequestId>,
+    },
+    /// The attach's refusals, in its order, with nothing installed: `AMD.__aenter__` checks the
+    /// session before it creates the models it names by string, and a refused instance stays
+    /// unentered. Answered with [`Answer::AmdAttach`](crate::agent_session::Answer::AmdAttach).
+    Check { amd_stt: bool, call: Option<RequestId> },
+}
+
+/// Why the session refused to attach a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, lk_agents_abi::Vocabulary)]
+pub enum AmdAttachRefused {
+    #[error("amd is already active")]
+    AlreadyAttached,
+    #[error("wait for the agent handoff to finish before entering AMD")]
+    HandoffInFlight,
+    #[error("finish the AgentTask before entering AMD")]
+    TaskRunning,
+    /// The realtime server detects turns and starts its replies itself, past the gate.
+    #[error("amd requires client-side turn detection with realtime models")]
+    RealtimeServerTurnDetection,
+    /// The realtime model cannot take a response's instructions and tools, or replies to tool
+    /// results on its own.
+    #[error(
+        "amd requires a realtime model with per-response tools and client-controlled tool replies"
+    )]
+    RealtimeTools,
+    /// A realtime model with neither session STT nor AMD's own: AMD would classify nothing.
+    #[error("amd requires session STT or AMD STT with realtime models")]
+    RealtimeNoStt,
+    #[error("the session is closing")]
+    Closing,
+}

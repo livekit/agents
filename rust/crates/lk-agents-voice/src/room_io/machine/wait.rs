@@ -13,6 +13,11 @@ pub enum WaitFor {
     Agent {
         name: Option<String>,
     },
+    Attribute {
+        identity: String,
+        attribute: String,
+        value: String,
+    },
     Track {
         identity: Option<String>,
         kinds: Option<Vec<i32>>,
@@ -55,6 +60,7 @@ pub enum RoomWaitEvent {
 pub enum Ready {
     Participant(Option<ParticipantIdentity>),
     Agent(ParticipantIdentity),
+    Attribute,
     Track(Option<ParticipantIdentity>, TrackSid),
 }
 
@@ -99,6 +105,20 @@ impl RoomWait {
                 .iter()
                 .find(|participant| agent_matches(name, participant))
                 .map(|participant| Ready::Agent(participant.identity.clone()))),
+            WaitFor::Attribute { identity, attribute, value } => {
+                let participant = snapshot
+                    .remote
+                    .iter()
+                    .find(|participant| participant.identity.as_str() == identity)
+                    .ok_or_else(|| {
+                        RtcError::WaitEnded(format!(
+                            "participant {} is not in the room",
+                            repr(identity)
+                        ))
+                    })?;
+                Ok((participant.attributes.get(attribute) == Some(value))
+                    .then_some(Ready::Attribute))
+            }
             WaitFor::Track { identity, kinds, include_local, subscribed } => {
                 if *include_local
                     && identity_matches(identity, &snapshot.local.identity)
@@ -142,6 +162,23 @@ impl RoomWait {
                 RoomWaitEvent::Connected(participant) | RoomWaitEvent::Attributes(participant),
             ) if agent_matches(name, &participant) => Some(Ready::Agent(participant.identity)),
             (
+                WaitFor::Attribute { identity, attribute, value },
+                RoomWaitEvent::Attributes(participant),
+            ) if participant.identity.as_str() == identity
+                && participant.attributes.get(attribute) == Some(value) =>
+            {
+                Some(Ready::Attribute)
+            }
+            (
+                WaitFor::Attribute { identity, attribute, .. },
+                RoomWaitEvent::Disconnected(participant),
+            ) if participant.as_str() == identity => {
+                return Some(Err(RtcError::WaitEnded(format!(
+                    "participant {} disconnected while waiting for {attribute}",
+                    repr(identity)
+                ))));
+            }
+            (
                 WaitFor::Track { identity, kinds, include_local, subscribed },
                 RoomWaitEvent::Published { owner, local, track },
             ) if identity_matches(identity, &owner)
@@ -177,6 +214,9 @@ impl RoomWait {
         let subject = match &self.request {
             WaitFor::Participant { .. } => "participant".to_owned(),
             WaitFor::Agent { .. } => "agent participant".to_owned(),
+            WaitFor::Attribute { identity, attribute, .. } => {
+                format!("{} {attribute}", repr(identity))
+            }
             WaitFor::Track { .. } => "track publication".to_owned(),
         };
         RtcError::WaitEnded(format!("room disconnected while waiting for {subject}"))

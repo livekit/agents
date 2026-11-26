@@ -16,7 +16,7 @@ from .._generated.workflow_prompts import (
     TOOL_SEARCH_QUERY_DESCRIPTION,
 )
 from ..job import get_job_context
-from ..llm import ToolError, ToolFlag, Toolset, function_tool
+from ..llm import ToolError, ToolFlag, ToolResult, Toolset, function_tool
 from ..llm.tool_context import (
     FunctionTool,
     ProviderTool,
@@ -113,9 +113,10 @@ class EndCallTool(Toolset):
 
 
 @function_tool
-async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> str:
+async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> ToolResult:
     """
     Send a list of DTMF events to the telephony provider.
+    Successful sends do not request a follow-up reply.
 
     Call when:
     - User wants to send DTMF events
@@ -125,7 +126,12 @@ async def send_dtmf_events(ctx: RunContext, events: list[DtmfEvent]) -> str:
     if session is None:
         raise RuntimeError("DTMF tones are sent on a call; this tool runs outside one")
     room = session._room or get_job_context().room
-    return await _core.send_dtmf_events(_core._core_create_room_session(room), events)
+    try:
+        sent = await _core.send_dtmf_events(_core._core_create_room_session(room), events)
+    except ToolError as error:
+        # one fixed message, with no cause: the room's error never reaches the model or a log
+        raise error from None
+    return ToolResult(sent, reply_required=False)
 
 
 class SearchStrategy(Protocol):

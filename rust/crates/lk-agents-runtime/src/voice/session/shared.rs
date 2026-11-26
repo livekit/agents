@@ -43,6 +43,103 @@ impl Journal {
     }
 }
 
+type AmdObserver =
+    dyn FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation) + Send;
+
+/// One run's executor input. The gate answers one run at a time, but routes are keyed by run, so
+/// a run being refused never displaces the one attached.
+type AmdRoutes = std::collections::BTreeMap<
+    lk_agents_voice::amd::AmdRunId,
+    tokio::sync::mpsc::UnboundedSender<lk_agents_voice::amd::AmdObservation>,
+>;
+
+/// Where the gate's AMD observations go: to each run's executor, routed by run, and to the
+/// observer a test or the simulation installed. A run's observations reach only that run; with
+/// no route they go nowhere, and nothing in the session waits on one. It also owns every run's
+/// task, from its entry to its outcome, so the session's close joins them.
+#[derive(Clone, Default)]
+pub struct AmdTap {
+    observer: Option<Arc<Mutex<AmdObserver>>>,
+    routes: Arc<Mutex<AmdRoutes>>,
+    /// The last run id handed out: runs are numbered per session, from 1.
+    runs: Arc<std::sync::atomic::AtomicU64>,
+    /// Each run's task: its attach, its executor, its legs' join and its models' close.
+    tasks: Arc<lk_agents_net::task::TaskSet>,
+}
+
+impl std::fmt::Debug for AmdTap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let routed: Vec<_> = self.routes.lock().keys().copied().collect();
+        f.debug_struct("AmdTap")
+            .field("observer", &self.observer.is_some())
+            .field("routed", &routed)
+            .finish()
+    }
+}
+
+impl AmdTap {
+    pub fn observed(
+        observer: impl FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation)
+        + Send
+        + 'static,
+    ) -> Self {
+        AmdTap { observer: Some(Arc::new(Mutex::new(observer))), ..AmdTap::default() }
+    }
+
+    /// A new run's id, unique on the session.
+    pub fn next_run(&self) -> lk_agents_voice::amd::AmdRunId {
+        let last = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        lk_agents_voice::amd::AmdRunId(last + 1)
+    }
+
+    /// From here, `run`'s observations go to `observations`, in the order the gate sent them.
+    /// Another run's route is left as it is.
+    pub fn attach(
+        &self,
+        run: lk_agents_voice::amd::AmdRunId,
+        observations: tokio::sync::mpsc::UnboundedSender<lk_agents_voice::amd::AmdObservation>,
+    ) {
+        let previous = self.routes.lock().insert(run, observations);
+        drop(previous);
+    }
+
+    /// `run`'s observations go nowhere any more.
+    pub fn detach(&self, run: lk_agents_voice::amd::AmdRunId) {
+        let previous = self.routes.lock().remove(&run);
+        drop(previous);
+    }
+
+    pub fn deliver(
+        &self,
+        run: lk_agents_voice::amd::AmdRunId,
+        observation: &lk_agents_voice::amd::AmdObservation,
+    ) {
+        if let Some(observer) = &self.observer {
+            (observer.lock())(run, observation);
+        }
+        let mut routes = self.routes.lock();
+        // A run whose executor is gone stops being routed.
+        if routes.get(&run).is_some_and(|route| route.send(observation.clone()).is_err()) {
+            routes.remove(&run);
+        }
+    }
+
+    /// The set every run's task lives in, from its entry to its outcome.
+    pub(crate) fn tasks(&self) -> &Arc<lk_agents_net::task::TaskSet> {
+        &self.tasks
+    }
+
+    /// Waits until every run settled (legs joined, models closed), or `deadline`; then cancels
+    /// what is left and names it.
+    pub async fn join(
+        &self,
+        clock: &dyn lk_agents_abi::Clock,
+        deadline: lk_agents_abi::Ts,
+    ) -> Vec<String> {
+        self.tasks.drain(clock, deadline).await
+    }
+}
+
 /// The loop's one queue: every source sends on it, so the loop receives one [`VoiceRuntimeEvent`] at a time
 /// in arrival order and merges it with its timers by a stated rule; the trace is a function of the
 /// event sequence.
@@ -144,6 +241,8 @@ pub struct PeerHandle {
     pub time: Timebase,
     /// The session's context, under its `agent_session`.
     pub session: telemetry::Cx,
+    /// Where the gate's AMD observations go: an AMD run routes its own here.
+    pub amd: AmdTap,
 }
 
 impl PeerHandle {
@@ -225,6 +324,8 @@ pub struct SessionShared {
     pub(in crate::voice) keyterms: lk_agents_net::signal::Cell<Option<Vec<String>>>,
     /// A task's steps reach the loop's journal only when one is observed.
     pub(in crate::voice) journal: Journal,
+    /// The attached AMD run's observations.
+    pub(in crate::voice) amd: AmdTap,
 }
 
 impl SessionShared {

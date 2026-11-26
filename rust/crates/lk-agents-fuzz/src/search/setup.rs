@@ -90,6 +90,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         avatar_latency_ms: 20,
         stt_model: 0,
         stt_speech: Default::default(),
+        amd: None,
         tts_latency: None,
         conn: None,
         chunked_tts: false,
@@ -231,7 +232,64 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         setup.remote = Some(peer_script(rng));
         setup.tools.push(crate::fakes::remote_tool::REMOTE_TOOL.into());
     }
+    // AMD through its executor on a call in ten, drawn after everything else. The answerer then
+    // answers the executor's model requests instead of the gate (`search::conversation::answerer`).
+    // AMD enters only a realtime model with client-side turn detection, per-response tools and
+    // client tool replies, and some STT (spec §5.1). A realtime call mostly detects turns on the
+    // client, and AMD mostly brings its own recogniser when the session has none; the rest are
+    // refused.
+    // A model without its own transcription leaves the turn's words to the session's recogniser,
+    // or, half the time with none, to AMD's `InsertUserItem` (spec §7.2).
+    if rng.u8(0..100) < 10 {
+        let realtime = setup.realtime.is_some();
+        let mut client_side = false;
+        if let Some(server) = setup.realtime.as_mut() {
+            client_side = rng.u8(0..100) < 75;
+            if client_side {
+                server.turn_detection = false;
+                server.duplex = false;
+            }
+            server.user_transcription = rng.bool();
+            if client_side && !server.user_transcription && rng.bool() {
+                setup.stt = false;
+            }
+        }
+        let mut amd = amd(rng, setup.stt, realtime);
+        // Without session STT AMD mostly brings its own; one call in ten has none, which the
+        // session refuses (`RealtimeNoStt`).
+        amd.own_stt |= client_side && !setup.stt && rng.u8(0..10) != 0;
+        setup.amd = Some(amd);
+        // Mostly a caller in the room to listen to; otherwise AMD finds no participant.
+        if setup.room_legs.is_none() && !setup.console && rng.u8(0..100) < 80 {
+            setup.room_legs = Some(RoomLegs { pre_connect: None });
+        }
+    }
     setup
+}
+
+/// AMD's models and options for a run of the executor: a decision model or an LLM, AMD's own
+/// recogniser or not, an opening, and a stage the application handles. A realtime model hears the
+/// caller itself, so AMD may bring its own recogniser without session STT.
+fn amd(rng: &mut Rng, stt: bool, realtime: bool) -> crate::fakes::amd::AmdSetup {
+    let mut options = crate::fakes::amd::options();
+    match rng.u8(0..6) {
+        0 => options.opening_text = Some(crate::fakes::amd::OPENING_TEXT.into()),
+        1 => options.opening_instructions = Some(crate::fakes::amd::OPENING_INSTRUCTIONS.into()),
+        _ => {}
+    }
+    match rng.u8(0..8) {
+        0 => options.screening_instructions = None,
+        1 => options.voicemail_instructions = None,
+        2 => options.ivr_instructions = None,
+        _ => {}
+    }
+    crate::fakes::amd::AmdSetup {
+        decision: rng.u8(0..100) < 25,
+        own_stt: (stt || realtime) && rng.bool(),
+        inference: rng.bool(),
+        options,
+        ..Default::default()
+    }
 }
 
 /// How the remote peer works and misbehaves: slow work, progress bursts, questions, a lost

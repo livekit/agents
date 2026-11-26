@@ -92,6 +92,9 @@ impl VoiceDriver {
         let drains = self.activity.take_drain_waiters();
         let phase = ClosePhase::Requested;
         self.session.closing = Some(Closing { reason, error, phase, drains: Some(drains) });
+        // An attached AMD run ends with the session: its gate releases, so the drain plays what
+        // it held.
+        self.release_gate_for_close(now);
         if !drain {
             let generating = self.activity.realtime_generating();
             self.force_cut_open(now);
@@ -395,6 +398,15 @@ impl VoiceDriver {
                 return;
             }
             Command::VoiceTask(_) => return,
+            // An attach or its check somebody awaits: refused as closing.
+            Command::Amd(
+                crate::amd::AmdCommand::Attach { call, .. }
+                | crate::amd::AmdCommand::Check { call, .. },
+            ) => {
+                let refused = crate::amd::AmdAttachRefused::Closing;
+                self.answer(call, Answer::AmdAttach(Err(refused)));
+                return;
+            }
             // A run somebody awaits: refused as closing, on the stream.
             Command::Run(spec) => {
                 self.emit_now(SessionEvent::RunRefused {

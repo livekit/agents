@@ -523,7 +523,7 @@ input keeps its task/context identity; see
 | Name | What |
 |---|---|
 | `EndCallTool(extra_description=, delete_room=, end_instructions=, ignore_on_enter=, on_tool_called=, on_tool_completed=)` | a toolset whose `end_call` tool ends the call after the agent's goodbye; the callbacks receive a `ToolCalledEvent` and a `ToolCompletedEvent` |
-| `send_dtmf_events` | a tool that sends keypad (DTMF) tones on the call |
+| `send_dtmf_events` | a tool that sends keypad (DTMF) tones on the call, 0.3 s apart. It returns `ToolResult(..., reply_required=False)`: the agent does not reply after a send, and the next participant turn decides what happens next. A failed send raises `ToolError("Failed to send DTMF events.")` without the room's error; a cancelled send stays a cancellation |
 | `ToolSearchToolset(id=, tools=, max_results=, search_strategy=, search_description=, query_description=)` | keeps a large tool collection out of the model's context: one `tool_search` tool loads the tools a search finds; the `*_description` arguments reword the tool and its query parameter for the model |
 | `ToolProxyToolset(id=, tools=, ..., search_description=, query_description=, call_description=)` | the same collection behind two fixed tools, `tool_search` (returns schemas) and `call_tool`, so the tool list never changes |
 | `SearchStrategy`, `SearchItem` | the search the two toolsets run (`build_index`, `search`, `cleanup` over `SearchItem`s); `BM25SearchStrategy(k1=, b=)` is the default, `KeywordSearchStrategy` a simpler one |

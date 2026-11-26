@@ -138,6 +138,7 @@ impl Authored {
                 speech: Some(speech),
                 tools: vec![],
                 input_candidates: None,
+                messages: vec![],
             },
         )
     }
@@ -379,6 +380,42 @@ impl Authored {
         self
     }
 
+    /// The session sent realtime socket 0 this command.
+    pub fn rt_sent(mut self, sent: crate::record::RtSent) -> Self {
+        let at = self.next();
+        self.recording.record_rt_sent(at, 0, sent);
+        self
+    }
+
+    /// The session asked realtime socket 0 for a response, with these per-response instructions.
+    pub fn rt_response(self, req_id: &str, instructions: Option<&str>) -> Self {
+        self.rt_sent(crate::record::RtSent::Response {
+            req_id: req_id.into(),
+            instructions: instructions.map(str::to_owned),
+        })
+    }
+
+    /// The session dispatched request `req_id` for `speech` (its journal's `Requested`), and
+    /// realtime socket 0 received it with these per-response instructions.
+    pub fn rt_request(self, req_id: &str, speech: u64, instructions: Option<&str>) -> Self {
+        use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+        use lk_agents_voice::trace::RealtimeStep;
+        let requested =
+            RealtimeStep::Requested { req_id: req_id.into(), speech: Some(SpeechId(speech)) };
+        self.journal(Step::Realtime(requested)).rt_response(req_id, instructions)
+    }
+
+    /// The session reported to run `run` that `speech` replies to `turn` (`ReplyCreated`).
+    pub fn reply_created(self, run: u64, turn: u64, speech: u64) -> Self {
+        use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+        use lk_agents_voice::audio_recognition::TurnId;
+        let created = lk_agents_voice::amd::AmdObservation::ReplyCreated {
+            turn: TurnId(turn),
+            speech: SpeechId(speech),
+        };
+        self.amd(run, created)
+    }
+
     /// The person heard `ms` of a realtime generation's audio.
     pub fn heard(mut self, generation: u32, ms: u64) -> Self {
         let at = self.next();
@@ -438,8 +475,285 @@ impl Authored {
         self
     }
 
+    /// The AMD run `run` observed this.
+    pub fn amd(mut self, run: u64, observation: lk_agents_voice::amd::AmdObservation) -> Self {
+        let at = self.next();
+        self.recording.record_amd(at, lk_agents_voice::amd::AmdRunId(run), observation);
+        self
+    }
+
+    /// AMD's executor attached run `run` (`Input::AmdEnter`).
+    pub fn amd_entered(mut self, run: u64) -> Self {
+        let at = self.next();
+        self.recording.record_amd_entered(at, Ok(lk_agents_voice::amd::AmdRunId(run)));
+        self
+    }
+
+    /// The session took this answer from AMD's executor.
+    pub fn amd_answer(mut self, answer: lk_agents_voice::amd::AmdAnswer) -> Self {
+        let at = self.next();
+        self.recording.record_amd_answer(at, answer);
+        self
+    }
+
+    /// Run `run` handed the host this event.
+    pub fn amd_event(mut self, run: u64, event: lk_agents_voice::amd::events::AmdEvent) -> Self {
+        let at = self.next();
+        self.recording.record_amd_event(at, lk_agents_voice::amd::AmdRunId(run), event);
+        self
+    }
+
+    /// Run `run`'s `execute()` returned this.
+    pub fn amd_returned(
+        mut self,
+        run: u64,
+        outcome: lk_agents_voice::amd::events::Outcome,
+    ) -> Self {
+        let at = self.next();
+        self.recording.record_amd_outcome(at, lk_agents_voice::amd::AmdRunId(run), outcome);
+        self
+    }
+
+    /// The executor journalled this step.
+    pub fn amd_step(self, step: lk_agents_voice::trace::AmdStep) -> Self {
+        self.journal(Step::Amd(step))
+    }
+
+    /// AMD's executor asked a fake model: a classification (prompt, `state`, then `words`), a
+    /// menu extraction of `words`, or a decision model's choice.
+    pub fn amd_asked(
+        self,
+        kind: crate::record::amd_run::AskKind,
+        state: &str,
+        words: &str,
+    ) -> Self {
+        use crate::record::amd::RequestMessage;
+        use crate::record::amd_run::{AskKind, Asked};
+        let message =
+            |role, text: &str| RequestMessage { id: "item".into(), role, text: text.into() };
+        let (messages, input) = match kind {
+            AskKind::Classify => (
+                vec![
+                    message(lk_agents_abi::Role::System, "Classify the call participant"),
+                    message(lk_agents_abi::Role::System, state),
+                    message(lk_agents_abi::Role::User, words),
+                ],
+                None,
+            ),
+            AskKind::Menu => (
+                vec![
+                    message(lk_agents_abi::Role::System, "Extract observed IVR menu"),
+                    message(lk_agents_abi::Role::User, words),
+                ],
+                None,
+            ),
+            AskKind::Choice => {
+                (Vec::new(), Some(format!("Request: {state}\nTranscript:\nuser: {words}")))
+            }
+        };
+        let asked = Asked {
+            kind,
+            messages,
+            tools: if kind == AskKind::Choice { vec![] } else { vec!["record_result".into()] },
+            required: kind != AskKind::Choice,
+            tagged: false,
+            input,
+            // A decision model's choice offers every category.
+            options: match kind {
+                AskKind::Choice => (lk_agents_voice::amd::events::Category::ALL.iter())
+                    .map(|c| c.as_str().to_owned())
+                    .collect(),
+                AskKind::Classify | AskKind::Menu => Vec::new(),
+            },
+        };
+        self.opens(Kind::AmdAsk, Detail::AmdAsk(Box::new(asked)))
+    }
+
+    /// The case answered ask `ask` with `says`; `accepted` when the model call still took it.
+    pub fn amd_said(mut self, ask: u32, says: crate::input::AmdSays, accepted: bool) -> Self {
+        let at = self.next();
+        self.recording.record_amd_reply(crate::record::amd_run::Reply { at, ask, says, accepted });
+        self
+    }
+
+    /// The session committed `turn` for a reply with these words: the end of turn, the host's
+    /// `UserTurnCompleted`, its user item (`user_<turn>`) and, under a gate, its `AmdTurn`.
+    pub fn user_turn(self, run: Option<u64>, turn: u64, words: &str) -> Self {
+        self.user_turn_unsaved(run, turn, words).user_item(turn, words)
+    }
+
+    /// The turn's user item, `user_<turn>`, as the session saves it.
+    pub fn user_item(self, turn: u64, words: &str) -> Self {
+        use lk_agents_voice::audio_recognition::TurnId;
+        self.session(SessionEvent::ConversationItemAdded {
+            item: Box::new(lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
+                format!("user_{turn}"),
+                lk_agents_abi::Role::User,
+                words,
+                std::time::UNIX_EPOCH,
+            ))),
+            agent: "agent".into(),
+            source: lk_agents_voice::agent::Source::UserTurn { turn: TurnId(turn) },
+            visibility: lk_agents_voice::agent::Visibility::Both,
+        })
+    }
+
+    /// As [`Self::user_turn`], with no user item saved.
+    pub fn user_turn_unsaved(mut self, run: Option<u64>, turn: u64, words: &str) -> Self {
+        use lk_agents_voice::audio_recognition::{TurnId, UserTurnCommitVerdict};
+        use lk_agents_voice::trace::TurnStep;
+        self = self.journal(Step::Turn(TurnStep::EndOfTurn {
+            transcript: words.into(),
+            verdict: UserTurnCommitVerdict::Reply,
+            committed: true,
+        }));
+        self = self.session(SessionEvent::UserTurnCompleted(
+            lk_agents_voice::events::UserTurnCompletedEvent {
+                turn: TurnId(turn),
+                new_transcript: words.into(),
+                transcript_confidence: 1.0,
+            },
+        ));
+        if let Some(run) = run {
+            self = self.opens(Kind::AmdTurn, Detail::AmdTurn { run, turn });
+            self = self.amd(
+                run,
+                lk_agents_voice::amd::AmdObservation::TurnCommitted {
+                    turn: TurnId(turn),
+                    transcript: words.into(),
+                    eot_delay: None,
+                    skip_reply: false,
+                    bound: true,
+                    speaking: false,
+                    agent: "agent".into(),
+                    at: lk_agents_abi::Ts::ZERO,
+                },
+            );
+        }
+        self
+    }
+
+    /// A model request for `speech` answering the user item `user_<turn>` (with `words`), with
+    /// `extra` system messages after it and these tools.
+    pub fn request(
+        self,
+        speech: u64,
+        turn: u64,
+        words: &str,
+        extra: &[&str],
+        tools: &[&str],
+    ) -> Self {
+        use crate::record::amd::RequestMessage;
+        let mut messages = vec![
+            RequestMessage {
+                id: "prompt".into(),
+                role: lk_agents_abi::Role::System,
+                text: "Be brief.".into(),
+            },
+            RequestMessage {
+                id: format!("user_{turn}"),
+                role: lk_agents_abi::Role::User,
+                text: words.into(),
+            },
+        ];
+        messages.extend(extra.iter().map(|text| RequestMessage {
+            id: "turn_instructions".into(),
+            role: lk_agents_abi::Role::System,
+            text: (*text).into(),
+        }));
+        self.opens(
+            Kind::Chat,
+            Detail::Chat {
+                ctx_ids: messages.iter().map(|m| m.id.clone()).collect(),
+                speech: Some(speech),
+                tools: tools.iter().map(|t| (*t).to_string()).collect(),
+                input_candidates: None,
+                messages,
+            },
+        )
+    }
+
+    /// The speech's audio reached the sink.
+    pub fn pushed(self, speech: u64) -> Self {
+        use lk_agents_voice::trace::{PlayoutStep, SinkCall};
+        self.journal(Step::Playout(PlayoutStep::SinkCalled {
+            speech: Some(SpeechId(speech)),
+            call: SinkCall::Push { frames: 1 },
+        }))
+    }
+
     pub fn done(mut self) -> Recording {
         self.recording.set_now(Observed::at(self.seq + 1, self.seq + 1 + self.later_ms));
         self.recording
+    }
+}
+
+/// An `amd_prediction` for a hand-written recording.
+pub fn amd_prediction(
+    turn_id: u64,
+    category: lk_agents_voice::amd::events::Category,
+    stage: lk_agents_voice::amd::events::Stage,
+    reason: lk_agents_voice::amd::events::AmdReason,
+) -> lk_agents_voice::amd::events::Prediction {
+    lk_agents_voice::amd::events::Prediction {
+        turn_id,
+        category,
+        stage,
+        reason,
+        transcript: "hello".into(),
+        speech_duration: std::time::Duration::from_millis(300),
+        delay: std::time::Duration::from_millis(200),
+        inference_duration: None,
+    }
+}
+
+/// An `amd_completed` outcome for a hand-written recording.
+pub fn amd_outcome(
+    category: lk_agents_voice::amd::events::Stage,
+    reason: lk_agents_voice::amd::events::AmdReason,
+    voicemail_message_played: bool,
+) -> lk_agents_voice::amd::events::Outcome {
+    lk_agents_voice::amd::events::Outcome {
+        category,
+        reason,
+        voicemail_message_played,
+        last_prediction: None,
+    }
+}
+
+/// The executor's `Predicted` step for a hand-written recording.
+#[allow(clippy::too_many_arguments, reason = "one argument per journalled field")]
+pub fn amd_predicted(
+    run: u64,
+    turn: u64,
+    turn_id: u64,
+    source_req: Option<u64>,
+    raw: Option<lk_agents_voice::amd::events::Category>,
+    category: lk_agents_voice::amd::events::Category,
+    stage: lk_agents_voice::amd::events::Stage,
+    reason: lk_agents_voice::amd::events::AmdReason,
+    likely_human: bool,
+) -> lk_agents_voice::trace::AmdStep {
+    lk_agents_voice::trace::AmdStep::Predicted {
+        run: lk_agents_voice::amd::AmdRunId(run),
+        turn: lk_agents_voice::audio_recognition::TurnId(turn),
+        turn_id,
+        source_req: source_req.map(lk_agents_voice::amd::effects::ReqId),
+        raw,
+        category,
+        stage,
+        reason,
+        likely_human,
+    }
+}
+
+/// The executor's `TurnBound` step for a hand-written recording.
+pub fn amd_bound(run: u64, turn: u64, turn_id: u64) -> lk_agents_voice::trace::AmdStep {
+    lk_agents_voice::trace::AmdStep::TurnBound {
+        run: lk_agents_voice::amd::AmdRunId(run),
+        turn: lk_agents_voice::audio_recognition::TurnId(turn),
+        turn_id,
+        has_text: true,
+        late_wait: false,
     }
 }

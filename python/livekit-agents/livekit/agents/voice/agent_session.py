@@ -13,7 +13,7 @@ import contextlib
 import contextvars
 import copy
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
 from typing_extensions import Unpack
@@ -38,6 +38,7 @@ from ..llm import (
     ChatContext,
     ChatItem,
     Tool,
+    ToolChoice,
     Toolset,
 )
 from ..log import logger
@@ -92,6 +93,7 @@ if TYPE_CHECKING:
     from ..storage.context import ContextStore, _SessionBinding
     from ..storage.session_state import BoundContext
     from ._session_bindings import SessionHost
+    from .amd import AMD
     from .io import TurnHandlingOptions
 
 # The session and the state of the event its callbacks are handling.
@@ -131,6 +133,9 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _steps: dict[str, Callable[..., Any]]
     _audio_input_options: AudioInputOptions | None
     _tasks: aio.TaskSet
+    # the running AMD, and its DTMF tool: kept after detach, so a reply AMD allowed still runs it
+    _amd: AMD | None = None
+    _amd_tools: list[Tool] = []  # noqa: RUF012 - replaced, never mutated
 
     def __init__(
         self,
@@ -221,6 +226,11 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     @property
     def conn_options(self) -> SessionConnectOptions:
         return self._conn_options
+
+    @property
+    def amd(self) -> AMD | None:
+        """The running ``AMD``, or ``None``."""
+        return self._amd
 
     @property
     def input(self) -> io.AgentInput:
@@ -401,10 +411,57 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
 
         return result()
 
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+        *,
+        audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
+    ) -> io.SpeechHandle:
+        """Speak ``text`` without the LLM; see ``_facades.VoiceSession.say``. Raises
+        ``RuntimeError`` while AMD runs: its opening options are the way to speak first."""
+        if self._amd is not None:
+            # AMD would hold the speech and play it after detection
+            raise RuntimeError("say() is not supported while AMD is running")
+        return super().say(
+            text,
+            audio=audio,
+            allow_interruptions=allow_interruptions,
+            add_to_chat_ctx=add_to_chat_ctx,
+        )
+
+    def generate_reply(
+        self,
+        *,
+        user_input: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+    ) -> io.SpeechHandle:
+        """Reply now; see ``_facades.VoiceSession.generate_reply``. Raises ``RuntimeError`` while
+        AMD runs: AMD decides each reply."""
+        if self._amd is not None:
+            # AMD would hold the reply and play it after detection
+            raise RuntimeError("generate_reply() is not supported while AMD is running")
+        return super().generate_reply(
+            user_input=user_input,
+            instructions=instructions,
+            tool_choice=tool_choice,
+            tools=tools,
+            allow_interruptions=allow_interruptions,
+            chat_ctx=chat_ctx,
+        )
+
     def update_agent(self, agent: Agent, *, chat_ctx: ChatContext | None = None) -> None:
         """Hand the conversation to ``agent``; the session and its history stay. ``chat_ctx`` is
         the context ``agent`` works on instead of the conversation carried forward; before
-        ``start()``, the history the session starts on unless ``start()`` names its own."""
+        ``start()``, the history the session starts on unless ``start()`` names its own. Raises
+        ``RuntimeError`` while AMD runs."""
+        if self._amd is not None:
+            raise RuntimeError("agent handoffs are not supported while AMD is running")
         frame = self._frame(agent) if self._core is not None else None
         items = chat_ctx.items if chat_ctx is not None else None
         self._native.update_agent(agent, frame, chat_ctx=items)

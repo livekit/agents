@@ -20,7 +20,9 @@ use lk_agents_voice::{
 use crate::input::Input;
 
 mod probes;
+mod realtime;
 pub use probes::{Fault, Probe, Site, Wait};
+pub use realtime::{Breach, RtSent};
 mod recognition;
 mod remote;
 pub use recognition::{Recognised, Recognition, SttReport};
@@ -30,27 +32,13 @@ mod storage;
 pub use storage::{
     BoundaryOperation, BoundaryOutcome, StorageFault, StorageOperation, StorageStep,
 };
+pub mod amd;
+pub mod amd_run;
 mod views;
 
 #[cfg(test)]
-mod tests {
-    use super::Tag;
-
-    #[test]
-    fn reserved_marker_values_are_unknown_audio_without_a_producer() {
-        for chunk in 0..=Tag::MAX_CHUNK as i16 {
-            for sample in [chunk, -chunk, Tag::MIC | chunk, -(Tag::MIC | chunk)] {
-                assert_eq!(Tag::decode(sample), Tag::Unknown(sample), "sample {sample}");
-            }
-        }
-        assert_eq!(Tag::decode(i16::MIN), Tag::Unknown(i16::MIN));
-        // The first representable producer remains producer zero, including both marker sides.
-        assert_eq!(Tag::decode(Tag::synthesized(0, 0)), Tag::Synthesized { tts: 0, chunk: 0 });
-        assert_eq!(Tag::decode(Tag::generated(0, 0)), Tag::Generated { generation: 0, chunk: 0 });
-        assert_eq!(Tag::decode(Tag::fed(0, 0)), Tag::Fed { stream: 0, chunk: 0 });
-        assert_eq!(Tag::decode(Tag::mic(0, 0)), Tag::Mic { mic: 0, chunk: 0 });
-    }
-}
+#[path = "tag_tests.rs"]
+mod tag_tests;
 pub use resources::{Resource, hook_of, step_name};
 pub use views::*;
 
@@ -158,6 +146,11 @@ pub enum Kind {
     Realtime,
     /// A turn the realtime server is in the middle of: open until the case says it finished.
     Generation,
+    /// A turn the AMD gate committed: open until its run detaches, so a late answer names it.
+    AmdTurn,
+    /// One request AMD's executor made of its fake models: a classification, a menu extraction
+    /// or a decision model's choice. Open until answered or abandoned.
+    AmdAsk,
 }
 
 /// The production identity behind a resource, once the run knows it.
@@ -198,6 +191,20 @@ pub enum Detail {
         tools: Vec<String>,
         /// Count observed in an input classifier's actual prompt, without retaining dialogue.
         input_candidates: Option<usize>,
+        /// Each message, in request order: which turn a reply answers, with what instructions.
+        messages: Vec<amd::RequestMessage>,
+    },
+    /// A turn the AMD gate committed: the run that observed it and the session's turn id.
+    AmdTurn {
+        run: u64,
+        turn: u64,
+    },
+    /// What AMD's executor asked one of its fake models, as the model received it.
+    AmdAsk(Box<amd_run::Asked>),
+    /// AMD's own recogniser, apart from the session's; `tagged` when its connections carry
+    /// AMD's client feature header (`X-LiveKit-Client-Feature: AMD`).
+    AmdStt {
+        tagged: bool,
     },
     Tool {
         invocation_id: String,
@@ -413,6 +420,9 @@ pub enum RecorderCall {
     },
 }
 
+/// When a stream last heard each of a microphone's frame numbers.
+type MicChunks = [Option<Observed>; Tag::MAX_MIC_CHUNK as usize + 1];
+
 /// What one audio sample says about where it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tag {
@@ -430,6 +440,11 @@ pub enum Tag {
 
 impl Tag {
     pub const MAX_CHUNK: u16 = 63;
+    /// A microphone frame's number wraps after 512 frames (5.12 s): long enough that the frame a
+    /// stream hears is the latest push of its number. Its tag gives 9 bits to the number and 5
+    /// to the microphone, so a run's 32nd microphone shares the first one's tags.
+    pub const MAX_MIC_CHUNK: u16 = 511;
+    const MIC_CHUNK_BITS: u32 = 9;
     /// Set on user-side samples that came from the microphone rather than a fed stream.
     const MIC: i16 = 0x4000;
 
@@ -448,7 +463,8 @@ impl Tag {
     }
 
     pub fn mic(mic: u32, chunk: u16) -> i16 {
-        -(Self::synthesized(mic, chunk) | Self::MIC)
+        let producer = (mic % 31 + 1) << Self::MIC_CHUNK_BITS;
+        -((producer as i16) | (chunk.min(Self::MAX_MIC_CHUNK) as i16) | Self::MIC)
     }
 
     pub fn decode(sample: i16) -> Self {
@@ -464,6 +480,14 @@ impl Tag {
             return Tag::Unknown(sample);
         }
         let (id, chunk) = (u32::from(producer - 1), value & 0x3f);
+        if user_side && from_mic {
+            let producer = value >> Self::MIC_CHUNK_BITS;
+            if producer == 0 {
+                return Tag::Unknown(sample);
+            }
+            let chunk = value & Self::MAX_MIC_CHUNK;
+            return Tag::Mic { mic: u32::from(producer - 1), chunk };
+        }
         match (user_side, from_mic) {
             (false, true) => Tag::Generated { generation: id, chunk },
             (false, false) => Tag::Synthesized { tts: id, chunk },
@@ -471,25 +495,6 @@ impl Tag {
             (true, true) => Tag::Mic { mic: id, chunk },
         }
     }
-}
-
-/// A client frame the realtime server refused, or a request it answered from the wrong state
-/// (`fakes::realtime::server`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Breach {
-    /// Refused with an `error` event. `knowing`: when the client sent it, it had already been told
-    /// what makes it invalid (the response it cancels was done, the one it asks over had been
-    /// created, the item it names never was); otherwise it raced an event still on the wire.
-    Refused { event: String, code: &'static str, why: &'static str, knowing: bool },
-    /// A response asked for while the conversation ended in a function call without its output,
-    /// whose output the client sent afterwards: the reply read the conversation without it.
-    AskedBeforeOutput { response: String, request: Option<String>, call_id: String },
-    /// A client `response.cancel` stopped the server's answer to the person's turn (its VAD ended
-    /// the turn and replied), before any of its audio and with no onset told over it: the server
-    /// saw no reason for it.
-    /// `generation` is the reply as the run knows it (`Kind::Generation`), once the client was
-    /// told of it; `None` is a cancel landing on a reply the client never heard of.
-    CancelledUnprompted { response: String, generation: Option<u32> },
 }
 
 /// What the avatar worker's runner was handed and did, as its receiver, its generator and its
@@ -570,6 +575,8 @@ pub enum Answer {
     VoiceTask(
         Result<u64, lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskEnded>,
     ),
+    /// What `AmdEnter`'s `enter` answered: the run's id, or why it refused.
+    AmdEnter(Result<u64, String>),
     /// The channel closed without an answer.
     Lost,
     /// The host stopped awaiting it: the tool body that awaited a `VoiceTask.run()` ended first.
@@ -688,6 +695,8 @@ pub struct Recording {
     first_audio_due: BTreeMap<u32, u64>,
     /// What each realtime socket's server refused or answered wrongly, by socket.
     breaches: Vec<(Observed, u32, Breach)>,
+    /// What the session sent each realtime socket, by socket, as the server receives it.
+    rt_sent: Vec<(Observed, u32, RtSent)>,
     /// Each failed attempt the framework reported to a fake provider, and its `recoverable`.
     provider_failed: Vec<(Observed, Kind, bool)>,
     /// Each recogniser report and what its stream made of it.
@@ -719,6 +728,11 @@ pub struct Recording {
     /// What each audio source published in the room played, by source, as last looked at.
     room_speakers: Vec<crate::fakes::room::Speaker>,
     journal: Vec<(Observed, Step)>,
+    /// What the attached AMD runs observed, in the order the session emitted it.
+    amd: Vec<amd::Seen>,
+    /// What the runs entered through AMD's executor told the host, and what their fake models
+    /// were answered.
+    amd_run: amd_run::Executed,
     handles: BTreeMap<u64, Handle>,
     driver_finished: bool,
     driver_panic: Option<String>,
@@ -765,7 +779,7 @@ struct Index {
     /// When each listening stream last heard each microphone chunk number, by `(stream kind,
     /// stream, microphone)` and then chunk. A run forwards tens of thousands of frames, and the
     /// rules ask about each one whether it was heard after it was pushed.
-    heard: BTreeMap<(Kind, u32, u32), [Option<Observed>; Tag::MAX_CHUNK as usize + 1]>,
+    heard: BTreeMap<(Kind, u32, u32), Box<MicChunks>>,
 }
 
 impl Recording {
@@ -1004,7 +1018,7 @@ impl Recording {
                     .index
                     .heard
                     .entry((kind, nth, mic))
-                    .or_insert_with(|| [None; Tag::MAX_CHUNK as usize + 1]);
+                    .or_insert_with(|| Box::new([None; Tag::MAX_MIC_CHUNK as usize + 1]));
                 if let Some(last) = chunks.get_mut(usize::from(chunk)) {
                     *last = (*last).max(Some(at));
                 }
@@ -1032,11 +1046,6 @@ impl Recording {
 
     pub fn record_provider_failed(&mut self, at: Observed, kind: Kind, recoverable: bool) {
         self.provider_failed.push((at, kind, recoverable));
-    }
-
-    /// The n-th realtime socket's server refused a frame, or answered from the wrong state.
-    pub fn record_breach(&mut self, at: Observed, socket: u32, breach: Breach) {
-        self.breaches.push((at, socket, breach));
     }
 
     /// The person heard `ms` of a realtime generation's audio.

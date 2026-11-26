@@ -71,6 +71,17 @@ impl Llm for FakeLlm {
                     speech: None,
                     tools: request.tools.iter().map(|t| t.name.clone()).collect(),
                     input_candidates: input_candidates(request),
+                    messages: request
+                        .chat_ctx
+                        .items
+                        .iter()
+                        .filter_map(|item| item.as_message())
+                        .map(|m| crate::record::amd::RequestMessage {
+                            id: m.id.clone(),
+                            role: m.role,
+                            text: m.raw_text_content().unwrap_or_default(),
+                        })
+                        .collect(),
                 },
                 Control::Chat(sender),
             );

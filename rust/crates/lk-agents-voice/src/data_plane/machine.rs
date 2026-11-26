@@ -21,6 +21,11 @@ pub const TURN_EDGE: Duration = Duration::from_millis(200);
 /// The audio an open turn holds for an STT stream still opening; beyond it the oldest goes.
 const TURN_BACKLOG: Duration = Duration::from_secs(30);
 
+/// The audio the AMD channel holds for AMD's STT stream still opening, counted in media
+/// duration; beyond it the oldest goes. Its opening is bounded by the stream's own connection
+/// timeouts, well within this.
+pub const AMD_BACKLOG: Duration = Duration::from_secs(30);
+
 /// Control inputs to the microphone fan-out. External commands enter through the owner's queue;
 /// the decision core's effects are applied in their batch before another frame is forwarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +63,10 @@ pub enum AudioInputRouterCommand {
     /// A released turn's tail ends now: the microphone went quiet (a client that stops sending
     /// on release).
     EndTail,
+    /// `true`: until a sink is installed on [`AudioChannel::Amd`], the real frames it would hear
+    /// are held for it, up to [`AMD_BACKLOG`], and delivered first when it is installed.
+    /// `false`: what is held is dropped and nothing more is held.
+    HoldAmd(bool),
 }
 
 /// The counters the close journals, answered to [`AudioInputRouterCommand::ReportCensus`].
@@ -113,6 +122,9 @@ pub struct AudioInputRouter {
     /// The last forwarded frame's shape and the conversion's.
     input_shape: Option<(FrameShape, FrameShape)>,
     turns: TurnGate,
+    /// The AMD channel's frames while AMD's STT stream opens: `Some` from `HoldAmd(true)` until
+    /// its sink is installed or `HoldAmd(false)`.
+    amd_backlog: Option<Edge>,
 }
 
 /// Push-to-talk and user turns at the microphone.
@@ -170,6 +182,7 @@ impl AudioInputRouter {
             last_input: None,
             input_shape: None,
             turns: TurnGate::default(),
+            amd_backlog: None,
         }
     }
 
@@ -186,14 +199,16 @@ impl AudioInputRouter {
                 if let Some(previous) = previous.filter(|p| *p != sink) {
                     effects.push(AudioInputRouterEffect::EndInput(previous));
                 }
-                if channel == AudioChannel::Stt {
-                    let held = self.turns.backlog.take().into_iter();
-                    effects.extend(held.map(|frame| AudioInputRouterEffect::PushFrame {
-                        sink,
-                        frame,
-                        delivery: Delivery::Head,
-                    }));
-                }
+                let held = match channel {
+                    AudioChannel::Stt => self.turns.backlog.take(),
+                    AudioChannel::Amd => self.amd_backlog.take().unwrap_or_default().take(),
+                    _ => VecDeque::new(),
+                };
+                effects.extend(held.into_iter().map(|frame| AudioInputRouterEffect::PushFrame {
+                    sink,
+                    frame,
+                    delivery: Delivery::Head,
+                }));
             }
             AudioInputRouterCommand::Remove(sink) => {
                 if let Some(slot) = self.slots.iter_mut().find(|s| s.sink == Some(sink)) {
@@ -247,6 +262,10 @@ impl AudioInputRouter {
                 }
             }
             AudioInputRouterCommand::EndTail => self.end_tail(&mut effects),
+            AudioInputRouterCommand::HoldAmd(hold) => {
+                let installed = self.slots[AudioChannel::Amd as usize].sink.is_some();
+                self.amd_backlog = (hold && !installed).then(Edge::default);
+            }
             AudioInputRouterCommand::Abort(sink) => {
                 if self.turns.tail.is_some_and(|(tail, _)| tail == sink) {
                     self.turns.tail = None;
@@ -327,6 +346,7 @@ impl AudioInputRouter {
 
     /// The session ended: every sink still installed has its input ended, and an open turn's.
     pub fn close(&mut self) -> Vec<AudioInputRouterEffect> {
+        self.amd_backlog = None;
         let tail = self.turns.tail.take().map(|(sink, _)| sink);
         let sinks = self.slots.iter_mut().filter_map(|slot| slot.sink.take()).chain(tail);
         sinks.map(AudioInputRouterEffect::EndInput).collect()
@@ -373,6 +393,10 @@ impl AudioInputRouter {
         // An open turn whose STT stream is still opening keeps its audio for it.
         if self.turns.open && self.slots[AudioChannel::Stt as usize].sink.is_none() {
             self.turns.backlog.push(frame.clone(), TURN_BACKLOG);
+        }
+        // AMD's STT still opening: the real frame, as its channel is never substituted.
+        if let Some(backlog) = &mut self.amd_backlog {
+            backlog.push(frame.clone(), AMD_BACKLOG);
         }
         // `Raw` channels: the source frame; the substitute has the room frame's shape.
         let raw_silence = self.discard.then(|| silence_like(&frame));
@@ -607,6 +631,86 @@ mod tests {
         let install = router
             .handle(AudioInputRouterCommand::Install { channel: AudioChannel::Stt, sink: stt });
         assert_eq!(pushed(&install), vec![(stt, true); 3]);
+    }
+
+    /// A 20 ms frame at 16 kHz whose every sample is `n`: frames that tell apart in order.
+    fn numbered(n: i16) -> AudioFrame {
+        let data: Vec<u8> = std::iter::repeat_n(n.to_le_bytes(), 320).flatten().collect();
+        AudioFrame::new(data, 16_000, 1, 320)
+    }
+
+    fn sample(frame: &AudioFrame) -> i16 {
+        i16::from_le_bytes([frame.data[0], frame.data[1]])
+    }
+
+    /// What `sink` was pushed, by sample value, with whether it came as held audio.
+    fn heard_by(effects: &[AudioInputRouterEffect], sink: ResourceId) -> Vec<(i16, bool)> {
+        let pushes = effects.iter().filter_map(|effect| match effect {
+            AudioInputRouterEffect::PushFrame { sink: s, frame, delivery } if *s == sink => {
+                Some((sample(frame), *delivery == Delivery::Head))
+            }
+            _ => None,
+        });
+        pushes.collect()
+    }
+
+    // Catches: AMD's STT losing the words said between activation and its stream's sink being
+    // installed, hearing them out of order, or hearing the session's substituted silence. Python
+    // opens AMD's stream on the first frame and keeps that frame (`_stt.py` `push_audio`).
+    #[test]
+    fn amds_channel_holds_the_real_frames_until_its_sink_is_installed() {
+        let mut router = AudioInputRouter::new(16_000);
+        let stt = ResourceId(1);
+        router.handle(AudioInputRouterCommand::Install { channel: AudioChannel::Stt, sink: stt });
+        // Before the hold: nothing is kept for AMD.
+        router.on_frame(numbered(1), false, Ts::ZERO);
+        router.handle(AudioInputRouterCommand::HoldAmd(true));
+        let mut session = Vec::new();
+        session.extend(router.on_frame(numbered(2), false, Ts::ZERO));
+        // The gate substitutes silence for the session's STT; AMD keeps the real frame.
+        router.handle(AudioInputRouterCommand::SetGateDiscard(true));
+        session.extend(router.on_frame(numbered(3), false, Ts::ZERO));
+        router.handle(AudioInputRouterCommand::SetGateDiscard(false));
+        session.extend(router.on_frame(numbered(4), false, Ts::ZERO));
+        assert_eq!(heard_by(&session, stt), [(2, false), (0, false), (4, false)]);
+
+        let amd = ResourceId(9);
+        let install = router
+            .handle(AudioInputRouterCommand::Install { channel: AudioChannel::Amd, sink: amd });
+        assert_eq!(heard_by(&install, amd), [(2, true), (3, true), (4, true)]);
+        let live = router.on_frame(numbered(5), false, Ts::ZERO);
+        assert_eq!(heard_by(&live, amd), [(5, false)], "live audio follows the held audio");
+        // Installed, the channel holds nothing more.
+        router.handle(AudioInputRouterCommand::Remove(amd));
+        router.on_frame(numbered(6), false, Ts::ZERO);
+        let again = router
+            .handle(AudioInputRouterCommand::Install { channel: AudioChannel::Amd, sink: amd });
+        assert!(heard_by(&again, amd).is_empty());
+    }
+
+    // Catches: a hold that keeps audio after AMD's STT gave up, or that grows without a bound.
+    #[test]
+    fn amds_hold_is_bounded_and_ends_when_released() {
+        let mut router = AudioInputRouter::new(16_000);
+        router.handle(AudioInputRouterCommand::HoldAmd(true));
+        let frames = AMD_BACKLOG.as_millis() / u128::from(DEFAULT_FRAME_MS) + 50;
+        for n in 0..frames {
+            router.on_frame(numbered(n as i16), false, Ts::ZERO);
+        }
+        let amd = ResourceId(9);
+        let install = router
+            .handle(AudioInputRouterCommand::Install { channel: AudioChannel::Amd, sink: amd });
+        let held = heard_by(&install, amd);
+        assert_eq!(held.len() as u128, AMD_BACKLOG.as_millis() / u128::from(DEFAULT_FRAME_MS));
+        assert_eq!(held.last().map(|(n, _)| *n), Some((frames - 1) as i16), "the oldest go");
+
+        router.handle(AudioInputRouterCommand::Remove(amd));
+        router.handle(AudioInputRouterCommand::HoldAmd(true));
+        router.on_frame(numbered(1), false, Ts::ZERO);
+        router.handle(AudioInputRouterCommand::HoldAmd(false));
+        let install = router
+            .handle(AudioInputRouterCommand::Install { channel: AudioChannel::Amd, sink: amd });
+        assert!(heard_by(&install, amd).is_empty(), "a released hold keeps nothing");
     }
 
     // Catches: a press replaying audio from before a mute into the recognisers (seed 2544).

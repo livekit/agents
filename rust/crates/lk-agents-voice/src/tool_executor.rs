@@ -552,6 +552,34 @@ impl Toolset {
         Ok(())
     }
 
+    /// These tools and a framework tool the host runs (AMD's `send_dtmf_events`), offered with
+    /// the default policies: no approval, duplicates allowed, the run's retry budget.
+    pub fn with_builtin(&self, spec: lk_agents_abi::ToolSpec) -> Toolset {
+        use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
+        let mut toolset = self.clone();
+        toolset.agent = self.agent.as_ref().map(|frame| {
+            let mut definition = frame.definition().clone();
+            definition.tools.push(FunctionToolInfo {
+                spec: spec.clone(),
+                raw_schema: false,
+                needs_approval: None,
+                on_duplicate: DuplicateMode::Allow,
+                duplicate_scope: DuplicateScope::Name,
+                retries: None,
+                remote: None,
+                local_agent: None,
+            });
+            Arc::new(VoiceAgentFrame {
+                definition,
+                host: Arc::clone(frame.host()),
+                host_context: frame.host_context().clone(),
+                toolset_scope: frame.toolset_scope(),
+            }) as Arc<dyn AgentFrame>
+        });
+        toolset.specs.push(spec);
+        toolset
+    }
+
     /// The tools as the host's setup reported them, every toolset's listed: the agent's frame
     /// takes their policies (approval, duplicates, retries, expert identity), so its definition
     /// is the one built after setup.

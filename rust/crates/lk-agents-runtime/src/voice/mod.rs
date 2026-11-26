@@ -1,3 +1,4 @@
+pub mod amd;
 mod audio;
 pub mod background_audio;
 pub mod console;
@@ -623,6 +624,7 @@ impl VoiceRuntime {
             | AudioInputRouterCommand::CancelTurn
             | AudioInputRouterCommand::Abort(_)
             | AudioInputRouterCommand::EndTail
+            | AudioInputRouterCommand::HoldAmd(_)
             | AudioInputRouterCommand::ReportCensus => {}
         }
         let effects = self.forwarder.handle(command);

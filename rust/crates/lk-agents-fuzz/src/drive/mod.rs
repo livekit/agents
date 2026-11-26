@@ -219,6 +219,9 @@ pub struct Setup {
     /// How the recogniser reports speech: with its own detection or without, transcribing during
     /// the speech or only after it ended.
     pub stt_speech: fakes::SttSpeech,
+    /// AMD through the runtime's executor: what `Input::AmdEnter` enters it with. `None` refuses
+    /// the input.
+    pub amd: Option<fakes::amd::AmdSetup>,
     /// The voice takes as long to its first audio as a real one does, drawn from this seed;
     /// `None` answers at once.
     pub tts_latency: Option<u64>,
@@ -423,6 +426,13 @@ pub struct RealtimeSetup {
     pub duplex: bool,
     /// Delays the case sets instead of the seed drawing them.
     pub delays: crate::fakes::RealtimeDelays,
+    /// The model transcribes the user's audio (`capabilities.user_transcription`). Off, the
+    /// server sends no input transcription, and a session without STT has the turn's words only
+    /// from AMD (spec §7.2).
+    pub user_transcription: bool,
+    /// A handoff gives the new agent its own realtime model of the same shape, which transcribes
+    /// the user or not, instead of keeping the session's.
+    pub handoff_user_transcription: Option<bool>,
 }
 
 impl Default for RealtimeSetup {
@@ -438,6 +448,8 @@ impl Default for RealtimeSetup {
             fallback: false,
             duplex: false,
             delays: Default::default(),
+            user_transcription: true,
+            handoff_user_transcription: None,
         }
     }
 }
@@ -503,6 +515,7 @@ impl Default for Setup {
             unreported_clear: None,
             stt_model: 0,
             stt_speech: fakes::SttSpeech::default(),
+            amd: None,
             tts_latency: None,
             tts_alignment: TtsAlignment::None,
             tts_markup: "",
@@ -694,6 +707,23 @@ impl RefRegistry for NoopRefs {
 }
 
 /// A real session, the fakes behind it, and everything the run has learned.
+/// A run attached through AMD's executor, as the host holds it: the handle, its events not yet
+/// absorbed, and its `execute()` until it returns.
+pub(crate) struct Entered {
+    /// The run's id, or why `enter` refused it.
+    pub result: Result<lk_agents_voice::amd::AmdRunId, String>,
+    /// The recording has its entry.
+    pub recorded: bool,
+    pub run: Option<lk_agents_runtime::voice::amd::AmdRun>,
+    pub events: Option<tokio::sync::mpsc::Receiver<lk_agents_voice::amd::events::AmdEvent>>,
+    pub execute: Option<BoxFuture<'static, lk_agents_voice::amd::events::Outcome>>,
+    /// `aclose()`, until it returns.
+    pub close: Option<BoxFuture<'static, lk_agents_voice::amd::events::Outcome>>,
+}
+
+/// AMD observations as the gate emitted them, stamped.
+pub(crate) type AmdSeen = Vec<crate::record::amd::Seen>;
+
 pub struct Run {
     wall_clock: Arc<fakes::clock::SkewClock>,
     /// The session, as a host holds it.
@@ -727,6 +757,12 @@ pub struct Run {
     /// Journal steps the probe stamped, waiting to be absorbed. The probe runs under the
     /// driver's own lock and cannot touch the recording, so it parks them here.
     steps: Arc<Mutex<Vec<(Observed, Step)>>>,
+    /// What the AMD gate observed, waiting to be absorbed, as `steps` are.
+    amd: Arc<Mutex<AmdSeen>>,
+    /// How many AMD runs attached: the latest is the one answering.
+    amd_runs: u64,
+    /// The runs `AmdEnter` attached through AMD's executor, as the host holds them.
+    entered: Arc<Mutex<Vec<Entered>>>,
     /// What the host received, with the live handle of a speech it was told of, taken as the
     /// event was delivered (the session lets it go once nothing names it).
     host: HostJournal,
@@ -842,6 +878,16 @@ impl Run {
         history: Vec<ChatItem>,
     ) -> Result<(), lk_agents_abi::storage::StorageError> {
         self.store.as_ref().expect("this authored story has storage").foreign_history(history).await
+    }
+
+    /// The SIP caller answers: their `sip.callStatus` becomes `active`. False when no caller is in
+    /// the room.
+    pub fn answer_sip_call(&mut self) -> bool {
+        let caller = lk_agents_abi::voice::rtc::ParticipantIdentity::from(start::CALLER);
+        let Some(participant) = self.room.fake_participant(&caller) else { return false };
+        participant.set_attribute(start::SIP_CALL_STATUS, "active");
+        self.collect();
+        true
     }
 
     /// The text streams the agent has sent into the room, in the order it opened them.

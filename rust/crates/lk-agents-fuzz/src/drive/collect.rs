@@ -55,6 +55,8 @@ impl Run {
         self.avatar_reports();
         let from_journal = self.record.journal().len();
         self.absorb_journal();
+        self.absorb_amd();
+        self.absorb_amd_runs();
         self.attribute_chats(from_journal, from_host);
 
         // The snapshot takes a stamp of its own, so what it saw never shares an instant with what
@@ -223,6 +225,9 @@ impl Run {
                 Record::Heard { at, generation, ms, whole } => {
                     self.record.record_heard(at, generation % 255, ms, whole);
                 }
+                Record::RtSent { at, socket, sent } => {
+                    self.record.record_rt_sent(at, socket, sent);
+                }
                 Record::Held { at, socket, items } => {
                     let items = items.into_iter().map(|(g, ms)| (g % 255, ms)).collect();
                     self.record.record_held(at, socket, items);
@@ -351,6 +356,67 @@ impl Run {
                 _ => {}
             }
             self.record.record_journal(at, step);
+        }
+    }
+
+    /// Absorb what the runs entered through AMD's executor told the host: each entry, the events
+    /// sent since, and `execute()` once it returned.
+    fn absorb_amd_runs(&mut self) {
+        let entered = self.entered.clone();
+        let mut entered = entered.lock().unwrap();
+        for e in entered.iter_mut() {
+            if !std::mem::replace(&mut e.recorded, true) {
+                let at = self.stamps.next();
+                self.record.record_amd_entered(at, e.result.clone());
+            }
+            let Ok(run) = e.result else { continue };
+            if let Some(events) = &mut e.events {
+                while let Ok(event) = events.try_recv() {
+                    let at = self.stamps.next();
+                    self.record.record_amd_event(at, run, event);
+                }
+            }
+            if let Some(execute) = e.execute.as_mut()
+                && let Some(outcome) = super::apply::ready_now(execute.as_mut())
+            {
+                e.execute = None;
+                let at = self.stamps.next();
+                self.record.record_amd_outcome(at, run, outcome);
+            }
+            if let Some(close) = e.close.as_mut()
+                && super::apply::ready_now(close.as_mut()).is_some()
+            {
+                e.close = None;
+            }
+        }
+    }
+
+    /// Absorb what the AMD gate observed: a committed turn opens an `AmdTurn` the answerer can
+    /// name, and its run's detach closes every turn of that run.
+    fn absorb_amd(&mut self) {
+        use lk_agents_voice::amd::AmdObservation;
+        let seen = std::mem::take(&mut *self.amd.lock().unwrap());
+        for (at, run, observation) in seen {
+            match &observation {
+                AmdObservation::TurnCommitted { turn, .. } => {
+                    let detail = Detail::AmdTurn { run: run.0, turn: turn.0 };
+                    self.record.open(at, Kind::AmdTurn, Id::Pending, detail);
+                }
+                AmdObservation::Detached { run: detached } => {
+                    let turns: Vec<u32> = self
+                        .record
+                        .resources(Kind::AmdTurn)
+                        .filter(|t| matches!(t.detail(), Detail::AmdTurn { run, .. } if *run == detached.0))
+                        .map(|t| t.nth())
+                        .filter(|nth| self.record.live().has(Kind::AmdTurn, *nth))
+                        .collect();
+                    for nth in turns {
+                        self.record.close(at, Kind::AmdTurn, nth);
+                    }
+                }
+                _ => {}
+            }
+            self.record.record_amd(at, run, observation);
         }
     }
 

@@ -36,6 +36,11 @@ pub struct RealtimeSessionState {
     attributed_bytes: usize,
     pub(super) closing: bool,
     ended: bool,
+    /// What an AMD decision adds to its reply's responses, by speech, until the speech's player
+    /// closes: its tool follow-ups ask with the same instructions and tools.
+    pub(super) gated: BTreeMap<SpeechId, super::gated::GatedResponse>,
+    /// The gated speech whose tools the server holds in place of the agent's.
+    pub(super) tools_for: Option<SpeechId>,
 }
 
 impl RealtimeSessionState {
@@ -135,7 +140,7 @@ pub(super) struct Swap {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestKey(pub u64);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Request {
     Say {
         text: String,
@@ -147,9 +152,11 @@ pub enum Request {
         /// A DTMF collection's read-back, whose guard the speech holds once it exists.
         read_back: bool,
     },
-    /// No caller waits. `commit_audio`: commit the input buffer and ask, both or neither.
+    /// No caller waits. `commit_audio`: commit the input buffer and ask, both or neither. `gated`:
+    /// what an AMD decision adds to the reply, whose turn committed its audio already.
     UserTurn {
         commit_audio: bool,
+        gated: Option<super::gated::GatedResponse>,
     },
     ToolFollowUp {
         speech: SpeechId,

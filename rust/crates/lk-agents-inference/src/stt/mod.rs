@@ -2,6 +2,8 @@
 mod connection_tests;
 mod executor;
 pub(crate) mod gaps;
+#[cfg(test)]
+mod headers_tests;
 pub(crate) mod input;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -75,6 +77,9 @@ pub struct SttOptions {
     pub api_secret: String,
     pub extra_kwargs: serde_json::Map<String, serde_json::Value>,
     pub fallback: Vec<FallbackModel>,
+    /// Headers every connection of a stream sends besides the gateway's own, reconnects
+    /// included: a view's (`stream(extra_headers=...)`), never the client's.
+    pub extra_headers: std::collections::BTreeMap<String, String>,
     /// Not an `Option`: `__init__` substitutes `DEFAULT_API_CONNECT_OPTIONS`. `connect_timeout`
     /// bounds the handshake, `read_timeout` the session acknowledgement.
     pub conn_options: ApiConnectOptions,
@@ -91,6 +96,7 @@ impl Default for SttOptions {
             api_key: String::new(),
             api_secret: String::new(),
             extra_kwargs: Default::default(),
+            extra_headers: Default::default(),
             fallback: Vec::new(),
             conn_options: lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS,
         }
@@ -108,6 +114,8 @@ pub struct GatewayStt {
     label: String,
     /// The host object it was built as, which hears each failure the core reports.
     events: Option<Arc<dyn ProviderEvents>>,
+    /// What this view's streams send on every connection besides the gateway's headers.
+    extra_headers: std::collections::BTreeMap<String, String>,
 }
 
 /// What every session's view of one client shares: its options, connections and open streams.
@@ -161,6 +169,7 @@ impl GatewayStt {
             conn_options: None,
             label: NativeLabel::InferenceStt.as_str().into(),
             events: None,
+            extra_headers: Default::default(),
         }
     }
 
@@ -305,6 +314,7 @@ impl GatewayStt {
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
         }
+        opts.extra_headers.clone_from(&self.extra_headers);
         if let Some(language) = language {
             opts.language = Some(
                 lk_agents_abi::tokenize::language::LanguageCode::new(language).as_str().to_owned(),
@@ -469,6 +479,7 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
             api_key: credentials.api_key,
             api_secret: credentials.api_secret,
             extra_kwargs: extra_kwargs.unwrap_or_default(),
+            extra_headers: Default::default(),
             fallback,
             conn_options: conn_options.unwrap_or(lk_agents_abi::DEFAULT_API_CONNECT_OPTIONS),
         };
@@ -532,6 +543,15 @@ impl Stt for GatewayStt {
 
     fn conn_options(&self) -> Option<ApiConnectOptions> {
         self.conn_options
+    }
+
+    fn with_extra_headers(
+        &self,
+        headers: &std::collections::BTreeMap<String, String>,
+    ) -> Option<Arc<dyn Stt>> {
+        let mut view = self.clone();
+        view.extra_headers.extend(headers.iter().map(|(k, v)| (k.clone(), v.clone())));
+        Some(Arc::new(view))
     }
 
     /// The provider's `error` event, on the host object it was built as.

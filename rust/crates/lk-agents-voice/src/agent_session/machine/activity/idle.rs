@@ -104,5 +104,6 @@ impl AgentActivity {
             && !winding_down
             && !activity.audio_recognition.phase().is_running()
             && activity.pending_turn.is_none()
+            && activity.gate.as_ref().and_then(|gate| gate.parked_turn()).is_none()
     }
 }

@@ -23,6 +23,7 @@ use crate::{
 // A delivery to a closed receiver is a recorded, rejected attempt, never a panic.
 
 pub mod a2a_peer;
+pub mod amd;
 mod avatar;
 pub(crate) mod clock;
 mod console;
@@ -131,6 +132,8 @@ pub enum Control {
     Realtime(Arc<realtime::Socket>),
     /// A realtime turn in progress; its end comes through the socket.
     Generation,
+    /// One request of AMD's executor to its fake models.
+    AmdAsk(amd::Answering),
 }
 
 impl Control {
@@ -217,6 +220,12 @@ pub enum Record {
         generation: u32,
         ms: u64,
         whole: bool,
+    },
+    /// A command the session sent the n-th realtime socket, as the server receives it.
+    RtSent {
+        at: Observed,
+        socket: u32,
+        sent: crate::record::RtSent,
     },
     /// What a realtime socket's server held as a connection closed.
     Held {
@@ -313,12 +322,13 @@ pub fn boundary_of(input: &Input) -> Option<Kind> {
         Input::SinkReset { .. } => Kind::Output,
         Input::VideoFrames { .. } => Kind::Video,
         Input::RealtimeEvent { .. } => Kind::Realtime,
+        Input::AmdReply { .. } => Kind::AmdAsk,
         _ => return None,
     })
 }
 
 /// The kinds the fakes mint identities for; the rest the harness opens from the journal.
-const MINTED: [Kind; 14] = [
+const MINTED: [Kind; 15] = [
     Kind::Chat,
     Kind::Tts,
     Kind::Stt,
@@ -333,6 +343,7 @@ const MINTED: [Kind; 14] = [
     Kind::Video,
     Kind::Realtime,
     Kind::Generation,
+    Kind::AmdAsk,
 ];
 
 struct StoragePending(Arc<Registry>);
@@ -718,6 +729,11 @@ impl Registry {
         self.write(Record::Heard { at, generation, ms, whole });
     }
 
+    pub(super) fn record_rt_sent(&self, socket: u32, sent: crate::record::RtSent) {
+        let at = self.stamps.next();
+        self.write(Record::RtSent { at, socket, sent });
+    }
+
     pub(super) fn record_held(&self, socket: u32, items: Vec<(u32, u64)>) {
         let at = self.stamps.next();
         self.write(Record::Held { at, socket, items });
@@ -784,6 +800,13 @@ impl Registry {
                 (realtime::deliver(&socket, input), Some(Control::Realtime(socket)))
             }
             Control::Generation => (false, Some(Control::Generation)),
+            // One answer per ask.
+            Control::AmdAsk(answering) => {
+                let Input::AmdReply { says, .. } = input else {
+                    return (false, Some(Control::AmdAsk(answering)));
+                };
+                (amd::deliver(answering, *says), None)
+            }
             Control::Segment(playout) => {
                 if let Input::PlayoutStarted { .. } = input {
                     let accepted = playout.started(slot.nth, self.stamps.ts());

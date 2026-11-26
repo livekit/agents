@@ -70,7 +70,7 @@ pub fn build_request(
     let schemas = tool_schemas(tools, opts.strict_tools)?;
     let body = request::build_body(&opts.model, formatted.messages, schemas, &args, extra);
 
-    // `extra_headers` (the composed kwarg, so the instance's replaces the call's), overlaid
+    // `extra_headers` (the instance's merged with the call's, the call's winning), overlaid
     // with the gateway's identification and provider pin, and the bearer.
     let mut headers: Headers = match extra_headers {
         Some(Value::Object(map)) => map.into_iter().map(|(k, v)| (k, text(v))).collect(),

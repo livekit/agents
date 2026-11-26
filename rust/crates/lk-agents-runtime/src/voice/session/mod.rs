@@ -70,6 +70,8 @@ pub struct VoiceSession {
     /// Every speech's live handle, from its host call or creation to the session's end.
     speeches: Arc<Speeches>,
     room_io: Arc<dyn RoomIo>,
+    /// The room the session runs in, if any: AMD waits there for its callee.
+    rtc: Option<Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>>,
     /// The transcript synchroniser, held only so `close_io` can close it.
     outputs: crate::voice::io::SessionOutputs,
     spawner: Arc<dyn Spawner>,
@@ -277,6 +279,33 @@ impl VoiceSession {
         if let Stage::Ready(ready) = &mut *self.stage.lock() {
             ready.builder.journal = shared::Journal::observed(observer);
         }
+    }
+
+    /// Every observation the reply gate sends the attached AMD run, to `observer`. Before
+    /// `start()`. The scripted answerer of a test or the simulation reads them.
+    #[cfg(any(test, feature = "dst"))]
+    pub fn observe_amd(
+        &self,
+        observer: impl FnMut(lk_agents_voice::amd::AmdRunId, &lk_agents_voice::amd::AmdObservation)
+        + Send
+        + 'static,
+    ) {
+        if let Stage::Ready(ready) = &mut *self.stage.lock() {
+            ready.builder.amd = shared::AmdTap::observed(observer);
+        }
+    }
+
+    /// An answer of the attached AMD run, applied by the session's reply gate in the order sent.
+    /// The scripted answerer of a test or the simulation sends it, as the AMD executor will.
+    #[cfg(any(test, feature = "dst"))]
+    pub fn answer_amd(
+        &self,
+        answer: lk_agents_voice::amd::AmdAnswer,
+    ) -> Result<(), SessionRefused> {
+        self.running(|r| {
+            (r.api.send(lk_agents_voice::agent_session::VoiceEvent::Amd(answer)))
+                .map_err(|_| SessionRefused::LoopEnded)
+        })
     }
 
     #[cfg(feature = "dst")]
@@ -535,6 +564,43 @@ impl VoiceSession {
         self.running(|r| Ok(r.api.clone()))
     }
 
+    /// The room AMD waits in for its callee, and the room I/O whose linked participant it
+    /// listens to. `None` without a room: AMD listens at once (`_setup_listening`).
+    pub(crate) fn amd_room(
+        &self,
+    ) -> Option<(Arc<dyn lk_agents_abi::voice::rtc::RtcRoom>, Arc<dyn RoomIo>)> {
+        Some((self.rtc.clone()?, Arc::clone(&self.room_io)))
+    }
+
+    /// The session opened on a realtime model: AMD sends it the transcripts it may need.
+    pub(crate) fn amd_realtime(&self) -> bool {
+        self.realtime.is_some()
+    }
+
+    /// What an AMD run executes against, and the agent running now. Refused unless running.
+    pub(crate) fn amd_peer(&self) -> Result<(crate::voice::amd::AmdPeer, String), SessionRefused> {
+        let agent = self.view.get().agent.clone();
+        self.running(|r| {
+            let peer = crate::voice::amd::AmdPeer {
+                api: r.api.clone(),
+                journal: r.peer.journal.clone(),
+                time: self.time.clone(),
+                spawner: Arc::clone(&self.spawner),
+                resources: self.resources.clone(),
+                cx: r.peer.session.clone(),
+                route: r.peer.amd.clone(),
+                remote: r.remote.clone(),
+            };
+            Ok((peer, agent))
+        })
+    }
+
+    /// This session's turn among handoffs: every `update_agent` asked before it has reached the
+    /// loop once it is held, so a command sent under it sees that handoff in flight.
+    pub(crate) async fn handoff_turn(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        Arc::clone(&self.host.handoffs).lock_owned().await
+    }
+
     /// A call to await: its id goes in the command, which carries its reply; `pick` takes its
     /// answer.
     pub fn call<T>(
@@ -633,6 +699,7 @@ impl VoiceSession {
                         running.drained.take(),
                         running.remote.clone(),
                         running.peer.session.clone(),
+                        running.peer.amd.clone(),
                     )),
                     None,
                 ),
@@ -652,7 +719,7 @@ impl VoiceSession {
         let stage = Arc::clone(&self.stage);
         let time = self.time.clone();
         async move {
-            let Some((api, drained, remote, session)) = running else {
+            let Some((api, drained, remote, session, amd)) = running else {
                 return;
             };
             // A stopped receiver has already closed the session.
@@ -662,6 +729,13 @@ impl VoiceSession {
                 let overrun =
                     telemetry::TeardownOverrun { stage: telemetry::TeardownStage::SessionClose };
                 telemetry::measure(&session, &overrun, 1u64);
+            }
+            // The loop ended: its close detached any AMD run, which now joins its legs and closes
+            // its models (`_teardown_activity` awaits `amd.aclose()`).
+            let deadline = time.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+            let late = amd.join(time.clock().as_ref(), deadline).await;
+            if !late.is_empty() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, tasks:? = late; "AMD run did not settle within the session's teardown bound");
             }
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on
             // the host stream, and the drain only ends when every sender is gone.

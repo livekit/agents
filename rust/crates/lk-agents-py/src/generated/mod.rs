@@ -191,6 +191,8 @@ pub trait Implementations: 'static {
     type WebSocketMux: ::lk_agents_abi::utils::websocket::WebSocketMux;
     type WebSocketPacing: ::lk_agents_abi::utils::websocket::WebSocketPacing;
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
+    type AmdRun: ::lk_agents_abi::voice::amd::AmdRun;
+    type AmdRules: ::lk_agents_abi::voice::amd::AmdRules;
     type HostAudioReceiver: ::lk_agents_abi::voice::avatar::HostAudioReceiver;
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
@@ -231,6 +233,7 @@ pub trait Implementations: 'static {
             CameraLeg = Self::RoomVideoInput,
             Speech = Self::SpeechHandle,
             UserTurn = Self::UserTurn,
+            AmdRun = Self::AmdRun,
         >;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
     type SessionState: ::lk_agents_abi::voice::session_effects::SessionState;
@@ -478,6 +481,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<utils::WebSocketPacing>()?;
     m.add_class::<vad::InferenceVad>()?;
     m.add_class::<vad::InferenceVadStream>()?;
+    m.add_class::<voice::AmdRun>()?;
+    m.add_function(wrap_pyfunction!(voice::_core_amd_check_options, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::_core_amd_prediction_is_human, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::_core_amd_prediction_is_machine, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::_core_amd_completed_is_error, m)?)?;
+    m.add_function(wrap_pyfunction!(voice::_core_amd_auto_models, m)?)?;
     m.add_class::<voice::HostAudioReceiver>()?;
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::DataStreamAudioReceiver>()?;

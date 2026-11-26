@@ -701,6 +701,16 @@ from .agent_session import (  # noqa: E402
     VoiceTask,
     VoiceTaskFailed,
 )
+from .amd import (  # noqa: E402
+    AMD,
+    AMDCategory,
+    AMDCompletedEvent,
+    AMDLifecycle,
+    AMDMenuObservedEvent,
+    AMDPredictionEvent,
+    AMDReason,
+    IVRMenuOption,
+)
 from .background_audio import (  # noqa: E402
     AudioConfig,
     BackgroundAudioPlayer,
@@ -730,6 +740,14 @@ __all__ = [
     "AudioConfig",
     "BuiltinAudioClip",
     "PlayHandle",
+    "AMD",
+    "AMDCategory",
+    "AMDLifecycle",
+    "AMDPredictionEvent",
+    "AMDCompletedEvent",
+    "AMDMenuObservedEvent",
+    "AMDReason",
+    "IVRMenuOption",
     "io",
     "room_io",
 ]

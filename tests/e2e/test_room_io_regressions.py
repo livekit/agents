@@ -96,7 +96,8 @@ async def test_the_dtmf_tool_presses_keys_in_the_room_its_session_runs_in(sfu: s
     ):
         person.on("sip_dtmf_received", lambda dtmf: pressed.append(dtmf.digit))
         session = VoiceSession(
-            llm=FakeLLM([tool_call("send_dtmf_events", events=["1", "2"]), "Dialed."]),
+            # the tool asks for no follow-up reply, so the model is asked once
+            llm=FakeLLM([tool_call("send_dtmf_events", events=["1", "2"])]),
             vad=None,
             turn_handling={"turn_detection": None},
         )

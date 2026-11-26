@@ -105,6 +105,57 @@ pub struct FakeRoom {
     host: Arc<HostLoop>,
     /// On by default so unrelated tests need not call `set_subscribed(true)`.
     state: Mutex<RoomState>,
+    /// How each subscription to the room's events ended, in subscription order.
+    event_streams: Arc<Mutex<Vec<EventStreamEnd>>>,
+}
+
+/// How one subscription to a room's events ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventStreamEnd {
+    Open,
+    /// Its owner closed it (`close(deadline)`).
+    Closed,
+    /// Its owner dropped it unclosed: cancelled.
+    Dropped,
+}
+
+/// A room events subscription that records how it ended.
+struct RecordedEvents {
+    inner: Option<lk_agents_abi::voice::rtc::ports::Receiver<RoomEvent>>,
+    nth: usize,
+    ends: Arc<Mutex<Vec<EventStreamEnd>>>,
+}
+
+impl RecordedEvents {
+    fn end(&self, how: EventStreamEnd) {
+        let mut ends = self.ends.lock().unwrap();
+        if ends[self.nth] == EventStreamEnd::Open {
+            ends[self.nth] = how;
+        }
+    }
+}
+
+impl Drop for RecordedEvents {
+    fn drop(&mut self) {
+        self.end(EventStreamEnd::Dropped);
+    }
+}
+
+impl StreamOutput<RoomEvent> for RecordedEvents {
+    fn next<'a>(
+        &'a mut self,
+    ) -> lk_agents_abi::BoxFuture<'a, std::result::Result<Option<RoomEvent>, ProviderError>> {
+        let inner = self.inner.as_mut().expect("open until closed");
+        inner.next()
+    }
+    fn cancel_safe(&self) -> bool {
+        self.inner.as_ref().is_some_and(|inner| inner.cancel_safe())
+    }
+    fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        self.end(EventStreamEnd::Closed);
+        let inner = self.inner.take().expect("closed once");
+        inner.close(deadline)
+    }
 }
 
 struct RoomState {
@@ -144,7 +195,13 @@ impl FakeRoom {
             bus,
             routes: Arc::new(lk_agents_runtime::rtc::events::RoomRpcRouter::default()),
             state: Mutex::new(RoomState::default()),
+            event_streams: Arc::default(),
         })
+    }
+
+    /// How each subscription to the room's events ended so far, in subscription order.
+    pub fn event_streams(&self) -> Vec<EventStreamEnd> {
+        self.event_streams.lock().unwrap().clone()
     }
 
     pub fn local_participant(&self) -> Arc<FakeLocalParticipant> {
@@ -357,6 +414,15 @@ impl RtcRoom for FakeRoom {
 
     fn event_bus(&self) -> &Arc<dyn RoomEventSink> {
         &self.bus
+    }
+    fn events(&self) -> lk_agents_abi::voice::rtc::ports::Receiver<RoomEvent> {
+        let nth = {
+            let mut ends = self.event_streams.lock().unwrap();
+            ends.push(EventStreamEnd::Open);
+            ends.len() - 1
+        };
+        let inner = Some(self.bus.subscribe());
+        Box::new(RecordedEvents { inner, nth, ends: self.event_streams.clone() })
     }
     fn rpc_router(&self) -> &Arc<dyn lk_agents_abi::voice::rtc::ports::RpcRoutes> {
         &self.routes

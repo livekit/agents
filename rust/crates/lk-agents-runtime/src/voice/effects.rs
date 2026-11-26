@@ -369,6 +369,7 @@ impl VoiceRuntime {
             E::CancelToolRefusal { speech, call } => {
                 self.speeches.end_callback(speech, HostCallbackId::ToolRefusal(call))
             }
+            E::Amd { run, observation } => self.shared.amd.deliver(run, &observation),
         }
     }
 

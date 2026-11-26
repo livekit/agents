@@ -54,6 +54,11 @@ impl RoomIo for BoundRoomIo {
     fn linked_participant(&self) -> Option<ParticipantIdentity> {
         self.0.linked_participant()
     }
+    fn wait_linked_participant<'a>(
+        &'a self,
+    ) -> lk_agents_abi::BoxFuture<'a, Option<ParticipantIdentity>> {
+        self.0.wait_linked_participant()
+    }
 
     fn start(self: Arc<Self>, startup: crate::telemetry::Cx) {
         self.inner().start(startup);

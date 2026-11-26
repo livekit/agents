@@ -14,6 +14,34 @@ impl Run {
     ///
     /// Read off the live set, which is already the answer to "what has this run opened and not
     /// closed". Empty means the run is quiet and the settle can begin.
+    /// AMD's owed answers: a decision for the attached run's latest turn it never answered, and
+    /// its completion. The scripted answerer is the progress the gate's liveness assumes.
+    fn amd_releases(&self) -> Vec<Input> {
+        let applied = self.record.applied();
+        let Some(attached) = applied.iter().rposition(|a| matches!(a.input, Input::AmdAttach {}))
+        else {
+            return Vec::new();
+        };
+        let since = &applied[attached..];
+        if since.iter().any(|a| matches!(a.input, Input::AmdDetach { .. })) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        if let Some(latest) = self.record.live().of(Kind::AmdTurn).last().copied() {
+            let decided = since
+                .iter()
+                .any(|a| matches!(a.input, Input::AmdDecide { turn, .. } if turn.nth == latest));
+            if !decided {
+                out.push(Input::AmdDecide {
+                    turn: Ref::new(latest),
+                    verdict: crate::input::AmdVerdict::Allow,
+                });
+            }
+        }
+        out.push(Input::AmdDetach { category: crate::input::AmdVerdict::Allow, forbid: false });
+        out
+    }
+
     pub fn releases(&self) -> Vec<Input> {
         let blank = || AgentText(String::new());
         let each: [(Kind, &dyn Fn(u32) -> Input); 7] = [
@@ -52,6 +80,7 @@ impl Run {
                 .filter(|nth| self.tts_held(*nth))
                 .map(|nth| Input::TtsRelease { tts: Ref::new(nth) }),
         );
+        out.extend(self.amd_releases());
         // A realtime turn the server is still speaking is the case's to end.
         if let Some(socket) = self.record.live().of(Kind::Realtime).first().copied() {
             for _ in self.record.live().of(Kind::Generation) {

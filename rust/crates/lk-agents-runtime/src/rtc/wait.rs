@@ -23,7 +23,7 @@ fn observe(value: &dyn RemoteParticipant, request: &WaitFor) -> Result<Participa
         identity: value.identity().clone(),
         kind: value.kind(),
         active: if matches!(request, WaitFor::Participant { .. }) { value.active()? } else { true },
-        attributes: if matches!(request, WaitFor::Agent { .. }) {
+        attributes: if matches!(request, WaitFor::Agent { .. } | WaitFor::Attribute { .. }) {
             value.attributes()?
         } else {
             BTreeMap::new()
@@ -137,6 +137,18 @@ pub async fn agent(room: &dyn RtcRoom, name: Option<String>) -> Result<Participa
     match perform(room, WaitFor::Agent { name }).await? {
         Ready::Agent(identity) => Ok(identity),
         _ => unreachable!("an agent wait resolves with an agent"),
+    }
+}
+
+pub async fn participant_attribute(
+    room: &dyn RtcRoom,
+    identity: String,
+    attribute: String,
+    value: String,
+) -> Result<()> {
+    match perform(room, WaitFor::Attribute { identity, attribute, value }).await? {
+        Ready::Attribute => Ok(()),
+        _ => unreachable!("an attribute wait resolves with the attribute"),
     }
 }
 

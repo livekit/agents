@@ -90,12 +90,30 @@ pub struct StreamOptions {
 /// The body keys the framework always sets; a kwarg never overrides them.
 const OWNED_KEYS: &[&str] = &["model", "messages", "tools", "stream", "stream_options"];
 
-/// `LLM.chat()`'s kwargs: the call's `extra_kwargs`, overridden by the instance's.
+/// `LLM.chat()`'s kwargs: the call's `extra_kwargs`, overridden by the instance's, except
+/// `extra_headers`: the two maps merge, and the call's header wins on a shared name (`main`'s
+/// `inference.LLM.chat`), so a call-level tag such as AMD's client feature survives a model's
+/// own headers. Header names compare case-insensitively, as HTTP's do, so one value is sent;
+/// a model's `extra_headers` that is not a map gives way to the call's.
 pub fn compose_extra(args: &ChatArgs, opts_extra: &Map<String, Value>) -> Map<String, Value> {
     let mut extra = args.extra_kwargs.clone().unwrap_or_default();
+    let call_headers = extra.remove(EXTRA_HEADERS);
     extra.extend(opts_extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let Some(call) = call_headers else { return extra };
+    match (extra.get_mut(EXTRA_HEADERS), call) {
+        (Some(Value::Object(merged)), Value::Object(call)) => {
+            merged.retain(|name, _| !call.keys().any(|own| own.eq_ignore_ascii_case(name)));
+            merged.extend(call);
+        }
+        (Some(Value::Object(_)), _) => {}
+        (_, call) => {
+            extra.insert(EXTRA_HEADERS.to_owned(), call);
+        }
+    }
     extra
 }
+
+const EXTRA_HEADERS: &str = "extra_headers";
 
 /// `LLMStream._run()`'s body assembly, after [`super::models::drop_unsupported_params`] has run
 /// over `kwargs`. The call's explicit `parallel_tool_calls`, `tool_choice` and `response_format`
@@ -190,6 +208,65 @@ mod tests {
         assert_eq!(body["temperature"], json!(0.1));
         assert_eq!(body["tool_choice"], json!("none"));
         assert_eq!(body["parallel_tool_calls"], json!(false));
+    }
+
+    // Catches: a model's own `extra_headers` replacing the call's whole map, which dropped
+    // AMD's `X-LiveKit-Client-Feature` from its classifier requests.
+    #[test]
+    fn extra_headers_merge_and_the_calls_header_wins_on_a_shared_name() {
+        let args = ChatArgs {
+            extra_kwargs: Some(opts(&[(
+                "extra_headers",
+                json!({"X-LiveKit-Client-Feature": "AMD", "X-Call": "1"}),
+            )])),
+            ..Default::default()
+        };
+        let model = opts(&[(
+            "extra_headers",
+            json!({"X-LiveKit-Client-Feature": "Agent", "X-Custom": "kept"}),
+        )]);
+        let extra = compose_extra(&args, &model);
+        assert_eq!(
+            extra["extra_headers"],
+            json!({"X-LiveKit-Client-Feature": "AMD", "X-Call": "1", "X-Custom": "kept"})
+        );
+        // either side alone passes through
+        assert_eq!(
+            compose_extra(&args, &Map::new())["extra_headers"],
+            args.extra_kwargs.unwrap()["extra_headers"]
+        );
+        assert_eq!(
+            compose_extra(&ChatArgs::default(), &model)["extra_headers"],
+            model["extra_headers"]
+        );
+    }
+
+    // Catches: a model header that differs from the call's only in case surviving beside it,
+    // so the gateway got both values; or a model's non-map `extra_headers` dropping the call's.
+    #[test]
+    fn a_calls_header_replaces_the_models_whatever_the_case() {
+        let args = ChatArgs {
+            extra_kwargs: Some(opts(&[(
+                "extra_headers",
+                json!({"X-LiveKit-Client-Feature": "AMD"}),
+            )])),
+            ..Default::default()
+        };
+        let model = opts(&[(
+            "extra_headers",
+            json!({"x-livekit-client-feature": "Agent", "X-Custom": "kept"}),
+        )]);
+        assert_eq!(
+            compose_extra(&args, &model)["extra_headers"],
+            json!({"X-LiveKit-Client-Feature": "AMD", "X-Custom": "kept"})
+        );
+        for not_a_map in [Value::Null, json!("X-Custom: kept")] {
+            let model = opts(&[("extra_headers", not_a_map)]);
+            assert_eq!(
+                compose_extra(&args, &model)["extra_headers"],
+                json!({"X-LiveKit-Client-Feature": "AMD"})
+            );
+        }
     }
 
     // Catches: passing the caller's tool_choice dict through unmodified.

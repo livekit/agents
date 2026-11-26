@@ -427,7 +427,9 @@ class AgentCallbacks:
             call = _function_call(invocation)
             ctx: RunContext[Any]
             if isinstance(binding, _VoiceBinding):
-                tool = _voice_tools(binding).get_function_tool(call.name)
+                tool = _voice_tools(binding).get_function_tool(call.name) or _amd_tool(
+                    binding.session, call.name
+                )
                 assert isinstance(invocation.speech, _core.SpeechHandle)
                 speech = SpeechHandle._of(invocation.speech)
                 ctx = RunContext(function_call=call, session=binding.session, speech_handle=speech)
@@ -664,6 +666,14 @@ def _voice_tools(binding: _VoiceBinding) -> ToolContext:
     # resolved per call: the session's tools may change after the frame was installed
     agent_tools, session_tools = _call_tools(binding.agent, binding.session)
     return ToolContext([*agent_tools, *session_tools])
+
+
+def _amd_tool(
+    session: VoiceSession[Any], name: str
+) -> FunctionTool[..., Any] | RawFunctionTool[..., Any] | None:
+    # AMD's built-in tool, offered to the replies it allows DTMF; an agent's tool of that name
+    # was found first
+    return ToolContext(session._amd_tools).get_function_tool(name)
 
 
 def _call_tools(

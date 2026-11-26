@@ -23,6 +23,9 @@ pub(crate) struct AgentInput {
     /// The verdict last sent to the data plane; `None` before the first, so it is an edge.
     pub(crate) gate_discard: Option<bool>,
     pub(crate) audio_enabled: bool,
+    /// An attached AMD run is not active yet: participant audio is discarded, whatever
+    /// `audio_enabled` says.
+    pub(crate) amd_discard: bool,
     pub(crate) first_input_at: Option<Ts>,
     /// So the same leg handed back is a no-op.
     pub(crate) video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
@@ -58,6 +61,7 @@ impl AgentInput {
             sinks,
             gate_discard: None,
             audio_enabled: true,
+            amd_discard: false,
             first_input_at: None,
             video_instance,
             video_sampler,
@@ -319,7 +323,7 @@ impl VoiceDriver {
         let changed = match leg {
             IoKind::AudioInput => {
                 let changed = std::mem::replace(&mut self.input.audio_enabled, enabled) != enabled;
-                if changed {
+                if changed && !self.input.amd_discard {
                     let command = AudioInputRouterCommand::SetInputEnabled(enabled);
                     self.record_effect(VoiceEffect::UpdateAudioInputRouting(command));
                 }

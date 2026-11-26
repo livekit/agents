@@ -84,6 +84,11 @@ pub trait RoomIo: Send + Sync {
     fn transcription_output(&self) -> Option<Arc<dyn TranscriptionOutput>>;
     fn wants_transcript_sync(&self, external_audio: bool) -> bool;
     fn linked_participant(&self) -> Option<ParticipantIdentity>;
+    /// The participant linked now, or the next one linked (`_wait_for_linked_participant`);
+    /// `None` once no link can come. The default answers with the link as it is now.
+    fn wait_linked_participant<'a>(&'a self) -> crate::BoxFuture<'a, Option<ParticipantIdentity>> {
+        Box::pin(std::future::ready(self.linked_participant()))
+    }
     /// Starts the room's IO; its startup spans (the participant, its track, the agent's
     /// publication) open under `startup`, the session's `session_start`.
     fn start(self: Arc<Self>, startup: crate::telemetry::Cx);
