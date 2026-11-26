@@ -1,0 +1,24 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  h_a827ab16c3c189 2138
+livekit-agents/livekit/agents/voice/amd/_stt.py
+  h_a827ab16c3c189 6,78,81-82,130-131
+livekit-agents/livekit/agents/voice/amd/detector.py
+  h_a827ab16c3c189 216-219,436,455-461,463-464,512-515,547,736-737,739-740,742-743,746-747,750,1454-1455
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  h_a827ab16c3c189 1135
+spec/amd.md
+  h_a827ab16c3c189 757-758,760,819-822,831-832,836-837,839-840,855-857,859,861-864,866,869-871,884,886-892,897-899
+tests/test_amd.py
+  h_a827ab16c3c189 6963,7202,7212,7279,7314-7321,7323-7327,7329-7333,7339-7347,7350,7352,7355,7357-7362,7364-7366,7374-7376,7379-7380,7383-7394,7396-7401,7403-7408,7410,7412,7414-7416,7435,7458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "828a070886fe3189e6989d0ea33d232b1e8e9eef",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
