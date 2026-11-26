@@ -1,11 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::productstats::ProductStat;
 use lk_agents_abi::productstats::runner::{Runner, RunnerCmd, RunnerKind};
 use lk_agents_abi::productstats::testkit::{TestCounts, TestDuration};
 use lk_agents_abi::telemetry::decl::{self, MetricDecl};
-use lk_agents_abi::telemetry::record::{Number, Record, RecordSink as _};
+use lk_agents_abi::telemetry::record::{Number, RecordSink as _};
 
 use super::super::proto::collector::metrics::v1::ExportMetricsServiceRequest;
 use super::super::proto::common::v1::{KeyValue, any_value::Value as Any};
@@ -48,12 +47,9 @@ fn counts(label: &str) -> TestCounts {
     TestCounts { label: Label(label.to_owned()) }
 }
 
-fn measure<M: MetricDecl<Audience = decl::ProductStats>>(
-    exporter: &Exporter,
-    labels: &M,
-    value: impl Into<Number>,
-) {
-    exporter.record(Record::ProductStat(ProductStat::of(labels, value)));
+/// One measurement, as its declared audience routes it.
+fn measure<M: MetricDecl>(exporter: &Exporter, labels: &M, value: impl Into<Number>) {
+    exporter.record(decl::record_of(labels, value.into(), None));
 }
 
 /// The requests the collector's route received, each decoded and checked for its bearer.

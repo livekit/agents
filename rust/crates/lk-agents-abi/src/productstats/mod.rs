@@ -1,5 +1,5 @@
-use crate::telemetry::decl::{Attrs, Label, MetricDecl, Number, ProductStats, SpanValue};
-use crate::telemetry::record::{KeyValues, Measurement};
+use crate::telemetry::decl::{Attrs, Label, SpanValue};
+use crate::telemetry::record::Measurement;
 use crate::telemetry::semconv::otel;
 use runner::Runner;
 
@@ -16,50 +16,14 @@ pub mod sessions;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 
-/// What records a product statistic: a context (`&Cx`, in an async crate) or a machine's trace
-/// (`&mut Trace`). The emitters both kinds of code share end in one of those two.
-pub trait MeasureProduct {
-    fn measure_product<M: MetricDecl<Audience = ProductStats>>(
-        &mut self,
-        metric: &M,
-        value: Number,
-    );
-}
-
-/// A context records through its recorder; under `Cx::NONE` nothing is recorded.
-impl MeasureProduct for &crate::telemetry::Cx {
-    fn measure_product<M: MetricDecl<Audience = ProductStats>>(
-        &mut self,
-        metric: &M,
-        value: Number,
-    ) {
-        if let Some(recorder) = self.recorder() {
-            let stat = ProductStat::of(metric, value);
-            recorder.record(crate::telemetry::record::Record::ProductStat(stat));
-        }
-    }
-}
-
 /// One measurement of a declared product statistic, as it travels among a recorder's records.
+/// Only the `ProductStats` audience makes one, from a measurement of a declaration of its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductStat(Measurement);
 
 impl ProductStat {
-    pub fn of<M: MetricDecl<Audience = ProductStats>>(
-        labels: &M,
-        value: impl Into<Number>,
-    ) -> Self {
-        let mut out = KeyValues::new();
-        labels.write(&mut out);
-        ProductStat(Measurement {
-            instrument: M::NAME,
-            kind: M::KIND,
-            unit: M::UNIT,
-            bounds: M::BOUNDS,
-            value: value.into(),
-            labels: out,
-            job: None,
-        })
+    pub(crate) fn new(measurement: Measurement) -> Self {
+        ProductStat(measurement)
     }
 
     pub fn into_measurement(self) -> Measurement {

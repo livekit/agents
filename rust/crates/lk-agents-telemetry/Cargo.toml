@@ -16,7 +16,7 @@ rand = "0.9"
 lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
 
 [features]
-# A test's own recorder of product statistics (`productstats::testkit`).
+# A test's own recorder (`testkit`).
 testkit = ["lk-agents-abi/testkit"]
 
 [lints]

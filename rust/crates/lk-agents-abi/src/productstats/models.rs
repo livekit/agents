@@ -1,6 +1,5 @@
-use super::MeasureProduct;
 use crate::ProviderId;
-use crate::telemetry::decl::{Attrs, Label, SpanValue, metric};
+use crate::telemetry::decl::{Attrs, Label, Measure, SpanValue, metric};
 use crate::telemetry::instruments::DURATION_BOUNDS;
 
 // What every model is counted under. The framework derives the labels from the identity a model
@@ -159,22 +158,22 @@ impl ModelUsage {
     }
 
     /// Adds this usage to `model`'s statistics: each unit it was measured in, and no other.
-    pub fn measure(self, model: &ModelLabels, mut into: impl MeasureProduct) {
+    pub fn measure(self, model: &ModelLabels, mut into: impl Measure) {
         let model = || model.clone();
         if self.input_tokens > 0 {
             let tokens = self.input_tokens.into();
-            into.measure_product(&ModelInputTokens { model: model() }, tokens);
+            into.measure(&ModelInputTokens { model: model() }, tokens);
         }
         if self.output_tokens > 0 {
             let tokens = self.output_tokens.into();
-            into.measure_product(&ModelOutputTokens { model: model() }, tokens);
+            into.measure(&ModelOutputTokens { model: model() }, tokens);
         }
         if self.characters > 0 {
-            into.measure_product(&ModelCharacters { model: model() }, self.characters.into());
+            into.measure(&ModelCharacters { model: model() }, self.characters.into());
         }
         if self.audio_duration > 0.0 {
             let seconds = self.audio_duration.into();
-            into.measure_product(&ModelAudioDuration { model: model() }, seconds);
+            into.measure(&ModelAudioDuration { model: model() }, seconds);
         }
     }
 }

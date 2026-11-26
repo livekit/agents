@@ -109,7 +109,7 @@ impl VoiceDriver {
             false => FalseInterruption::Off,
         };
         let started = VoiceSessions { pipeline, turn_detection, interruption, false_interruption };
-        self.telemetry.measure_product(&started, 1u64.into());
+        self.telemetry.measure(&started, 1u64.into());
     }
 
     /// The session ends: its one count with what its agents did, and each feature it used.
@@ -139,7 +139,7 @@ impl VoiceDriver {
         let Some((delay, endpointing)) = info.transcription_after_endpoint() else { return };
         let Some(model) = self.stt_stats() else { return };
         let labels = ModelTranscriptionDelay { model, endpointing };
-        self.telemetry.measure_product(&labels, delay.as_secs_f64().into());
+        self.telemetry.measure(&labels, delay.as_secs_f64().into());
     }
 
     /// One response of the session's realtime or duplex model: the request, its tokens and its
@@ -152,10 +152,10 @@ impl VoiceDriver {
             false => ModelKind::Realtime,
         };
         let model = ModelLabels::of(kind, &realtime.provider);
-        self.telemetry.measure_product(&ModelRequests { model: model.clone() }, 1u64.into());
+        self.telemetry.measure(&ModelRequests { model: model.clone() }, 1u64.into());
         ModelUsage::tokens(&response.tokens).measure(&model, &mut self.telemetry);
         if let Some(ttft) = response.ttft.filter(|ttft| !response.cancelled && *ttft >= 0.0) {
-            self.telemetry.measure_product(&ModelTtft { model }, ttft.into());
+            self.telemetry.measure(&ModelTtft { model }, ttft.into());
         }
     }
 }

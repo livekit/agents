@@ -52,9 +52,14 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// Who a declaration's data is for. Each pipeline records only its own audience's declarations,
-/// so one recorded into the other's does not compile.
-pub trait Audience: sealed::Sealed {}
+/// Who a declaration's data is for: the customer's observability, or LiveKit's product
+/// statistics. A measurement's audience is its declaration's and chooses the record it becomes,
+/// so nothing a caller passes can send one audience's data to the other's destination. Sealed:
+/// there are these two audiences and no other.
+pub trait Audience: sealed::Sealed {
+    /// The record `measurement` travels as.
+    fn record(measurement: super::record::Measurement) -> super::record::Record;
+}
 
 /// The customer's observability: spans, events and metrics exported to the customer's project.
 pub enum Observability {}
@@ -63,9 +68,57 @@ pub enum Observability {}
 pub enum ProductStats {}
 
 impl sealed::Sealed for Observability {}
-impl Audience for Observability {}
+impl Audience for Observability {
+    fn record(measurement: super::record::Measurement) -> super::record::Record {
+        super::record::Record::Measurement(measurement)
+    }
+}
 impl sealed::Sealed for ProductStats {}
-impl Audience for ProductStats {}
+impl Audience for ProductStats {
+    /// A product statistic belongs to no job.
+    fn record(measurement: super::record::Measurement) -> super::record::Record {
+        let stat = crate::productstats::ProductStat::new(super::record::Measurement {
+            job: None,
+            ..measurement
+        });
+        super::record::Record::ProductStat(stat)
+    }
+}
+
+/// One measurement of the declared instrument `M` under `labels`, as the record its audience
+/// makes it: the one way a measurement becomes a record.
+pub fn record_of<M: MetricDecl>(
+    labels: &M,
+    value: Number,
+    job: Option<super::record::JobKey>,
+) -> super::record::Record {
+    let mut out = KeyValues::new();
+    labels.write(&mut out);
+    M::Audience::record(super::record::Measurement {
+        instrument: M::NAME,
+        kind: M::KIND,
+        unit: M::UNIT,
+        bounds: M::BOUNDS,
+        value,
+        labels: out,
+        job,
+    })
+}
+
+/// What measures a declared instrument of either audience: a context (`&Cx`, async code) or a
+/// machine's trace (`&mut Trace`). The emitters both kinds of code share take one.
+pub trait Measure {
+    fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number);
+}
+
+/// A context records through its recorder, for its job; under `Cx::NONE` nothing is recorded.
+impl Measure for &super::Cx {
+    fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number) {
+        if let Some(recorder) = self.recorder() {
+            recorder.record(record_of(metric, value, self.job().cloned()));
+        }
+    }
+}
 
 /// A span: its start attributes are the struct, its end attributes `End`.
 pub trait SpanDecl: Attrs {

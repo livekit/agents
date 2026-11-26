@@ -393,3 +393,33 @@ fn an_end_attribute_replaces_the_start_value_under_its_key() {
     assert_eq!(sources.len(), 1, "{:?}", wait.attributes);
     assert_eq!(attr(wait, "lk.eou.source"), Some(&Value::String("stt".into())));
 }
+
+// Catches: `Trace::measure` sending a metric to the other audience's destination, or a product
+// statistic carrying the session's job.
+#[test]
+fn trace_measure_routes_each_metric_by_its_declared_audience() {
+    use lk_agents_abi::productstats::testkit::TestDuration;
+    use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
+    let mut t = trace();
+    t.measure(&WorkerProcessReadyDuration, 1.0.into());
+    t.measure(&TestDuration, 2.0.into());
+    let routed: Vec<(&str, &str, bool)> = t
+        .drain()
+        .into_iter()
+        .map(|record| match record {
+            Record::Measurement(m) => ("customer", m.instrument, m.job.is_some()),
+            Record::ProductStat(stat) => {
+                let m = stat.into_measurement();
+                ("product", m.instrument, m.job.is_some())
+            }
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        routed,
+        [
+            ("customer", "lk.agents.worker.process_ready.duration", true),
+            ("product", "lk.product.agents.test.duration", false),
+        ]
+    );
+}

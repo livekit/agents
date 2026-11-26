@@ -1,10 +1,9 @@
-use super::MeasureProduct;
 use super::features::{
     Feature, FeatureBackgroundAudio, FeatureLanguageSwitch, FeatureMcp, FeatureModelSwitch,
     FeatureOverrideOptions, FeatureUpdateOptions,
 };
 use crate::agent::FunctionToolInfo;
-use crate::telemetry::decl::{Attrs, SpanValue, metric};
+use crate::telemetry::decl::{Attrs, Measure, SpanValue, metric};
 use std::collections::BTreeSet;
 
 // A session is one call (`rtc_session`) or one text request (`a2a_session`).
@@ -93,7 +92,7 @@ impl SessionStats {
     }
 
     /// The session ended: its one count, and one for each feature it used.
-    pub fn emit(self, entrypoint: Entrypoint, mut into: impl MeasureProduct) {
+    pub fn emit(self, entrypoint: Entrypoint, mut into: impl Measure) {
         let topology = match (self.handoff, self.agent_as_tool) {
             (false, false) => Topology::Single,
             (true, false) => Topology::Handoff,
@@ -101,18 +100,16 @@ impl SessionStats {
             (true, true) => Topology::Both,
         };
         let delegation = if self.remote { Delegation::Remote } else { Delegation::None };
-        into.measure_product(&Sessions { entrypoint, topology, delegation }, 1u64.into());
+        into.measure(&Sessions { entrypoint, topology, delegation }, 1u64.into());
         for feature in self.features {
             let once = 1u64.into();
             match feature {
-                Feature::Mcp => into.measure_product(&FeatureMcp, once),
-                Feature::UpdateOptions => into.measure_product(&FeatureUpdateOptions, once),
-                Feature::OverrideOptions => into.measure_product(&FeatureOverrideOptions, once),
-                Feature::BackgroundAudio => into.measure_product(&FeatureBackgroundAudio, once),
-                Feature::LanguageSwitch => into.measure_product(&FeatureLanguageSwitch, once),
-                Feature::ModelSwitch(kind) => {
-                    into.measure_product(&FeatureModelSwitch { kind }, once)
-                }
+                Feature::Mcp => into.measure(&FeatureMcp, once),
+                Feature::UpdateOptions => into.measure(&FeatureUpdateOptions, once),
+                Feature::OverrideOptions => into.measure(&FeatureOverrideOptions, once),
+                Feature::BackgroundAudio => into.measure(&FeatureBackgroundAudio, once),
+                Feature::LanguageSwitch => into.measure(&FeatureLanguageSwitch, once),
+                Feature::ModelSwitch(kind) => into.measure(&FeatureModelSwitch { kind }, once),
             }
         }
     }

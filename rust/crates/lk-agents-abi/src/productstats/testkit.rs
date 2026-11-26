@@ -1,4 +1,4 @@
-use crate::telemetry::decl::{Attrs, Label, metric};
+use crate::telemetry::decl::{Attrs, Current, Label, metric, span};
 use crate::telemetry::instruments::DURATION_BOUNDS;
 
 // What the pipeline's tests record: no shipped build declares or sends these.
@@ -45,3 +45,9 @@ pub fn stat(stat: super::ProductStat) -> Stat {
     };
     (m.instrument, labels.collect(), value)
 }
+
+/// A span declared for the wrong audience, which no span API accepts: product statistics are
+/// metrics only.
+#[span(name = "lk.product.agents.test.span", parent = Current, audience = ProductStats)]
+#[derive(Attrs)]
+pub struct TestSpan;

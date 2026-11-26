@@ -31,7 +31,6 @@ pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
-use lk_agents_telemetry::productstats;
 pub(crate) use lk_agents_telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
 };
@@ -49,7 +48,7 @@ pub fn model_labels(id: &ProviderId) -> ModelLabels {
 /// One request made to `id`'s model, as product statistics count it: counted when it is made,
 /// so a request that fails or is dropped is still one.
 pub(crate) fn model_request(cx: &Cx, kind: ModelKind, id: &ProviderId) {
-    productstats::measure(cx, &ModelRequests { model: ModelStats::of(kind, id) }, 1u64);
+    measure(cx, &ModelRequests { model: ModelStats::of(kind, id) }, 1u64);
 }
 
 fn seconds(from: u64, to: u64) -> f64 {
@@ -260,7 +259,7 @@ impl LlmTrace {
         let model = ModelStats::of(ModelKind::Llm, &self.id);
         ModelUsage::tokens(&usage).measure(&model, cx);
         if let Some(at) = self.first_chunk {
-            productstats::measure(cx, &ModelTtft { model }, seconds(self.started, at));
+            measure(cx, &ModelTtft { model }, seconds(self.started, at));
         }
         let provider = provider_name(&self.id);
         let labels = || GenAiLabels {
@@ -486,7 +485,7 @@ impl TtsTrace {
             };
             usage.measure(&model, &self.cx);
             if let Some(ttfb) = metrics.ttfb.filter(|ttfb| *ttfb >= 0.0) {
-                productstats::measure(&self.cx, &ModelTtfb { model }, ttfb);
+                measure(&self.cx, &ModelTtfb { model }, ttfb);
             }
         }
         let end = TtsRequestEnd {
