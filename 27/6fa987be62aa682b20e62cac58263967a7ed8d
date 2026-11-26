@@ -1,0 +1,18 @@
+livekit-agents/livekit/agents/voice/amd/detector.py
+  h_a827ab16c3c189 439-444
+spec/amd.md
+  h_a827ab16c3c189 699,758,859-861
+tests/test_amd.py
+  h_a827ab16c3c189 7620,7625,7627-7630,7635-7640
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "276fa987be62aa682b20e62cac58263967a7ed8d",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
