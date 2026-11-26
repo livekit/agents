@@ -47,6 +47,8 @@ from .log import logger
 from .models import (
     _REASONING_EFFORT_LOW_MODELS,
     _REASONING_EFFORT_NONE_MODELS,
+    _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS,
+    _TOOLS_REQUIRE_RESPONSES_API_MODELS,
     CerebrasChatModels,
     ChatModels,
     CometAPIChatModels,
@@ -65,23 +67,6 @@ from .models import (
 from .utils import AsyncAzureADTokenProvider
 
 lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
-
-# models that reject any reasoning_effort value but "none" once function tools are attached
-_REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS: frozenset[str] = frozenset(
-    {
-        "gpt-6-luna",
-        "gpt-6-sol",
-        "gpt-5.6",
-        "gpt-5.6-luna",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.5",
-    }
-)
-
-# models that reject function tools on /v1/chat/completions at every reasoning_effort ("none" is
-# not a supported value for them); they only take tools through the Responses API
-_TOOLS_REQUIRE_RESPONSES_API_MODELS: frozenset[str] = frozenset({"gpt-6-astra", "gpt-6.1-sol"})
 
 Verbosity = Literal["low", "medium", "high"]
 PromptCacheRetention = Literal["in_memory", "24h"]
