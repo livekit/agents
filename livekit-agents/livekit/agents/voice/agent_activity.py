@@ -3329,11 +3329,11 @@ class AgentActivity(RecognitionHooks):
                 # stacking copies, and an expressive-off turn removes it again
                 update_expressive_instructions(chat_ctx, text=text)
 
-    def _no_pending_speech(self, besides: SpeechHandle | None = None) -> bool:
+    @property
+    def _no_pending_speech(self) -> bool:
         # an interrupted speech stays queued until the scheduler pops it, but is no longer pending
-        current = self._current_speech
         return all(speech.done() for _, _, speech in self._speech_q) and (
-            current is None or current is besides or current.done()
+            not self._current_speech or self._current_speech.done()
         )
 
     @property
@@ -3350,7 +3350,7 @@ class AgentActivity(RecognitionHooks):
         return any(e._pending_updates for e in executors)
 
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
-        if self._no_pending_speech():
+        if self._no_pending_speech:
             # a speech awaiting its tool executions keeps the agent busy: stay in
             # "thinking" so the user-away timer isn't armed mid-tool (#6904)
             self._session._update_agent_state(
@@ -5237,13 +5237,13 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
-        # no reply or other work follows, so nothing else clears the "thinking" the tool asserted;
         # this speech is over, though the scheduler releases it only on its next pass
-        if (
-            not tool_reply_expected
-            and not self._has_followup_work
-            and self._no_pending_speech(besides=speech_handle)
-        ):
+        current = self._current_speech
+        no_other_speech = all(speech.done() for _, _, speech in self._speech_q) and (
+            current is None or current is speech_handle or current.done()
+        )
+        # no reply or other work follows, so nothing else clears the "thinking" the tool asserted
+        if not tool_reply_expected and not self._has_followup_work and no_other_speech:
             self._session._update_agent_state("listening")
 
     def _disallow_interruptions(self, speech_handle: SpeechHandle) -> None:
