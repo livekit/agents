@@ -97,6 +97,23 @@ class TestExtractAndStrip:
         assert clean == "hi A7"
         assert tags == [("emotion", "happy"), ("spell", "A7")]
 
+    def test_self_closing_tag_has_no_inner_text(self) -> None:
+        # a self-closing tag must not take the text up to a later closing tag of its name
+        clean, tags = extract_and_strip(
+            '<emotion value="happy"/> Glad. <emotion value="sad">sorry</emotion>',
+            xml_tags=["emotion"],
+        )
+        assert clean == "Glad. sorry"
+        assert tags == [("emotion", "happy"), ("emotion", "sorry")]
+
+    @pytest.mark.parametrize("value", ["a/b", "x/"])
+    def test_slash_in_attribute_value_does_not_close_the_tag(self, value: str) -> None:
+        clean, tags = extract_and_strip(
+            f'<emotion value="{value}">sorry</emotion>', xml_tags=["emotion"]
+        )
+        assert clean == "sorry"
+        assert tags == [("emotion", "sorry")]
+
 
 # ===========================================================================
 # xAI dialect (mixed inline [..] + wrapping <..>)
