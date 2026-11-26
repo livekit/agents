@@ -29,6 +29,9 @@ pub enum Command {
     /// Plugin-measured only (VAD, realtime usage, EOT/interruption); LLM/TTS/STT/EOU never come
     /// from here.
     HostMetrics(Box<lk_agents_abi::metrics::base::AgentMetrics>),
+    /// The session used a feature its executor saw (an options call, a toolset it activated):
+    /// its product statistics count it when the session ends.
+    FeatureUsed(lk_agents_abi::productstats::features::Feature),
     /// The avatar session failed while the call goes on (it did not join in time): one
     /// recoverable `avatar_error`.
     AvatarError(lk_agents_abi::errors::ProviderError),
@@ -602,6 +605,7 @@ impl Command {
             | Command::Close(_)
             | Command::HookDone { .. }
             | Command::HostMetrics(_)
+            | Command::FeatureUsed(_)
             | Command::AvatarError(_)
             | Command::DelegateUsage(_)
             | Command::SetStaticKeyterms(_)

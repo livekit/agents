@@ -200,7 +200,7 @@ pub struct Session {
     /// Remaining siblings cannot widen the occurrences offered to that deferred model turn.
     deferred_input_offers: BTreeMap<FrameId, Vec<InputCandidate>>,
     /// The agents this turn's invocations called as tools, local and remote.
-    facts: lk_agents_abi::productstats::sessions::SessionFacts,
+    stats: lk_agents_abi::productstats::sessions::SessionStats,
     /// The turn's ended invocations: the live one is added to it when read.
     usage: Ledger,
     sequence: u64,

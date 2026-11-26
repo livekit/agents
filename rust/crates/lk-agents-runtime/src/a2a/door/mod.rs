@@ -39,6 +39,8 @@ const RESPONSE_CAPACITY: usize = 64;
 struct TurnCall {
     host_context: Option<lk_agents_abi::HostRef>,
     span: Option<telemetry::SpanContext>,
+    /// The request's context: its product statistics are recorded under it.
+    cx: telemetry::Cx,
 }
 /// The transport's database frame ceiling also bounds one decoded door payload.
 pub const MAX_PAYLOAD_BYTES: usize = 16 << 20;
@@ -276,7 +278,7 @@ impl Inner {
                         task_id: message.task_id.clone().unwrap_or_default(),
                     },
                 );
-                let call = TurnCall { host_context, span: span.cx().span() };
+                let call = TurnCall { host_context, span: span.cx().span(), cx: span.cx().clone() };
                 let sent =
                     self.send(id, &principal, message, history_length, streaming, &sender, call);
                 let sent = sent.await;
@@ -432,6 +434,7 @@ impl Inner {
             publisher: Some(publisher.clone()),
             host_context: call.host_context,
             span: call.span,
+            cx: call.cx,
             cancels: self.owner.clone(),
             ..Turn::new(
                 thread.clone(),

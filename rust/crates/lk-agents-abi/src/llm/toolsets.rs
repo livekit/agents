@@ -78,6 +78,10 @@ pub trait ScopesPort: Any + Send + Sync {
     ) -> BoxFuture<'_, Result<u64, HostError>>;
     fn discard(&self, activation: u64) -> BoxFuture<'_, Result<(), HostError>>;
     fn release(&self, scope: Option<u64>) -> BoxFuture<'_, Result<(), HostError>>;
+    /// Whether a toolset activated so far, or one nested in those, is an MCP toolset.
+    fn mcp(&self) -> bool {
+        false
+    }
 }
 
 /// The toolset scope of the whole session; other scopes are stable host agent identities.

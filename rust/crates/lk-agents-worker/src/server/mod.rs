@@ -484,11 +484,10 @@ impl ServerRuntime {
         if !start.unregistered {
             settings.check_registration()?;
         }
-        lk_agents_net::export::productstats::configure_destination(
-            &settings.ws_url,
-            &settings.api_key,
-            &settings.api_secret,
-        );
+        if let Some(exporter) = lk_agents_net::export::exporter() {
+            let (url, key, secret) = (&settings.ws_url, &settings.api_key, &settings.api_secret);
+            exporter.configure_product_stats(url, key, secret);
+        }
         settings.check_routes(!start.endpoints.is_empty())?;
         if settings.cloud() {
             settings.load_threshold = DEFAULT_LOAD_THRESHOLD;

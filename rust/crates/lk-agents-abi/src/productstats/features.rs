@@ -1,10 +1,8 @@
-use super::ProductStat;
 use super::models::ModelKind;
 use crate::telemetry::decl::{Attrs, SpanValue, metric};
-use std::collections::BTreeSet;
 
-// One counter per feature, each counting the sessions that used it: a session adds 1 the first
-// time it uses the feature, and never more.
+// One counter per feature, each counting the sessions that used it: a session's summary holds
+// each feature it used once, and adds 1 for it when the session ends.
 
 /// Sessions that ran an agent that has an MCP toolset.
 #[metric(
@@ -100,22 +98,4 @@ pub enum Feature {
     BackgroundAudio,
     LanguageSwitch,
     ModelSwitch(SwitchedModel),
-}
-
-/// The features one session already counted, held with the session's state.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SessionFeatures(BTreeSet<Feature>);
-
-impl SessionFeatures {
-    /// The session used `feature`: its count the first time, nothing after.
-    pub fn used(&mut self, feature: Feature) -> Option<ProductStat> {
-        self.0.insert(feature).then(|| match feature {
-            Feature::Mcp => ProductStat::of(&FeatureMcp, 1u64),
-            Feature::UpdateOptions => ProductStat::of(&FeatureUpdateOptions, 1u64),
-            Feature::OverrideOptions => ProductStat::of(&FeatureOverrideOptions, 1u64),
-            Feature::BackgroundAudio => ProductStat::of(&FeatureBackgroundAudio, 1u64),
-            Feature::LanguageSwitch => ProductStat::of(&FeatureLanguageSwitch, 1u64),
-            Feature::ModelSwitch(kind) => ProductStat::of(&FeatureModelSwitch { kind }, 1u64),
-        })
-    }
 }

@@ -568,6 +568,12 @@ impl VoiceSession {
         self.send_from(VoiceCommandOrigin::Host, cmd)
     }
 
+    /// The session used `feature`, for its product statistics; a session that already ended
+    /// counts nothing more.
+    pub(crate) fn feature_used(&self, feature: lk_agents_abi::productstats::features::Feature) {
+        let _ = self.send(Command::FeatureUsed(feature));
+    }
+
     pub fn send_from(
         &self,
         origin: VoiceCommandOrigin,
@@ -873,6 +879,12 @@ impl VoiceSession {
                     return;
                 }
             };
+            // The arriving agent's toolsets are activated: an MCP toolset among them is a feature.
+            if scopes.mcp() {
+                let used = lk_agents_abi::productstats::features::Feature::Mcp;
+                let _ =
+                    send_command(&api, VoiceCommandOrigin::Host, Command::FeatureUsed(used), None);
+            }
             let toolset = std::mem::take(&mut update.toolset);
             update.toolset = Toolset::set_up(set_up, toolset.host, toolset.agent);
             let cmd = wrap(update);

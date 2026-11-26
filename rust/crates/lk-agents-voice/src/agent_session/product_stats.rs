@@ -2,8 +2,7 @@ use crate::agent_session::VoiceDriver;
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::productstats::ProductStat;
-use lk_agents_abi::productstats::features::{Feature, SessionFeatures, SwitchedModel};
+use lk_agents_abi::productstats::features::{Feature, SwitchedModel};
 use lk_agents_abi::productstats::models::{
     ModelKind, ModelLabels, ModelRequests, ModelTranscriptionDelay, ModelTtft, ModelUsage,
 };
@@ -18,48 +17,34 @@ use std::collections::BTreeMap;
 // The product statistics a voice session measures itself: its own count, and what only it knows
 // of its models. They leave with the session's telemetry records; the session never records them.
 
-/// The features a session already counted, and what its switches are told against.
+/// The model of each kind the session started with, which a switch is told against; `None`
+/// when it had none.
 #[derive(Default)]
-pub(crate) struct Features {
-    counted: SessionFeatures,
-    /// The model of each kind the session started with; `None` when it had none.
-    started_with: BTreeMap<SwitchedModel, Option<ProviderId>>,
-}
+pub(crate) struct StartedWith(BTreeMap<SwitchedModel, Option<ProviderId>>);
 
-impl Features {
-    pub(crate) fn starting_with(
-        stt: &Option<SttRef>,
-        tts: &Option<TtsRef>,
-        llm: &Option<LlmRef>,
-    ) -> Self {
-        let started_with = BTreeMap::from([
+impl StartedWith {
+    pub(crate) fn models(stt: &Option<SttRef>, tts: &Option<TtsRef>, llm: &Option<LlmRef>) -> Self {
+        StartedWith(BTreeMap::from([
             (SwitchedModel::Stt, stt.as_ref().map(|stt| stt.provider.clone())),
             (SwitchedModel::Tts, tts.as_ref().map(|tts| tts.provider.clone())),
             (SwitchedModel::Llm, llm.as_ref().map(|llm| llm.provider.clone())),
-        ]);
-        Features { counted: SessionFeatures::default(), started_with }
+        ]))
     }
 
-    /// The session opened on this realtime model: a later one is told against it.
-    pub(crate) fn started_on_realtime(&mut self, model: Option<ProviderId>) {
-        self.started_with.insert(SwitchedModel::Realtime, model);
+    /// The session opened on this realtime model.
+    pub(crate) fn realtime(&mut self, model: Option<ProviderId>) {
+        self.0.insert(SwitchedModel::Realtime, model);
     }
 }
 
 impl VoiceDriver {
-    /// The session used `feature`: counted the first time.
-    pub(crate) fn count_feature(&mut self, feature: Feature) {
-        let counted = self.session.features.counted.used(feature);
-        self.telemetry.product_stats(counted);
-    }
-
     /// A model of `kind` is installed, however it came (`update_options`, `override_options`, an
     /// agent that brings its own): a switch when it is another than the one the session started
     /// with.
     pub(crate) fn count_model_installed(&mut self, kind: SwitchedModel, model: &ProviderId) {
-        let started = self.session.features.started_with.get(&kind).cloned().flatten();
+        let started = self.session.started_with.0.get(&kind).cloned().flatten();
         if started.as_ref() != Some(model) {
-            self.count_feature(Feature::ModelSwitch(kind));
+            self.session.stats.used(Feature::ModelSwitch(kind));
         }
     }
 
@@ -88,7 +73,7 @@ impl VoiceDriver {
         if let (Some(before), Some(now)) = (before, now)
             && before.language() != now.language()
         {
-            self.count_feature(Feature::LanguageSwitch);
+            self.session.stats.used(Feature::LanguageSwitch);
         }
     }
 
@@ -124,13 +109,13 @@ impl VoiceDriver {
             false => FalseInterruption::Off,
         };
         let started = VoiceSessions { pipeline, turn_detection, interruption, false_interruption };
-        self.telemetry.product_stats([ProductStat::of(&started, 1u64)]);
+        self.telemetry.measure_product(&started, 1u64.into());
     }
 
-    /// The session ends: its one count, with what its agents did.
+    /// The session ends: its one count with what its agents did, and each feature it used.
     pub(crate) fn count_session_end(&mut self) {
-        let ended = self.session.facts.ended(Entrypoint::RtcSession);
-        self.telemetry.product_stats([ended]);
+        let stats = std::mem::take(&mut self.session.stats);
+        stats.emit(Entrypoint::RtcSession, &mut self.telemetry);
     }
 
     /// The session STT's labels: a `FallbackAdapter`'s are the instance serving.
@@ -145,7 +130,7 @@ impl VoiceDriver {
             audio_duration: usage.audio_duration.unwrap_or_default(),
             ..ModelUsage::tokens(&usage.tokens)
         };
-        self.telemetry.product_stats(heard.stats(&model));
+        heard.measure(&model, &mut self.telemetry);
     }
 
     /// A committed turn's transcription delay, once per turn: nothing when the final came before
@@ -154,7 +139,7 @@ impl VoiceDriver {
         let Some((delay, endpointing)) = info.transcription_after_endpoint() else { return };
         let Some(model) = self.stt_stats() else { return };
         let labels = ModelTranscriptionDelay { model, endpointing };
-        self.telemetry.product_stats([ProductStat::of(&labels, delay.as_secs_f64())]);
+        self.telemetry.measure_product(&labels, delay.as_secs_f64().into());
     }
 
     /// One response of the session's realtime or duplex model: the request, its tokens and its
@@ -167,12 +152,11 @@ impl VoiceDriver {
             false => ModelKind::Realtime,
         };
         let model = ModelLabels::of(kind, &realtime.provider);
-        let mut stats = vec![ProductStat::of(&ModelRequests { model: model.clone() }, 1u64)];
-        stats.extend(ModelUsage::tokens(&response.tokens).stats(&model));
+        self.telemetry.measure_product(&ModelRequests { model: model.clone() }, 1u64.into());
+        ModelUsage::tokens(&response.tokens).measure(&model, &mut self.telemetry);
         if let Some(ttft) = response.ttft.filter(|ttft| !response.cancelled && *ttft >= 0.0) {
-            stats.push(ProductStat::of(&ModelTtft { model }, ttft));
+            self.telemetry.measure_product(&ModelTtft { model }, ttft.into());
         }
-        self.telemetry.product_stats(stats);
     }
 }
 

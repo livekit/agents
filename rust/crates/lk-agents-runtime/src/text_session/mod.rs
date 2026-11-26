@@ -587,7 +587,7 @@ impl Driver {
     ) {
         self.finished = true;
         if let Some(crate::agent_run::output::Target::Handler(turn)) = &self.output_target {
-            turn.session_facts(self.session.session_facts());
+            turn.session_stats(self.session.session_stats());
         }
         self.routing.take();
         self.pending.clear();

@@ -15,6 +15,7 @@ extern crate self as lk_agents_telemetry;
 
 mod observability;
 pub mod process;
+pub mod productstats;
 pub mod span;
 
 pub use observability::*;

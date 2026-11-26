@@ -627,6 +627,7 @@ impl VoiceDriver {
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
+            Command::FeatureUsed(feature) => self.session.stats.used(feature),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {
                     metrics: record,
@@ -892,7 +893,7 @@ impl VoiceDriver {
             VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
         session.expressive = initial.expressive;
         let realtime = activity.realtime().map(|realtime| realtime.provider.clone());
-        session.features.started_on_realtime(realtime);
+        session.started_with.realtime(realtime);
         let input = crate::agent_session::machine::activity::io::AgentInput::new(
             initial.sinks,
             initial.video_instance,

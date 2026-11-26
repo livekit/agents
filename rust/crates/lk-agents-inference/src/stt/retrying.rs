@@ -35,9 +35,9 @@ struct Report<'a> {
 impl Report<'_> {
     /// One stream or recognition asked of the provider, as product statistics count it; an
     /// adapter's members count their own.
-    fn request(&self) {
+    fn request(&self, cx: &telemetry::Cx) {
         if !self.stt.retries_itself() {
-            telemetry::model_request(ModelKind::Stt, &self.stt.id());
+            telemetry::model_request(cx, ModelKind::Stt, &self.stt.id());
         }
     }
 
@@ -190,7 +190,7 @@ pub(crate) async fn recognize_reported(
 ) -> Result<SpeechEvent, ProviderError> {
     let (stt, options) = attempt_view(stt, options);
     let report = Report { stt: &*stt, give_up };
-    report.request();
+    report.request(cx);
     let mut attempts = attempts(&options, clock.now(), report)?;
     let deadline = attempts.wake_at(None);
     match before(
@@ -227,7 +227,7 @@ pub(crate) async fn stream_reported(
 ) -> Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError> {
     let (stt, options) = attempt_view(stt, options);
     let report = Report { stt: &*stt, give_up };
-    report.request();
+    report.request(cx);
     let accepted = clock.now();
     let mut attempts = attempts(&options, accepted, report)?;
     let deadline = attempts.wake_at(None);

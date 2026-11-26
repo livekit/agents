@@ -1,6 +1,11 @@
-use super::ProductStat;
+use super::MeasureProduct;
+use super::features::{
+    Feature, FeatureBackgroundAudio, FeatureLanguageSwitch, FeatureMcp, FeatureModelSwitch,
+    FeatureOverrideOptions, FeatureUpdateOptions,
+};
 use crate::agent::FunctionToolInfo;
 use crate::telemetry::decl::{Attrs, SpanValue, metric};
+use std::collections::BTreeSet;
 
 // A session is one call (`rtc_session`) or one text request (`a2a_session`).
 
@@ -53,44 +58,42 @@ pub struct Sessions {
     pub delegation: Delegation,
 }
 
-/// What happened in a session that its topology and delegation report: facts its machines
-/// already decide, noted where they do.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SessionFacts {
+/// One session's summary: what its agents did and the features it used, each once. The voice
+/// session and the text request both fill one and emit it once, when the session ends.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionStats {
     /// One agent replaced another.
     pub handoff: bool,
     /// A local agent ran as a tool.
     pub agent_as_tool: bool,
     /// A `RemoteAgent` was called.
     pub remote: bool,
-    /// An agent that ran has an MCP toolset.
-    pub mcp: bool,
+    /// The features the session used.
+    pub features: BTreeSet<Feature>,
 }
 
-impl SessionFacts {
+impl SessionStats {
     /// The body of `tool` starts: a local agent's, a `RemoteAgent`'s, or neither.
     pub fn tool_started(&mut self, tool: &FunctionToolInfo) {
         self.agent_as_tool |= tool.local_agent.is_some();
         self.remote |= tool.remote.is_some() && tool.local_agent.is_none();
     }
 
+    /// The session used `feature`.
+    pub fn used(&mut self, feature: Feature) {
+        self.features.insert(feature);
+    }
+
     /// What another part of the same session did, too.
-    pub fn merge(&mut self, other: SessionFacts) {
+    pub fn merge(&mut self, other: SessionStats) {
         self.handoff |= other.handoff;
         self.agent_as_tool |= other.agent_as_tool;
         self.remote |= other.remote;
-        self.mcp |= other.mcp;
+        self.features.extend(other.features);
     }
 
-    /// The session ended: its one count, and the MCP feature's when an agent of it had one. For a
-    /// session that counts its features nowhere else (a text request).
-    pub fn ended_with_features(self, entrypoint: Entrypoint) -> Vec<ProductStat> {
-        let mcp = self.mcp.then(|| ProductStat::of(&super::features::FeatureMcp, 1u64));
-        std::iter::once(self.ended(entrypoint)).chain(mcp).collect()
-    }
-
-    /// The session ended: its one count.
-    pub fn ended(self, entrypoint: Entrypoint) -> ProductStat {
+    /// The session ended: its one count, and one for each feature it used.
+    pub fn emit(self, entrypoint: Entrypoint, mut into: impl MeasureProduct) {
         let topology = match (self.handoff, self.agent_as_tool) {
             (false, false) => Topology::Single,
             (true, false) => Topology::Handoff,
@@ -98,7 +101,20 @@ impl SessionFacts {
             (true, true) => Topology::Both,
         };
         let delegation = if self.remote { Delegation::Remote } else { Delegation::None };
-        ProductStat::of(&Sessions { entrypoint, topology, delegation }, 1u64)
+        into.measure_product(&Sessions { entrypoint, topology, delegation }, 1u64.into());
+        for feature in self.features {
+            let once = 1u64.into();
+            match feature {
+                Feature::Mcp => into.measure_product(&FeatureMcp, once),
+                Feature::UpdateOptions => into.measure_product(&FeatureUpdateOptions, once),
+                Feature::OverrideOptions => into.measure_product(&FeatureOverrideOptions, once),
+                Feature::BackgroundAudio => into.measure_product(&FeatureBackgroundAudio, once),
+                Feature::LanguageSwitch => into.measure_product(&FeatureLanguageSwitch, once),
+                Feature::ModelSwitch(kind) => {
+                    into.measure_product(&FeatureModelSwitch { kind }, once)
+                }
+            }
+        }
     }
 }
 

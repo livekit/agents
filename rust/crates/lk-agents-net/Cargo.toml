@@ -59,8 +59,6 @@ miniz_oxide = "0.8"
 sysinfo.workspace = true
 
 [features]
-# A test's own capture of product statistics (`export::productstats::testkit`).
-testkit = ["lk-agents-abi/testkit"]
 # Test-only: the registry of parked signal waiters a simulation checks at quiescence.
 dst = []
 

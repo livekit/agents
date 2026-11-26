@@ -431,7 +431,7 @@ impl VoiceDriver {
             }
         }
 
-        self.session.facts.handoff |= !previous_agent.is_empty();
+        self.session.stats.handoff |= !previous_agent.is_empty();
         self.record_handoff((!previous_agent.is_empty()).then_some(previous_agent));
 
         let legs = self.reopen_legs(stt, vad);

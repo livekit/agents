@@ -3,7 +3,7 @@ use crate::recording::SessionRecorder;
 use crate::telemetry;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
-use lk_agents_abi::productstats::features::{Feature, SessionFeatures};
+use lk_agents_abi::productstats::features::Feature;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure, SessionRecorder as _};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
@@ -29,6 +29,7 @@ use lk_agents_voice::agent_session::lifecycle::{
 };
 use lk_agents_voice::agent_session::options::{RECORDING_ALL_OFF, validate_session_update};
 use parking_lot::Mutex;
+use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::OnceCell;
 
@@ -110,8 +111,8 @@ type Opened = Option<Result<(), StartFailed>>;
 struct Inner {
     env: ProcessEnv,
     options: SessionOptions,
-    /// The options features the session already counted in its product statistics.
-    features: Mutex<SessionFeatures>,
+    /// The features used on the session so far, which reach its summary once it runs.
+    features: Mutex<BTreeSet<Feature>>,
     lifecycle: Mutex<OwnerLifecycle>,
     startup: OnceLock<Startup>,
     toolsets: OnceLock<Arc<dyn lk_agents_abi::llm::toolsets::ScopesPort>>,
@@ -159,11 +160,22 @@ struct Selection {
 }
 
 impl Inner {
-    /// The session used `feature`: counted the first time.
-    fn count_feature(&self, feature: Feature) {
-        if let Some(counted) = self.features.lock().used(feature) {
-            lk_agents_net::export::productstats::record(counted);
+    /// The session used `feature`: the running session counts it in its summary; before it
+    /// runs, it is kept for when it does.
+    fn feature_used(&self, feature: Feature) {
+        self.features.lock().insert(feature);
+        if let Some(session) = self.session.get() {
+            session.feature_used(feature);
         }
+    }
+
+    /// The session runs: what was used before it did, and the MCP toolsets its start activated.
+    fn hand_over_features(&self, session: &VoiceSession) {
+        if self.toolsets.get().is_some_and(|toolsets| toolsets.mcp()) {
+            self.features.lock().insert(Feature::Mcp);
+        }
+        let used: Vec<Feature> = self.features.lock().iter().copied().collect();
+        used.into_iter().for_each(|feature| session.feature_used(feature));
     }
 
     /// Reports and avatar item events share the running session's recording timeline.
@@ -347,6 +359,7 @@ impl Inner {
         }
         session.trace_under(trace, job_ids, opening);
         let _ = self.session.set(session.clone());
+        self.hand_over_features(&session);
         let initial = self.select(initial_agent);
         let started = session.start().map_err(|error| HostError::new(error.to_string()))?.await;
         self.selected(initial);
@@ -710,7 +723,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
         };
         validate_session_update(&update)?;
-        self.0.count_feature(Feature::UpdateOptions);
+        self.0.feature_used(Feature::UpdateOptions);
         if let Some(session) = self.0.session.get() {
             session.update_turn_options(update)?;
         } else {
@@ -733,7 +746,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             ..UpdateKwargs::default()
         };
         validate_session_update(&update)?;
-        self.0.count_feature(Feature::OverrideOptions);
+        self.0.feature_used(Feature::OverrideOptions);
         let layer = match self.0.session.get() {
             Some(session) => session.override_options(update)?,
             None => self.0.options.override_options(update),
@@ -749,7 +762,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
     }
 
     fn background_audio(&self) {
-        self.0.count_feature(Feature::BackgroundAudio);
+        self.0.feature_used(Feature::BackgroundAudio);
     }
 
     fn release_override(&self, layer: u64) -> Result<(), OptionsRefused> {

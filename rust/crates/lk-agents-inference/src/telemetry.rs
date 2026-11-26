@@ -31,7 +31,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
-use lk_agents_net::export::productstats;
+use lk_agents_telemetry::productstats;
 pub(crate) use lk_agents_telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
 };
@@ -48,8 +48,8 @@ pub fn model_labels(id: &ProviderId) -> ModelLabels {
 
 /// One request made to `id`'s model, as product statistics count it: counted when it is made,
 /// so a request that fails or is dropped is still one.
-pub(crate) fn model_request(kind: ModelKind, id: &ProviderId) {
-    productstats::measure(&ModelRequests { model: ModelStats::of(kind, id) }, 1u64);
+pub(crate) fn model_request(cx: &Cx, kind: ModelKind, id: &ProviderId) {
+    productstats::measure(cx, &ModelRequests { model: ModelStats::of(kind, id) }, 1u64);
 }
 
 fn seconds(from: u64, to: u64) -> f64 {
@@ -127,7 +127,7 @@ impl LlmTrace {
             )
         });
         if span.is_some() {
-            model_request(ModelKind::Llm, &id);
+            model_request(cx, ModelKind::Llm, &id);
         }
         let cx = span.as_ref().map_or_else(|| cx.clone(), |span| span.cx().clone());
         let started = cx.now_nanos();
@@ -258,9 +258,9 @@ impl LlmTrace {
         let cx = span.cx();
         let usage = self.usage.clone().unwrap_or_default();
         let model = ModelStats::of(ModelKind::Llm, &self.id);
-        ModelUsage::tokens(&usage).stats(&model).into_iter().for_each(productstats::record);
+        ModelUsage::tokens(&usage).measure(&model, cx);
         if let Some(at) = self.first_chunk {
-            productstats::measure(&ModelTtft { model }, seconds(self.started, at));
+            productstats::measure(cx, &ModelTtft { model }, seconds(self.started, at));
         }
         let provider = provider_name(&self.id);
         let labels = || GenAiLabels {
@@ -404,7 +404,7 @@ impl TtsTrace {
         use lk_agents_telemetry::start;
         let span = match tts.request_span() {
             RequestSpan::Request => {
-                model_request(ModelKind::Tts, &id);
+                model_request(cx, ModelKind::Tts, &id);
                 Some(TtsRequestSpan::Request(start(cx, TtsRequest { target, recovery: None })))
             }
             RequestSpan::FallbackAdapter => {
@@ -484,9 +484,9 @@ impl TtsTrace {
                 audio_duration: metrics.audio_duration,
                 ..ModelUsage::tokens(&metrics.tokens)
             };
-            usage.stats(&model).into_iter().for_each(productstats::record);
+            usage.measure(&model, &self.cx);
             if let Some(ttfb) = metrics.ttfb.filter(|ttfb| *ttfb >= 0.0) {
-                productstats::measure(&ModelTtfb { model }, ttfb);
+                productstats::measure(&self.cx, &ModelTtfb { model }, ttfb);
             }
         }
         let end = TtsRequestEnd {

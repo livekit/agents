@@ -1,8 +1,8 @@
 use lk_agents_abi::Ts;
-use lk_agents_abi::productstats::ProductStat;
+use lk_agents_abi::productstats::{MeasureProduct, ProductStat};
 use lk_agents_abi::telemetry::decl::{
-    Attrs, Current, EventDecl, HasEvent, MetricDecl, Observability, ParentOf, SpanDecl, SpanEnd,
-    finish_span,
+    Attrs, Current, EventDecl, HasEvent, MetricDecl, Observability, ParentOf, ProductStats,
+    SpanDecl, SpanEnd, finish_span,
 };
 use lk_agents_abi::telemetry::errors::ErrorType;
 use lk_agents_abi::telemetry::record::{
@@ -19,6 +19,17 @@ use std::time::{Duration, SystemTime};
 
 /// Where span and trace ids come from: random in production, seeded in the DST.
 pub type IdSource = Box<dyn FnMut() -> u64 + Send>;
+
+/// A machine's trace records the product statistics an emitter shared with async code measures.
+impl MeasureProduct for &mut Trace {
+    fn measure_product<M: MetricDecl<Audience = ProductStats>>(
+        &mut self,
+        metric: &M,
+        value: Number,
+    ) {
+        Trace::measure_product(self, metric, value);
+    }
+}
 
 /// A deterministic id source (splitmix64).
 pub fn seeded_ids(seed: u64) -> IdSource {
@@ -325,10 +336,14 @@ impl Trace {
         }));
     }
 
-    /// Records product statistics: they leave with the session's records and reach the process's
-    /// product statistics, under no job.
-    pub fn product_stats(&mut self, stats: impl IntoIterator<Item = ProductStat>) {
-        self.records.extend(stats.into_iter().map(Record::ProductStat));
+    /// Records one measurement of a product statistic, labeled by `metric`: it leaves with the
+    /// session's records, under no job.
+    pub fn measure_product<M: MetricDecl<Audience = ProductStats>>(
+        &mut self,
+        metric: &M,
+        value: Number,
+    ) {
+        self.records.push(Record::ProductStat(ProductStat::of(metric, value)));
     }
 
     /// Unix nanoseconds of a session instant.

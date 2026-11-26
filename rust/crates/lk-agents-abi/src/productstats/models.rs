@@ -1,4 +1,4 @@
-use super::ProductStat;
+use super::MeasureProduct;
 use crate::ProviderId;
 use crate::telemetry::decl::{Attrs, Label, SpanValue, metric};
 use crate::telemetry::instruments::DURATION_BOUNDS;
@@ -158,24 +158,24 @@ impl ModelUsage {
         }
     }
 
-    /// `model`'s statistics of this usage.
-    pub fn stats(self, model: &ModelLabels) -> Vec<ProductStat> {
+    /// Adds this usage to `model`'s statistics: each unit it was measured in, and no other.
+    pub fn measure(self, model: &ModelLabels, mut into: impl MeasureProduct) {
         let model = || model.clone();
-        let mut stats = Vec::new();
         if self.input_tokens > 0 {
-            stats.push(ProductStat::of(&ModelInputTokens { model: model() }, self.input_tokens));
+            let tokens = self.input_tokens.into();
+            into.measure_product(&ModelInputTokens { model: model() }, tokens);
         }
         if self.output_tokens > 0 {
-            stats.push(ProductStat::of(&ModelOutputTokens { model: model() }, self.output_tokens));
+            let tokens = self.output_tokens.into();
+            into.measure_product(&ModelOutputTokens { model: model() }, tokens);
         }
         if self.characters > 0 {
-            stats.push(ProductStat::of(&ModelCharacters { model: model() }, self.characters));
+            into.measure_product(&ModelCharacters { model: model() }, self.characters.into());
         }
         if self.audio_duration > 0.0 {
-            stats
-                .push(ProductStat::of(&ModelAudioDuration { model: model() }, self.audio_duration));
+            let seconds = self.audio_duration.into();
+            into.measure_product(&ModelAudioDuration { model: model() }, seconds);
         }
-        stats
     }
 }
 

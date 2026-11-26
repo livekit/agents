@@ -986,24 +986,24 @@ mod checkpoints {
 // statistics, an ordinary tool taken for one, or a remote call taken for a local agent.
 #[test]
 fn a_run_notes_the_agents_it_called_as_tools() {
-    use lk_agents_abi::productstats::sessions::SessionFacts;
+    use lk_agents_abi::productstats::sessions::SessionStats;
     let expert =
         FunctionToolInfo { remote: Some("expert".into()), ..string_tool("ask_expert", "q") };
     let billing =
         FunctionToolInfo { local_agent: Some("billing".into()), ..string_tool("ask_billing", "q") };
     let tools = vec![string_tool("lookup", "q"), expert, billing];
     let mut d = Driver::new(text_agent(tools), "hi", vec![]);
-    let mut called = SessionFacts::default();
-    assert_eq!(d.run.session_facts, called);
+    let mut called = SessionStats::default();
+    assert_eq!(d.run.session_stats, called);
     d.reply("", &[("lookup", json!({"q": "hours"}))]);
     d.run_tools(|_| value("9 to 5"));
-    assert_eq!(d.run.session_facts, called, "an ordinary tool is no agent");
+    assert_eq!(d.run.session_stats, called, "an ordinary tool is no agent");
     d.reply("", &[("ask_expert", json!({"q": "refund"}))]);
     d.run_tools(|_| value("refunded"));
     called.remote = true;
-    assert_eq!(d.run.session_facts, called);
+    assert_eq!(d.run.session_stats, called);
     d.reply("", &[("ask_billing", json!({"q": "invoice"}))]);
     d.run_tools(|_| value("sent"));
     called.agent_as_tool = true;
-    assert_eq!(d.run.session_facts, called);
+    assert_eq!(d.run.session_stats, called);
 }

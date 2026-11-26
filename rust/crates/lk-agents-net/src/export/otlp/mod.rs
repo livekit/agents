@@ -3,11 +3,14 @@ pub mod config;
 mod destination;
 pub(crate) mod encode;
 pub(crate) mod metrics;
+pub mod product_stats;
 pub mod proto;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use lk_agents_abi::productstats::runner::RunnerCmd;
+use lk_agents_abi::productstats::{ProductStatsResource, ThreadStorage};
 use lk_agents_abi::telemetry::record::{JobKey, KeyValues, Record, RecordSink, SpanRecord};
 use lk_agents_abi::telemetry::report::CloudAgent;
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
@@ -22,6 +25,7 @@ pub use config::{
 pub use destination::Limits;
 use destination::{App, AppSpan, Batch, Cloud, State, Take};
 use lk_agents_core::telemetry::policy::ContentPolicy;
+use product_stats::{Collector, ProductStatsDestination};
 
 // Producers never block: each destination copies a record into a bounded queue, or drops it.
 
@@ -64,15 +68,20 @@ pub struct Exporter {
 }
 
 impl Exporter {
-    /// Starts the periodic export on `spawner`, timed by `clock`.
+    /// Starts the periodic export on `spawner`, timed by `clock`. `product_stats` is the
+    /// resource of LiveKit's product statistics; `None` when the process opted out of them.
     pub fn start(
         spawner: &dyn Spawner,
         clock: Arc<dyn Clock>,
         process: ProcessIdentity,
         limits: Limits,
+        product_stats: Option<ProductStatsResource>,
     ) -> Self {
+        let now = wall_nanos(&*clock);
+        let product_stats =
+            product_stats.map(|resource| ProductStatsDestination::new(resource, now));
         let shared = Arc::new(Shared {
-            state: Mutex::new(State::new(process, limits)),
+            state: Mutex::new(State::new(process, limits, product_stats)),
             clock,
             wake: signal::signal(()).0,
             in_flight: signal::signal(0).0,
@@ -93,6 +102,29 @@ impl Exporter {
     /// Enables Cloud export. The first endpoint stays; a later one is ignored.
     pub fn configure_cloud(&self, endpoint: CloudEndpoint) {
         self.shared.state.lock().cloud.get_or_insert(endpoint);
+    }
+
+    /// Signs later product statistics exports with the key of the server or job at
+    /// `livekit_url`: the most recent configuration wins, and off LiveKit Cloud nothing is sent.
+    pub fn configure_product_stats(&self, livekit_url: &str, api_key: &str, api_secret: &str) {
+        if let Some(product_stats) = &mut self.shared.state.lock().product_stats {
+            product_stats.configure(Collector::cloud(livekit_url, api_key, api_secret));
+        }
+    }
+
+    /// The process opened a thread storage of this kind, which the product statistics resource
+    /// names from then on: a process that opens several names the last one.
+    pub fn storage_opened(&self, storage: ThreadStorage) {
+        if let Some(product_stats) = &mut self.shared.state.lock().product_stats {
+            product_stats.resource.storage = storage;
+        }
+    }
+
+    /// The command that started the process, as the product statistics resource names it, for a
+    /// worker to hand its job processes; none when the process opted out, where nothing reads it.
+    pub fn runner_cmd(&self) -> RunnerCmd {
+        let state = self.shared.state.lock();
+        state.product_stats.as_ref().map_or(RunnerCmd::NoCommand, |stats| stats.resource.runner.cmd)
     }
 
     /// Replaces the application endpoint for subsequent records; `None` disables it. What the
@@ -138,7 +170,10 @@ impl Exporter {
         let shared = &*self.shared;
         let deadline = shared.clock.now().saturating_add(limit);
         let now = shared.wall_nanos();
-        let batches = shared.state.lock().take(Take { job, metrics: true, all: true }, now);
+        let batches = shared
+            .state
+            .lock()
+            .take(Take { job, metrics: true, product_stats: true, all: true }, now);
         shared.send(batches, Some(deadline)).await && shared.settled(deadline).await
     }
 
@@ -159,12 +194,6 @@ impl Exporter {
 
 impl RecordSink for Exporter {
     fn record(&self, record: Record) {
-        // A session's records carry the product statistics its machine measured: they go to
-        // LiveKit's exporter here, and never into a customer's queue.
-        let record = match record {
-            Record::ProductStat(stat) => return super::productstats::record(stat),
-            record => record,
-        };
         let bytes = encode::charge(&record);
         let batch_ready = self.shared.state.lock().record(record, bytes);
         if batch_ready {
@@ -173,14 +202,17 @@ impl RecordSink for Exporter {
     }
 }
 
-/// Full batches when one fills, everything queued every second, metrics every 30 s.
+/// Full batches when one fills, everything queued every second, metrics every 30 s, product
+/// statistics every minute.
 async fn run(shared: Arc<Shared>) {
     let clock = shared.clock.clone();
     let mut next_metrics = clock.now().saturating_add(METRIC_INTERVAL);
+    let mut next_product_stats = clock.now().saturating_add(product_stats::INTERVAL);
     // `shared` holds the producer, so the wake never ends under this loop.
     let mut wake = shared.wake.cell();
     loop {
-        let at = clock.now().saturating_add(SPAN_INTERVAL).min(next_metrics);
+        let at =
+            clock.now().saturating_add(SPAN_INTERVAL).min(next_metrics).min(next_product_stats);
         let woken = tokio::select! {
             biased;
             _ = wake.changed() => true,
@@ -191,10 +223,20 @@ async fn run(shared: Arc<Shared>) {
         if metrics {
             next_metrics = now.saturating_add(METRIC_INTERVAL);
         }
+        let product_stats = now >= next_product_stats;
+        if product_stats {
+            next_product_stats = now.saturating_add(product_stats::INTERVAL);
+        }
         let wall = shared.wall_nanos();
-        let batches = shared.state.lock().take(Take { job: None, metrics, all: !woken }, wall);
+        let take = Take { job: None, metrics, product_stats, all: !woken };
+        let batches = shared.state.lock().take(take, wall);
         shared.send(batches, None).await;
     }
+}
+
+fn wall_nanos(clock: &dyn Clock) -> u64 {
+    let since = clock.wall().duration_since(SystemTime::UNIX_EPOCH);
+    since.map_or(0, |d| d.as_nanos().min(u64::MAX as u128) as u64)
 }
 
 /// Counts an export in progress until dropped, cancellation included.
@@ -208,8 +250,7 @@ impl Drop for InFlight<'_> {
 
 impl Shared {
     fn wall_nanos(&self) -> u64 {
-        let since = self.clock.wall().duration_since(SystemTime::UNIX_EPOCH);
-        since.map_or(0, |d| d.as_nanos().min(u64::MAX as u128) as u64)
+        wall_nanos(&*self.clock)
     }
 
     /// Sends each batch in turn. False when `deadline` cut it short; the rest is dropped.
@@ -231,7 +272,7 @@ impl Shared {
             }
             let job = match &batch {
                 Batch::Cloud { job, .. } => Some(job.clone()),
-                Batch::App { .. } => None,
+                Batch::App { .. } | Batch::ProductStats(_) => None,
             };
             match timeout(&*self.clock, limit, self.export(batch)).await {
                 Ok(Ok(())) => {}
@@ -272,6 +313,10 @@ impl Shared {
                 cloud.post(&path, |request| body.attach(request)).await
             }
             Batch::App { config, payload } => export_app(&process, &config, payload).await,
+            Batch::ProductStats(window) => {
+                window.export().await;
+                Ok(())
+            }
         }
     }
 }

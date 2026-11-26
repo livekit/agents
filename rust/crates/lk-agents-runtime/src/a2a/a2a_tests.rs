@@ -164,7 +164,7 @@ enum Behavior {
     /// `InputRequired("Could you send a photo?")` from `request_photo`, call `p1`.
     Ask,
     /// Its runs did this (called a local agent or a `RemoteAgent` as a tool), then `"done"`.
-    Ran(lk_agents_abi::productstats::sessions::SessionFacts),
+    Ran(lk_agents_abi::productstats::sessions::SessionStats),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -215,7 +215,7 @@ impl TurnHost for Fake {
         Box::pin(async move {
             // Each run under the turn reports what it did when it ends.
             if let Behavior::Ran(facts) = &self.behavior {
-                turn.session_facts(*facts);
+                turn.session_stats(*facts);
             }
             // cancelled as the host cancels its task: the run stops where it waits
             tokio::select! {
@@ -1127,7 +1127,7 @@ mod attachments {
 // counted as the request's feature.
 #[tokio::test]
 async fn a_text_request_is_one_session_with_what_its_runs_called() {
-    use lk_agents_abi::productstats::sessions::SessionFacts;
+    use lk_agents_abi::productstats::sessions::SessionStats;
     let stats = lk_agents_net::export::productstats::testkit::Capture::start();
     let fx = Backend::Sqlite.fixture(None).await;
     let thread = fx.thread().await;
@@ -1140,8 +1140,8 @@ async fn a_text_request_is_one_session_with_what_its_runs_called() {
         let labels = labels.map(|(k, v)| (k.to_owned(), v.to_owned())).to_vec();
         ("lk.product.agents.sessions", labels, 1.0)
     };
-    let called = SessionFacts { agent_as_tool: true, remote: true, ..SessionFacts::default() };
-    let with_mcp = SessionFacts { mcp: true, ..SessionFacts::default() };
+    let called = SessionStats { agent_as_tool: true, remote: true, ..SessionStats::default() };
+    let with_mcp = SessionStats { mcp: true, ..SessionStats::default() };
     let mcp = ("lk.product.agents.feature.mcp", Vec::new(), 1.0);
     for (n, (behavior, counted)) in [
         (Behavior::Echo, vec![session("single", "none")]),

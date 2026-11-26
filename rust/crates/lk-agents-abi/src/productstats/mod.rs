@@ -16,8 +16,31 @@ pub mod sessions;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 
-/// One measurement of a declared product statistic. A sans-I/O machine makes it where the fact is
-/// known; the process's product statistics record it.
+/// What records a product statistic: a context (`&Cx`, in an async crate) or a machine's trace
+/// (`&mut Trace`). The emitters both kinds of code share end in one of those two.
+pub trait MeasureProduct {
+    fn measure_product<M: MetricDecl<Audience = ProductStats>>(
+        &mut self,
+        metric: &M,
+        value: Number,
+    );
+}
+
+/// A context records through its recorder; under `Cx::NONE` nothing is recorded.
+impl MeasureProduct for &crate::telemetry::Cx {
+    fn measure_product<M: MetricDecl<Audience = ProductStats>>(
+        &mut self,
+        metric: &M,
+        value: Number,
+    ) {
+        if let Some(recorder) = self.recorder() {
+            let stat = ProductStat::of(metric, value);
+            recorder.record(crate::telemetry::record::Record::ProductStat(stat));
+        }
+    }
+}
+
+/// One measurement of a declared product statistic, as it travels among a recorder's records.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductStat(Measurement);
 

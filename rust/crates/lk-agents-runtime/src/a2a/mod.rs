@@ -196,6 +196,8 @@ pub struct Turn {
     host_context: Option<lk_agents_abi::HostRef>,
     /// The span the handler runs in: the request's `a2a_request`.
     span: Option<telemetry::SpanContext>,
+    /// The request's context, which records its product statistics when it ends.
+    cx: telemetry::Cx,
     /// The cancels of tasks turns left unanswered, owned by the door.
     cancels: Arc<TaskSet>,
     /// The executor each run's background work spawns on, read when the run starts.
@@ -225,6 +227,7 @@ impl Turn {
             publisher: None,
             host_context: None,
             span: None,
+            cx: telemetry::Cx::NONE,
             cancels: Arc::default(),
             spawner,
         }
@@ -331,10 +334,7 @@ impl Turn {
                             "the managed text execution ended without its cleanup receipt");
                     }
                     // One text request is one session, however it ended.
-                    let ended = call.managed.session_facts();
-                    for stat in ended.ended_with_features(Entrypoint::A2aSession) {
-                        lk_agents_net::export::productstats::record(stat);
-                    }
+                    call.managed.session_stats().emit(Entrypoint::A2aSession, &self.cx);
                     let now = elapsed();
                     let Call { holder, run, lease, mut submitted, .. } = call;
                     if let (Ok(_), Some(submitted)) = (&answer, submitted.as_mut()) {

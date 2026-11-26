@@ -258,10 +258,10 @@ async fn waiters_resolve_when_the_opening_task_is_dropped() {
 
 /// A text request's turn, recording what its runs report for its product statistics.
 #[derive(Default)]
-struct Turn(parking_lot::Mutex<Vec<lk_agents_abi::productstats::sessions::SessionFacts>>);
+struct Turn(parking_lot::Mutex<Vec<lk_agents_abi::productstats::sessions::SessionStats>>);
 
 impl lk_agents_abi::a2a::turn::HandlerPort for Turn {
-    fn session_facts(&self, facts: lk_agents_abi::productstats::sessions::SessionFacts) {
+    fn session_stats(&self, facts: lk_agents_abi::productstats::sessions::SessionStats) {
         self.0.lock().push(facts);
     }
     fn checkpoint(&self) -> BoxFuture<'_, bool> {
@@ -286,9 +286,9 @@ impl lk_agents_abi::a2a::turn::HandlerPort for Turn {
 // counts the feature when it ends, or a run without one reporting it.
 #[tokio::test]
 async fn a_runs_mcp_toolset_is_reported_to_its_text_request() {
-    use lk_agents_abi::productstats::sessions::SessionFacts;
+    use lk_agents_abi::productstats::sessions::SessionStats;
     for (mcp, reported) in
-        [(false, vec![]), (true, vec![SessionFacts { mcp: true, ..SessionFacts::default() }])]
+        [(false, vec![]), (true, vec![SessionStats { mcp: true, ..SessionStats::default() }])]
     {
         let hooks = Arc::new(Hooks::new());
         if mcp {

@@ -108,10 +108,11 @@ pub(crate) struct VoiceSessionState {
     pub(crate) local_inputs: machine::activity::local_input::LocalInputs,
     /// `start_user_turn()`'s turn; it outlives a handoff.
     pub(crate) user_turns: machine::activity::user_turn::UserTurns,
-    /// What the session's agents did, which its product statistics report when it ends.
-    pub(crate) facts: lk_agents_abi::productstats::sessions::SessionFacts,
-    /// The features the session already counted, and what it compares a switch against.
-    pub(crate) features: product_stats::Features,
+    /// What the session's agents did and the features it used, which its product statistics
+    /// report when it ends.
+    pub(crate) stats: lk_agents_abi::productstats::sessions::SessionStats,
+    /// The models the session started with, which a model switch is told against.
+    pub(crate) started_with: product_stats::StartedWith,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -161,7 +162,7 @@ impl VoiceSessionState {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
         let cfg = config.effective();
-        let features = product_stats::Features::starting_with(&stt, &tts, &llm);
+        let started_with = product_stats::StartedWith::models(&stt, &tts, &llm);
         VoiceSessionState {
             usage: Default::default(),
             requests: Default::default(),
@@ -202,8 +203,8 @@ impl VoiceSessionState {
             experts: Default::default(),
             local_inputs: Default::default(),
             user_turns: Default::default(),
-            facts: Default::default(),
-            features,
+            stats: Default::default(),
+            started_with,
         }
     }
 

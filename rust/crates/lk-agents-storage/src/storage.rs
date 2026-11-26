@@ -164,10 +164,12 @@ impl Namespace {
         self.backend
             .get_or_try_init(|| async {
                 use lk_agents_abi::productstats::ThreadStorage;
-                lk_agents_net::export::productstats::storage_opened(match &self.config {
-                    Config::Local { .. } => ThreadStorage::Sqlite,
-                    Config::Cloud { .. } => ThreadStorage::AgentDb,
-                });
+                if let Some(exporter) = lk_agents_net::export::exporter() {
+                    exporter.storage_opened(match &self.config {
+                        Config::Local { .. } => ThreadStorage::Sqlite,
+                        Config::Cloud { .. } => ThreadStorage::AgentDb,
+                    });
+                }
                 Ok(match &self.config {
                     Config::Local { directory, lease, .. } => {
                         let spawner = (self.env.spawner)().map_err(|e| {

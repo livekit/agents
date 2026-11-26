@@ -1,7 +1,8 @@
 use lk_agents_abi::agent::resources::{BindingCleanup, ContextHydration, ResourceError};
 use lk_agents_abi::llm::toolsets::LeaseGroup;
 use lk_agents_abi::llm::toolsets::{ToolsetGroup as _, ToolsetHooks};
-use lk_agents_abi::productstats::sessions::SessionFacts;
+use lk_agents_abi::productstats::features::Feature;
+use lk_agents_abi::productstats::sessions::SessionStats;
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::{BoxFuture, errors::HostError};
@@ -161,7 +162,9 @@ impl Inner {
         }
         if result.is_ok() {
             if let Some(turn) = self.turn.as_ref().filter(|_| LeaseGroup::mcp(&self.toolsets)) {
-                turn.session_facts(SessionFacts { mcp: true, ..SessionFacts::default() });
+                let mut stats = SessionStats::default();
+                stats.used(Feature::Mcp);
+                turn.session_stats(stats);
             }
             if let Some(started) = started.take() {
                 started.resolve(Ok(()));

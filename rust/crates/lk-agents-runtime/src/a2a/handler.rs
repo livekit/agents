@@ -1,6 +1,6 @@
 use lk_agents_abi::a2a::turn::{HandlerOutput, HandlerPort, TurnEvent, TurnHost};
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::productstats::sessions::SessionFacts;
+use lk_agents_abi::productstats::sessions::SessionStats;
 use lk_agents_abi::{BoxFuture, Clock, Ts};
 use lk_agents_net::outbox::{Outbox, outbox};
 use lk_agents_net::task::Cancellation;
@@ -31,7 +31,7 @@ pub(super) struct ManagedOwner {
     execution: Mutex<Option<lk_agents_abi::OwnedTask>>,
     checkpoint: Option<Arc<super::checkpoint::Port>>,
     /// What the request's runs did, which its product statistics report when it ends.
-    facts: Mutex<SessionFacts>,
+    stats: Mutex<SessionStats>,
 }
 
 impl ManagedOwner {
@@ -39,8 +39,9 @@ impl ManagedOwner {
         Self { checkpoint: Some(checkpoint), ..Default::default() }
     }
 
-    pub(super) fn session_facts(&self) -> SessionFacts {
-        *self.facts.lock()
+    /// What the request's runs reported, taken once when the request ends.
+    pub(super) fn session_stats(&self) -> SessionStats {
+        std::mem::take(&mut *self.stats.lock())
     }
 
     pub(super) fn commands(&self) -> Option<crate::session::CommandPort> {
@@ -129,9 +130,9 @@ impl HandlerTurn {
 }
 
 impl HandlerPort for HandlerTurn {
-    fn session_facts(&self, facts: SessionFacts) {
+    fn session_stats(&self, stats: SessionStats) {
         if let Some(managed) = self.managed.upgrade() {
-            managed.facts.lock().merge(facts);
+            managed.stats.lock().merge(stats);
         }
     }
 
