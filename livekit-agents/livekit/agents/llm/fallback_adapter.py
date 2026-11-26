@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import sys
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
@@ -16,6 +17,11 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
+
+if sys.version_info >= (3, 11):
+    from asyncio import timeout_at
+else:
+    from async_timeout import timeout_at
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -47,6 +53,7 @@ class FallbackAdapter(
         llm: list[LLM],
         *,
         attempt_timeout: float = 5.0,
+        first_token_timeout: float | None = None,
         # use fallback instead of retrying
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
@@ -58,6 +65,10 @@ class FallbackAdapter(
         Args:
             llm (list[LLM]): List of LLM instances to fallback to.
             attempt_timeout (float, optional): Timeout for each LLM attempt. Defaults to 5.0.
+            first_token_timeout (float, optional): Fail over when an attempt yields no text or
+                tool call within this many seconds, even if the provider keeps the connection
+                alive. Time the model spends reasoning counts against it. Defaults to None
+                (disabled).
             max_retry_per_llm (int, optional): Internal retries per LLM. Defaults to 0, which means no
                 internal retries, the failed LLM will be skipped and the next LLM will be used.
             retry_interval (float, optional): Interval between retries. Defaults to 0.5.
@@ -77,6 +88,7 @@ class FallbackAdapter(
 
         self._llm_instances = llm
         self._attempt_timeout = attempt_timeout
+        self._first_token_timeout = first_token_timeout
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
         self._retry_on_chunk_sent = retry_on_chunk_sent
@@ -244,8 +256,27 @@ class FallbackLLMStream(LLMStream):
                 if not check_recovery:
                     stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
                 should_set_current = not check_recovery
+                first_token_timeout = self._fallback_adapter._first_token_timeout
+                deadline = (
+                    asyncio.get_running_loop().time() + first_token_timeout
+                    if first_token_timeout is not None
+                    else None
+                )
                 try:
-                    async for chunk in stream:
+                    while True:
+                        try:
+                            if deadline is None:
+                                chunk = await stream.__anext__()
+                            else:
+                                # keep-alives reset the provider's read timeout, so bound the
+                                # wait for the first output here; wait_for can drop a cancel
+                                # before 3.12 (cpython#86296), a timeout scope does not
+                                async with timeout_at(deadline):
+                                    chunk = await stream.__anext__()
+                                if chunk.has_response():
+                                    deadline = None
+                        except StopAsyncIteration:
+                            break
                         if should_set_current:
                             should_set_current = False
                             self._current_stream = stream
