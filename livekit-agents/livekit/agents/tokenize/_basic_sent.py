@@ -41,6 +41,10 @@ def split_sentences(
     text = re.sub(r" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
     text = re.sub(r" "+suffixes+"[.]"," \\1<prd>",text)
     text = re.sub(r" " + alphabets + "[.]"," \\1<prd>",text)
+    # a dot with a lowercase letter right after it ends no sentence: it sits inside a host
+    # name, a file name or a path ("docs.livekit.io", "irctc.co.in", "config.yaml").
+    # it runs after the abbreviation rules so "e.g." and "Ph.D." keep their handling
+    text = re.sub(r"(?<=\w)\.(?=[a-z])", "<prd>", text)
 
     # mark end of sentence punctuations with <stop>
     # (also Arabic "؟", Urdu "۔" and the Devanagari/Bengali dandas "।" "॥")
