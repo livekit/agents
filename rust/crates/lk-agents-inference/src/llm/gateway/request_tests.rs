@@ -226,3 +226,39 @@ fn a_strict_parameterless_tool_has_an_empty_required_list() {
         assert_eq!(parameters["required"], json!([]), "{parameters}");
     }
 }
+
+// Catches: a model's `extra_headers` that is not a map dropping the call's headers, so AMD's
+// client feature tag never reached the gateway; and a header named in two cases sent twice.
+#[test]
+fn the_calls_headers_reach_the_gateway_whatever_the_models_are() {
+    let args = ChatArgs {
+        extra_kwargs: Some(
+            [("extra_headers".to_owned(), json!({"X-LiveKit-Client-Feature": "AMD"}))]
+                .into_iter()
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    for model in [json!({"x-livekit-client-feature": "Agent"}), json!(null), json!("X-Title: app")]
+    {
+        let opts = LlmOptions {
+            extra_kwargs: [("extra_headers".to_owned(), model.clone())].into_iter().collect(),
+            ..opts()
+        };
+        let request = build_request(
+            &opts,
+            &Cx::NONE,
+            &NoImages,
+            &ChatContext::default(),
+            &[],
+            args.clone(),
+            "t",
+        )
+        .unwrap();
+        let sent: Vec<&str> = (request.headers.iter())
+            .filter(|(name, _)| name.eq_ignore_ascii_case("X-LiveKit-Client-Feature"))
+            .map(|(_, value)| value.as_str())
+            .collect();
+        assert_eq!(sent, ["AMD"], "model extra_headers {model}");
+    }
+}
