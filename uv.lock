@@ -2417,6 +2417,7 @@ zoom-ai = [
 requires-dist = [
     { name = "aiofiles", specifier = ">=24" },
     { name = "aiohttp", specifier = "~=3.10" },
+    { name = "async-timeout", marker = "python_full_version < '3.11'", specifier = ">=4.0" },
     { name = "av", specifier = ">=14.0.0" },
     { name = "certifi", specifier = ">=2025.6.15" },
     { name = "click", specifier = "~=8.1" },

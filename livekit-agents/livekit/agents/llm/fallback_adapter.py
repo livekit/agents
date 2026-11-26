@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import sys
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
@@ -16,6 +17,11 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, N
 from .chat_context import ChatContext, MetricsMetadata
 from .llm import LLM, ChatChunk, LLMStream
 from .tool_context import Tool, ToolChoice
+
+if sys.version_info >= (3, 11):
+    from asyncio import timeout_at
+else:
+    from async_timeout import timeout_at
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
     max_retry=0, timeout=DEFAULT_API_CONNECT_OPTIONS.timeout
@@ -263,11 +269,10 @@ class FallbackLLMStream(LLMStream):
                                 chunk = await stream.__anext__()
                             else:
                                 # keep-alives reset the provider's read timeout, so bound the
-                                # wait for the first output here
-                                chunk = await asyncio.wait_for(
-                                    stream.__anext__(),
-                                    deadline - asyncio.get_running_loop().time(),
-                                )
+                                # wait for the first output here; wait_for can drop a cancel
+                                # before 3.12 (cpython#86296), a timeout scope does not
+                                async with timeout_at(deadline):
+                                    chunk = await stream.__anext__()
                                 if chunk.has_response():
                                     deadline = None
                         except StopAsyncIteration:
