@@ -21,7 +21,12 @@ from ojin.stv import FrameType, STVAudioFrame, STVEvent, STVVideoFrame
 
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioReceiver, AudioSegmentEnd, QueueAudioOutput
-from livekit.plugins.ojin.avatar import AvatarSession, OjinVideoGenerator, _FrameSink
+from livekit.plugins.ojin.avatar import (
+    AvatarSession,
+    OjinVideoGenerator,
+    _FrameSink,
+    _RunnerOutput,
+)
 
 _BYTES_PER_SAMPLE = 2
 
@@ -478,6 +483,25 @@ async def test_degrade_gives_the_drain_its_own_output(monkeypatch: pytest.Monkey
     try:
         assert len(fake_session.output.tails) == 1
         assert fake_session.output.tails[0] is not previous
+    finally:
+        await session.aclose()
+
+
+async def test_degrade_does_not_clear_the_closed_runners_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The closed runner's clear handler must not fire when the agent's tail is swapped."""
+    session = _avatar_session(monkeypatch)
+    runner_output = _RunnerOutput(sample_rate=24000, wait_playback_start=True)
+    clears: list[int] = []
+    runner_output.on("clear_buffer", lambda: clears.append(1))
+    session._audio_output = runner_output
+    session._agent_session = _FakeAgentSession()  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        runner_output.clear_buffer()  # what swapping the tail does to the old output
+        assert clears == []
     finally:
         await session.aclose()
 

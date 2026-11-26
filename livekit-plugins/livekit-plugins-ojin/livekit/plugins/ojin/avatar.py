@@ -592,6 +592,27 @@ def _build_avatar_options(
     )
 
 
+class _RunnerOutput(QueueAudioOutput):
+    """Output the avatar runner reads, whose clear events can be switched off for good.
+
+    Swapping the agent's audio tail clears the output it replaces. After a degrade the
+    runner is closed but its clear handler is still attached, so that one clear would
+    reach a closed client.
+    """
+
+    def __init__(self, *, sample_rate: int | None = None, wait_playback_start: bool = False):
+        super().__init__(sample_rate=sample_rate, wait_playback_start=wait_playback_start)
+        self._detached = False
+
+    def detach(self) -> None:
+        self._detached = True
+
+    def emit(self, event: str, *args: object) -> None:
+        if self._detached and event == "clear_buffer":
+            return
+        super().emit(event, *args)  # type: ignore[arg-type]
+
+
 class _DrainOutput(QueueAudioOutput):
     """Output for the degraded drain that counts segment ends still waiting in the queue.
 
@@ -858,9 +879,7 @@ class AvatarSession(BaseAvatarSession):
             extra={"width": options.video_width, "height": options.video_height},
         )
 
-        audio_output = QueueAudioOutput(
-            sample_rate=self._audio_sample_rate, wait_playback_start=True
-        )
+        audio_output = _RunnerOutput(sample_rate=self._audio_sample_rate, wait_playback_start=True)
         # Synchronous dispatch: this is what lets a new turn see a barge-in that
         # the runner has only scheduled.
         receiver: AudioReceiver = audio_output
@@ -1004,6 +1023,9 @@ class AvatarSession(BaseAvatarSession):
         previous_output = self._audio_output
         if previous_output is None:
             return
+        if isinstance(previous_output, _RunnerOutput):
+            # The runner is closed; its clear handler must not fire when the tail is swapped.
+            previous_output.detach()
 
         if agent_session is None:
             # start() had not attached the session yet, so the agent session
