@@ -692,11 +692,21 @@ refused instance creates no model and stays `initialized`. The check and the att
 take the session's handoff turn before they are sent, so an `update_agent()` called
 before them reaches the loop first and refuses them. The host reads the run through
 `_core.AmdRun` (`lifecycle`, `next_event`, `execute`, `aclose`,
-`listener_failed`). The host creates the models named by strings and closes them after
-the run's completion arrives and before `execute()` returns and `amd_completed` fires,
-so the entry it sends marks every model as supplied. The executor forwards each
-prediction and the completion to the session's remote session host as it emits them,
-before the host reads them; a menu is not forwarded.
+`listener_failed`). The host reads each model's label before the attach, and an error
+after the attach closes the accepted run and the models it created before
+`__aenter__` raises. The Python host owns the models it creates from strings: when the
+completion arrives it clears `session.amd`, then closes those models, then resolves
+`execute()` and fires `amd_completed`. The entry it sends marks every model as
+supplied, because the runtime has no `aclose` port for a host LLM or STT;
+`OwnedModels` and `ModelCloser` stay for a host that hands the runtime a closer. The
+executor forwards each prediction and the completion to the session's remote session
+host as it emits them, before the host reads them; a menu is not forwarded.
+
+The check and the attach wait for the session's handoff turn. An `update_agent()`
+holds that turn while it sets up the arriving agent's toolsets and until its command
+reaches the loop. So a toolset's `setup()` that awaits AMD entry deadlocks: the entry
+waits for the turn that the `setup()`'s own handoff holds. Enter AMD after the handoff
+landed.
 
 **Decision model.** A decision model is the `DecisionModel` port: `choose(cx,
 ChoiceRequest)` makes one `evaluate` call with one `Choice` decision. The request
@@ -728,7 +738,18 @@ remain, and why:
   decision plugins, `inference.DecisionModel` and `DecisionFallbackAdapter` are not
   ported.
 - **Entry checks.** There is no session-level `ivr_detection` in v2.0, so its check
-  does not exist.
+  does not exist. Entering on a session that is not running raises `RuntimeError("start
+  VoiceSession before entering AMD")`, `main`'s message with v2.0's class name.
+- **Options.** The four timeouts and `machine_silence_threshold` accept
+  `float("inf")`, as `main` does: the runtime maps it to `Duration::MAX`, on which every
+  deadline saturates, so it is no deadline. NaN is refused, as is a negative value.
+- **`push_audio`.** `AMD.push_audio(frame)` is removed. In v2.0 AMD's STT hears the
+  participant's frames on the session's AMD audio channel, which the router fills from
+  the participant the run listens to; no host API feeds it other frames.
+- **Binding records.** `livekit.agents.voice.amd` exports only the public API. The
+  records the host hands the runtime (`AmdEntry`, `AmdLlm`, `AmdDecision`, `AmdStt`,
+  `AmdClassifier`, `AmdChoiceRequest`, `AmdEvent`) carry no public `path` in ABI and stay
+  in `_generated.amd`.
 - **Speech under AMD.** `say()`, `generate_reply()` and `update_agent()` raise
   `RuntimeError` while `session.amd` is set, with `main`'s messages. The core also
   refuses a reply or a handoff that reaches it while the gate is attached, such as one a
@@ -736,16 +757,33 @@ remain, and why:
   dropped (`HandoffRefused::AmdAttached`).
 - **DTMF tool.** `beta.send_dtmf_events` returns `ToolResult(..., reply_required=False)`
   and raises `ToolError("Failed to send DTMF events.")` with no cause, as `main` does.
-  The core raises `SendDtmfError`, one fixed message, so the room's own error never
-  reaches the model or a log.
+  The core raises `SendDtmfError::Failed`, one fixed message, so the room's own error
+  never reaches the model or a log. A publish the host cancels is
+  `SendDtmfError::Cancelled`, raised as `asyncio.CancelledError`. v2.0's tool used to ask
+  for a follow-up reply after a send; it no longer does (`docs/tools.md`).
 - **Listeners.** `AMD.emit` passes a listener's error up, so any error of a prediction
   or menu listener completes the run with `internal_error`, as spec §12.1 says. `main`'s
   code does so only for a `TypeError`: its `rtc.EventEmitter.emit` logs any other error
-  and detection goes on. An `amd_completed` listener's error is logged on both.
+  and detection goes on. An `amd_completed` listener's error is logged on both. A
+  listener whose signature `inspect` cannot read gets every argument. A prediction that
+  completes the run (`human`, `machine-unavailable`, a customer-handled stage, the
+  uncertain limit) completes it before its listeners hear it, as on `main`, whose
+  `_record_prediction` runs the `COMPLETE` effect first: such a listener's error is
+  logged and the reason stays. The host hears each event after the executor stepped
+  past it, so a later input, such as a deadline, can complete the run before a
+  listener's failure on a non-completing prediction arrives; `main` runs listeners
+  inside the transition, so it has no such window.
+- **Speech after completion.** `session.amd` is `None`, and `say()`, `generate_reply()`
+  and `update_agent()` work, from the moment the host reads the completion, before the
+  models AMD created close (`main`'s `_finish` detaches before `_cleanup` closes them).
+- **Logs.** A classifier failure outside the provider taxonomy logs "amd task failed" at
+  ERROR with only `error_type`, the exception's class name, as `main`'s `_on_task_done`.
 
 An Inference model's own `extra_headers` merge with a call's (`compose_extra`), the
 call's header winning on a shared name, as in `main`'s `inference.LLM.chat`, so AMD's
-feature header survives a model-level header map.
+feature header survives a model-level header map. Names compare case-insensitively, so
+the merged map holds one entry per header. A model's `extra_headers` that is not a map
+gives way to the call's.
 
 ### Ported unchanged
 

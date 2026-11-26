@@ -21,15 +21,22 @@ names the arriving agent at once).
 
 | Status | Tests |
 | --- | --- |
-| Python and Rust | 26 |
-| Python only | 34 |
-| Rust only | 151 |
+| Python and Rust | 30 |
+| Python only | 31 |
+| Rust only | 150 |
 | Out of scope | 17 |
 | Gap | 0 |
 
 `tests/smoke/test_amd_console.py::test_a_completion_without_a_prediction_is_forwarded_without_one`
 ports no single test: it checks the §13 rule that a completion without a prediction is forwarded
 with the prediction unset.
+
+Four host tests from the review of step 5 port no single test either:
+`test_failing_listener_of_the_completing_prediction_keeps_finished` (a listener of the prediction
+that completes the run cannot change its reason, as on `main`),
+`test_listener_without_a_signature_gets_the_event`,
+`test_failing_model_label_after_creation_leaves_nothing_attached` and
+`test_dtmf_tool_propagates_a_publish_cancelled_by_the_room`.
 
 | `main` test | Status | Covered by | Note |
 | --- | --- | --- | --- |
@@ -44,7 +51,7 @@ with the prediction unset.
 | `test_classifier_requires_exactly_one_result_tool` | Rust | Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`anything_but_exactly_one_record_result_call_is_an_inference_error`) |  |
 | `test_classifier_recommends_next_states_without_restricting_predictions` | Rust | Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`any_category_is_accepted_whatever_the_recommendations`) |  |
 | `test_classifier_tags_only_its_own_request` | Python | Python `tests/host/test_amd.py` | Through a local Inference gateway. |
-| `test_classifier_tag_beats_a_model_level_feature_header` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `inference/src/llm/request.rs` (`extra_headers_merge_and_the_calls_header_wins_on_a_shared_name`) | Through a local Inference gateway. `compose_extra` merges the call's and the model's `extra_headers`, the call's winning on a shared name; before step 5 the model's map replaced the call's. |
+| `test_classifier_tag_beats_a_model_level_feature_header` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `inference/src/llm/request.rs` (`extra_headers_merge_and_the_calls_header_wins_on_a_shared_name`, `a_calls_header_replaces_the_models_whatever_the_case`); Rust unit `inference/src/llm/gateway/request_tests.rs` (`the_calls_headers_reach_the_gateway_whatever_the_models_are`) | Through a local Inference gateway. `compose_extra` merges the call's and the model's `extra_headers`, the call's winning on a shared name; before step 5 the model's map replaced the call's. Header names compare case-insensitively, and a model `extra_headers` that is not a map gives way to the call's. |
 | `test_inference_decision_model_is_tagged` | Rust | DST story `fuzz/tests/regressions/amd/executor.rs` (`an_inference_classifier_is_tagged`); Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`an_inference_decision_model_is_tagged_and_timed`) |  |
 | `test_plugin_llm_gets_no_header` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`the_feature_header_goes_only_to_an_inference_model`) |  |
 | `test_fallback_adapter_is_tagged_only_when_every_llm_is_inference` | Python | Python `tests/host/test_amd.py` | Through a local Inference gateway. |
@@ -100,7 +107,7 @@ with the prediction unset.
 | `test_nonterminal_finish_releases_a_waiter_without_a_prediction` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `voice/src/amd/machine/replies_tests.rs` (`test_nonterminal_finish_releases_a_waiter_without_a_prediction`) | Only `cancelled`; `participant_disconnected` and `timeout` need private hooks or a room (Rust executor tests). The turn then gets the "AMD completed" row's reply. |
 | `test_empty_turn_does_not_cancel_a_pending_terminal_prediction` | Rust | Rust unit `voice/src/amd/machine/turns_tests.rs` (`test_empty_turn_does_not_cancel_a_pending_terminal_prediction`) |  |
 | `test_failing_completion_listener_does_not_block_session_close` | Python | Python `tests/host/test_amd.py` |  |
-| `test_completion_is_forwarded_to_session_observability` | Python | Python `tests/smoke/test_amd_console.py` | Over the `lk agent console` socket; with an `ok` and a failing listener. |
+| `test_completion_is_forwarded_to_session_observability` | Python + Rust | Python `tests/smoke/test_amd_console.py`; Rust unit `runtime/src/voice/amd/executor_tests.rs` (`the_remote_host_hears_each_event_before_the_runs_host`) | Over the `lk agent console` socket; with an `ok` and a failing listener. |
 | `test_timeout_rearms_and_late_result_cannot_change_a_newer_turn` | Rust | DST story `fuzz/tests/regressions/amd/executor.rs` (`a_stale_answer_cannot_decide_a_newer_turn`); Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_timeout_rearms_and_late_result_cannot_change_a_newer_turn`) |  |
 | `test_stop_response_remains_owned_by_session` | Rust | Rust unit `voice/src/agent_session/machine/activity/amd_gate_rule_tests.rs` (`stop_response_ends_the_turn_and_a_later_decision_does_nothing`); DST story `fuzz/tests/regressions/amd/realtime.rs` (`a_stopped_turn_asks_for_no_response`) |  |
 | `test_agent_handoff_is_rejected_until_amd_finishes` | Python | Python `tests/host/test_amd.py` |  |
@@ -118,7 +125,7 @@ with the prediction unset.
 | `test_a_result_without_a_reply_cancels_an_unplayed_opening` | Rust | Rust unit `voice/src/agent_session/machine/activity/amd_gate_reply_tests.rs` (`detach_forbidding_replies_cancels_only_an_unplayed_opening`) |  |
 | `test_opening_instructions_generate_with_a_realtime_model` | Rust | Rust unit `voice/src/agent_session/machine/activity/amd_gate_realtime_tests.rs` (`a_realtime_opening_is_said_or_generated_by_the_model`) |  |
 | `test_opening_text_needs_a_tts_or_a_realtime_model_that_can_say` | Python | Python `tests/host/test_amd.py` |  |
-| `test_amd_cannot_enter_during_an_agent_handoff` | Python | Python `tests/host/test_amd.py` | `VoiceSession.check_amd` runs the attach's refusals before any model exists, after every handoff already asked has reached the loop. |
+| `test_amd_cannot_enter_during_an_agent_handoff` | Python | Python `tests/host/test_amd.py` | `VoiceSession.check_amd` runs the attach's refusals before any model exists, after every handoff already asked has reached the loop. Rust `the_entry_check_answers_as_the_attach_would_and_attaches_nothing` checks the same command on an idle, an attached and a closed session. |
 | `test_tool_handoff_is_cancelled_while_amd_is_running` | Out of scope | — | v2.0 tools do not hand off by returning an `Agent`; handoffs go through `update_agent()`, refused under AMD: `test_agent_handoff_is_rejected_until_amd_finishes`. The session refusal is `HandoffRefused::AmdAttached`. |
 | `test_invalid_model_output_falls_back_and_releases_the_reply` | Rust | DST story `fuzz/tests/regressions/amd/executor.rs` (`a_garbled_answer_is_an_inference_error_and_the_turn_is_answered`); Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_invalid_model_output_falls_back_and_releases_the_reply`) |  |
 | `test_amd_commits_short_turns_during_agent_speech` | Python | Python `tests/host/test_amd.py` |  |
@@ -145,7 +152,7 @@ with the prediction unset.
 | `test_dtmf_tool_works_without_amd` | Python | Python `tests/host/test_amd.py` | `beta.send_dtmf_events`, as v2.0 reaches the room (`ctx.live_session._room`); returns `ToolResult(..., reply_required=False)`. |
 | `test_dtmf_publish_failure_does_not_expose_provider_error` | Python | Python `tests/host/test_amd.py` | `beta.send_dtmf_events`; the core raises `SendDtmfError` (`ToolError("Failed to send DTMF events.")`), re-raised with no cause. |
 | `test_amd_observes_dtmf_tool_completion_from_session` | Rust | Rust unit `voice/src/amd/machine/turns_tests.rs` (`test_amd_collects_only_successful_dtmf_calls_from_its_run`) |  |
-| `test_dtmf_tool_propagates_cancelled_publish` | Python | Python `tests/host/test_amd.py` | `beta.send_dtmf_events`; passes before the implementation (v2.0 already propagates cancellation). |
+| `test_dtmf_tool_propagates_cancelled_publish` | Python | Python `tests/host/test_amd.py` | `beta.send_dtmf_events`; passes before the implementation (v2.0 already propagates the caller's cancellation). `test_dtmf_tool_propagates_a_publish_cancelled_by_the_room` checks a publish that raises `CancelledError` itself: `SendDtmfError::Cancelled`. |
 | `test_classifier_sees_both_transcripts_without_changing_agent_transcript` | Rust | DST story `fuzz/tests/regressions/amd/executor.rs` (`the_classifier_reads_both_transcripts_and_the_session_keeps_its_own`); Rust unit `voice/src/amd/machine/turns_tests.rs` (`test_classifier_sees_both_transcripts_without_changing_agent_transcript`) |  |
 | `test_a_late_amd_transcript_does_not_empty_the_turn` | Rust | Rust unit `voice/src/amd/machine/turns_tests.rs` (`test_a_late_amd_transcript_does_not_empty_the_turn`) |  |
 | `test_transcript_received_after_eot_is_kept_in_next_request` | Rust | Rust unit `voice/src/amd/machine/turns_tests.rs` (`test_transcript_received_after_eot_is_kept_in_next_request`) |  |
@@ -163,15 +170,15 @@ with the prediction unset.
 | `test_empty_turns_do_not_cancel_or_count_against_pending_inference` | Rust | Rust unit `voice/src/amd/machine/turns_tests.rs` (`test_empty_turns_do_not_cancel_or_count_against_pending_inference`) |  |
 | `test_dtmf_on_an_empty_turn_is_context_not_an_inference_trigger` | Rust | Rust unit `voice/src/amd/machine/turns_tests.rs` (`test_dtmf_on_an_empty_turn_is_context_not_an_inference_trigger`) |  |
 | `test_inference_error_falls_back_and_uncertain_keeps_the_stage` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `voice/src/amd/machine/replies_tests.rs` (`test_inference_error_falls_back_and_uncertain_keeps_the_stage`) | Also `ValueError` and `TimeoutError`, which the host maps to `inference_error` (`detector.py`). |
-| `test_llm_calls_use_session_connection_options` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`the_session_connection_options_bound_the_retries`) |  |
+| `test_llm_calls_use_session_connection_options` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`the_session_connection_options_bound_the_retries`) | The host test checks that the session's options reach each call; `max_retry` bounding the retries relies on Rust `the_session_connection_options_bound_the_retries`. |
 | `test_prediction_deadline_does_not_wait_for_llm_retries` | Rust | Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_result_after_deadline_is_ignored_before_timer_callback`); Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`the_session_connection_options_bound_the_retries`) | Partial: the deadline is the machine's own timer. That the timeout stops the retrying leg is not asserted |
-| `test_unexpected_inference_errors_finish_with_internal_error` | Python + Rust | Python `tests/host/test_amd.py`; DST story `fuzz/tests/regressions/amd/executor.rs` (`a_crashing_classifier_ends_the_run_with_internal_error`); Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`a_failure_outside_the_provider_taxonomy_fails_the_leg`); Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_unexpected_inference_errors_finish_with_internal_error`) | Classifier failure and prediction listener; `main`'s failing `_fsm.transition` is a Python internal. |
+| `test_unexpected_inference_errors_finish_with_internal_error` | Python + Rust | Python `tests/host/test_amd.py`; DST story `fuzz/tests/regressions/amd/executor.rs` (`a_crashing_classifier_ends_the_run_with_internal_error`); Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`a_failure_outside_the_provider_taxonomy_fails_the_leg`); Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_unexpected_inference_errors_finish_with_internal_error`) | Classifier failure and prediction listener; `main`'s failing `_fsm.transition` is a Python internal. Asserts `main`'s ERROR record with `error_type` and no `exc_info`: the classifier leg logs "amd task failed", the host logs "amd prediction handler failed". |
 | `test_unexpected_menu_error_does_not_end_detection` | Rust | Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`a_menu_failure_is_silent`); Rust unit `voice/src/amd/machine/replies_tests.rs` (`test_unexpected_menu_error_does_not_end_detection`) |  |
-| `test_menu_listener_error_ends_detection_with_internal_error` | Python | Python `tests/host/test_amd.py` |  |
+| `test_menu_listener_error_ends_detection_with_internal_error` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `runtime/src/voice/amd/executor_tests.rs` (`a_failed_host_listener_ends_the_run_with_internal_error`) |  |
 | `test_slow_menu_does_not_block_classification_or_next_turn` | Rust | DST story `fuzz/tests/regressions/amd/executor.rs` (`a_newer_turn_stops_a_slow_menu`); Rust unit `voice/src/amd/machine/replies_tests.rs` (`test_slow_menu_does_not_block_classification_or_next_turn`) |  |
 | `test_prediction_listener_next_turn_cancels_the_previous_menu` | Out of scope | — | synchronous listener reentrancy. v2.0 events are informational. The newer-turn menu cancel is covered by replies_tests.rs::test_slow_menu_does_not_block_classification_or_next_turn |
 | `test_delayed_deadline_cancels_reply_hold_without_repeating_effects` | Rust | Rust unit `voice/src/amd/machine/machine_tests.rs` (`the_overall_timeout_releases_a_held_reply`); Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_amd_enforces_overall_deadline_independently_of_fsm`) |  |
-| `test_screening_prediction_is_forwarded_to_session_observability` | Python | Python `tests/smoke/test_amd_console.py` | Over the `lk agent console` socket. |
+| `test_screening_prediction_is_forwarded_to_session_observability` | Python + Rust | Python `tests/smoke/test_amd_console.py`; Rust unit `runtime/src/voice/amd/executor_tests.rs` (`the_remote_host_hears_each_event_before_the_runs_host`) | Over the `lk agent console` socket. |
 | `test_split_screening_rollover_retains_all_turns` | Rust | Rust unit `voice/src/amd/machine/replies_tests.rs` (`test_split_screening_rollover_retains_all_turns`) |  |
 | `test_classifier_that_ignores_cancellation_cannot_change_state` | Rust | DST story `fuzz/tests/regressions/amd/executor.rs` (`a_stale_answer_cannot_decide_a_newer_turn`); Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_classifier_that_ignores_cancellation_cannot_change_state`) |  |
 | `test_result_after_deadline_is_ignored_before_timer_callback` | Rust | Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_result_after_deadline_is_ignored_before_timer_callback`) |  |
@@ -204,14 +211,14 @@ with the prediction unset.
 | `test_decision_model_error_is_an_inference_error` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `runtime/src/voice/amd/classifier_tests.rs` (`a_decision_model_without_a_valid_choice_is_an_inference_error`) | On `llm.DecisionModel`: an error for the choice, and a raised `ValueError` (from the implementation's dev tests). |
 | `test_decision_model_without_choice_is_rejected` | Python | Python `tests/host/test_amd.py` | On `llm.DecisionModel`. |
 | `test_missing_llm_does_not_install_turn_hooks` | Python | Python `tests/host/test_amd.py` |  |
-| `test_rejected_entry_does_not_create_owned_models` | Python | Python `tests/host/test_amd.py` | Refused by a second run instead of session-level `ivr_detection`, which v2.0 does not have. |
+| `test_rejected_entry_does_not_create_owned_models` | Python | Python `tests/host/test_amd.py` | Refused by a second run instead of session-level `ivr_detection`, which v2.0 does not have. Before start: "start VoiceSession before entering AMD", `main`'s message with v2.0's class name. |
 | `test_partial_model_setup_closes_owned_models` | Python | Python `tests/host/test_amd.py` |  |
 | `test_setup_failure_cleans_up_amd` | Out of scope | — | monkeypatched Python setup internals. Rust analog for cancellation: executor_tests.rs::a_caller_that_stops_waiting_leaves_no_run_behind |
 | `test_stt_model_string_uses_the_standard_factory_and_closes_owned_model` | Python | Python `tests/host/test_amd.py` |  |
 | `test_cleanup_closes_the_run_stream_and_does_not_close_supplied_stt` | Python | Python `tests/host/test_amd.py` |  |
 | `test_owned_model_cleanup_failure_still_detaches_and_releases_turn_hooks` | Python | Python `tests/host/test_amd.py` |  |
 | `test_finish_detaches_before_task_cleanup_and_preserves_a_new_run` | Rust | Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_completion_waits_for_detached_and_legs_closed`); Rust unit `runtime/src/voice/amd/amd_tests.rs` (`another_runs_attach_leaves_a_runs_route_alone`) |  |
-| `test_slow_resource_close_does_not_keep_amd_attached` | Rust | Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_completion_waits_for_detached_and_legs_closed`); Rust unit `runtime/src/voice/amd/executor_tests.rs` (`the_models_amd_created_are_closed_once_before_the_outcome`) |  |
+| `test_slow_resource_close_does_not_keep_amd_attached` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_completion_waits_for_detached_and_legs_closed`); Rust unit `runtime/src/voice/amd/executor_tests.rs` (`the_models_amd_created_are_closed_once_before_the_outcome`) | Python: `owned_stt` and `owned_llm`, as the host closes the models it created after it clears `session.amd`. `main`'s `run_stt` case is the executor's bounded stream close, before the completion reaches the host. |
 | `test_nonstreaming_stt_is_rejected` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `runtime/src/voice/amd/executor_tests.rs` (`invalid_options_and_a_batch_stt_are_refused_at_entry`) |  |
 | `test_machine_silence_default_and_validation` | Python + Rust | Python `tests/host/test_amd.py`; Rust unit `voice/src/amd/machine/limits_tests.rs` (`test_machine_silence_default_and_validation`) |  |
 | `test_machine_prediction_updates_state_before_reply_silence` | Rust | Rust unit `voice/src/amd/machine/replies_tests.rs` (`test_machine_prediction_updates_state_before_reply_silence`) |  |
