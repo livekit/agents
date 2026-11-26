@@ -23,7 +23,7 @@ import aiohttp
 from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.llm import _systemone as systemone
 from livekit.agents.llm.decisions import Decision, DecisionCapabilities, DecisionResponse
-from livekit.agents.types import APIConnectOptions
+from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 
 from ._common import (
     DEFAULT_CONN_OPTIONS,
@@ -100,6 +100,7 @@ class DecisionModel(llm.DecisionModel):
         input: str | llm.ChatContext,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions = DEFAULT_CONN_OPTIONS,
+        extra_headers: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
     ) -> DecisionResponse:
         """Evaluate a batch of decisions.
 
@@ -109,6 +110,7 @@ class DecisionModel(llm.DecisionModel):
             decisions: Decisions keyed by name.
             conn_options: Retry and per-attempt timeout settings. The timeout defaults to
                 70 s, above the gateway's own deadline.
+            extra_headers: Headers sent with every attempt.
 
         Each requested name appears in either ``results`` or ``errors``. Request failures
         and malformed responses raise.
@@ -117,6 +119,7 @@ class DecisionModel(llm.DecisionModel):
             input=input,
             decisions=decisions,
             conn_options=conn_options_or_default(conn_options),
+            extra_headers=extra_headers,
         )
 
     async def _evaluate_impl(
@@ -125,13 +128,14 @@ class DecisionModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
         session = self._session or utils.http_context.http_session()
         try:
             async with session.post(
                 self._url,
-                headers=self._headers,
+                headers={**extra_headers, **self._headers},
                 json={"model": self._model, "state": input, "questions": questions},
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
                 allow_redirects=False,

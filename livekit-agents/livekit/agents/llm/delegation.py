@@ -21,7 +21,8 @@ from .tool_context import (
 
 if TYPE_CHECKING:
     from ..inference.llm import LLMModels
-    from ..metrics import AgentMetrics
+    from ..metrics import AgentMetrics, LLMMetrics
+    from .chat_context import FunctionCall
 
 DEFAULT_DETECTOR_MODEL = "google/gemma-4-31b-it"
 
@@ -60,6 +61,27 @@ class DelegationCreatedEvent:
     id: str
     source: Literal["model", "manual"] = "model"
     """``manual`` when the application started it with ``delegate()``."""
+
+
+@dataclass
+class _DelegatedResponse:
+    """One finished response of a delegated model, reported so the framework can trace it."""
+
+    delegation_id: str | None
+    provider: str
+    model: str
+    started_at: float
+    ended_at: float
+    response_id: str | None = None
+    response_model: str | None = None
+    metrics: LLMMetrics | None = None
+    instructions: str | None = None
+    text: str = ""
+    function_calls: list[FunctionCall] = field(default_factory=list)
+    error: str | None = None
+    """Why the response did not complete, when it did not."""
+    final: bool = False
+    """Whether the delegation produces no more responses after this one."""
 
 
 @dataclass

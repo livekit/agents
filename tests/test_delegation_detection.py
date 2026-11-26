@@ -62,7 +62,9 @@ class _Decided(llm.DecisionModel):
         super().__init__(capabilities=llm.DecisionCapabilities(decision_kinds=["probability"]))
         self._probability = probability
 
-    async def _evaluate_impl(self, *, input, decisions, conn_options) -> llm.DecisionResponse:  # type: ignore[no-untyped-def]
+    async def _evaluate_impl(
+        self, *, input, decisions, conn_options, extra_headers
+    ) -> llm.DecisionResponse:  # type: ignore[no-untyped-def]
         assert input == _INPUT
         return llm.DecisionResponse(
             results={"delegate": llm.ProbabilityResult(value=self._probability)}

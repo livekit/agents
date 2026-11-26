@@ -47,9 +47,11 @@ from .room_io import (
 from .run_result import RunOutputOptions
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
+from .turn import CommitUserTurnResult
 
 __all__ = [
     "AgentSession",
+    "CommitUserTurnResult",
     "ExpressiveOptions",
     "NonverbalOptions",
     "RecordingOptions",

@@ -186,6 +186,8 @@ ATTR_SPEECH_QUEUE_WAIT = "lk.speech.queue_wait"
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
 ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
+ATTR_SESSION_USAGE = "lk.session_usage"
+ATTR_DELEGATION_ID = "lk.delegation_id"
 
 # latency span attributes
 ATTR_E2E_LATENCY = "lk.e2e_latency"

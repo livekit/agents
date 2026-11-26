@@ -401,8 +401,8 @@ async def test_init_recording_called_with_options() -> None:
         await session.start(SimpleAgent(), record=custom)
 
     # _resolve_recording_options merges with defaults, so the result should match
-    mock_ctx.init_recording.assert_called_once()
-    assert mock_ctx.init_recording.call_args[0][0] == {
+    mock_ctx._init_recording.assert_called_once()
+    assert mock_ctx._init_recording.call_args[0][0] == {
         "audio": True,
         "traces": True,
         "logs": False,
@@ -439,8 +439,8 @@ async def test_init_recording_called_even_when_all_false() -> None:
     with _patch_job_ctx(mock_ctx):
         await session.start(SimpleAgent(), record=False)
 
-    mock_ctx.init_recording.assert_called_once()
-    assert mock_ctx.init_recording.call_args[0][0] == _RECORDING_ALL_OFF
+    mock_ctx._init_recording.assert_called_once()
+    assert mock_ctx._init_recording.call_args[0][0] == _RECORDING_ALL_OFF
     await _cleanup(session)
 
 
@@ -452,8 +452,8 @@ async def test_init_recording_defers_to_job_enable_recording() -> None:
     with _patch_job_ctx(mock_ctx, patch_recorder=True):
         await session.start(SimpleAgent())
 
-    mock_ctx.init_recording.assert_called_once()
-    assert mock_ctx.init_recording.call_args[0][0] == _RECORDING_ALL_ON
+    mock_ctx._init_recording.assert_called_once()
+    assert mock_ctx._init_recording.call_args[0][0] == _RECORDING_ALL_ON
     await _cleanup(session)
 
 
@@ -465,7 +465,7 @@ async def test_init_recording_called_when_job_recording_disabled() -> None:
     with _patch_job_ctx(mock_ctx):
         await session.start(SimpleAgent())
 
-    mock_ctx.init_recording.assert_called_once()
+    mock_ctx._init_recording.assert_called_once()
     assert session.options.recording_options == _RECORDING_ALL_OFF
     await _cleanup(session)
 
@@ -1861,3 +1861,17 @@ async def test_invalid_recorder_bit_rate_rejected(audio: bool) -> None:
     assert mock_ctx._primary_agent_session is None
     assert session._room_io is None
     assert not session._started
+
+
+def test_setup_cloud_tracer_skips_the_log_handler_after_the_hand_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import _hosted_logs
+    from livekit.agents.telemetry import traces as traces_mod
+
+    monkeypatch.setattr(_hosted_logs, "_handed_off", True)
+    with _stub_cloud_tracer_deps():
+        _setup_cloud_tracer_for_job()
+        cloud = traces_mod._cloud
+        assert cloud._log_batch_processor is not None
+        assert cloud.log_handler is None or cloud.log_handler not in logging.getLogger().handlers
