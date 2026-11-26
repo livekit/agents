@@ -6,6 +6,8 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from typing_extensions import Self
+
 from livekit import rtc
 
 from ...job import get_job_context
@@ -208,25 +210,44 @@ class DTMFKeypadTool(Toolset):
 
         raise ToolError("No active Room connection found for DTMF emission.")
 
+    async def setup(self) -> Self:
+        """Initialize the toolset and subscribe to inbound SIP DTMF events if configured."""
+        await super().setup()
+        if self._on_dtmf_received is not None and self._subscribed_room is None:
+            room = self._room
+            if room is None:
+                try:
+                    job_ctx = get_job_context(required=False)
+                    if job_ctx is not None:
+                        room = job_ctx.room
+                except Exception:
+                    room = None
+            if room is not None:
+                self.listen(room)
+        return self
+
     async def send_dtmf(self, ctx: RunContext, digits: str) -> ToolResult:
         """Send DTMF touch tones to navigate an IVR or dial an extension.
 
         Args:
             digits: Sequence of DTMF touch tones to emit (0-9, *, #, A-D). For example: "1", "1234#", or "*67".
         """
-        logger.debug(f"send_dtmf called with digits='{digits}'")
+        logger.debug(f"send_dtmf called with {len(digits)} digit(s)")
         validate_dtmf_digits(digits)
 
         room = self._resolve_room(ctx)
         if room.local_participant is None:
             raise ToolError("Room has no local participant connected.")
 
+        if self._on_dtmf_received is not None and self._subscribed_room is None:
+            self.listen(room)
+
         if self._on_tool_called:
             await self._on_tool_called(
                 Toolset.ToolCalledEvent(ctx=ctx, arguments={"digits": digits})
             )
 
-        for digit in digits:
+        for idx, digit in enumerate(digits):
             code = dtmf_char_to_code(digit)
             try:
                 await room.local_participant.publish_dtmf(code=code, digit=digit)
@@ -246,7 +267,7 @@ class DTMFKeypadTool(Toolset):
                 except Exception as e:
                     logger.warning(f"Failed to publish DTMF data packet: {e}")
 
-            if self._publish_delay > 0:
+            if self._publish_delay > 0 and idx < len(digits) - 1:
                 await asyncio.sleep(self._publish_delay)
 
         output = f"Successfully sent DTMF digits: {digits}"
@@ -343,7 +364,7 @@ class CallTransferTool(Toolset):
             transfer_to: Destination phone number (E.164 e.g. "+15551234567"), PBX extension (3-7 digits), or SIP URI (e.g. "sip:agent@trunk.example.com").
             play_dialtone: Optional override for playing a dialtone during the transfer. Defaults to None (uses configured tool default).
         """
-        logger.debug(f"transfer_call called with transfer_to='{transfer_to}'")
+        logger.debug("transfer_call invoked")
         clean_destination = validate_transfer_destination(transfer_to)
         dialtone = play_dialtone if play_dialtone is not None else self._play_dialtone
 

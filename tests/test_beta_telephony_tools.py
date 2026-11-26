@@ -319,14 +319,18 @@ class TestDTMFEmission:
 
     @pytest.mark.asyncio
     async def test_dtmf_publish_delay_applied(self) -> None:
-        """Verify configurable publish_delay sleeps between sequential digits."""
+        """Verify configurable publish_delay sleeps only between consecutive digits."""
         ctx, _, _ = _make_mock_run_context()
         toolset = DTMFKeypadTool(publish_delay=0.15, enable_data_packets=False)
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             await toolset.send_dtmf(ctx, "123")
-            assert mock_sleep.await_count == 3
+            assert mock_sleep.await_count == 2
             mock_sleep.assert_awaited_with(0.15)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await toolset.send_dtmf(ctx, "1")
+            mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_dtmf_data_packet_publishing_enabled(self) -> None:
@@ -428,6 +432,53 @@ class TestInboundSIPDTMFInterception:
 
         await keypad.aclose()
         assert keypad._subscribed_room is None
+
+    @pytest.mark.asyncio
+    async def test_keypad_setup_subscribes_via_job_context_when_no_explicit_room(self) -> None:
+        """Verify DTMFKeypadTool.setup() subscribes to job_ctx.room when no explicit room was given."""
+        room = _MockRoom()
+        received: list[str] = []
+        mock_job_ctx = MagicMock(spec=JobContext, room=room)
+
+        keypad = DTMFKeypadTool(on_dtmf_received=lambda ev: received.append(ev.digit))
+        assert keypad._subscribed_room is None
+
+        with patch(
+            "livekit.agents.beta.tools.telephony.get_job_context", return_value=mock_job_ctx
+        ):
+            await keypad.setup()
+
+        assert keypad._subscribed_room is room
+        room.emit("sip_dtmf_received", rtc.SipDTMF(code=5, digit="5", participant=None))
+        assert received == ["5"]
+
+        await keypad.aclose()
+        assert keypad._subscribed_room is None
+        room.emit("sip_dtmf_received", rtc.SipDTMF(code=6, digit="6", participant=None))
+        assert received == ["5"]
+
+    @pytest.mark.asyncio
+    async def test_send_dtmf_subscribes_fallback_when_room_resolved(self) -> None:
+        """Verify send_dtmf registers on_dtmf_received if setup() ran before room was available."""
+        received: list[str] = []
+        ctx, mock_room, _ = _make_mock_run_context()
+        # Use _MockRoom event hooks on mock_room
+        backing_room = _MockRoom()
+        mock_room.on = backing_room.on
+        mock_room.off = backing_room.off
+
+        keypad = DTMFKeypadTool(
+            publish_delay=0.0,
+            enable_data_packets=False,
+            on_dtmf_received=lambda ev: received.append(ev.digit),
+        )
+        assert keypad._subscribed_room is None
+
+        await keypad.send_dtmf(ctx, "1")
+        assert keypad._subscribed_room is mock_room
+        backing_room.emit("sip_dtmf_received", rtc.SipDTMF(code=7, digit="7", participant=None))
+        assert received == ["7"]
+        await keypad.aclose()
 
     def test_on_sip_dtmf_helper_filtering(self) -> None:
         """Verify on_sip_dtmf helper filters by participant and unregisters cleanly."""
@@ -767,3 +818,39 @@ class TestCallTransferErrorHandling:
                 await toolset.transfer_call(ctx, "+15551234567")
 
         assert "No active JobContext found" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_send_dtmf_does_not_log_sensitive_digits(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Verify send_dtmf debug logging does not expose DTMF PINs or digits."""
+        ctx, _, _ = _make_mock_run_context()
+        toolset = DTMFKeypadTool(publish_delay=0.0, enable_data_packets=False)
+
+        with caplog.at_level("DEBUG", logger="livekit.agents"):
+            await toolset.send_dtmf(ctx, "4321#")
+
+        assert "4321#" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_transfer_call_does_not_log_sensitive_destination(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Verify transfer_call debug logging does not expose transfer_to destination."""
+        sip_p = MagicMock(
+            spec=rtc.RemoteParticipant,
+            identity="sip_p",
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        )
+        ctx, _, _ = _make_mock_run_context(linked_participant=sip_p)
+        mock_job_ctx = MagicMock(spec=JobContext)
+        mock_job_ctx.transfer_sip_participant = AsyncMock(return_value=None)
+
+        toolset = CallTransferTool()
+        with (
+            patch("livekit.agents.beta.tools.telephony.get_job_context", return_value=mock_job_ctx),
+            caplog.at_level("DEBUG", logger="livekit.agents"),
+        ):
+            await toolset.transfer_call(ctx, "+15559876543")
+
+        assert "+15559876543" not in caplog.text
