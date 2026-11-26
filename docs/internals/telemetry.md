@@ -213,13 +213,12 @@ LiveKit's own statistics, never customer data; the list is
 [telemetry.md](../telemetry.md#what-is-collected). They are laid out like observability:
 
 - Declared in `abi::productstats` (`models`, `sessions`, `features`, `runner`), every key under
-  `lk.product.agents.`. `lk-agents-codegen --check` refuses a declaration there without the
-  prefix, any other declaration with it, and a label that is not a closed enum or a `Label`.
-- Recorded through `lk-agents-telemetry`, by two entry points and no state:
-  `productstats::measure(cx, &metric, value)` in async code, beside `measure(cx, ..)`, and
-  `Trace::measure_product(&metric, value)` in a sans-I/O machine, beside `Trace::measure`. Both
-  make a `Record::ProductStat` for the context's recorder. The emitters machines and async code
-  share (`ModelUsage::measure`, `SessionStats::emit`) take either as a `MeasureProduct`.
+  `lk.product.agents.`, with `audience = ProductStats`.
+- Recorded through the one recording API: `measure(cx, &metric, value)` in async code and
+  `Trace::measure(&metric, value)` in a sans-I/O machine take a metric of either audience. The
+  metric's declared audience chooses the record (`Record::Measurement` or
+  `Record::ProductStat`); no argument does. The emitters machines and async code share
+  (`ModelUsage::measure`, `SessionStats::emit`) take either as a `Measure`.
 - Exported by `lk_agents_net::export::otlp`, as the exporter's third destination
   (`otlp/product_stats.rs`): see [Destinations](#destinations).
 - Models: `ModelLabels::of(kind, &ProviderId)` derives the four labels. Requests, tokens,
@@ -236,8 +235,20 @@ LiveKit's own statistics, never customer data; the list is
 - MCP: an `MCPToolset`'s lifecycle marks its toolset's lifetime port when it sets it up; a
   toolset group knows after its start whether one of its toolsets, or one nested in them, is
   marked.
-- Tests record under a tracer of their own (`productstats::testkit::Recorded`), or read the
-  machine's drained records.
+- Tests record under a tracer of their own (`testkit::Recorded`), or read the machine's drained
+  records.
+
+What keeps the two audiences apart, now that one function records both:
+
+| Guarantee | Enforced by |
+| --- | --- |
+| A declaration's audience, name prefix and module agree, both ways; so do its keys | compile time: `#[span]`/`#[event]`/`#[metric]` expand to `decl::declared::<A>(name, module_path!())`, `#[derive(Attrs)]` to `decl::key_declared(..)`; `lk-agents-codegen --check` repeats it |
+| A product statistic carries closed enums and bounded labels only | compile time: its fields must be `decl::Bounded`, a sealed marker implemented by `Label`, closed `SpanValue` enums and `#[derive(Bounded)]` groups |
+| There are two audiences | compile time: `Audience` is sealed |
+| The audience alone routes a measurement | compile time: `Audience::record` makes the record; `ProductStat` has no constructor outside ABI |
+| Spans and events are observability only | compile time: `Audience = Observability` bounds on `start`, `Trace::open`, `event` |
+| A `ProductStat` reaches its destination only, under its own policy | the exporter's typed split and its tests (`otlp/product_stats_tests.rs`) |
+
 
 ### Report records
 

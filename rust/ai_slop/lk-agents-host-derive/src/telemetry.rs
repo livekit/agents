@@ -580,4 +580,90 @@ mod tests {
         let out = role("event", quote!(name = "x"), quote! { fn f() {} });
         assert!(out.contains("is for an `Attrs` struct"), "{out}");
     }
+
+    // Catches: a declaration expanded without its compile-time audience check (its name and its
+    // module against its audience), a key without its check or a dependency key taken for ours,
+    // or a product statistic whose field types are not required to be bounded.
+    #[test]
+    fn declarations_expand_to_their_compile_time_audience_checks() {
+        let squeeze = |tokens: String| tokens.replace(' ', "");
+        let stat = squeeze(role(
+            "metric",
+            quote!(
+                name = "lk.product.agents.m",
+                kind = Counter,
+                unit = "1",
+                audience = ProductStats
+            ),
+            quote!(
+                struct M {
+                    #[attr("lk.product.agents.k")]
+                    k: Label,
+                    #[attrs]
+                    g: Group,
+                }
+            ),
+        ));
+        let d = "::lk_agents_abi::telemetry::decl";
+        let declared = format!(
+            "const_:()={d}::declared::<{d}::ProductStats>(\"lk.product.agents.m\",::core::module_path!());"
+        );
+        assert!(stat.contains(&declared), "{stat}");
+        let bounded = format!("const_:()={{{d}::bounded::<Label>();{d}::bounded::<Group>();}};");
+        assert!(stat.contains(&bounded), "{stat}");
+
+        let customer = squeeze(role(
+            "metric",
+            quote!(name = "lk.m", kind = Counter, unit = "1"),
+            quote!(
+                struct M {
+                    #[attr("lk.k")]
+                    k: String,
+                }
+            ),
+        ));
+        assert!(customer.contains(&format!("{d}::declared::<{d}::Observability>(\"lk.m\"")));
+        assert!(!customer.contains("bounded::<"), "{customer}");
+        for (role_name, args) in
+            [("event", quote!(name = "e")), ("span", quote!(name = "s", parent = Current))]
+        {
+            let out = squeeze(role(
+                role_name,
+                args,
+                quote!(
+                    struct D;
+                ),
+            ));
+            assert!(out.contains(&format!("{d}::declared::<{d}::Observability>(")), "{out}");
+        }
+
+        let keys = squeeze(derive(
+            super::attrs,
+            quote!(
+                struct S {
+                    #[attr("lk.a")]
+                    a: Label,
+                    #[attr(otel::SERVICE_NAME)]
+                    b: Label,
+                }
+            ),
+        ));
+        let key = |key: &str, owned: bool| {
+            format!("const_:()={d}::key_declared({key},::core::module_path!(),{owned});")
+        };
+        assert!(keys.contains(&key("\"lk.a\"", true)), "{keys}");
+        assert!(keys.contains(&key("otel::SERVICE_NAME", false)), "{keys}");
+
+        let group = squeeze(derive(
+            super::bounded,
+            quote!(
+                struct G {
+                    a: Label,
+                    b: Kind,
+                }
+            ),
+        ));
+        assert!(group.contains(&format!("{d}::bounded::<Label>();{d}::bounded::<Kind>();")));
+        assert!(group.contains(&format!("impl{d}::Boundedfor G{{}}").replace("for G", "forG")));
+    }
 }
