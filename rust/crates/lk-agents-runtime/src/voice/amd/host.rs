@@ -17,13 +17,21 @@ use lk_agents_voice::amd::options::AmdOptions;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Seconds as a duration. `inf` is no deadline: `Duration::MAX`, on which every deadline
+/// saturates, as `main` accepts `float("inf")`. NaN and negative seconds are `None`.
+fn duration(seconds: f64) -> Option<Duration> {
+    if seconds == f64::INFINITY {
+        return Some(Duration::MAX);
+    }
+    Duration::try_from_secs_f64(seconds).ok()
+}
+
 /// `AMD(...)`'s options as the machine takes them, checked in the constructor's order: the
 /// `ValueError` it raises otherwise.
 pub fn options(host: &abi::AmdOptions) -> Result<AmdOptions, Invalid> {
     const NOT_POSITIVE: &str = "amd timeouts and max_uncertain_turns must be positive";
     let positive = |seconds: f64| {
-        Duration::try_from_secs_f64(seconds)
-            .ok()
+        duration(seconds)
             .filter(|duration| !duration.is_zero())
             .ok_or_else(|| Invalid(NOT_POSITIVE.into()))
     };
@@ -39,8 +47,8 @@ pub fn options(host: &abi::AmdOptions) -> Result<AmdOptions, Invalid> {
         return Err(Invalid("max_inference_timeouts must be positive".into()));
     }
     let max_inference_timeouts = u32::try_from(host.max_inference_timeouts).unwrap_or(u32::MAX);
-    let machine_silence_threshold = Duration::try_from_secs_f64(host.machine_silence_threshold)
-        .map_err(|_| Invalid("machine_silence_threshold must be non-negative".into()))?;
+    let machine_silence_threshold = duration(host.machine_silence_threshold)
+        .ok_or_else(|| Invalid("machine_silence_threshold must be non-negative".into()))?;
     let options = AmdOptions {
         screening_instructions: host.screening_instructions.clone(),
         voicemail_instructions: host.voicemail_instructions.clone(),

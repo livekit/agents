@@ -56,6 +56,35 @@ fn invalid_options_raise_mains_messages() {
     );
 }
 
+// Catches: `float("inf")`, which `main` accepts for every timeout and the silence threshold,
+// refused as not positive or negative. It is no deadline; NaN stays refused.
+#[test]
+fn infinite_seconds_are_no_deadline() {
+    let mut host = host_options();
+    host.idle_timeout = f64::INFINITY;
+    host.voicemail_idle_timeout = f64::INFINITY;
+    host.timeout = f64::INFINITY;
+    host.inference_timeout = f64::INFINITY;
+    host.machine_silence_threshold = f64::INFINITY;
+    let machine = options(&host).expect("inf is accepted");
+    let all = [
+        machine.idle_timeout,
+        machine.voicemail_idle_timeout,
+        machine.timeout,
+        machine.inference_timeout,
+        machine.machine_silence_threshold,
+    ];
+    assert_eq!(all, [Duration::MAX; 5]);
+    let mut nan = host_options();
+    nan.machine_silence_threshold = f64::NAN;
+    let refused = Invalid("machine_silence_threshold must be non-negative".into());
+    assert_eq!(options(&nan), Err(refused));
+    let mut negative_inf = host_options();
+    negative_inf.timeout = f64::NEG_INFINITY;
+    let positive = "amd timeouts and max_uncertain_turns must be positive";
+    assert_eq!(options(&negative_inf), Err(Invalid(positive.into())));
+}
+
 // Catches: a session refusal raised as the wrong Python class: `main` raises `RuntimeError` for
 // the session's state and `ValueError` for a model that does not fit it.
 #[test]
