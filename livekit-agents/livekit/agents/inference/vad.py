@@ -198,10 +198,17 @@ class _VADStream(vad.VADStream):
                 self._opts.prefix_padding_duration * self._input_sample_rate
             )
 
-            self._speech_buffer.resize(
+            new_size = (
                 int(self._opts.max_buffered_speech * self._input_sample_rate)
                 + self._prefix_padding_samples
             )
+            if new_size != len(self._speech_buffer):
+                # Copy into a new array rather than ndarray.resize(): on Python 3.14 its
+                # reference check rejects this buffer because it is held by an attribute.
+                speech_buffer = np.zeros(new_size, dtype=self._speech_buffer.dtype)
+                kept = min(len(self._speech_buffer), new_size)
+                speech_buffer[:kept] = self._speech_buffer[:kept]
+                self._speech_buffer = speech_buffer
 
             # Resizing may discard samples that the write cursor still counted.
             self._speech_buffer_index = min(self._speech_buffer_index, len(self._speech_buffer))
@@ -397,10 +404,19 @@ class _VADStream(vad.VADStream):
                         data=speech_data,
                     )
 
+                is_speech = p >= self._opts.activation_threshold or (
+                    pub_speaking and p > self._opts.deactivation_threshold
+                )
                 if pub_speaking:
                     pub_speech_duration += window_duration
                 else:
                     pub_silence_duration += window_duration
+
+                # silence after the last speech window only counts once speech resumes,
+                # so it can't push the speech duration over the interruption threshold
+                trailing_silence = (
+                    0.0 if is_speech else silence_threshold_duration + window_duration
+                )
 
                 self._event_ch.send_nowait(
                     vad.VADEvent(
@@ -408,7 +424,7 @@ class _VADStream(vad.VADStream):
                         samples_index=pub_current_sample,
                         timestamp=pub_timestamp,
                         silence_duration=pub_silence_duration,
-                        speech_duration=pub_speech_duration,
+                        speech_duration=max(0.0, pub_speech_duration - trailing_silence),
                         probability=p,
                         inference_duration=inference_duration,
                         frames=[
@@ -425,9 +441,7 @@ class _VADStream(vad.VADStream):
                     )
                 )
 
-                if p >= self._opts.activation_threshold or (
-                    pub_speaking and p > self._opts.deactivation_threshold
-                ):
+                if is_speech:
                     speech_threshold_duration += window_duration
                     silence_threshold_duration = 0.0
 

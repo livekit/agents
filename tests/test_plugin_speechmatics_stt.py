@@ -36,6 +36,7 @@ from speechmatics.agent_stt import (
 
 from livekit.agents import APIError, stt
 from livekit.agents.utils.aio.channel import ChanEmpty
+from livekit.agents.utils.audio import silence_frame
 from livekit.plugins.speechmatics import stt as speechmatics_stt
 from livekit.plugins.speechmatics.stt import (
     DEFAULT_BASE_URL,
@@ -43,6 +44,8 @@ from livekit.plugins.speechmatics.stt import (
     SpeechStream,
     TurnDetectionMode,
 )
+
+from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.plugin("speechmatics")
 
@@ -123,15 +126,59 @@ def _segment_message(
     }
 
 
+@pytest.mark.parametrize("end", [0.4, 0.0])
+async def test_endpoint_preserves_final_segment_timing_and_clears_it(end: float) -> None:
+    stream = _stream()
+    stream.start_time_offset = 7.0
+    try:
+        stream._handle_start_of_turn({})
+        stream._handle_segment(_segment_message(start=0.1, end=end), is_final=True)
+        stream._handle_end_of_turn({})
+        endpoint = next(e for e in _events(stream) if e.type == stt.SpeechEventType.END_OF_SPEECH)
+        if end:
+            assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+        else:
+            assert endpoint.alternatives == []
+
+        stream._handle_start_of_turn({})
+        stream._handle_end_of_turn({})
+        endpoint = next(e for e in _events(stream) if e.type == stt.SpeechEventType.END_OF_SPEECH)
+        assert endpoint.alternatives == []
+    finally:
+        await stream.aclose()
+
+
+async def test_untimed_final_clears_previous_speechmatics_endpoint_timing() -> None:
+    stream = _stream()
+    try:
+        stream._handle_segment(_segment_message(end=0.4), is_final=True)
+        stream._handle_segment(_segment_message(end=0.0), is_final=True)
+        stream._handle_end_of_turn({})
+        assert _events(stream)[-1].alternatives == []
+    finally:
+        await stream.aclose()
+
+
 class _StubClient:
-    """Stands in for `AgentSttAsyncClient` where only `finalize()` is under test."""
+    """Records audio and turn control calls without a connection."""
 
     def __init__(self) -> None:
         self.is_connected = True
+        self.is_ready_for_audio = True
         self.finalize_calls = 0
+        self.audio_calls: list[bytes | str] = []
 
     def finalize(self) -> None:
         self.finalize_calls += 1
+
+    async def send_audio(self, payload: bytes) -> None:
+        self.audio_calls.append(payload)
+
+    async def force_end_of_utterance(self) -> None:
+        self.audio_calls.append("ForceEndOfUtterance")
+
+    async def disconnect(self) -> None:
+        self.is_connected = False
 
 
 @pytest.fixture(autouse=True)
@@ -179,7 +226,9 @@ def test_capabilities_mirror_resolved_options() -> None:
 
 
 def test_audio_format_is_validated() -> None:
-    """Both values are fixed, and a wrong one must fail here rather than mid-session.
+    """Both values are constrained, and a wrong one must fail here rather than mid-session.
+
+    The service accepts 8 kHz and 16 kHz; anything else is rejected at construction.
 
     The encoding check is deliberately narrower than the spec: `pcm_f32le` is legal on the
     wire, but LiveKit frames are int16 and we forward them unconverted, so declaring it
@@ -187,10 +236,24 @@ def test_audio_format_is_validated() -> None:
     error.
     """
     with pytest.raises(ValueError, match="sample_rate"):
-        _stt(sample_rate=8000)
+        _stt(sample_rate=22050)
 
     with pytest.raises(ValueError, match="audio_encoding"):
         _stt(audio_encoding=AudioEncoding.PCM_F32LE)
+
+
+async def test_8khz_reaches_the_audio_path() -> None:
+    """At 8 kHz the stream must resample to, and declare, the rate it was built with.
+
+    `RecognizeStream` resamples incoming frames to the stream's `sample_rate`, so the
+    `AudioFormat` sent in `StartRecognition` has to name the same rate for the service
+    to read the bytes correctly.
+    """
+    instance = _stt(sample_rate=8000)
+    assert instance._sample_rate == 8000
+
+    stream = _stream(sample_rate=8000)
+    assert stream._needed_sr == 8000
 
 
 # --- Model resolution ----------------------------------------------------------------
@@ -286,14 +349,12 @@ def test_turn_config_is_a_top_level_sibling() -> None:
 
 
 def test_bare_external_loads_a_vad() -> None:
-    """`EXTERNAL` is the default and the service does not endpoint in it.
-
-    The pre-Agent-STT plugin auto-loaded Silero here. Without it a bare `STT()` finalizes
-    nothing and transcribes nothing, which is the zero-config path.
-    """
+    """The plugin loads Silero so standalone `STT()` streams close turns automatically."""
     pytest.importorskip("livekit.plugins.silero")
 
-    assert _stt()._vad is not None
+    instance = _stt()
+    assert instance._vad is not None
+    assert not instance.capabilities.manual_flush
 
 
 def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
@@ -301,20 +362,26 @@ def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
     wherever the optional package was absent."""
     monkeypatch.setitem(sys.modules, "livekit.plugins.silero", None)
 
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("DEBUG", logger=speechmatics_stt.logger.name):
         instance = _stt()
 
     assert instance._vad is None
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert instance.capabilities.manual_flush
+    assert [
+        record.levelname
+        for record in caplog.records
+        if "could not load the optional Silero VAD" in record.getMessage()
+    ] == ["DEBUG"]
 
 
 def test_explicit_none_vad_opts_out(caplog) -> None:
-    """`vad=None` is the advanced path: that caller drives `finalize()` by hand."""
-    with caplog.at_level("WARNING"):
+    """`vad=None` allows the session or caller to close turns."""
+    with caplog.at_level("DEBUG", logger=speechmatics_stt.logger.name):
         instance = _stt(vad=None)
 
     assert instance._vad is None
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert instance.capabilities.manual_flush
+    assert not any(record.name == speechmatics_stt.logger.name for record in caplog.records)
 
 
 async def test_finalize_and_vad_only_act_in_external() -> None:
@@ -335,6 +402,65 @@ async def test_finalize_and_vad_only_act_in_external() -> None:
     assert service_side._stt._vad is None  # nothing is auto-loaded outside EXTERNAL
     service_side._stt.finalize()
     assert service_side._client.finalize_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "local_vad", "manual_flush"),
+    [
+        (TurnDetectionMode.EXTERNAL, None, True),
+        (TurnDetectionMode.EXTERNAL, FakeVAD(), False),
+        (TurnDetectionMode.VAD, None, False),
+    ],
+)
+async def test_stream_flush_sends_buffered_audio_before_finalizing(
+    mode: TurnDetectionMode, local_vad: FakeVAD | None, manual_flush: bool, monkeypatch
+) -> None:
+    stream = _stream(turn_detection_mode=mode, vad=local_vad)
+    client = _StubClient()
+    monkeypatch.setattr(stream, "_client", client)
+    first = silence_frame(0.01, 16000)
+    second = silence_frame(0.02, 16000)
+    try:
+        stream.flush()
+        stream.push_frame(first)
+        stream.flush()
+        stream.flush()
+        stream.push_frame(second)
+        stream.end_input()
+        await stream._process_audio()
+
+        expected: list[bytes | str] = [first.data.tobytes(), second.data.tobytes()]
+        if manual_flush:
+            expected.insert(1, "ForceEndOfUtterance")
+            expected.append("ForceEndOfUtterance")
+        assert client.audio_calls == expected
+        assert stream._stt.capabilities.manual_flush is manual_flush
+    finally:
+        await stream.aclose()
+
+
+async def test_explicit_stream_flush_with_framework_flushing_disabled(monkeypatch) -> None:
+    stream = _stream(vad=None)
+    stream._stt.capabilities.manual_flush = False
+    client = _StubClient()
+    monkeypatch.setattr(stream, "_client", client)
+    frame = silence_frame(0.01, 16000)
+    try:
+        stream.push_frame(frame)
+        stream.flush()
+        stream.push_frame(frame)
+        stream.end_input()
+        await stream._process_audio()
+
+        payload = frame.data.tobytes()
+        assert client.audio_calls == [
+            payload,
+            "ForceEndOfUtterance",
+            payload,
+            "ForceEndOfUtterance",
+        ]
+    finally:
+        await stream.aclose()
 
 
 # --- Config down-translation ---------------------------------------------------------
@@ -365,6 +491,13 @@ def test_config_sends_only_whitelisted_fields() -> None:
     assert json.dumps(sent)
 
     assert _stt(language="en")._prepare_config("fr").to_dict()["language"] == "fr"
+
+
+def test_emit_sentences_sent_only_when_set() -> None:
+    """Unset means the service default (turn-level segments), so the key stays off the wire."""
+    assert "emit_sentences" not in _stt()._prepare_config().to_dict()
+    assert _stt(emit_sentences=True)._prepare_config().to_dict()["emit_sentences"] is True
+    assert _stt(emit_sentences=False)._prepare_config().to_dict()["emit_sentences"] is False
 
 
 def test_diarization_config_built_only_when_used() -> None:
@@ -442,6 +575,22 @@ async def test_add_segment_becomes_final_transcript() -> None:
     assert data.language == "en"
     assert data.start_time == 11.5
     assert data.end_time == 12.5
+
+
+async def test_each_sentence_segment_becomes_its_own_final() -> None:
+    """With `emit_sentences`, one turn arrives as several `AddSegment`s, one per sentence.
+
+    Each must surface as its own final transcript, in order, rather than being merged or
+    dropped while the turn is still open.
+    """
+    stream = _stream(emit_sentences=True)
+
+    stream._handle_message(_segment_message(transcript="Hello there.", start=0.0, end=1.0))
+    stream._handle_message(_segment_message(transcript="How are you?", start=1.2, end=2.0))
+    events = _events(stream)
+
+    assert [event.type for event in events] == [stt.SpeechEventType.FINAL_TRANSCRIPT] * 2
+    assert [event.alternatives[0].text for event in events] == ["Hello there.", "How are you?"]
 
 
 async def test_add_partial_segment_becomes_interim() -> None:
@@ -713,3 +862,22 @@ stt.update_speakers(focus_speakers=["S1"])
     assert namespace["stt"].model == DEFAULT_MODEL.value
     for deprecated in (OPERATING_POINT, SPEAKER_FOCUS_MODE, "ADAPTIVE", "focus_mode"):
         assert deprecated in caplog.text
+
+
+@pytest.mark.parametrize(
+    "event, expected_retries",
+    [
+        (ServerMessageType.RECOGNITION_STARTED, 2),
+        (ServerMessageType.INFO, 2),
+        (ServerMessageType.START_OF_TURN, 0),
+        (ServerMessageType.END_OF_TURN, 0),
+    ],
+)
+async def test_provider_progress_resets_retries_without_transcript(event, expected_retries):
+    stream = _stream()
+    stream._num_retries = 2
+    try:
+        stream._handle_message({"message": event.value})
+        assert stream._num_retries == expected_retries
+    finally:
+        await stream.aclose()

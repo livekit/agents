@@ -50,7 +50,6 @@ _SAMPLE_WIDTH_BYTES = 2
 _CHUNK_DURATION = 0.08
 _CHUNK_BYTES = int(_SAMPLE_RATE * _CHANNELS * _SAMPLE_WIDTH_BYTES * _CHUNK_DURATION)
 _MAX_MESSAGE_BYTES = 1024 * 1024
-_WS_HEARTBEAT = 30.0
 _MAX_COMPLETED_TURNS = 128
 _SUPPORTED_LANGUAGES = (
     "Arabic",
@@ -462,7 +461,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._session.ws_connect(
                     self._url,
                     max_msg_size=_MAX_MESSAGE_BYTES,
-                    heartbeat=_WS_HEARTBEAT,
+                    autoping=False,
                 ),
                 timeout=self._conn_options.timeout,
             )
@@ -481,7 +480,10 @@ class SpeechStream(stt.RecognizeStream):
 
         try:
             await ws.send_str(json.dumps(self._handshake(), separators=(",", ":")))
-            raw = await asyncio.wait_for(ws.receive(), timeout=self._conn_options.timeout)
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
+            raw = await asyncio.wait_for(monitor.receive(), timeout=self._conn_options.timeout)
             message = _parse_ws_message(
                 raw,
                 phase="handshake",
@@ -612,9 +614,12 @@ class SpeechStream(stt.RecognizeStream):
             self._end_stream_sent = True
 
     async def _receive_events(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        monitor = utils.aio.WebSocketMonitor(
+            ws, liveness_timeout=self._conn_options.liveness_timeout
+        )
         while True:
             try:
-                raw = await ws.receive()
+                raw = await monitor.receive()
             except Exception as exc:
                 raise APIConnectionError(
                     f"Meta Muse realtime ASR receive failed ({type(exc).__name__})",
@@ -652,6 +657,9 @@ class SpeechStream(stt.RecognizeStream):
                 self._speech_complete(message)
             elif event_type == "audioProgress":
                 self._audio_progress(message)
+            else:
+                continue
+            self._mark_provider_progress()
 
     def _audio_progress(self, message: dict[str, Any]) -> None:
         processed_ms = message.get("audioProcessedMs")

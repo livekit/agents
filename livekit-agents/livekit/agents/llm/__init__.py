@@ -14,6 +14,10 @@ from .chat_context import (
     ImageContent,
     MetricsReport,
 )
+from .decision_fallback_adapter import (
+    DecisionAvailabilityChangedEvent,
+    DecisionModelFallbackAdapter,
+)
 from .decisions import (
     Choice,
     ChoiceResult,
@@ -27,6 +31,12 @@ from .decisions import (
     ProbabilityResult,
     Score,
     ScoreResult,
+)
+from .delegation import (
+    DelegationCheck,
+    DelegationCreatedEvent,
+    DelegationDetectionOptions,
+    DelegationDetector,
 )
 from .duplex import (
     DuplexAudioFrame,
@@ -83,6 +93,7 @@ from .tool_context import (
     ToolFlag,
     ToolResult,
     Toolset,
+    ToolsetError,
     find_function_tools,
     function_tool,
     is_function_tool,
@@ -119,6 +130,7 @@ __all__ = [
     "ToolChoice",
     "Tool",
     "Toolset",
+    "ToolsetError",
     "is_function_tool",
     "function_tool",
     "find_function_tools",
@@ -150,7 +162,9 @@ __all__ = [
     "Decision",
     "DecisionCapabilities",
     "DecisionKind",
+    "DecisionAvailabilityChangedEvent",
     "DecisionModel",
+    "DecisionModelFallbackAdapter",
     "DecisionResponse",
     "DecisionResult",
     "Probability",
@@ -167,6 +181,10 @@ __all__ = [
     "GenerationCreatedEvent",
     "MessageGeneration",
     "RealtimeSessionReconnectedEvent",
+    "DelegationCheck",
+    "DelegationCreatedEvent",
+    "DelegationDetectionOptions",
+    "DelegationDetector",
     "LLMError",
     "RemoteItemAddedEvent",
 ]

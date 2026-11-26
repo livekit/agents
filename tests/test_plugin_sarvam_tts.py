@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from types import SimpleNamespace
@@ -11,58 +14,60 @@ from unittest.mock import MagicMock
 import aiohttp
 import pytest
 
-from livekit.agents import APIStatusError
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIStatusError,
+    tts,
+)
 from livekit.agents.tts import AudioEmitter
-from livekit.agents.types import APIConnectOptions
 from livekit.plugins.sarvam import models as sarvam_models, tts as sarvam_tts
+from livekit.plugins.sarvam.tts import (
+    ALLOWED_OUTPUT_AUDIO_CODECS,
+    _codec_to_mime_type,
+    _decode_telephony,
+)
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_leaked_keepalive_tasks() -> AsyncIterator[None]:
+    """Cancel keepalive tasks left by tests that never close their TTS."""
+    yield
+    for task in list(asyncio.all_tasks()):
+        if task.get_name() == "sarvam-tts-ws-keepalive" and not task.done():
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
 
 
 def _make_tts(**kwargs: Any) -> sarvam_tts.TTS:
     return sarvam_tts.TTS(api_key="sk_test", http_session=object(), **kwargs)  # type: ignore[arg-type]
 
 
-def test_synthesize_honors_explicit_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("method", "cls"), [("synthesize", "ChunkedStream"), ("stream", "SynthesizeStream")]
+)
+def test_explicit_conn_options_reach_the_stream(
+    monkeypatch: pytest.MonkeyPatch, method: str, cls: str
 ) -> None:
     captured: dict[str, object] = {}
 
-    class _CapturedChunkedStream:
+    class _Captured:
         def __init__(self, **kwargs: object) -> None:
             captured.update(kwargs)
 
-    monkeypatch.setattr(sarvam_tts, "ChunkedStream", _CapturedChunkedStream)
-    tts = _make_tts()
+    monkeypatch.setattr(sarvam_tts, cls, _Captured)
     conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, timeout=12.0)
 
-    tts.synthesize("hello", conn_options=conn_options)
+    t = _make_tts()
+    if method == "synthesize":
+        t.synthesize("hello", conn_options=conn_options)
+    else:
+        t.stream(conn_options=conn_options)
 
-    stream_conn_options = captured["conn_options"]
-    assert stream_conn_options is conn_options
-    assert stream_conn_options.max_retry == 5
-    assert stream_conn_options.retry_interval == 1.5
-    assert stream_conn_options.timeout == 12.0
-
-
-def test_stream_honors_explicit_conn_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    class _CapturedSynthesizeStream:
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-
-    monkeypatch.setattr(sarvam_tts, "SynthesizeStream", _CapturedSynthesizeStream)
-    tts = _make_tts()
-    conn_options = APIConnectOptions(max_retry=5, retry_interval=1.5, timeout=12.0)
-
-    tts.stream(conn_options=conn_options)
-
-    stream_conn_options = captured["conn_options"]
-    assert stream_conn_options is conn_options
-    assert stream_conn_options.max_retry == 5
-    assert stream_conn_options.retry_interval == 1.5
-    assert stream_conn_options.timeout == 12.0
+    assert captured["conn_options"] is conn_options
 
 
 def test_v4_defaults_to_its_own_speaker_and_ws_v2_endpoint() -> None:
@@ -97,9 +102,8 @@ def test_v4_rejects_v3_speaker_names() -> None:
 
 
 def test_v4_request_fields() -> None:
-    tts = _make_tts(model="bulbul:v4-flash", dict_id="dict-1", enable_cached_responses=True)
+    tts = _make_tts(model="bulbul:v4-flash", dict_id="dict-1")
 
-    # caching is ignored by v4, so it is never sent
     assert sarvam_tts._model_extra_fields(tts._opts) == {
         "pitch": 0.0,
         "loudness": 1.0,
@@ -107,8 +111,6 @@ def test_v4_request_fields() -> None:
         "temperature": 0.6,
         "dict_id": "dict-1",
     }
-    # the websocket config adds the buffering knobs for the shared v3/v4 pipeline
-    assert "bulbul:v4-flash" in sarvam_tts._V3_PIPELINE_MODELS
 
 
 def test_v3_request_fields_unchanged() -> None:
@@ -307,12 +309,7 @@ async def _speak(stream: sarvam_tts.SynthesizeStream) -> None:
 async def test_stream_created_before_a_model_switch_speaks_with_the_new_options(
     socket_tts: _SocketTTS,
 ) -> None:
-    """A stream adopts the model-coupled options its socket was opened with, all together.
-
-    update_options validates model, speaker and language as one set, so taking only some
-    of them could pair a model with a speaker or language it rejects. Sample rate and
-    codec stay the stream's own: its output emitter is already initialized from them.
-    """
+    """A stream adopts model, speaker and language together, but keeps its own rate and codec."""
     tts, session = socket_tts(
         model="bulbul:v4-flash",
         target_language_code="as-IN",
@@ -387,6 +384,7 @@ _TO_V4_FLASH = {"model": "bulbul:v4-flash", "speaker": "ritu_hi_medical"}
 _BACK_TO_V3 = {"model": "bulbul:v3", "speaker": "shubh"}
 
 
+@pytest.mark.virtual_time
 @pytest.mark.parametrize(
     "switches",
     [
@@ -432,11 +430,7 @@ async def test_socket_retired_mid_utterance_is_closed_when_returned(
 
 
 def _error_stream() -> sarvam_tts.SynthesizeStream:
-    """A SynthesizeStream carrying only the attributes `_handle_error_message` reads.
-
-    The real ``__init__`` spawns a task that connects to the API, which a unit test
-    must not do.
-    """
+    """A SynthesizeStream carrying only what `_handle_error_message` reads."""
     stream = object.__new__(sarvam_tts.SynthesizeStream)
     stream._opts = _make_tts(model="bulbul:v4-flash")._opts
     stream._session_id = 0
@@ -518,3 +512,465 @@ async def test_error_frame_forwards_request_id() -> None:
         )
 
     assert exc.value.request_id == "20260918_abc"
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == sarvam_tts.logger.name and r.levelno == logging.WARNING
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "replacement"),
+    [("bulbul:v2", "bulbul:v4-flash"), ("bulbul:v3-beta", "bulbul:v3")],
+)
+def test_removed_model_warns_with_its_replacement(
+    model: str, replacement: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = _make_tts(model=model)
+
+    assert any(model in w and f"'{replacement}'" in w for w in _warnings(caplog))
+    # sent as given rather than swapped for the replacement; the Sarvam API has the last word
+    assert tts._opts.model == model
+
+
+def test_update_options_to_removed_model_warns(caplog: pytest.LogCaptureFixture) -> None:
+    tts = _make_tts(model="bulbul:v3")
+
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts.update_options(model="bulbul:v2")
+
+    assert any("'bulbul:v4-flash'" in w for w in _warnings(caplog))
+    assert tts._opts.model == "bulbul:v2"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("pitch", 0.5), ("loudness", 1.5), ("enable_preprocessing", True)],
+)
+def test_v4_flash_only_arg_on_v3_warns_instead_of_failing(
+    name: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A bulbul:v2 config moved to bulbul:v3 may still set these."""
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = _make_tts(model="bulbul:v3", **{name: value})
+
+    assert any(f"`{name}`" in w and "bulbul:v4-flash" in w for w in _warnings(caplog))
+    assert name not in sarvam_tts._model_extra_fields(tts._opts)
+
+
+def test_update_options_v4_flash_only_arg_on_v3_warns(caplog: pytest.LogCaptureFixture) -> None:
+    tts = _make_tts(model="bulbul:v3")
+
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts.update_options(loudness=1.5)
+
+    assert any("`loudness`" in w for w in _warnings(caplog))
+
+
+def test_v3_defaults_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        _make_tts(model="bulbul:v3")
+
+    assert _warnings(caplog) == []
+
+
+def test_v4_flash_applies_its_args_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = _make_tts(model="bulbul:v4-flash", pitch=0.3, loudness=1.5, enable_preprocessing=True)
+
+    assert _warnings(caplog) == []
+    fields = sarvam_tts._model_extra_fields(tts._opts)
+    assert (fields["pitch"], fields["loudness"], fields["enable_preprocessing"]) == (
+        0.3,
+        1.5,
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: _make_tts(enable_cached_responses=True),
+        lambda: _make_tts().update_options(enable_cached_responses=True),
+    ],
+    ids=["init", "update_options"],
+)
+def test_enable_cached_responses_warns_instead_of_raising(
+    call: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        call()
+
+    assert any("`enable_cached_responses`" in w for w in _warnings(caplog))
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: _make_tts(pich=0.2),
+        lambda: _make_tts().update_options(pich=0.2),
+    ],
+    ids=["init", "update_options"],
+)
+def test_unknown_argument_still_raises(call: Any) -> None:
+    with pytest.raises(TypeError, match="pich"):
+        call()
+
+
+_CODEC_MIMES = {
+    "mp3": "audio/mp3",
+    "wav": "audio/wav",
+    "opus": "audio/opus",
+    "flac": "audio/flac",
+    "aac": "audio/aac",
+    # pcm and the telephony codecs are pushed as linear PCM
+    "linear16": "audio/pcm",
+    "mulaw": "audio/pcm",
+    "alaw": "audio/pcm",
+}
+
+
+def test_codec_to_mime_type_covers_every_allowed_codec() -> None:
+    assert set(_CODEC_MIMES) == ALLOWED_OUTPUT_AUDIO_CODECS
+    assert {codec: _codec_to_mime_type(codec) for codec in _CODEC_MIMES} == _CODEC_MIMES
+    with pytest.raises(ValueError, match="Unsupported output_audio_codec"):
+        _codec_to_mime_type("unknown_codec")
+
+
+@pytest.mark.parametrize("codec", ["linear16", "mulaw", "alaw"])
+def test_pcm_and_telephony_codecs_are_accepted(codec: str) -> None:
+    assert _make_tts(output_audio_codec=codec)._opts.output_audio_codec == codec
+    t = _make_tts()
+    t.update_options(output_audio_codec=codec)
+    assert t._opts.output_audio_codec == codec
+
+
+def test_unknown_codec_is_rejected() -> None:
+    with pytest.raises(ValueError, match="output_audio_codec must be one of"):
+        _make_tts(output_audio_codec="ogg")
+    with pytest.raises(ValueError, match="output_audio_codec must be one of"):
+        _make_tts().update_options(output_audio_codec="ogg")
+
+
+def _text(payload: dict[str, Any]) -> SimpleNamespace:
+    return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload), extra=None)
+
+
+_AUDIO = _text({"type": "audio", "data": {"audio": "AAAA"}})
+_FINAL = _text({"type": "event", "data": {"event_type": "final"}})
+
+
+class _FakeWS:
+    """Replays queued frames, then blocks like an idle socket until closed."""
+
+    def __init__(
+        self,
+        recv: list[SimpleNamespace] | None = None,
+        *,
+        send_error: BaseException | None = None,
+        recv_error: BaseException | None = None,
+    ) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.closed = False
+        self.close_code: int | None = None
+        self._recv = list(recv or [])
+        self._send_error = send_error
+        self._recv_error = recv_error
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        if self._send_error is not None:
+            raise self._send_error
+        self.sent.append(json.loads(data))
+
+    async def receive(self, timeout: float | None = None) -> SimpleNamespace:
+        if self._recv_error is not None:
+            raise self._recv_error
+        if self._recv:
+            return self._recv.pop(0)
+        await self._closed.wait()
+        return SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None, extra=None)
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+
+class _FakePool:
+    """Hands out one socket and records evictions."""
+
+    last_acquire_time = 0.0
+    last_connection_reused = False
+
+    def __init__(self, ws: _FakeWS | None = None, *, remove_error: bool = False) -> None:
+        self.ws = ws
+        self.removed: list[object] = []
+        self._remove_error = remove_error
+
+    @contextlib.asynccontextmanager
+    async def connection(self, *, timeout: float) -> AsyncIterator[_FakeWS | None]:
+        yield self.ws
+
+    def remove(self, conn: object) -> None:
+        if self._remove_error:
+            raise RuntimeError("pool already shut down")
+        self.removed.append(conn)
+
+
+async def _run_on(ws: _FakeWS, **tts_kwargs: Any) -> sarvam_tts.SynthesizeStream:
+    stream = _ws_stream(_make_tts(**tts_kwargs))
+    stream._tts._pool = _FakePool(ws)  # type: ignore[assignment]
+
+    async def no_words() -> AsyncIterator[SimpleNamespace]:
+        return
+        yield
+
+    await stream._run_ws(no_words(), MagicMock(spec=tts.AudioEmitter))  # type: ignore[arg-type]
+    return stream
+
+
+async def test_ws_config_carries_codec_and_v3_fields() -> None:
+    ws = _FakeWS([_AUDIO, _FINAL])
+    stream = await _run_on(ws, model="bulbul:v3", output_audio_codec="opus")
+    await stream._tts._stop_keepalive(ws)  # type: ignore[arg-type]
+
+    config = ws.sent[0]
+    assert config["type"] == "config"
+    data = config["data"]
+    assert data["output_audio_codec"] == "opus"
+    assert {"output_audio_bitrate", "min_buffer_size", "max_chunk_length", "temperature"} <= set(
+        data
+    )
+    assert "pitch" not in data and "loudness" not in data
+    # the keepalive is paused while the socket is in use
+    assert all(frame["type"] in {"config", "text", "flush"} for frame in ws.sent)
+
+
+@pytest.mark.parametrize(
+    ("error", "match"),
+    [
+        # a dead transport must raise so the pool evicts the socket instead of reusing it
+        (ConnectionResetError("Cannot write to closing transport"), "transport closed before send"),
+        (RuntimeError("WebSocket connection is closed"), "transport closed before send"),
+        (ConnectionResetError("peer reset connection unexpectedly"), "Send task failed"),
+        # recv_task waits on the send side, so a send failure must still release it
+        (ValueError("simulated config error"), "Send task failed"),
+    ],
+)
+async def test_send_failure_raises_connection_error(error: BaseException, match: str) -> None:
+    with pytest.raises(APIConnectionError, match=match):
+        await _run_on(_FakeWS([_FINAL], send_error=error))
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        # a dead transport is evicted and retried; any other reset fails the session
+        (
+            aiohttp.ClientConnectionResetError("Cannot write to closing transport"),
+            APIConnectionError,
+        ),
+        (ConnectionResetError("peer reset connection"), APIStatusError),
+    ],
+)
+async def test_recv_connection_reset(error: BaseException, expected: type[Exception]) -> None:
+    with pytest.raises(expected):
+        await _run_on(_FakeWS(recv_error=error))
+
+
+@pytest.mark.parametrize(
+    ("send_error", "resumed"), [(None, True), (ValueError("bad config"), False)]
+)
+async def test_keepalive_resumes_only_after_a_clean_session(
+    send_error: BaseException | None, resumed: bool
+) -> None:
+    ws = _FakeWS([_AUDIO, _FINAL], send_error=send_error)
+    t = _make_tts()
+    t._start_keepalive(ws)  # type: ignore[arg-type]
+    stream = _ws_stream(t)
+    t._pool = _FakePool(ws)  # type: ignore[assignment]
+
+    async def no_words() -> AsyncIterator[SimpleNamespace]:
+        return
+        yield
+
+    with contextlib.suppress(APIConnectionError):
+        await stream._run_ws(no_words(), MagicMock(spec=tts.AudioEmitter))  # type: ignore[arg-type]
+
+    # a failed socket is discarded by the pool, so a keepalive on it would be orphaned
+    assert (id(ws) in t._ws_keepalive_tasks) is resumed
+    await t._stop_keepalive(ws)  # type: ignore[arg-type]
+
+
+async def test_aclose_closes_segments_channel() -> None:
+    stream = _make_tts().stream()
+    stream.end_input()
+    await stream.aclose()
+    assert stream._segments_ch.closed
+
+
+@pytest.mark.parametrize(
+    ("message", "keep_reading"),
+    [
+        (json.dumps({"type": "event", "data": {"event_type": "final"}}), False),
+        ("not json{", True),
+        (json.dumps({"type": "ping", "data": {}}), True),
+    ],
+    ids=["final", "invalid-json", "unknown-type"],
+)
+async def test_websocket_message_ends_only_on_final(message: str, keep_reading: bool) -> None:
+    emitter = MagicMock(spec=tts.AudioEmitter)
+    assert await _ws_stream(_make_tts())._handle_websocket_message(message, emitter) is keep_reading
+    assert emitter.end_input.called is not keep_reading
+
+
+@pytest.mark.parametrize(
+    ("codec", "data", "samples"),
+    [
+        # ITU-T G.711 reference values
+        ("mulaw", b"\xff\x80\x00\x7f", [0, 32124, -32124, 0]),
+        ("alaw", b"\xd5\xaa\x2a", [8, 32256, -32256]),
+        ("mulaw", b"", []),
+        ("alaw", b"", []),
+    ],
+)
+def test_decode_telephony(codec: str, data: bytes, samples: list[int]) -> None:
+    out = _decode_telephony(codec, data)
+    assert [
+        int.from_bytes(out[i : i + 2], "little", signed=True) for i in range(0, len(out), 2)
+    ] == (samples)
+
+
+def test_decode_telephony_rejects_other_codecs() -> None:
+    with pytest.raises(ValueError, match="does not support codec"):
+        _decode_telephony("mp3", b"\x00")
+
+
+@pytest.mark.parametrize("codec", ["mulaw", "alaw", "mp3", "linear16"])
+async def test_audio_message_decodes_only_telephony_codecs(codec: str) -> None:
+    raw = b"\xd5\xaa\x2a\x00"
+    emitter = MagicMock(spec=tts.AudioEmitter)
+    stream = _ws_stream(_make_tts(output_audio_codec=codec))
+    resp = {"type": "audio", "data": {"audio": base64.b64encode(raw).decode()}}
+
+    assert await stream._handle_audio_message(resp, emitter) is True
+    expected = _decode_telephony(codec, raw) if codec in {"mulaw", "alaw"} else raw
+    emitter.push.assert_called_once_with(expected)
+
+
+async def test_empty_audio_is_skipped() -> None:
+    emitter = MagicMock(spec=tts.AudioEmitter)
+    stream = _ws_stream(_make_tts(output_audio_codec="mulaw"))
+    assert await stream._handle_audio_message({"type": "audio", "data": {"audio": ""}}, emitter)
+    emitter.push.assert_not_called()
+
+
+@pytest.fixture
+def keepalive_tts(monkeypatch: pytest.MonkeyPatch) -> sarvam_tts.TTS:
+    monkeypatch.setattr(sarvam_tts, "_KEEPALIVE_INTERVAL", 1.0)
+    return _make_tts()
+
+
+@pytest.mark.virtual_time
+async def test_keepalive_start_and_stop(keepalive_tts: sarvam_tts.TTS) -> None:
+    ws = _FakeWS()
+    keepalive_tts._start_keepalive(ws)  # type: ignore[arg-type]
+    task = keepalive_tts._ws_keepalive_tasks[id(ws)]
+
+    await keepalive_tts._stop_keepalive(ws)  # type: ignore[arg-type]
+    await keepalive_tts._stop_keepalive(ws)  # type: ignore[arg-type]
+    assert task.done() and id(ws) not in keepalive_tts._ws_keepalive_tasks
+
+
+def test_keepalive_disabled_with_zero_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sarvam_tts, "_KEEPALIVE_INTERVAL", 0.0)
+    t = _make_tts()
+    t._start_keepalive(_FakeWS())  # type: ignore[arg-type]
+    assert t._ws_keepalive_tasks == {}
+
+
+@pytest.mark.virtual_time
+async def test_keepalive_drains_then_pings_an_idle_socket(keepalive_tts: sarvam_tts.TTS) -> None:
+    pool = _FakePool()
+    keepalive_tts._pool = pool  # type: ignore[assignment]
+    # draining lets aiohttp's heartbeat see PONGs; a ping only goes out once reads time out
+    ws = _FakeWS([_text({}) for _ in range(3)])
+    keepalive_tts._start_keepalive(ws)  # type: ignore[arg-type]
+
+    await asyncio.sleep(0.5)
+    assert ws.sent == []
+    await asyncio.sleep(3)
+    await keepalive_tts._stop_keepalive(ws)  # type: ignore[arg-type]
+
+    assert len(ws.sent) >= 2 and all(frame == {"type": "ping"} for frame in ws.sent)
+    assert pool.removed == []
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    "msg_type", [aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR]
+)
+async def test_keepalive_evicts_a_socket_the_server_closed(
+    keepalive_tts: sarvam_tts.TTS, msg_type: aiohttp.WSMsgType
+) -> None:
+    pool = _FakePool()
+    keepalive_tts._pool = pool  # type: ignore[assignment]
+    ws = _FakeWS([SimpleNamespace(type=msg_type, data=1006, extra=None)])
+    keepalive_tts._start_keepalive(ws)  # type: ignore[arg-type]
+
+    await keepalive_tts._ws_keepalive_tasks[id(ws)]
+    assert pool.removed == [ws]
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("remove_error", [False, True])
+async def test_keepalive_evicts_and_exits_on_failed_ping(
+    keepalive_tts: sarvam_tts.TTS, remove_error: bool
+) -> None:
+    pool = _FakePool(remove_error=remove_error)
+    keepalive_tts._pool = pool  # type: ignore[assignment]
+    ws = _FakeWS(send_error=ConnectionResetError("Cannot write to closing transport"))
+    keepalive_tts._start_keepalive(ws)  # type: ignore[arg-type]
+
+    task = keepalive_tts._ws_keepalive_tasks[id(ws)]
+    await task
+    assert task.exception() is None
+    assert pool.removed == ([] if remove_error else [ws])
+
+
+@pytest.mark.virtual_time
+async def test_close_ws_stops_keepalive_and_closes_socket(keepalive_tts: sarvam_tts.TTS) -> None:
+    ws = _FakeWS()
+    keepalive_tts._start_keepalive(ws)  # type: ignore[arg-type]
+    await keepalive_tts._close_ws(ws)  # type: ignore[arg-type]
+    assert ws.closed and id(ws) not in keepalive_tts._ws_keepalive_tasks
+
+    unwatched = _FakeWS()
+    await keepalive_tts._close_ws(unwatched)  # type: ignore[arg-type]
+    assert unwatched.closed
+
+
+def test_keepalive_intervals_beat_sarvam_idle_timeout() -> None:
+    # Sarvam drops a socket idle for 60 s; the protocol heartbeat is the first line of defense
+    assert 0 < sarvam_tts._WS_HEARTBEAT_INTERVAL <= sarvam_tts._KEEPALIVE_INTERVAL < 60
+
+
+async def test_connect_ws_passes_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sarvam_tts, "_WS_HEARTBEAT_INTERVAL", 5.0)
+    captured: dict[str, Any] = {}
+
+    class _Session:
+        async def ws_connect(self, url: str, **kwargs: Any) -> _FakeWS:
+            captured.update(kwargs)
+            return _FakeWS()
+
+    t = _make_tts()
+    t._session = _Session()  # type: ignore[assignment]
+    ws = await t._connect_ws(timeout=5.0)
+    await t._stop_keepalive(ws)  # type: ignore[arg-type]
+
+    assert captured["heartbeat"] == 5.0

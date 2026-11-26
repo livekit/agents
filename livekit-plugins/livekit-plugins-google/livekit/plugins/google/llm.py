@@ -21,8 +21,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
+import httpx
+
 import google.auth.credentials
 from google.auth._default_async import default_async
+from google.auth.transport import mtls
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
@@ -66,9 +69,48 @@ def _supports_thinking_level(model: str) -> bool:
     return _is_gemini_3_or_newer(model) or _is_gemma_4_model(model)
 
 
+def _supports_xhigh_thinking(model: str) -> bool:
+    """Check if model accepts thinking_level "xhigh", its maximum reasoning depth"""
+    model = model.lower()
+    return "gemini-4-hydrogen" in model or "gemini-4-neon" in model
+
+
+def _validate_thinking_level(model: str, level: str | types.ThinkingLevel | None) -> None:
+    """Raise if the model does not accept the thinking level"""
+    if level is not None and level.upper() == "XHIGH" and not _supports_xhigh_thinking(model):
+        raise ValueError(f"Model {model} does not support thinking_level 'xhigh'.")
+
+
+def _normalize_thinking_config(thinking_config: types.ThinkingConfigOrDict) -> types.ThinkingConfig:
+    """Put the thinking level in the API's upper case.
+
+    google-genai has no XHIGH member and would send an unknown level as typed.
+    """
+    if isinstance(thinking_config, dict):
+        thinking_config = types.ThinkingConfig.model_validate(thinking_config)
+    level = thinking_config.thinking_level
+    if level is None:
+        return thinking_config
+    return thinking_config.model_copy(
+        update={"thinking_level": types.ThinkingLevel(level.value.upper())}
+    )
+
+
 def _ignores_sampling_params(model: str) -> bool:
     """Check if model ignores temperature/top_p/top_k, which later ones will reject outright"""
     return _is_gemini_4_model(model)
+
+
+def _put_a_user_turn_before_an_opening_tool_call(turns: list[dict[str, Any]]) -> None:
+    """Gemini 4 rejects a function call that opens the conversation.
+
+    Its error: "function call turn comes immediately after a user turn or after a function
+    response turn". A reply started by generate_reply() and interrupted before its text
+    was kept leaves exactly that history, so the same placeholder user turn already sent
+    at the end of the history goes in front.
+    """
+    if turns and "function_call" in turns[0]["parts"][0]:
+        turns.insert(0, {"role": "user", "parts": [{"text": "."}]})
 
 
 def _function_calling_config(
@@ -160,7 +202,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: ChatModels | str = "gemini-2.5-flash",
+        model: ChatModels | str = "gemini-3.8-flash",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         vertexai: NotGivenOr[bool] = NOT_GIVEN,
         project: NotGivenOr[str] = NOT_GIVEN,
@@ -196,7 +238,7 @@ class LLM(llm.LLM):
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
 
         Args:
-            model (ChatModels | str, optional): The model name to use. Defaults to "gemini-2.0-flash-001".
+            model (ChatModels | str, optional): The model name to use. Defaults to "gemini-3.8-flash".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. If not provided, it attempts to read from the `GOOGLE_GENAI_USE_VERTEXAI` environment variable. Defaults to False.
                 project (str, optional): The Google Cloud project to use (only for VertexAI). Defaults to None.
@@ -285,6 +327,8 @@ class LLM(llm.LLM):
                     f"or 'high' (thinking on), got {_thinking_level!r}."
                 )
 
+            _validate_thinking_level(model, _thinking_level)
+
         self._opts = _LLMOptions(
             model=model,
             temperature=temperature,
@@ -307,12 +351,28 @@ class LLM(llm.LLM):
             cached_content=cached_content,
             media_resolution=media_resolution,
         )
+        # use httpx, whose timeout limits each read and not the total request time like aiohttp's;
+        # a custom transport bypasses genai's SSL context, so it gets the Vertex client cert here
+        client_http_options = (
+            http_options.model_copy() if is_given(http_options) else types.HttpOptions()
+        )
+        client_async_args = dict(client_http_options.async_client_args or {})
+        if "transport" not in client_async_args and client_http_options.httpx_async_client is None:
+            ssl_ctx = None
+            if use_vertexai:
+                try:
+                    ssl_ctx = mtls.get_default_ssl_context()
+                except Exception:
+                    logger.warning("failed to load the default client certificate", exc_info=True)
+            client_async_args["transport"] = httpx.AsyncHTTPTransport(verify=ssl_ctx or True)
+            client_http_options.async_client_args = client_async_args
         self._client = Client(
             api_key=gemini_api_key,
             vertexai=use_vertexai,
             project=gcp_project,
             location=gcp_location,
             credentials=credentials,
+            http_options=client_http_options,
         )
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
@@ -505,6 +565,12 @@ class LLM(llm.LLM):
                     # Pass through original config if no specific handling needed
                     extra["thinking_config"] = self._opts.thinking_config
 
+        # a thinking_config can also arrive through extra_kwargs, so check what will be sent
+        if extra.get("thinking_config") is not None:
+            thinking_cfg = _normalize_thinking_config(extra["thinking_config"])
+            _validate_thinking_level(self._opts.model, thinking_cfg.thinking_level)
+            extra["thinking_config"] = thinking_cfg
+
         if is_given(self._opts.automatic_function_calling_config):
             extra["automatic_function_calling"] = self._opts.automatic_function_calling_config
 
@@ -583,6 +649,8 @@ class LLMStream(llm.LLMStream):
                 thought_signatures=thought_sigs,
                 merge_dynamic_instructions=not using_cache,
             )
+            if _is_gemini_4_model(self._model):
+                _put_a_user_turn_before_an_opening_tool_call(turns_dict)
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
             long_decode = _is_gemini_4_model(self._model)
@@ -590,6 +658,10 @@ class LLMStream(llm.LLMStream):
             if long_decode:
                 # a reasoning turn runs for minutes; a short read timeout drops a live request
                 timeout_ms = max(timeout_ms, LONG_DECODE_HTTP_TIMEOUT_MS)
+            # plugin set the timeout unless the caller passed their own http_options.timeout
+            plugin_set_timeout = not is_given(self._llm._opts.http_options) or (
+                self._llm._opts.http_options.timeout is None
+            )
             if is_given(self._llm._opts.http_options):
                 http_options = self._llm._opts.http_options.model_copy()
                 if http_options.timeout is None:
@@ -599,6 +671,9 @@ class LLMStream(llm.LLMStream):
 
             headers = dict(http_options.headers or {})
             headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+            if plugin_set_timeout and "X-Server-Timeout" not in headers:
+                # preset to stop genai deriving a whole-request deadline from the ms timeout (#7987)
+                headers["X-Server-Timeout"] = str(int(LONG_DECODE_HTTP_TIMEOUT_MS / 1000))
             http_options.headers = headers
             config = types.GenerateContentConfig(
                 system_instruction=(
@@ -667,10 +742,15 @@ class LLMStream(llm.LLMStream):
                             usage = response.usage_metadata
                             if initial_prompt_tokens is None:
                                 initial_prompt_tokens = usage.prompt_token_count
+                            # thinking tokens are billed as output but reported apart from
+                            # the answer's; CompletionUsage counts them in completion_tokens
+                            thoughts_tokens = usage.thoughts_token_count or 0
                             hop_usage = llm.CompletionUsage(
-                                completion_tokens=usage.candidates_token_count or 0,
+                                completion_tokens=(usage.candidates_token_count or 0)
+                                + thoughts_tokens,
                                 prompt_tokens=usage.prompt_token_count or 0,
                                 prompt_cached_tokens=usage.cached_content_token_count or 0,
+                                reasoning_tokens=thoughts_tokens,
                                 total_tokens=usage.total_token_count or 0,
                             )
                             self._event_ch.send_nowait(
@@ -685,6 +765,8 @@ class LLMStream(llm.LLMStream):
                                         + hop_usage.prompt_tokens,
                                         prompt_cached_tokens=settled_usage.prompt_cached_tokens
                                         + hop_usage.prompt_cached_tokens,
+                                        reasoning_tokens=settled_usage.reasoning_tokens
+                                        + hop_usage.reasoning_tokens,
                                         total_tokens=settled_usage.total_tokens
                                         + hop_usage.total_tokens,
                                     ),
@@ -739,6 +821,8 @@ class LLMStream(llm.LLMStream):
                         prompt_tokens=settled_usage.prompt_tokens + hop_usage.prompt_tokens,
                         prompt_cached_tokens=settled_usage.prompt_cached_tokens
                         + hop_usage.prompt_cached_tokens,
+                        reasoning_tokens=settled_usage.reasoning_tokens
+                        + hop_usage.reasoning_tokens,
                         total_tokens=settled_usage.total_tokens + hop_usage.total_tokens,
                     )
 

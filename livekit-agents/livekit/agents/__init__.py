@@ -20,7 +20,21 @@ documentation, and examples.
 
 import typing
 
-from . import cli, inference, ipc, llm, metrics, stt, tokenize, tts, utils, vad, voice
+from . import (
+    # Import this at the top, so hosted logs handoff as soon as possible
+    _hosted_logs as _hosted_logs,
+    cli,
+    inference,
+    ipc,
+    llm,
+    metrics,
+    stt,
+    tokenize,
+    tts,
+    utils,
+    vad,
+    voice,
+)
 from ._exceptions import (
     APIConnectionError,
     APIError,
@@ -88,6 +102,7 @@ from .voice import (
     AudioRecognition,
     CloseEvent,
     CloseReason,
+    CommitUserTurnResult,
     ConversationItemAddedEvent,
     ErrorEvent,
     ExpressiveOptions,
@@ -98,6 +113,7 @@ from .voice import (
     RecordingOptions,
     RunContext,
     RunOutputOptions,
+    SessionConnectOptions,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     SpeechSteeringOptions,
@@ -118,7 +134,11 @@ from .voice import (
 from .voice.amd import (
     AMD,
     AMDCategory,
+    AMDCompletedEvent,
+    AMDLifecycle,
+    AMDMenuObservedEvent,
     AMDPredictionEvent,
+    AMDReason,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
 from .voice.keyterm_detection import (
@@ -193,6 +213,7 @@ __all__ = [
     "CloseReason",
     "ErrorEvent",
     "CloseEvent",
+    "CommitUserTurnResult",
     "ConversationItemAddedEvent",
     "AgentStateChangedEvent",
     "AgentFalseInterruptionEvent",
@@ -226,6 +247,7 @@ __all__ = [
     "SimulationRun",
     "SimulationVerdict",
     "AgentSession",
+    "SessionConnectOptions",
     "AudioRecognition",
     "ExpressiveOptions",
     "NonverbalOptions",
@@ -281,7 +303,11 @@ __all__ = [
     "AgentHandoffEvent",
     "AMD",
     "AMDCategory",
+    "AMDCompletedEvent",
+    "AMDLifecycle",
+    "AMDMenuObservedEvent",
     "AMDPredictionEvent",
+    "AMDReason",
     "TurnHandlingOptions",
     "EndpointingOptions",
     "InterruptionOptions",

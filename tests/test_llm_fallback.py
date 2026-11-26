@@ -22,7 +22,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
-pytestmark = [pytest.mark.unit]
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
 
 class _RetryLLM(FakeLLM):
@@ -298,6 +298,7 @@ class _ScriptedLLM(_NamedLLM):
         self.responses = deque(responses)
         self.requests = 0
         self.finish: asyncio.Event | None = None
+        self.keepalives = 0
 
     def chat(
         self,
@@ -312,6 +313,7 @@ class _ScriptedLLM(_NamedLLM):
         return _ScriptedLLMStream(
             self,
             response=response,
+            keepalives=self.keepalives,
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
@@ -320,10 +322,16 @@ class _ScriptedLLM(_NamedLLM):
 
 class _ScriptedLLMStream(LLMStream):
     def __init__(
-        self, llm: _ScriptedLLM, *, response: str | Exception | None, **kwargs: Any
+        self,
+        llm: _ScriptedLLM,
+        *,
+        response: str | Exception | None,
+        keepalives: int = 0,
+        **kwargs: Any,
     ) -> None:
         super().__init__(llm, **kwargs)
         self._response = response
+        self._keepalives = keepalives
         self._finish = llm.finish
 
     async def _run(self) -> None:
@@ -332,6 +340,15 @@ class _ScriptedLLMStream(LLMStream):
         if self._response is not None:
             self._event_ch.send_nowait(
                 ChatChunk(id=self._llm.model, delta=ChoiceDelta(content=self._response))
+            )
+        # a usage-only chunk per second stands in for a provider's SSE keep-alives
+        for _ in range(self._keepalives):
+            await asyncio.sleep(1)
+            self._event_ch.send_nowait(
+                ChatChunk(
+                    id=self._llm.model,
+                    usage=CompletionUsage(completion_tokens=0, prompt_tokens=1, total_tokens=1),
+                )
             )
         if self._finish is not None:
             await self._finish.wait()
@@ -616,6 +633,20 @@ async def test_sticky_model_survives_stream_close(empty_response: bool) -> None:
         assert adapter.provider == "fallback-provider"
     finally:
         finish.set()
+        await _close_retry_adapter(adapter)
+
+
+@pytest.mark.parametrize("first_token", [None, "primary"], ids=["stalled", "answered"])
+async def test_first_token_timeout(first_token: str | None) -> None:
+    """Keep-alives without output fail over; once output started, they no longer count."""
+    primary = _ScriptedLLM("primary", [first_token])
+    primary.keepalives = 5
+    fallback = _ScriptedLLM("fallback", [])
+    adapter = FallbackAdapter([primary, fallback], first_token_timeout=2.0)
+    try:
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == (first_token or "fallback")
+    finally:
         await _close_retry_adapter(adapter)
 
 
