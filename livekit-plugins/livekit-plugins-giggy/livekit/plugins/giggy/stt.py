@@ -24,40 +24,37 @@ from .log import logger
 
 DEFAULT_BASE_URL = "https://api.giggy.ai/v1"
 SAMPLE_RATE = 16000
+# Giggy's API takes these codes on both REST and WebSocket STT requests.
 LANGUAGES = {
-    LanguageCode(name).language: name
-    for name in (
-        "Arabic",
-        "Cantonese",
-        "Chinese",
-        "Czech",
-        "Dutch",
-        "English",
-        "Filipino",
-        "French",
-        "German",
-        "Greek",
-        "Hindi",
-        "Hungarian",
-        "Indonesian",
-        "Italian",
-        "Japanese",
-        "Korean",
-        "Malay",
-        "Persian",
-        "Polish",
-        "Portuguese",
-        "Romanian",
-        "Russian",
-        "Spanish",
-        "Swedish",
-        "Thai",
-        "Turkish",
-        "Vietnamese",
-    )
+    "ar": "Arabic",
+    "yue": "Cantonese",
+    "zh": "Chinese",
+    "cs": "Czech",
+    "nl": "Dutch",
+    "en": "English",
+    "fil": "Filipino",
+    "fr": "French",
+    "de": "German",
+    "el": "Greek",
+    "hi": "Hindi",
+    "hu": "Hungarian",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ms": "Malay",
+    "fa": "Persian",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ro": "Romanian",
+    "ru": "Russian",
+    "es": "Spanish",
+    "sv": "Swedish",
+    "th": "Thai",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
 }
-LANGUAGES.update({"yue": "Cantonese", "fil": "Filipino"})
-LANGUAGE_CODES = {name: code for code, name in LANGUAGES.items()}
+LANGUAGE_CODES = {name.lower(): code for code, name in LANGUAGES.items()}
 
 
 class STT(stt.STT):
@@ -141,7 +138,7 @@ class STT(stt.STT):
                 f"{self._base_url}/audio/transcriptions",
                 params=params,
                 headers={
-                    "xi-api-key": self._api_key,
+                    "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "audio/wav",
                     "Accept": "text/event-stream",
                 },
@@ -181,10 +178,7 @@ class STT(stt.STT):
                             alternatives=[
                                 stt.SpeechData(
                                     text=data.get("text") or "",
-                                    language=LanguageCode(
-                                        data.get("language")
-                                        or LANGUAGE_CODES.get(selected or "", "")
-                                    ),
+                                    language=LanguageCode(data.get("language") or selected or ""),
                                     end_time=frame.duration,
                                 )
                             ],
@@ -211,7 +205,7 @@ class SpeechStream(stt.SpeechStream):
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
         self._stt: STT = stt
-        self._code = LANGUAGE_CODES.get(language or "", "")
+        self._code = language or ""
         self._speaking = False
         self._request_id = ""
         self._stopped = False
@@ -411,10 +405,10 @@ class SpeechStream(stt.SpeechStream):
 
 
 def _resolve_language(language: str | None) -> str | None:
-    """Return Giggy's language name for a name or BCP-47 code, or None for detection."""
+    """Return Giggy's language code for a name or BCP-47 code, or None for detection."""
     if not language:
         return None
-    name = LANGUAGES.get(LanguageCode(language).language)
-    if name is None:
+    code = LANGUAGE_CODES.get(language.strip().lower(), LanguageCode(language).language)
+    if code not in LANGUAGES:
         raise ValueError(f"Unsupported Giggy STT language: {language}")
-    return name
+    return code

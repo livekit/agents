@@ -229,16 +229,21 @@ async def test_stt_recognize() -> None:
         )
 
     session = FakeSession(on_post=server)
-    result = await STT(api_key="key", base_url=BASE, http_session=session).recognize(  # type: ignore[arg-type]
-        [_frame(500, 48000)]
-    )
+    result = await STT(
+        api_key="key",
+        language="English",
+        base_url=BASE,
+        http_session=session,  # type: ignore[arg-type]
+    ).recognize([_frame(500, 48000)])
 
     assert result.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert result.request_id == GENERATION
     assert result.alternatives[0].text == "hi all"
     assert seen["url"] == f"{BASE}/audio/transcriptions"
-    assert seen["headers"]["xi-api-key"] == "key"
+    assert seen["headers"]["Authorization"] == "Bearer key"
     assert seen["params"]["mode"] == "streaming"
+    assert seen["params"]["language"] == "en"
+    assert result.alternatives[0].language == "en"
     assert seen["data"][:4] == b"RIFF"
 
 
