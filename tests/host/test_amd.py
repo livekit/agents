@@ -849,6 +849,10 @@ async def test_unexpected_inference_errors_finish_with_internal_error(
         result = await call.result()
         assert result.reason == AMDReason.INTERNAL_ERROR
     _core.flush_logs()
+    failures = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert failures
+    assert all(record.exc_info is None for record in failures)
+    assert all(record.error_type == type(error).__name__ for record in failures)
     assert "private customer content" not in caplog.text
     assert "private provider payload" not in caplog.text
 

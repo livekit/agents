@@ -325,10 +325,19 @@ pub async fn classify(
     Some(got)
 }
 
+/// A failure outside the provider taxonomy fails the leg, logged by its class name only, as
+/// `_on_task_done` logs "amd task failed": the message can carry the call's content.
 fn failed(req: lk_agents_voice::amd::effects::ReqId, error: &ProviderError) -> In {
     match classify_error(error) {
         Some(error) => In::Classified { req, result: Err(error) },
-        None => In::LegFailed,
+        None => {
+            let error_type = match error {
+                ProviderError::Host { error, .. } => error.class.as_str(),
+                ProviderError::Local(_) => "ApiError",
+            };
+            log::error!(target: lk_agents_abi::LOG_TARGET, error_type; "amd task failed");
+            In::LegFailed
+        }
     }
 }
 
