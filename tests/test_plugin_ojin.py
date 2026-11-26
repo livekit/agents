@@ -535,6 +535,23 @@ async def test_degraded_drain_reports_a_segment_cleared_before_it_started(
         await session.aclose()
 
 
+async def test_clear_buffer_drops_samples_held_by_the_resampler(harness: RunnerHarness) -> None:
+    """Samples a resampler still holds from a cancelled reply must not lead the next turn."""
+    samples = 1600
+    off_rate = rtc.AudioFrame(
+        data=b"\x11\x22" * samples,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+    await harness.generator.push_audio(off_rate)
+    assert harness.generator._resampler is not None
+
+    await harness.generator.clear_buffer()
+
+    assert harness.generator._resampler is None
+
+
 async def test_degraded_drain_reports_a_flushed_segment_cleared_before_it_started(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
