@@ -12,7 +12,7 @@ from livekit.agents.llm import LLM, Toolset
 from livekit.agents.storage.context import ContextStore, _SessionBinding
 from livekit.agents.voice.agent_run import AgentCallbacks
 
-from .._core import Storage, _core_ContextActivation
+from .._core import Storage, _core_ContextActivation, _core_HandlerTurn
 from .agent_authoring import AgentConfiguration, CallbackKind, Registered, ToolOptions
 from .agent_run import AgentDefinition, EventExpectation, Retries, RunRequest, RunUpdate, SayOutcome
 from .chat_items import ChatItem
@@ -81,6 +81,7 @@ class _core_RunResources:
         activation: _core_ContextActivation | None,
         partition_key: str,
         toolsets: Sequence[Toolset],
+        turn: _core_HandlerTurn | None = None,
     ) -> Self: ...
     async def open(self) -> None:
         """Open storage and toolsets before any run starts. Cancelling the caller requests cleanup;

@@ -175,7 +175,6 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> SessionConfig {
     };
     let agent = |name: &str, tools, output| SessionAgent {
         definition: AgentDefinition {
-            mcp: false,
             name: name.into(),
             instructions: format!("You are {name}."),
             dynamic_instructions: false,

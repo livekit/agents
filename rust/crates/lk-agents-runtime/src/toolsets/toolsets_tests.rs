@@ -31,6 +31,8 @@ struct Hooks {
     panic_setup: bool,
     panic_close: bool,
     children: Option<Arc<Group>>,
+    /// Its setup sets up an MCP server's tools, as an `MCPToolset`'s lifecycle does.
+    mcp: bool,
 }
 impl Hooks {
     fn new() -> Self {
@@ -49,6 +51,7 @@ impl Hooks {
             panic_setup: false,
             panic_close: false,
             children: None,
+            mcp: false,
         }
     }
 }
@@ -65,6 +68,9 @@ impl toolsets::ToolsetHooks for Hooks {
             let setup = async {
                 self.setups.fetch_add(1, Ordering::SeqCst);
                 assert!(!self.panic_setup, "setup panicked");
+                if self.mcp {
+                    self.lifetime.mcp_set_up();
+                }
                 if let Some(children) = &self.children {
                     children.start().await?;
                 }
@@ -319,4 +325,28 @@ async fn lifetime_replies_resolve_when_their_operation_dies() {
     let lease = ticket.result().await.unwrap();
     let released = tokio::time::timeout(LIMIT, lease.close()).await;
     assert!(released.is_ok(), "the release outlived its close");
+}
+
+// Catches: an MCP toolset not counted for the session that activates it (the session's own, an
+// agent's, or one nested in another toolset), a session without one counted, or a second agent's
+// MCP toolset counted again.
+#[tokio::test]
+async fn a_session_counts_mcp_once_when_a_toolset_it_activates_is_an_mcp_toolset() {
+    let stats = lk_agents_net::export::productstats::testkit::Capture::start();
+    let counted = || stats.take().into_iter().map(|(metric, ..)| metric).collect::<Vec<_>>();
+    let mcp = || Arc::new(Hooks { mcp: true, ..Hooks::new() });
+    let scopes = Scopes::new(&ProcessEnv::current_runtime());
+    scopes.acquire(0, vec![Arc::new(Hooks::new())]).await.unwrap();
+    assert_eq!(counted(), [""; 0]);
+    let wrapper = Arc::new(Hooks { children: Some(group(vec![mcp()])), ..Hooks::new() });
+    scopes.acquire(1, vec![wrapper]).await.unwrap();
+    assert_eq!(counted(), ["lk.product.agents.feature.mcp"]);
+    scopes.acquire(2, vec![mcp()]).await.unwrap();
+    assert_eq!(counted(), [""; 0]);
+    scopes.release(None).await.unwrap();
+
+    let own = Scopes::new(&ProcessEnv::current_runtime());
+    own.acquire(0, vec![mcp()]).await.unwrap();
+    assert_eq!(counted(), ["lk.product.agents.feature.mcp"]);
+    own.release(None).await.unwrap();
 }

@@ -379,9 +379,6 @@ pub struct AgentDefinition {
     pub tools: Vec<FunctionToolInfo>,
     pub output: OutputSpec,
     pub retries: Retries,
-    /// The agent has an MCP toolset, which its session's product statistics report.
-    #[host(default = false)]
-    pub mcp: bool,
 }
 
 /// One agent as a voice session installs it (an `update_agent` frame, a `VoiceTask`): its

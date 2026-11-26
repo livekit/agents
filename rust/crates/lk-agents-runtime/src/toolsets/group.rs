@@ -5,6 +5,7 @@ use lk_agents_net::signal;
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio_util::sync::CancellationToken;
 
 // Every acquired lease settles before a failure or close returns.
@@ -21,6 +22,8 @@ struct Inner {
     /// The driver's writers, taken once by whoever launches it: its end ends every wait.
     settle: Mutex<Option<(Settle, Settle)>>,
     closing: CancellationToken,
+    /// A toolset it started, or one nested in those, is an MCP toolset: known once started.
+    mcp: AtomicBool,
     started: Reply,
     closed: Reply,
     tasks: Arc<TaskSet>,
@@ -33,6 +36,7 @@ impl Group {
             entries: Mutex::new(Some(entries)),
             settle: Mutex::new(Some((start, close))),
             closing: CancellationToken::new(),
+            mcp: AtomicBool::new(false),
             started,
             closed,
             tasks: Arc::default(),
@@ -76,6 +80,9 @@ impl toolsets::ToolsetGroup for Group {
 impl toolsets::LeaseGroup for Group {
     fn close(&self) -> BoxFuture<'_, Outcome> {
         Box::pin(self.0.close())
+    }
+    fn mcp(&self) -> bool {
+        self.0.mcp.load(Ordering::Relaxed)
     }
 }
 struct OpeningWait {
@@ -148,6 +155,11 @@ impl Inner {
             }
         }
         if policy.ready() {
+            // Each toolset is set up, its own children started: an unreadable child counts none.
+            let mcp = entries.iter().any(|(lifetime, hooks)| {
+                lifetime.mcp() || hooks.children().ok().flatten().is_some_and(|nested| nested.mcp())
+            });
+            self.mcp.store(mcp, Ordering::Relaxed);
             if let Some(started) = started.take() {
                 started.resolve(Ok(()));
             }

@@ -4,6 +4,12 @@ use std::{any::Any, sync::Arc};
 #[crate::host(native(refused = "expected a native toolset lifetime"))]
 pub trait Lifetime: Any + Send + Sync {
     fn acquire(&self, hooks: Arc<dyn ToolsetHooks>) -> Arc<dyn Acquisition>;
+    /// Its toolset set up an MCP server's tools: the session that acquires it uses MCP.
+    fn mcp_set_up(&self) {}
+    /// Whether its toolset is an MCP toolset that was set up.
+    fn mcp(&self) -> bool {
+        false
+    }
 }
 
 pub trait Acquisition: Send + Sync {
@@ -17,6 +23,10 @@ pub trait Lease: Send + Sync {
 #[crate::host(native(refused = "expected a native toolset lease group"))]
 pub trait LeaseGroup: Any + Send + Sync {
     fn close(&self) -> BoxFuture<'_, Result<(), HostError>>;
+    /// Whether a toolset it started, or one nested in those, is an MCP toolset.
+    fn mcp(&self) -> bool {
+        false
+    }
 }
 
 /// A group retains its authored toolsets through setup and close, even when the caller passed

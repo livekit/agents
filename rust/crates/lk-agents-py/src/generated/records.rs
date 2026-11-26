@@ -2528,9 +2528,6 @@ pub mod agent_run {
             retries: crate::py_values::attr_with(obj, "AgentDefinition", "retries", |v| {
                 crate::generated::records::agent_run::retries_from_py(v)
             })?,
-            mcp: crate::py_values::attr_with(obj, "AgentDefinition", "mcp", |v| {
-                v.extract::<bool>()
-            })?,
         })
     }
 

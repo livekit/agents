@@ -44,7 +44,6 @@ pub(super) fn string_tool(name: &str, parameter: &str) -> FunctionToolInfo {
 
 pub(super) fn agent(tools: Vec<FunctionToolInfo>, output: OutputSpec) -> AgentDefinition {
     AgentDefinition {
-        mcp: false,
         name: "scheduler".into(),
         instructions: "Book appointments.".into(),
         dynamic_instructions: false,
@@ -984,8 +983,7 @@ mod checkpoints {
 }
 
 // Catches: a local agent or a `RemoteAgent` run as a tool not noted for the session's product
-// statistics, an ordinary tool taken for one, a remote call taken for a local agent, or the
-// agent's MCP toolset not noted.
+// statistics, an ordinary tool taken for one, or a remote call taken for a local agent.
 #[test]
 fn a_run_notes_the_agents_it_called_as_tools() {
     use lk_agents_abi::productstats::sessions::SessionFacts;
@@ -994,9 +992,8 @@ fn a_run_notes_the_agents_it_called_as_tools() {
     let billing =
         FunctionToolInfo { local_agent: Some("billing".into()), ..string_tool("ask_billing", "q") };
     let tools = vec![string_tool("lookup", "q"), expert, billing];
-    let agent = AgentDefinition { mcp: true, ..text_agent(tools) };
-    let mut d = Driver::new(agent, "hi", vec![]);
-    let mut called = SessionFacts { mcp: true, ..SessionFacts::default() };
+    let mut d = Driver::new(text_agent(tools), "hi", vec![]);
+    let mut called = SessionFacts::default();
     assert_eq!(d.run.session_facts, called);
     d.reply("", &[("lookup", json!({"q": "hours"}))]);
     d.run_tools(|_| value("9 to 5"));

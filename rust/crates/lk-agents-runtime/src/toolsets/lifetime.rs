@@ -45,6 +45,8 @@ struct State {
     operation: Option<(u64, OwnedTask, Arc<Cancellation>)>,
 }
 struct Inner {
+    /// Its toolset set up an MCP server's tools.
+    mcp: AtomicBool,
     env: ProcessEnv,
     state: Mutex<State>,
 }
@@ -54,6 +56,7 @@ impl toolsets::ToolsetLifetime for Lifetime {
     type Env = ProcessEnv;
     fn new(env: &ProcessEnv) -> Self {
         Self(Arc::new(Inner {
+            mcp: AtomicBool::new(false),
             env: env.clone(),
             state: Mutex::new(State {
                 policy: Policy::default(),
@@ -67,6 +70,12 @@ impl toolsets::ToolsetLifetime for Lifetime {
     }
 }
 impl toolsets::Lifetime for Lifetime {
+    fn mcp_set_up(&self) {
+        self.0.mcp.store(true, Ordering::Relaxed);
+    }
+    fn mcp(&self) -> bool {
+        self.0.mcp.load(Ordering::Relaxed)
+    }
     fn acquire(&self, hooks: Arc<dyn ToolsetHooks>) -> Arc<dyn Acquisition> {
         let (data, effects) = {
             let mut state = self.0.state.lock();

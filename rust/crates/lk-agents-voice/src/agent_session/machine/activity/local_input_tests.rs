@@ -405,7 +405,6 @@ fn scoped_approval_proposal(realtime: bool, revoke: bool) {
         }
     }
     let definition = AgentDefinition {
-        mcp: false,
         name: "agent".into(),
         instructions: String::new(),
         dynamic_instructions: false,
@@ -591,7 +590,6 @@ fn body_question_driver() -> VoiceDriver {
         provider_tool: None,
     };
     let frame = Frame(AgentDefinition {
-        mcp: false,
         name: "agent".into(),
         instructions: String::new(),
         dynamic_instructions: false,

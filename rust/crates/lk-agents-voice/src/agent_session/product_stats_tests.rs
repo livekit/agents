@@ -8,6 +8,7 @@ use crate::agent_session::{SessionParts, VoiceDriver};
 use crate::audio::Tagged;
 use crate::audio_recognition::{EndOfTurnInfo, TurnDetectionMode, TurnId, TurnSnapshot};
 use crate::events::SessionEvent;
+use lk_agents_abi::Maybe;
 use lk_agents_abi::metrics::base::{AgentMetrics, RealtimeModelMetrics};
 use lk_agents_abi::productstats::models::EndpointedBy;
 use lk_agents_abi::productstats::testkit::{Stat, stat};
@@ -16,9 +17,7 @@ use lk_agents_abi::stt::events::SpeechData;
 use lk_agents_abi::telemetry::record::Record;
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::voice::session_options::{DetectorKind, SessionLegs};
-use lk_agents_abi::{Maybe, agent::AgentDefinition};
 use lk_agents_abi::{ProviderId, RecognitionUsage, SpeechEvent, SpeechEventType, Ts};
-use std::sync::Arc;
 use std::time::Duration;
 
 /// The product statistics among `records`.
@@ -332,46 +331,4 @@ fn a_language_switch_is_counted_once_when_the_stt_reports_another_language() {
     }
     assert_eq!(hear(&mut session, "fr"), [("language_switch".to_owned(), vec![])]);
     assert_eq!(hear(&mut session, "en"), []);
-}
-
-// Catches: an agent's MCP toolset not counted when it runs, counted for an agent without one, or
-// counted again for the next agent that has one.
-#[test]
-fn an_agent_with_an_mcp_toolset_counts_the_feature_once() {
-    let mut session = driver();
-    taken(&mut session);
-    let hand_to = |session: &mut VoiceDriver, agent: &str, mcp: bool| {
-        let mut update = agent_update(agent, None);
-        let definition = AgentDefinition {
-            mcp,
-            name: agent.into(),
-            instructions: String::new(),
-            dynamic_instructions: false,
-            tools: Vec::new(),
-            output: lk_agents_abi::agent::OutputSpec::Text { validated: false },
-            retries: Default::default(),
-        };
-        update.toolset.agent = Some(Arc::new(Frame(definition)));
-        session.handoff_step(HandoffEvent::Asked { update: Box::new(update), run: None });
-        let mut stats = handed_over(session.settle_step());
-        stats.extend(taken(session));
-        features(&stats)
-    };
-    assert_eq!(hand_to(&mut session, "plain", false), []);
-    assert_eq!(hand_to(&mut session, "tools", true), [("mcp".to_owned(), vec![])]);
-    assert_eq!(hand_to(&mut session, "more", true), []);
-}
-
-struct Frame(AgentDefinition);
-
-impl lk_agents_abi::agent::AgentFrame for Frame {
-    fn definition(&self) -> &AgentDefinition {
-        &self.0
-    }
-    fn host(&self) -> &Arc<dyn lk_agents_abi::agent::AgentCallbacks> {
-        unreachable!("no callback runs")
-    }
-    fn host_context(&self) -> &lk_agents_abi::HostRef {
-        unreachable!("no callback runs")
-    }
 }

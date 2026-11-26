@@ -443,7 +443,6 @@ impl VoiceDriver {
             ActivityCommand::UpdateTools(toolset) => {
                 let tools = toolset.specs.len();
                 let (tools_added, tools_removed) = self.activity.update_tools(toolset);
-                self.count_agent_features();
                 if !tools_added.is_empty() || !tools_removed.is_empty() {
                     self.commit_config(None, tools_added, tools_removed);
                 }

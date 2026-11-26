@@ -1,6 +1,7 @@
 use super::group::Group;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::{self, Lifetime, ToolsetGroup as _, ToolsetHooks};
+use lk_agents_abi::productstats::features::{Feature, SessionFeatures};
 use lk_agents_core::toolsets::Scopes as Policy;
 use lk_agents_net::env::ProcessEnv;
 use parking_lot::Mutex;
@@ -18,6 +19,8 @@ struct State {
     /// Activations stay owned until their close settles, including after the policy releases
     /// them. Whole-session shutdown must join an earlier close whose waiter was cancelled.
     groups: BTreeMap<u64, Arc<Group>>,
+    /// The session already counted its MCP toolsets in its product statistics.
+    features: SessionFeatures,
 }
 // A cancelled or failed admission cannot occupy the older activation's release slot.
 struct Admission {
@@ -102,6 +105,11 @@ impl toolsets::ToolsetScopes for Scopes {
             return Err(error);
         }
         admission.accepted = true;
+        // The session's own toolsets and each agent's are activated here, nested ones included.
+        if toolsets::LeaseGroup::mcp(&*group) {
+            let counted = self.state.lock().features.used(Feature::Mcp);
+            counted.into_iter().for_each(lk_agents_net::export::productstats::record);
+        }
         Ok(id)
     }
     async fn release(&self, scope: Option<u64>) -> Result<(), HostError> {

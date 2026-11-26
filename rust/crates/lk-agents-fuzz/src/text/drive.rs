@@ -195,7 +195,6 @@ impl Env {
 
     fn agent() -> AgentDefinition {
         AgentDefinition {
-            mcp: false,
             name: "desk".into(),
             instructions: "Answer bookings.".into(),
             dynamic_instructions: false,

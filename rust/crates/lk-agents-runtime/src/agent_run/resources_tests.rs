@@ -77,7 +77,7 @@ impl ToolsetHooks for Hooks {
 }
 
 fn resources(hooks: Vec<Arc<dyn ToolsetHooks>>) -> RunResources {
-    RunResources::new(&ProcessEnv::current_runtime(), None, None, None, "agent".into(), hooks)
+    RunResources::new(&ProcessEnv::current_runtime(), None, None, None, "agent".into(), hooks, None)
         .unwrap()
 }
 
@@ -160,6 +160,7 @@ async fn borrowed_thread_and_context_remain_usable_after_the_request() {
         Some(activation.clone()),
         "agent".into(),
         vec![],
+        None,
     )
     .unwrap();
     owner.open().unwrap().await.unwrap();
@@ -186,6 +187,7 @@ async fn a_new_context_over_borrowed_storage_ends_only_that_context() {
         None,
         "agent".into(),
         vec![],
+        None,
     )
     .unwrap();
     owner.open().unwrap().await.unwrap();
@@ -252,4 +254,55 @@ async fn waiters_resolve_when_the_opening_task_is_dropped() {
     let closed = tokio::time::timeout(limit, owner.aclose()).await;
     assert!(closed.is_ok(), "the close waiter outlived its task");
     hooks.release.notify_one();
+}
+
+/// A text request's turn, recording what its runs report for its product statistics.
+#[derive(Default)]
+struct Turn(parking_lot::Mutex<Vec<lk_agents_abi::productstats::sessions::SessionFacts>>);
+
+impl lk_agents_abi::a2a::turn::HandlerPort for Turn {
+    fn session_facts(&self, facts: lk_agents_abi::productstats::sessions::SessionFacts) {
+        self.0.lock().push(facts);
+    }
+    fn checkpoint(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+    fn progress(&self, _: String) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn token(&self, _: String) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+    fn save_session(
+        &self,
+        state: serde_json::Value,
+        _: Vec<lk_agents_abi::ChatItem>,
+    ) -> BoxFuture<'_, Result<serde_json::Value, lk_agents_abi::storage::StorageError>> {
+        Box::pin(async move { Ok(state) })
+    }
+}
+
+// Catches: a text request's runs setting up an MCP toolset without telling the request, which
+// counts the feature when it ends, or a run without one reporting it.
+#[tokio::test]
+async fn a_runs_mcp_toolset_is_reported_to_its_text_request() {
+    use lk_agents_abi::productstats::sessions::SessionFacts;
+    for (mcp, reported) in
+        [(false, vec![]), (true, vec![SessionFacts { mcp: true, ..SessionFacts::default() }])]
+    {
+        let hooks = Arc::new(Hooks::new());
+        if mcp {
+            // As an `MCPToolset`'s lifecycle marks its toolset when it sets it up.
+            hooks.lifetime.mcp_set_up();
+        }
+        let turn = Arc::new(Turn::default());
+        let env = ProcessEnv::current_runtime();
+        let toolsets: Vec<Arc<dyn ToolsetHooks>> = vec![hooks];
+        let owner =
+            RunResources::new(&env, None, None, None, "agent".into(), toolsets, Some(turn.clone()))
+                .unwrap();
+        owner.open().unwrap().await.unwrap();
+        assert_eq!(*turn.0.lock(), reported);
+        owner.aclose().await.unwrap();
+    }
 }

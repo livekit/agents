@@ -53,13 +53,6 @@ impl VoiceDriver {
         self.telemetry.product_stats(counted);
     }
 
-    /// An agent runs: its MCP toolset, when it has one, is a feature of the session.
-    pub(crate) fn count_agent_features(&mut self) {
-        if self.activity.agent_has_mcp() {
-            self.count_feature(Feature::Mcp);
-        }
-    }
-
     /// A model of `kind` is installed, however it came (`update_options`, `override_options`, an
     /// agent that brings its own): a switch when it is another than the one the session started
     /// with.

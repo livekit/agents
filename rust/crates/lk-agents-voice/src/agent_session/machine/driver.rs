@@ -266,7 +266,6 @@ impl VoiceDriver {
             }
             self.issue_on_enter(now);
             self.count_voice_session();
-            self.count_agent_features();
             self.session_opened();
             self.settle_step()
         }

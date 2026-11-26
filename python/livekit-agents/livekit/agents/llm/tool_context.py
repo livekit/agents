@@ -59,9 +59,6 @@ class ProviderTool(Tool):
 
 
 class Toolset:
-    # An MCP toolset says so: the agent's definition reports it without importing `mcp`.
-    _mcp: ClassVar[bool] = False
-
     def __init__(self, *, id: str, tools: Sequence[Tool | Toolset] | None = None) -> None:
         self._id = id
         self._tools: Sequence[Tool | Toolset] = list(tools) if tools is not None else []

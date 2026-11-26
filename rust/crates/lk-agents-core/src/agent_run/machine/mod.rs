@@ -252,7 +252,7 @@ pub struct AgentRun {
     /// This invocation's requests and tool bodies.
     ledger: Ledger,
     /// What its session's product statistics report of this invocation: the agents it called as
-    /// tools, local and remote, and its agent's MCP toolset.
+    /// tools, local and remote.
     pub session_facts: lk_agents_abi::productstats::sessions::SessionFacts,
     /// What reached the person as written, in order: it leads the answer.
     verbatim: Vec<String>,
@@ -391,7 +391,6 @@ impl AgentRun {
 
     pub fn new(agent: AgentDefinition, mut input: RunInput) -> Result<AgentRun, AgentError> {
         agent::validate(&agent)?;
-        let agent_mcp = agent.mcp;
         if let Opening::Message(message) = &mut input.opening {
             execution::bind(message, &input.history, None, &input.invocation_id);
         }
@@ -403,10 +402,7 @@ impl AgentRun {
             input,
             next_id: 0,
             ledger: Ledger::default(),
-            session_facts: lk_agents_abi::productstats::sessions::SessionFacts {
-                mcp: agent_mcp,
-                ..Default::default()
-            },
+            session_facts: Default::default(),
             verbatim: Vec::new(),
             pending_call: None,
             input_requirements: Vec::new(),
