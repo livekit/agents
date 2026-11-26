@@ -535,6 +535,32 @@ async def test_degraded_drain_reports_a_segment_cleared_before_it_started(
         await session.aclose()
 
 
+async def test_degraded_drain_reports_a_flushed_segment_cleared_before_it_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clear after flush() discards the end marker too; the drain must still end the segment."""
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        drain_output = fake_session.output.tails[0]
+        events: list[bool] = []
+        drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+
+        await drain_output.capture_frame(tts_chunk())
+        drain_output.flush()
+        drain_output.clear_buffer()  # same tick: the queued end marker is discarded
+        ev = await asyncio.wait_for(drain_output.wait_for_playout(), 2)
+
+        assert ev.interrupted is True
+        assert events == [True]
+    finally:
+        await session.aclose()
+
+
 async def test_degrade_without_an_agent_session_starts_no_drain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

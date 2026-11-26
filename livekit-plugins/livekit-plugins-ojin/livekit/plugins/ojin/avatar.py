@@ -592,6 +592,37 @@ def _build_avatar_options(
     )
 
 
+class _DrainOutput(QueueAudioOutput):
+    """Output for the degraded drain that counts segment ends still waiting in the queue.
+
+    A clear that lands after `flush()` empties the queue, end marker included, and
+    `QueueAudioOutput` queues no interrupted marker for a segment that was already
+    flushed. The drain would then never learn that segment existed.
+    """
+
+    def __init__(self, *, sample_rate: int | None = None, wait_playback_start: bool = False):
+        super().__init__(sample_rate=sample_rate, wait_playback_start=wait_playback_start)
+        self.queued_ends = 0
+        self.lost_ends = 0
+
+    def flush(self) -> None:
+        was_capturing = self._capturing
+        super().flush()
+        if was_capturing:
+            self.queued_ends += 1
+
+    def clear_buffer(self) -> None:
+        # Counted here, not in the drain's clear handler, because a clear can land
+        # before the drain task has started and registered that handler.
+        self.lost_ends += self.queued_ends
+        self.queued_ends = 0
+        super().clear_buffer()
+
+    def take_lost_ends(self) -> int:
+        lost, self.lost_ends = self.lost_ends, 0
+        return lost
+
+
 class AvatarSession(BaseAvatarSession):
     """An Ojin avatar session.
 
@@ -994,16 +1025,14 @@ class AvatarSession(BaseAvatarSession):
         # The runner remains registered for clear_buffer on its original output.
         # Give the drain a fresh tail so future interruptions cannot notify both
         # the closed runner and this drain for the same event.
-        audio_output = QueueAudioOutput(
-            sample_rate=self._audio_sample_rate, wait_playback_start=True
-        )
+        audio_output = _DrainOutput(sample_rate=self._audio_sample_rate, wait_playback_start=True)
         agent_session.output.replace_audio_tail(audio_output)
         self._audio_output = audio_output
 
         if self._null_drain_task is None:
             self._null_drain_task = asyncio.create_task(self._null_drain(audio_output))
 
-    async def _null_drain(self, audio_output: QueueAudioOutput) -> None:
+    async def _null_drain(self, audio_output: _DrainOutput) -> None:
         position = 0.0
         started = False
         cleared_reported = False
@@ -1012,16 +1041,29 @@ class AvatarSession(BaseAvatarSession):
             # Core may emit clear_buffer more than once for one interruption.
             # Report only if this drain has actually started a segment.
             nonlocal position, started, cleared_reported
-            if not started:
-                return
-            audio_output.notify_playback_finished(playback_position=position, interrupted=True)
-            position, started, cleared_reported = 0.0, False, True
+            # A flushed segment's end marker is discarded by the clear itself, so
+            # nothing later reports it: count those here. The segment this drain
+            # started is one of them when its end was already queued.
+            lost = audio_output.take_lost_ends()
+            owed = max(lost, 1) if started else lost
+            for index in range(owed):
+                audio_output.notify_playback_finished(
+                    playback_position=position if index == 0 and started else 0.0,
+                    interrupted=True,
+                )
+            # An unflushed started segment still gets an interrupted end later.
+            cleared_reported = started and lost == 0
+            position, started = 0.0, False
 
         receiver: AudioReceiver = audio_output
         receiver.on("clear_buffer", on_clear)
         try:
+            # Segments flushed and then cleared before this task first ran.
+            for _ in range(audio_output.take_lost_ends()):
+                audio_output.notify_playback_finished(playback_position=0.0, interrupted=True)
             async for frame in audio_output:
                 if isinstance(frame, AudioSegmentEnd):
+                    audio_output.queued_ends = max(0, audio_output.queued_ends - 1)
                     if frame.interrupted:
                         # A clear discarded this segment. on_clear reports it if
                         # the drain had started it; a segment cleared before the
