@@ -499,3 +499,20 @@ async def test_with_azure_keeps_its_connection_between_turns(
         await server.wait_closed()
 
     assert len(connections) == expected_connections
+
+
+@pytest.mark.parametrize(
+    ("make_stt", "owns_client"),
+    [
+        (lambda: STT(api_key="k"), True),
+        (lambda: STT.with_azure(api_key="k", **AZURE), True),
+        (lambda: STT(client=openai.AsyncOpenAI(api_key="k")), False),
+    ],
+    ids=["default", "azure", "caller-client"],
+)
+async def test_stt_aclose_closes_only_the_client_it_owns(make_stt: Any, owns_client: bool) -> None:
+    stt = make_stt()
+
+    await stt.aclose()
+
+    assert stt._client.is_closed() is owns_client
