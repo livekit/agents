@@ -333,6 +333,27 @@ class TestDTMFEmission:
             mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_dtmf_concurrent_calls_do_not_interleave(self) -> None:
+        """Verify parallel send_dtmf calls serialize cleanly and preserve inter-sequence pacing."""
+        ctx, _, mock_local = _make_mock_run_context()
+        published: list[str] = []
+
+        async def _record_publish(*, code: int, digit: str) -> None:
+            published.append(digit)
+            await asyncio.sleep(0)
+
+        mock_local.publish_dtmf = AsyncMock(side_effect=_record_publish)
+        toolset = DTMFKeypadTool(publish_delay=0.01, enable_data_packets=False)
+
+        res1, res2 = await asyncio.gather(
+            toolset.send_dtmf(ctx, "12"),
+            toolset.send_dtmf(ctx, "34"),
+        )
+        assert "12" in str(res1.output)
+        assert "34" in str(res2.output)
+        assert published == ["1", "2", "3", "4"]
+
+    @pytest.mark.asyncio
     async def test_dtmf_data_packet_publishing_enabled(self) -> None:
         """Verify WebRTC data packet publishing with correct JSON payload and topic."""
         ctx, _, mock_local = _make_mock_run_context()
@@ -480,6 +501,31 @@ class TestInboundSIPDTMFInterception:
         assert received == ["7"]
         await keypad.aclose()
 
+    @pytest.mark.asyncio
+    async def test_send_dtmf_does_not_restart_stopped_listener(self) -> None:
+        """Verify send_dtmf does not reattach listener after explicit stop_listening/unregister_listener."""
+        received: list[str] = []
+        ctx, mock_room, _ = _make_mock_run_context()
+        backing_room = _MockRoom()
+        mock_room.on = backing_room.on
+        mock_room.off = backing_room.off
+
+        keypad = DTMFKeypadTool(
+            publish_delay=0.0,
+            enable_data_packets=False,
+            room=mock_room,  # type: ignore[arg-type]
+            on_dtmf_received=lambda ev: received.append(ev.digit),
+        )
+        assert keypad._subscribed_room is mock_room
+
+        keypad.stop_listening()
+        assert keypad._subscribed_room is None
+
+        await keypad.send_dtmf(ctx, "1")
+        assert keypad._subscribed_room is None
+        backing_room.emit("sip_dtmf_received", rtc.SipDTMF(code=8, digit="8", participant=None))
+        assert received == []
+
     def test_on_sip_dtmf_helper_filtering(self) -> None:
         """Verify on_sip_dtmf helper filters by participant and unregisters cleanly."""
         room = _MockRoom()
@@ -568,23 +614,29 @@ class TestInboundSIPDTMFInterception:
 
 class TestCallTransferDestinationValidation:
     def test_valid_e164_destinations(self) -> None:
-        """Verify standard and formatted E.164 phone numbers normalize correctly."""
-        assert validate_transfer_destination("+15551234567") == "+15551234567"
-        assert validate_transfer_destination("+442071838750") == "+442071838750"
+        """Verify standard, formatted, and tel: E.164 phone numbers normalize to tel: URIs."""
+        assert validate_transfer_destination("+15551234567") == "tel:+15551234567"
+        assert validate_transfer_destination("+442071838750") == "tel:+442071838750"
+        assert validate_transfer_destination("tel:+15551234567") == "tel:+15551234567"
+        assert validate_transfer_destination("TEL:+1 (555) 123-4567") == "tel:+15551234567"
         # Formatted with spaces, dashes, parentheses
-        assert validate_transfer_destination("+1 (555) 123-4567") == "+15551234567"
-        assert validate_transfer_destination("+1-555-123-4567") == "+15551234567"
-        assert validate_transfer_destination("+1.555.123.4567") == "+15551234567"
+        assert validate_transfer_destination("+1 (555) 123-4567") == "tel:+15551234567"
+        assert validate_transfer_destination("+1-555-123-4567") == "tel:+15551234567"
+        assert validate_transfer_destination("+1.555.123.4567") == "tel:+15551234567"
 
     def test_valid_pbx_extensions(self) -> None:
-        """Verify internal PBX extensions (3 to 7 digits) pass validation."""
-        assert validate_transfer_destination("101") == "101"
-        assert validate_transfer_destination("1001") == "1001"
-        assert validate_transfer_destination("8050") == "8050"
-        assert validate_transfer_destination("1234567") == "1234567"
+        """Verify internal PBX extensions require sip_domain or resolve to sip:ext@domain."""
+        assert validate_transfer_destination("101", sip_domain="pbx.example.com") == (
+            "sip:101@pbx.example.com"
+        )
+        assert validate_transfer_destination("1001", sip_domain="pbx.example.com") == (
+            "sip:1001@pbx.example.com"
+        )
+        with pytest.raises(ToolError, match="sip_domain"):
+            validate_transfer_destination("1001")
 
     def test_valid_sip_uris(self) -> None:
-        """Verify SIP and SIPS URIs pass validation."""
+        """Verify SIP and SIPS URIs normalize scheme to lowercase."""
         assert (
             validate_transfer_destination("sip:agent@trunk.example.com")
             == "sip:agent@trunk.example.com"
@@ -594,7 +646,7 @@ class TestCallTransferDestinationValidation:
         )
         assert (
             validate_transfer_destination("SIP:dispatcher@192.168.1.50")
-            == "SIP:dispatcher@192.168.1.50"
+            == "sip:dispatcher@192.168.1.50"
         )
 
     def test_invalid_transfer_destinations_raise_tool_error(self) -> None:
@@ -644,11 +696,11 @@ class TestCallTransferExecution:
 
         assert isinstance(res, ToolResult)
         assert res.reply_required is False
-        assert "+15551234567" in str(res.output)
+        assert "tel:+15551234567" in str(res.output)
 
         mock_job_ctx.transfer_sip_participant.assert_awaited_once_with(
             sip_p,
-            transfer_to="+15551234567",
+            transfer_to="tel:+15551234567",
             play_dialtone=False,
         )
 
@@ -701,15 +753,15 @@ class TestCallTransferExecution:
         mock_job_ctx = MagicMock(spec=JobContext)
         mock_job_ctx.transfer_sip_participant = AsyncMock()
 
-        # Tool configured with play_dialtone=True
-        toolset = CallTransferTool(play_dialtone=True)
+        # Tool configured with play_dialtone=True and sip_domain
+        toolset = CallTransferTool(play_dialtone=True, sip_domain="pbx.example.com")
         with patch(
             "livekit.agents.beta.tools.telephony.get_job_context", return_value=mock_job_ctx
         ):
             await toolset.transfer_call(ctx, "1001")
             mock_job_ctx.transfer_sip_participant.assert_awaited_with(
                 sip_p,
-                transfer_to="1001",
+                transfer_to="sip:1001@pbx.example.com",
                 play_dialtone=True,
             )
 
@@ -717,7 +769,7 @@ class TestCallTransferExecution:
             await toolset.transfer_call(ctx, "1001", play_dialtone=False)
             mock_job_ctx.transfer_sip_participant.assert_awaited_with(
                 sip_p,
-                transfer_to="1001",
+                transfer_to="sip:1001@pbx.example.com",
                 play_dialtone=False,
             )
 
@@ -854,3 +906,33 @@ class TestCallTransferErrorHandling:
             await toolset.transfer_call(ctx, "+15559876543")
 
         assert "+15559876543" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_error_when_transfer_response_status_is_failed(self) -> None:
+        """Verify ToolError is raised and on_tool_completed is skipped when SIP status is STS_TRANSFER_FAILED."""
+        from livekit.protocol import sip
+
+        sip_p = MagicMock(
+            spec=rtc.RemoteParticipant,
+            identity="sip_p",
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        )
+        ctx, _, _ = _make_mock_run_context(linked_participant=sip_p)
+        mock_job_ctx = MagicMock(spec=JobContext)
+        mock_job_ctx.transfer_sip_participant = AsyncMock(
+            return_value=sip.TransferSIPParticipantResponse(
+                status=sip.SIPTransferStatus.STS_TRANSFER_FAILED,
+                reason=sip.SIPTransferReason.STR_CALL_ENDED,
+                sip_status=sip.SIPStatus(code=487, status="Request Terminated"),
+            )
+        )
+        on_completed = AsyncMock()
+        toolset = CallTransferTool(on_tool_completed=on_completed)
+
+        with patch(
+            "livekit.agents.beta.tools.telephony.get_job_context", return_value=mock_job_ctx
+        ):
+            with pytest.raises(ToolError, match="Call transfer failed"):
+                await toolset.transfer_call(ctx, "+15551234567")
+
+        on_completed.assert_not_awaited()

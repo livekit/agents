@@ -9,6 +9,7 @@ from typing import Any
 from typing_extensions import Self
 
 from livekit import rtc
+from livekit.protocol import sip
 
 from ...job import get_job_context
 from ...llm import ToolError, ToolFlag, ToolResult, Toolset, function_tool
@@ -46,7 +47,8 @@ DTMF_CODE_MAP: dict[str, int] = {
 
 E164_REGEX = re.compile(r"^\+[1-9]\d{1,14}$")
 PBX_EXTENSION_REGEX = re.compile(r"^\d{3,7}$")
-SIP_URI_REGEX = re.compile(r"^sips?:[^@\s]+@[^@\s]+$", re.IGNORECASE)
+SIP_URI_REGEX = re.compile(r"^(sips?):([^@\s]+@[^@\s]+)$", re.IGNORECASE)
+TEL_URI_REGEX = re.compile(r"^tel:(.+)$", re.IGNORECASE)
 
 DTMF_KEYPAD_DESCRIPTION = """
 Sends DTMF (Dual-Tone Multi-Frequency) touch tones to navigate automated phone systems (IVR) or dial extensions.
@@ -98,44 +100,65 @@ def validate_dtmf_digits(digits: str) -> None:
             )
 
 
-def validate_transfer_destination(destination: str) -> str:
-    """Validate and normalize a call transfer destination.
+def validate_transfer_destination(
+    destination: str,
+    *,
+    sip_domain: str | None = None,
+) -> str:
+    """Validate and normalize a call transfer destination into a LiveKit SIP URI.
 
     Supports:
-    - E.164 phone numbers (e.g. '+15551234567' or formatted '+1 (555) 123-4567')
-    - PBX extensions (3 to 7 digits, e.g. '1001')
-    - SIP URIs (e.g. 'sip:agent@trunk.example.com')
+    - E.164 phone numbers (e.g. '+15551234567', '+1 (555) 123-4567', or 'tel:+15551234567') -> 'tel:+15551234567'
+    - PBX extensions (3 to 7 digits, e.g. '1001') when ``sip_domain`` is provided -> 'sip:1001@<sip_domain>'
+    - SIP URIs (e.g. 'sip:agent@trunk.example.com' or 'SIP:agent@trunk.example.com') -> lowercase scheme 'sip:agent@trunk.example.com'
 
     Returns:
-        The normalized destination string.
+        The normalized URI destination string ('tel:...', 'sip:...', or 'sips:...').
 
     Raises:
-        ToolError: If destination is empty or invalid.
+        ToolError: If destination is empty, invalid, or a bare PBX extension without ``sip_domain``.
     """
     cleaned = destination.strip()
     if not cleaned:
         raise ToolError("Transfer destination cannot be empty.")
 
-    # 1. Check SIP URI (RFC 3261)
+    # 1. Check SIP URI (RFC 3261) — LiveKit SIP API requires lowercase scheme
     if cleaned.lower().startswith(("sip:", "sips:")):
-        if SIP_URI_REGEX.match(cleaned):
-            return cleaned
+        match = SIP_URI_REGEX.match(cleaned)
+        if match:
+            scheme, rest = match.groups()
+            return f"{scheme.lower()}:{rest}"
         raise ToolError(
             f"Invalid SIP URI: '{destination}'. Expected format 'sip:user@host' or 'sips:user@host'."
         )
 
-    # 2. Check PBX Extension (3-7 digits)
-    if PBX_EXTENSION_REGEX.match(cleaned):
-        return cleaned
+    # 2. Check tel: URI
+    tel_match = TEL_URI_REGEX.match(cleaned)
+    if tel_match:
+        normalized_tel = re.sub(r"[\s\-\(\)\.]", "", tel_match.group(1).strip())
+        if E164_REGEX.match(normalized_tel):
+            return f"tel:{normalized_tel}"
+        raise ToolError(
+            f"Invalid tel URI: '{destination}'. Expected E.164 phone number after 'tel:' (e.g. 'tel:+15551234567')."
+        )
 
-    # 3. Check E.164 phone number (allow stripping spaces, hyphens, parentheses, periods)
+    # 3. Check PBX Extension (3-7 digits)
+    if PBX_EXTENSION_REGEX.match(cleaned):
+        if sip_domain and sip_domain.strip():
+            return f"sip:{cleaned}@{sip_domain.strip()}"
+        raise ToolError(
+            f"Bare PBX extension '{destination}' cannot be transferred without a configured SIP domain. "
+            "Provide a full SIP URI (e.g. 'sip:1001@pbx.example.com') or configure sip_domain on CallTransferTool."
+        )
+
+    # 4. Check bare E.164 phone number (allow stripping spaces, hyphens, parentheses, periods)
     normalized = re.sub(r"[\s\-\(\)\.]", "", cleaned)
     if E164_REGEX.match(normalized):
-        return normalized
+        return f"tel:{normalized}"
 
     raise ToolError(
         f"Invalid transfer destination: '{destination}'. Must be an E.164 phone number "
-        f"(e.g. +15551234567), a 3-7 digit PBX extension (e.g. 1001), or a SIP URI (sip:user@host)."
+        f"(e.g. +15551234567 or tel:+15551234567), a 3-7 digit PBX extension with sip_domain, or a SIP URI (sip:user@host)."
     )
 
 
@@ -175,7 +198,10 @@ class DTMFKeypadTool(Toolset):
         self._on_tool_completed = on_tool_completed
         self._on_dtmf_received = on_dtmf_received
         self._subscribed_room: rtc.Room | None = None
+        self._listening_stopped: bool = False
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._send_lock = asyncio.Lock()
+        self._pending_sends: int = 0
 
         desc = f"{DTMF_KEYPAD_DESCRIPTION.strip()}\n{extra_description}".strip()
         dtmf_tool = function_tool(
@@ -213,7 +239,11 @@ class DTMFKeypadTool(Toolset):
     async def setup(self) -> Self:
         """Initialize the toolset and subscribe to inbound SIP DTMF events if configured."""
         await super().setup()
-        if self._on_dtmf_received is not None and self._subscribed_room is None:
+        if (
+            self._on_dtmf_received is not None
+            and self._subscribed_room is None
+            and not self._listening_stopped
+        ):
             room = self._room
             if room is None:
                 try:
@@ -239,7 +269,11 @@ class DTMFKeypadTool(Toolset):
         if room.local_participant is None:
             raise ToolError("Room has no local participant connected.")
 
-        if self._on_dtmf_received is not None and self._subscribed_room is None:
+        if (
+            self._on_dtmf_received is not None
+            and self._subscribed_room is None
+            and not self._listening_stopped
+        ):
             self.listen(room)
 
         if self._on_tool_called:
@@ -247,28 +281,35 @@ class DTMFKeypadTool(Toolset):
                 Toolset.ToolCalledEvent(ctx=ctx, arguments={"digits": digits})
             )
 
-        for idx, digit in enumerate(digits):
-            code = dtmf_char_to_code(digit)
-            try:
-                await room.local_participant.publish_dtmf(code=code, digit=digit)
-            except Exception as e:
-                raise ToolError(f"Failed to publish DTMF digit '{digit}': {e}") from e
+        self._pending_sends += 1
+        try:
+            async with self._send_lock:
+                for idx, digit in enumerate(digits):
+                    code = dtmf_char_to_code(digit)
+                    try:
+                        await room.local_participant.publish_dtmf(code=code, digit=digit)
+                    except Exception as e:
+                        raise ToolError(f"Failed to publish DTMF digit '{digit}': {e}") from e
 
-            if self._enable_data_packets:
-                try:
-                    payload = json.dumps({"event": "dtmf", "digit": digit, "code": code}).encode(
-                        "utf-8"
-                    )
-                    await room.local_participant.publish_data(
-                        payload,
-                        topic=self._data_packet_topic,
-                        reliable=True,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to publish DTMF data packet: {e}")
+                    if self._enable_data_packets:
+                        try:
+                            payload = json.dumps(
+                                {"event": "dtmf", "digit": digit, "code": code}
+                            ).encode("utf-8")
+                            await room.local_participant.publish_data(
+                                payload,
+                                topic=self._data_packet_topic,
+                                reliable=True,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to publish DTMF data packet: {e}")
 
-            if self._publish_delay > 0 and idx < len(digits) - 1:
-                await asyncio.sleep(self._publish_delay)
+                    if self._publish_delay > 0 and (
+                        idx < len(digits) - 1 or self._pending_sends > 1
+                    ):
+                        await asyncio.sleep(self._publish_delay)
+        finally:
+            self._pending_sends -= 1
 
         output = f"Successfully sent DTMF digits: {digits}"
         if self._on_tool_completed:
@@ -280,11 +321,13 @@ class DTMFKeypadTool(Toolset):
         """Begin listening for inbound SIP DTMF events on the provided room."""
         if self._subscribed_room is not None:
             self.stop_listening()
+        self._listening_stopped = False
         self._subscribed_room = room
         room.on("sip_dtmf_received", self._handle_sip_dtmf)
 
     def stop_listening(self) -> None:
         """Stop listening for inbound SIP DTMF events."""
+        self._listening_stopped = True
         if self._subscribed_room is not None:
             self._subscribed_room.off("sip_dtmf_received", self._handle_sip_dtmf)
             self._subscribed_room = None
@@ -326,6 +369,7 @@ class CallTransferTool(Toolset):
         self,
         *,
         play_dialtone: bool = False,
+        sip_domain: str | None = None,
         extra_description: str = "",
         ignore_on_enter: bool = False,
         on_tool_called: Callable[[Toolset.ToolCalledEvent], Awaitable[None]] | None = None,
@@ -334,12 +378,14 @@ class CallTransferTool(Toolset):
         """
         Args:
             play_dialtone: Whether to play a dialtone to the caller during the transfer. Defaults to False.
+            sip_domain: Optional SIP domain used to resolve bare PBX extensions (e.g. "1001" -> "sip:1001@pbx.example.com").
             extra_description: Additional instructions appended to the LLM tool description.
             ignore_on_enter: Hide the tool during ``on_enter`` so the model doesn't transfer while greeting.
             on_tool_called: Callback called when the tool is invoked.
             on_tool_completed: Callback called when the tool completes.
         """
         self._play_dialtone = play_dialtone
+        self._sip_domain = sip_domain
         self._on_tool_called = on_tool_called
         self._on_tool_completed = on_tool_completed
 
@@ -358,14 +404,14 @@ class CallTransferTool(Toolset):
         transfer_to: str,
         play_dialtone: bool | None = None,
     ) -> ToolResult:
-        """Transfer the active SIP phone call to a secondary phone number, PBX extension, or SIP URI.
+        """Transfer the active SIP phone call to a secondary phone number or SIP URI.
 
         Args:
-            transfer_to: Destination phone number (E.164 e.g. "+15551234567"), PBX extension (3-7 digits), or SIP URI (e.g. "sip:agent@trunk.example.com").
+            transfer_to: Destination phone number (E.164 e.g. "+15551234567" or "tel:+15551234567"), PBX extension (when sip_domain is configured), or SIP URI (e.g. "sip:agent@trunk.example.com").
             play_dialtone: Optional override for playing a dialtone during the transfer. Defaults to None (uses configured tool default).
         """
         logger.debug("transfer_call invoked")
-        clean_destination = validate_transfer_destination(transfer_to)
+        clean_destination = validate_transfer_destination(transfer_to, sip_domain=self._sip_domain)
         dialtone = play_dialtone if play_dialtone is not None else self._play_dialtone
 
         # 1. Resolve active SIP participant
@@ -428,7 +474,14 @@ class CallTransferTool(Toolset):
                 play_dialtone=dialtone,
             )
             if asyncio.isfuture(transfer_fut) or asyncio.iscoroutine(transfer_fut):
-                await transfer_fut
+                transfer_res = await transfer_fut
+            else:
+                transfer_res = transfer_fut
+
+            if getattr(transfer_res, "status", None) == sip.SIPTransferStatus.STS_TRANSFER_FAILED:
+                reason = getattr(transfer_res, "reason", None)
+                sip_status = getattr(transfer_res, "sip_status", None)
+                raise ToolError(f"Call transfer failed (reason={reason}, sip_status={sip_status}).")
         except ToolError:
             raise
         except Exception as e:
