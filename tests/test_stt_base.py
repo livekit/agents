@@ -245,6 +245,42 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
     assert final_event.created_at - end_event.created_at == pytest.approx(0.5, abs=0.01)
 
 
+async def test_stream_adapter_keeps_the_recognize_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = silence_frame(duration=0.1, sample_rate=16_000)
+    monkeypatch.setattr("livekit.agents.stt.stream_adapter.utils.merge_frames", lambda _: frame)
+    batch_stt = FakeSTT(fake_transcript="hello")
+    batch_stt._capabilities.streaming = False
+    recognize_impl = batch_stt._recognize_impl
+
+    async def recognize_with_request_id(*args, **kwargs) -> SpeechEvent:
+        return dataclasses.replace(await recognize_impl(*args, **kwargs), request_id="req-1")
+
+    monkeypatch.setattr(batch_stt, "_recognize_impl", recognize_with_request_id)
+    adapter = StreamAdapter(
+        stt=batch_stt,
+        vad=FakeVAD(
+            fake_user_speeches=[
+                FakeUserSpeech(start_time=0.0, end_time=0.1, transcript="hello", stt_delay=0.0)
+            ],
+            min_speech_duration=0.01,
+            min_silence_duration=0.3,
+        ),
+    )
+
+    try:
+        async with adapter.stream() as stream:
+            stream.push_frame(frame)
+            stream.end_input()
+            events = [event async for event in stream]
+    finally:
+        await adapter.aclose()
+
+    final_event = next(event for event in events if event.type == SpeechEventType.FINAL_TRANSCRIPT)
+    assert final_event.request_id == "req-1"
+
+
 class _FlappingStream(RecognizeStream):
     """Every connection succeeds, stays up for `uptime` seconds, then drops."""
 

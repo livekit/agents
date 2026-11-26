@@ -155,6 +155,7 @@ class StreamAdapterWrapper(RecognizeStream):
                         SpeechEvent(
                             type=SpeechEventType.FINAL_TRANSCRIPT,
                             alternatives=[t_event.alternatives[0]],
+                            request_id=t_event.request_id,
                             speech_end_time=(
                                 t_event.speech_end_time
                                 if t_event.speech_end_time is not None
