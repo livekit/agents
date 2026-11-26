@@ -157,6 +157,26 @@ def _validate(
         raise ValueError("idle_flush_ms must be between 200 and 5000")
 
 
+class _DirectConnectionPool(utils.ConnectionPool[aiohttp.ClientWebSocketResponse]):
+    """A pool that closes a retired connection before opening its replacement.
+
+    Every direct connection holds a Finesse realtime session, and each open session occupies one
+    of the account's concurrent-stream slots. When a session ages out, the base pool queues its
+    socket for closing but only drains that queue on the next checkout, so the obsolete socket
+    keeps its slot until then — and if the agent falls silent right after a rollover, until the
+    server expires the session. Draining first releases the aged-out session's slot before the
+    replacement is minted, so a rollover never transiently needs two slots for one voice.
+
+    Only the direct pool needs this; the relayed pool's sockets carry no per-session slot.
+    """
+
+    async def _connect(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        # get() queues an expired socket onto _to_close just before calling _connect; close it
+        # now, before the replacement handshake, rather than deferring to the next checkout.
+        await self._drain_to_close()
+        return await super()._connect(timeout)
+
+
 class TTS(tts.TTS):
     def __init__(
         self,
@@ -274,12 +294,14 @@ class TTS(tts.TTS):
             return self._pool
         pool = self._direct_pools.get(voice)
         if pool is None:
-            pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            pool = _DirectConnectionPool(
                 connect_cb=functools.partial(self._connect_direct, voice=voice),
                 close_cb=self._close_ws,
                 # A direct connection carries a server session that expires regardless of use, so
                 # its lifetime is capped below that TTL and the clock is not refreshed on reuse:
-                # the pool recycles it (minting a fresh session) before the server ends it.
+                # the pool recycles it (minting a fresh session) before the server ends it. The
+                # retired socket is closed before its replacement opens (see _DirectConnectionPool)
+                # so a rollover never holds two of the account's concurrency slots for one voice.
                 max_session_duration=_DIRECT_MAX_SESSION_DURATION,
                 mark_refreshed_on_get=False,
             )

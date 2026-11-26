@@ -591,6 +591,43 @@ async def test_direct_pool_recycles_before_the_server_session_ttl(
     await tts.aclose()
 
 
+async def test_direct_pool_closes_the_expired_socket_before_opening_its_replacement() -> None:
+    from livekit.plugins.finesse.tts import _DirectConnectionPool
+
+    events: list[tuple[str, str]] = []
+    opened = 0
+
+    async def connect_cb(timeout: float) -> str:
+        nonlocal opened
+        opened += 1
+        conn = f"sock{opened}"
+        events.append(("connect", conn))
+        return conn
+
+    async def close_cb(conn: str) -> None:
+        events.append(("close", conn))
+
+    pool = _DirectConnectionPool(
+        connect_cb=connect_cb,
+        close_cb=close_cb,
+        max_session_duration=3300,
+        mark_refreshed_on_get=False,
+    )
+
+    first = await pool.get(timeout=1)
+    pool.put(first)
+    # Age the session past its lifetime so the next checkout rolls it over.
+    pool._connections[first] = 0.0
+
+    await pool.get(timeout=1)
+
+    # Each open direct session holds one concurrency slot, so the aged-out socket must be closed
+    # before its replacement is opened -- otherwise a quiet agent keeps two slots for one voice
+    # until the next synthesis or until the server expires the old session.
+    assert events == [("connect", "sock1"), ("close", "sock1"), ("connect", "sock2")]
+    await pool.aclose()
+
+
 async def test_direct_session_mints_for_the_streams_snapshot_voice(
     server: FakeFinesse, session: aiohttp.ClientSession
 ) -> None:
