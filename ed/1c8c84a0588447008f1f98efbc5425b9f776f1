@@ -1,0 +1,24 @@
+livekit-agents/livekit/agents/llm/realtime_fallback_adapter.py
+  h_a827ab16c3c189 397
+livekit-agents/livekit/agents/voice/agent_activity.py
+  h_a827ab16c3c189 3041,3356
+livekit-agents/livekit/agents/voice/agent_session.py
+  h_a827ab16c3c189 1656,1736,1946,2046
+livekit-agents/livekit/agents/voice/tool_executor.py
+  h_a827ab16c3c189 642
+tests/test_realtime_fallback.py
+  h_a827ab16c3c189 34,446
+tests/test_tools.py
+  h_a827ab16c3c189 2261,2526
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed1c8c84a0588447008f1f98efbc5425b9f776f1",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
