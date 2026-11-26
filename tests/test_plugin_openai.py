@@ -462,6 +462,8 @@ def _sdk_default_azure_client(**kwargs: Any) -> openai.AsyncAzureOpenAI:
     return openai.AsyncAzureOpenAI(**kwargs)
 
 
+# Patches httpcore2's module clock, which every test on a shared --concurrent loop would see.
+@pytest.mark.no_concurrent
 @pytest.mark.parametrize(
     ("make_client", "expected_connections"),
     [
