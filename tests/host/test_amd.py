@@ -1253,6 +1253,40 @@ async def test_owned_model_cleanup_failure_still_detaches_and_releases_turn_hook
         await call.replied(replies + 1)
 
 
+@pytest.mark.parametrize("close_target", ["owned_stt", "owned_llm"])
+async def test_slow_resource_close_does_not_keep_amd_attached(
+    model_factories: Factories, close_target: str
+) -> None:
+    """A slow close of a model AMD created does not keep AMD attached: ``session.amd`` is
+    ``None`` and the session speaks again before the close ends and ``execute()`` returns
+    (``_finish`` detaches before ``_cleanup`` closes the models)."""
+    close_started, release_close = asyncio.Event(), asyncio.Event()
+    target = model_factories.stt_model if close_target == "owned_stt" else model_factories.llm_model
+    original_close = target.aclose
+
+    async def slow_close() -> None:
+        close_started.set()
+        await release_close.wait()
+        await original_close()
+
+    target.aclose = slow_close  # type: ignore[method-assign]
+    async with started(["Hello?"]) as (session, microphone):
+        detector = AMD(
+            session, llm="google/gemma-4-31b-it", stt="cartesia/ink-2", machine_silence_threshold=0
+        )
+        async with detector:
+            microphone.speak(0.3)
+            done = asyncio.ensure_future(detector.execute())
+            await until(close_started.is_set, "the owned model's close never started")
+            assert session.amd is None
+            session.say("Hi, this is the clinic.")
+            assert not done.done()
+            release_close.set()
+            result = await asyncio.wait_for(done, 2)
+        assert result.category == AMDCategory.HUMAN
+        assert (model_factories.llm_model.closes, model_factories.stt_model.closes) == (1, 1)
+
+
 async def test_llm_calls_use_session_connection_options() -> None:
     """Classification and menu requests use the session's ``llm_conn_options`` (§4.1)."""
     options = APIConnectOptions(max_retry=1, retry_interval=0, read_timeout=0.5)

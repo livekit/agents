@@ -356,9 +356,9 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
 
     async def _complete(self, result: AMDCompletedEvent) -> None:
         self._lifecycle = AMDLifecycle.FINISHED
+        # the session takes direct speech again before the models close, as `_finish` does
+        self._detach()
         await self._close_owned()
-        if self._session._amd is self:
-            self._session._amd = None
         if self._completion is not None and not self._completion.done():
             self._completion.set_result(result)
         try:
@@ -367,7 +367,15 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
             # the run is over; a failing listener must not fail cleanup or session close
             logger.exception("amd_completed listener failed")
 
+    def _detach(self) -> None:
+        """Clears ``session.amd`` and the DTMF tool, if this run still holds them."""
+        if self._session._amd is self:
+            self._session._amd = None
+            self._session._amd_tools = []
+
     async def _close_owned(self) -> None:
+        """Closes the models AMD created from strings. The host owns them: the core's
+        ``OwnedModels`` closes only the models another host hands it to close."""
         owned, self._owned = self._owned, []
         for error in await asyncio.gather(
             *(model.aclose() for model in owned), return_exceptions=True
