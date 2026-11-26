@@ -219,7 +219,9 @@ def _end_user_turn_span(info: _EndOfTurnInfo) -> None:
 
     Module-level: tests drive the reply tasks with stand-in activities."""
     if info.user_turn_span_adopted and info.user_turn_span is not None:
-        if info.user_turn_span.is_recording():
+        if info.release_user_turn_span is not None:
+            info.release_user_turn_span()
+        elif info.user_turn_span.is_recording():
             info.user_turn_span.end()
         info.user_turn_span_adopted = False
 
@@ -1319,6 +1321,8 @@ class AgentActivity(RecognitionHooks):
             stt_aligned_transcript=bool(self.stt.capabilities.aligned_transcript)
             if self.stt
             else False,
+            realtime_transcription=isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.user_transcription,
         )
         stt_pipeline = reuse_resources.stt_pipeline if reuse_resources else None
         turn_detector_stream = reuse_resources.turn_detector_stream if reuse_resources else None
@@ -2203,9 +2207,16 @@ class AgentActivity(RecognitionHooks):
 
         self._interruption_detected = False
 
-    def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
+    def _on_input_speech_started(self, ev: llm.InputSpeechStartedEvent) -> None:
         if self.vad is None or self.using_default_vad:
-            self._session._update_user_state("speaking")
+            turn_span = (
+                self._audio_recognition._on_realtime_speech_started(ev.started_at)
+                if self._audio_recognition is not None and ev.started_at is not None
+                else None
+            )
+            # user_speaking nests under the turn, as it does under a VAD-opened one
+            with tracer.use_span(turn_span) if turn_span is not None else contextlib.nullcontext():
+                self._session._update_user_state("speaking")
             if self._audio_recognition:
                 self._audio_recognition._on_start_of_speech(
                     started_at=time.time(),
@@ -2236,6 +2247,9 @@ class AgentActivity(RecognitionHooks):
                 )
 
             self._session._update_user_state("listening")
+            if self._audio_recognition:
+                # after user_speaking ends, so the turn closes around it
+                self._audio_recognition._on_realtime_speech_stopped()
 
         if ev.user_transcription_enabled:
             self._session._user_input_transcribed(
@@ -2255,11 +2269,17 @@ class AgentActivity(RecognitionHooks):
             if self.stt is None and ev.transcript and (amd := self._session._amd) is not None:
                 amd._on_transcript(ev.transcript)
 
-            if self.stt is None and self._audio_recognition is not None:
+            if (
+                self.stt is None
+                and self._audio_recognition is not None
+                and isinstance(self.llm, llm.RealtimeModel)
+            ):
                 self._audio_recognition._on_realtime_user_transcript(
                     transcript=ev.transcript,
                     confidence=ev.confidence,
                     turn_started_at=ev.turn_started_at,
+                    model=self.llm.model,
+                    provider=self.llm.provider,
                 )
 
             msg = llm.ChatMessage(

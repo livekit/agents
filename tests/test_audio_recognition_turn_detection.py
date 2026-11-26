@@ -102,6 +102,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
         return_value=MagicMock(is_recording=MagicMock(return_value=False))
     )
     ar._user_turn_span = None
+    ar._held_user_turn = None
+    ar._realtime_transcription = False
     ar._user_turn_start = None
     ar._eou_wait_span = None
     ar._eou_wait_started_at_ns = None

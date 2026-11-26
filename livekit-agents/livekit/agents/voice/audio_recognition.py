@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import math
 import time
@@ -80,6 +81,23 @@ class _EndOfTurnInfo:
     """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
     ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
     user_turn_span_adopted: bool = False
+    release_user_turn_span: Callable[[], None] | None = None
+    """Set when recognition holds the span for a realtime transcript: the adopter calls this
+    instead of ending the span, and recognition ends it once the transcript is in."""
+
+
+@dataclass
+class _HeldUserTurn:
+    """A committed ``user_turn`` kept open until the realtime model transcribes it."""
+
+    span: trace.Span
+    start: float
+    committed_at: float
+    """When the turn closed: the VAD commit, or the model's own end of speech."""
+    end_time: float | None = None
+    """When the span ends, set once the activity is done with it: the commit, or later after a
+    slow ``on_user_turn_completed``."""
+    transcribed: bool = False
 
 
 def _compute_end_of_turn_metrics(
@@ -255,6 +273,7 @@ class AudioRecognition:
         stt_model: str | None = None,
         stt_provider: str | None = None,
         stt_aligned_transcript: bool = False,
+        realtime_transcription: bool = False,
     ) -> None:
         self._session = session
         self._hooks = hooks
@@ -270,6 +289,8 @@ class AudioRecognition:
         self._stt_model = stt_model
         self._stt_provider = stt_provider
         self._stt_aligned_transcript = stt_aligned_transcript
+        # a realtime model transcribes the user's turns, after they commit
+        self._realtime_transcription = realtime_transcription
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
@@ -335,6 +356,9 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._user_turn_start: float | None = None
+        self._held_user_turn: _HeldUserTurn | None = None
+        # the open user_turn a realtime transcript already landed on before its commit
+        self._transcribed_user_turn_span: trace.Span | None = None
         # eou_wait: one span per user turn, from the last speech anchor to the turn decision
         self._eou_wait_span: trace.Span | None = None
         self._eou_wait_started_at_ns: int | None = None
@@ -822,6 +846,7 @@ class AudioRecognition:
             # EOU normally ends this span, but teardown cancels EOU before a
             # pending speech segment necessarily produces a transcript.
             self._end_user_turn_span()
+            self._end_held_user_turn(force=True)
 
     def _update_stt(
         self,
@@ -1739,6 +1764,8 @@ class AudioRecognition:
                 last_final_transcript_time=last_final_transcript_time,
                 now=time.time(),
             )
+            # with no STT the realtime model's transcript arrives after the commit
+            awaits_transcript = self._stt is None and self._realtime_transcription
             end_of_turn = _EndOfTurnInfo(
                 skip_reply=skip_reply,
                 new_transcript=self._audio_transcript,
@@ -1746,6 +1773,11 @@ class AudioRecognition:
                 metrics=metrics,
                 backchannel_over_agent=self._turn_backchannel_over_agent,
                 user_turn_span=user_turn_span,
+                release_user_turn_span=(
+                    functools.partial(self._release_held_user_turn, user_turn_span)
+                    if awaits_transcript
+                    else None
+                ),
             )
             committed = self._hooks.on_end_of_turn(end_of_turn)
             if committed:
@@ -1763,19 +1795,30 @@ class AudioRecognition:
                 )
                 user_turn_span.set_attributes(
                     {
-                        trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
-                        trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
                         trace_types.ATTR_TRANSCRIPTION_DELAY: metrics.transcription_delay or 0,
                         trace_types.ATTR_END_OF_TURN_DELAY: metrics.end_of_turn_delay or 0,
                     }
                 )
+                if not awaits_transcript:
+                    user_turn_span.set_attributes(
+                        {
+                            trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
+                            trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
+                        }
+                    )
                 if self._stt_request_ids:
                     user_turn_span.set_attribute(
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
                 self._end_eou_wait_span("committed")
                 self._stamp_user_turn_resumes(user_turn_span)
-                if not end_of_turn.user_turn_span_adopted:
+                if awaits_transcript:
+                    # held for the transcript, which must not be blanked or land on a later turn
+                    self._hold_user_turn(
+                        user_turn_span,
+                        end_time=None if end_of_turn.user_turn_span_adopted else time.time(),
+                    )
+                elif not end_of_turn.user_turn_span_adopted:
                     user_turn_span.end()
                 self._user_turn_span = None
                 self._user_turn_start = None
@@ -2008,21 +2051,116 @@ class AudioRecognition:
         transcript: str,
         confidence: float | None,
         turn_started_at: float | None,
+        model: str,
+        provider: str,
     ) -> None:
-        """Put a realtime model's own transcript on a ``user_turn`` span.
+        """Put a realtime model's own transcript on the ``user_turn`` its start falls in.
 
-        No VAD or STT event opens a span for a server-detected turn, so one opened here is
-        back-dated to ``turn_started_at`` and closed at once; one a VAD opened is left to it."""
-        already_open = self._user_turn_span is not None and self._user_turn_span.is_recording()
-        span = self._ensure_user_turn_span(start_time=turn_started_at)
+        That is the committed turn held for it, else the open turn, else a span of its own
+        back-dated to ``turn_started_at``; with no start reported the oldest of those wins."""
+        held = self._held_user_turn
+        # a turn takes one transcript; a second one gets a span of its own rather than overwrite
+        open_span = (
+            self._user_turn_span
+            if self._user_turn_span is not None
+            and self._user_turn_span.is_recording()
+            and self._user_turn_span is not self._transcribed_user_turn_span
+            else None
+        )
+        span: trace.Span | None = None
+        if (
+            held is not None
+            and not held.transcribed
+            and (turn_started_at is None or held.start <= turn_started_at <= held.committed_at)
+        ):
+            span = held.span
+        elif open_span is not None and (
+            turn_started_at is None
+            or self._user_turn_start is None
+            or self._user_turn_start <= turn_started_at
+        ):
+            span = open_span
+        own = span is None
+        if span is None:
+            start = turn_started_at if turn_started_at is not None else time.time()
+            span = tracer.start_span(
+                "user_turn",
+                context=self._session._root_span_context,
+                start_time=int(start * 1_000_000_000),
+            )
+            if (room_io := self._session._room_io) and room_io.linked_participant:
+                _set_participant_attributes(span, room_io.linked_participant)
+
         span.set_attribute(trace_types.ATTR_USER_TRANSCRIPT, transcript)
+        # names the transcriber as STT does, so a transcript on a VAD-opened span shows its source
+        span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+        span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
         if confidence is not None:
             span.set_attribute(trace_types.ATTR_TRANSCRIPT_CONFIDENCE, confidence)
-        if turn_started_at is None:
-            # the provider gave no turn start, so the span's duration is not the speech duration
-            span.set_attribute(trace_types.ATTR_USER_TURN_START_ESTIMATED, True)
-        if not already_open:
-            self._end_user_turn_span()
+
+        if own:
+            if turn_started_at is None:
+                # the provider gave no turn start, so the span's duration is not the speech duration
+                span.set_attribute(trace_types.ATTR_USER_TURN_START_ESTIMATED, True)
+            span.end()
+        elif span is open_span:
+            self._transcribed_user_turn_span = span
+        elif held is not None:
+            held.transcribed = True
+            self._end_held_user_turn()
+
+    def _on_realtime_speech_started(self, started_at: float) -> trace.Span | None:
+        """Open the ``user_turn`` where the realtime model heard the user start, when no VAD or
+        STT bounds turns; the model's end of speech then holds it for the transcript."""
+        if self._vad is not None or self._stt is not None or not self._realtime_transcription:
+            return None
+        return self._ensure_user_turn_span(start_time=started_at)
+
+    def _on_realtime_speech_stopped(self) -> None:
+        span = self._user_turn_span
+        if (
+            self._vad is not None
+            or self._stt is not None
+            or not self._realtime_transcription
+            or span is None
+            or not span.is_recording()
+        ):
+            return
+        self._hold_user_turn(span, end_time=time.time())
+        self._user_turn_span = None
+        self._user_turn_start = None
+
+    def _hold_user_turn(self, span: trace.Span, *, end_time: float | None) -> None:
+        """Keep a closed ``user_turn`` open for its realtime transcript; ``end_time`` is unset
+        while the activity still runs ``on_user_turn_completed`` under it."""
+        self._end_held_user_turn(force=True)
+        now = time.time()
+        self._held_user_turn = _HeldUserTurn(
+            span=span,
+            start=self._user_turn_start or now,
+            committed_at=now,
+            end_time=end_time,
+            transcribed=self._transcribed_user_turn_span is span,
+        )
+        # a transcript that landed before the close ends it right away
+        self._end_held_user_turn()
+
+    def _release_held_user_turn(self, span: trace.Span) -> None:
+        """The activity is done with the held span, which ends now if it has its transcript."""
+        held = self._held_user_turn
+        if held is not None and held.span is span:
+            held.end_time = time.time()
+            self._end_held_user_turn()
+
+    def _end_held_user_turn(self, *, force: bool = False) -> None:
+        """End the held span once it has its transcript and its end time, or now with ``force``."""
+        held = self._held_user_turn
+        if held is None or not (force or (held.transcribed and held.end_time is not None)):
+            return
+        self._held_user_turn = None
+        if held.span.is_recording():
+            end_time = held.end_time if held.end_time is not None else time.time()
+            held.span.end(end_time=int(end_time * 1_000_000_000))
 
     def _end_user_turn_span(self) -> None:
         # a wait still open here never reached a decision (teardown, clear_user_turn, ...)

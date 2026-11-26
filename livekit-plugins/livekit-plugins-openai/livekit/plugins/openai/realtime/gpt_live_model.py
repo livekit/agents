@@ -777,7 +777,10 @@ class GPTLiveSession(
                 )
             )
             if role == "user":
-                self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+                self.emit(
+                    "input_speech_started",
+                    llm.InputSpeechStartedEvent(started_at=speech.started_at),
+                )
         speech.text += event.delta
         speech.quiet_ms = 0
         if event.end_ms is not None:
