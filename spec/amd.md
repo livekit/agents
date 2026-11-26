@@ -641,6 +641,9 @@ By default, the participant speaks first. With `opening_text` or
   `wait_until_answered=False`, it can be during early media.
 - `opening_text` plays through `say()`. `opening_instructions` plays through
   `generate_reply()` with `tool_choice="none"`, so the opening cannot call tools.
+  The limits of `generate_reply()` for the model apply. For example, a realtime
+  model that takes no instructions for one reply generates the opening from the
+  session instructions.
 - The opening is the only speech that skips the paused reply authorization
   (section 10.1). Every other reply still waits for its turn's prediction.
 - If the participant is already speaking when listening starts, AMD skips the
@@ -755,7 +758,7 @@ deadlines, and cleanup. They do not prove model accuracy.
 | 14 | A decision model classifies with one `choice` over the seven categories and never starts menu extraction. | 8.1, 11.2 | `test_decision_model_classifies_with_one_choice_and_skips_menus` |
 | 15 | Only the opening plays before a prediction allows a reply, and participant speech before its playout cancels it. | 10.6 | `test_opening_text_plays_while_other_replies_stay_held`, `test_participant_speech_before_the_opening_plays_cancels_it` |
 | 16 | Ungated AMD never holds, cancels, or changes a reply of the session. Its turn hooks only observe, and it keeps the session's settings and commit paths. The opening is AMD's own speech and keeps its rules (section 10.6). | 17.2 | `test_only_ungated_amd_enters_without_reply_control`, `test_ungated_amd_takes_the_end_of_turn_of_the_session`, `test_ungated_amd_denies_no_reply_after_a_wait_prediction`, `test_ungated_amd_adds_no_user_message_to_the_history_of_the_agent`, `test_manual_realtime_commit_without_amd`, `test_ungated_amd_leaves_replies_and_handoffs_to_the_session`, `test_ungated_amd_keeps_the_interruption_settings`, `test_ungated_amd_keeps_the_preemptive_reply_of_the_session`, `test_ungated_amd_enters_while_an_agent_task_runs`, `test_ungated_amd_lets_a_tool_hand_off_the_agent`, `test_ungated_amd_keeps_the_user_turn_limit` |
-| 17 | With client-side turn detection, ungated AMD takes each turn at the session's EOT or at the application's commit, with both transcripts. With server-side turn detection, it classifies each final of one transcript when it arrives. | 17.3 | `test_ungated_amd_takes_the_end_of_turn_of_the_session`, `test_ungated_amd_pairs_the_session_and_amd_transcripts_of_a_turn`, `test_ungated_amd_takes_a_turn_that_the_application_commits`, `test_ungated_amd_classifies_each_final_without_client_side_turn_detection`, `test_ungated_amd_classifies_the_session_final_after_its_stt_fails`, `test_ungated_amd_follows_a_handoff_to_another_turn_detection`, `test_ungated_amd_keeps_its_transcripts_after_a_handoff_to_client_side_turn_detection` |
+| 17 | With client-side turn detection, ungated AMD takes each turn at the session's EOT or at the application's commit, with both transcripts. With server-side turn detection, it classifies each final of one transcript when it arrives. | 17.3 | `test_ungated_amd_takes_the_end_of_turn_of_the_session`, `test_ungated_amd_pairs_the_session_and_amd_transcripts_of_a_turn`, `test_ungated_amd_takes_a_turn_that_the_application_commits`, `test_ungated_amd_classifies_each_final_without_client_side_turn_detection`, `test_ungated_amd_classifies_the_session_stt_final_without_model_transcription`, `test_ungated_amd_classifies_the_session_final_after_its_stt_fails`, `test_ungated_amd_follows_a_handoff_to_another_turn_detection`, `test_ungated_amd_keeps_its_transcripts_after_a_handoff_to_client_side_turn_detection` |
 | 18 | Only ungated AMD enters without the realtime checks. Stages without instructions do not lift the realtime limits. | 5.1, 17.1 | `test_only_ungated_amd_enters_without_reply_control`, `test_ungated_amd_needs_a_transcript_with_a_realtime_model` |
 | 19 | Ungated AMD completes at the first `human` or machine prediction, and at no `uncertain` or `wait` prediction. | 17.4 | `test_ungated_amd_keeps_listening_until_a_human_or_a_machine` |
 
@@ -864,6 +867,9 @@ other way. The transcripts in use stay as they were at entry. For example:
   after it.
 - After a handoff from server-side to client-side turn detection, a turn has only
   the AMD transcript when AMD has an STT, not the session transcript too.
+- After a handoff from client-side to server-side turn detection, AMD with an STT
+  classifies only the AMD finals. If the session has an STT too, the classifier still
+  gets the two-transcript format (section 6.1), with an empty session transcript.
 - The entry checks look only at the Agent at entry. If a handoff brings an Agent
   that leaves AMD with no transcript, AMD classifies nothing and completes at a limit.
 
@@ -888,7 +894,7 @@ history keeps the earlier text (section 8.2). AMD classifies one transcript:
 | AMD STT | Transcript | Notes |
 | --- | --- | --- |
 | yes | the AMD finals | AMD ignores the session transcript. If the AMD STT fails, AMD classifies the session transcript from then on (section 6.3). A session final from before the failure is not classified. If the session has no transcript, AMD classifies nothing after the failure. |
-| no | the session's final transcription events | These are the session STT finals. With a model that has user transcription, they are the model's transcription, which arrives late. AMD then logs a warning on entry. |
+| no | the session's final transcription events | These are the session STT finals. With a model that has user transcription, they are the model's transcription, which arrives late. AMD then logs a warning on entry. Some models hold the final transcription until they reply. If such a model sends no reply, AMD does not classify that turn. |
 
 A final can arrive while the participant still speaks, for example between two
 sentences. AMD classifies it at once. So AMD can report a machine before a long

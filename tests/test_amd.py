@@ -7232,7 +7232,7 @@ async def test_customer_stop_response_prevents_realtime_generation() -> None:
 
 @asynccontextmanager
 async def running_ungated_realtime(
-    *, amd_stt: stt.STT | None = None, session_stt: bool = False
+    *, amd_stt: stt.STT | None = None, session_stt: bool = False, user_transcription: bool = True
 ) -> AsyncIterator[tuple[AMD, AgentSession, ClassifierLLM, FakeRealtimeSession]]:
     """Ungated AMD on a realtime model that detects turns and replies to tool calls itself.
 
@@ -7243,6 +7243,7 @@ async def running_ungated_realtime(
             can_disable_turn_detection=False,
             auto_tool_reply_generation=True,
             per_response_tool_choice=False,
+            user_transcription=user_transcription,
         )
     )
     async with AgentSession(
@@ -7530,6 +7531,27 @@ async def test_ungated_amd_classifies_each_final_without_client_side_turn_detect
         assert session.amd is None
     if amd_stt is not None:
         await amd_stt.aclose()
+
+
+async def test_ungated_amd_classifies_the_session_stt_final_without_model_transcription(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with running_ungated_realtime(session_stt=True, user_transcription=False) as (
+        detector,
+        session,
+        classifier,
+        _,
+    ):
+        assert "model's own transcript" not in caplog.text
+        await session._activity._audio_recognition._on_stt_event(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(text="Hello?", language=LanguageCode("en"))],
+            )
+        )
+        request = await classifier.request()
+        assert request.current_turn.text_content == "Hello?"
+        assert detector._turn_id == 1
 
 
 async def test_ungated_amd_classifies_the_session_final_after_its_stt_fails() -> None:
