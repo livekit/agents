@@ -189,6 +189,8 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
 
     async def __aenter__(self) -> AMD:
         session = self._session
+        if session._core is None:
+            raise RuntimeError("start VoiceSession before entering AMD")
         native = session._running
         # the session's checks first, in `detector.py`'s order: a refused instance creates no
         # model and can enter later
@@ -322,7 +324,12 @@ class AMD(rtc.EventEmitter[AMDEventTypes]):
         propagates: a failing prediction or menu listener ends the run with
         ``internal_error``."""
         for callback in list(self._events.get(event, ())):
-            params = inspect.signature(callback).parameters.values()
+            try:
+                params = inspect.signature(callback).parameters.values()
+            except (TypeError, ValueError):
+                # no signature to read (some builtins): pass every argument
+                callback(*args)
+                continue
             if any(p.kind is p.VAR_POSITIONAL for p in params):
                 callback(*args)
                 continue

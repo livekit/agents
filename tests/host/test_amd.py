@@ -473,7 +473,9 @@ async def test_rejected_entry_does_not_create_owned_models(
             first = AMD(session, llm=Classifier(), stt=None)
             await first.__aenter__()
         detector = AMD(session, llm="google/gemini-3.1-flash-lite", stt="cartesia/ink-whisper")
-        with refused(RuntimeError):
+        # `main` says "start AgentSession before entering AMD"; v2.0's session is `VoiceSession`
+        message = "already active" if started else "^start VoiceSession before entering AMD$"
+        with refused(RuntimeError, message):
             await detector.__aenter__()
         assert model_factories.llm_calls == [] and model_factories.stt_calls == []
         assert session.amd is first
@@ -771,6 +773,28 @@ async def test_prediction_listener_failure_cleans_up_a_deferred_release() -> Non
         assert result.category == AMDCategory.MACHINE_SCREENING
         assert call.session.amd is None
         await call.replied(1)
+
+
+async def test_listener_without_a_signature_gets_the_event() -> None:
+    """A listener ``inspect.signature`` cannot read is called with the event, as
+    ``rtc.EventEmitter.emit`` calls it, instead of failing the run."""
+
+    class Unreadable:
+        __signature__ = "not a signature"
+
+        def __init__(self) -> None:
+            self.events: list[object] = []
+
+        def __call__(self, *args: object) -> None:
+            self.events.extend(args)
+
+    listener = Unreadable()
+    async with calling(["Leave a message."], {"Leave a message.": "machine-vm"}) as call:
+        call.amd.on("amd_prediction", listener)
+        call.speak()
+        prediction = await call.predicted(1)
+        assert listener.events == [prediction]
+        assert call.amd.lifecycle is AMDLifecycle.ACTIVE
 
 
 async def test_prediction_listener_cannot_mutate_saved_decision() -> None:
