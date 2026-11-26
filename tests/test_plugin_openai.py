@@ -453,32 +453,49 @@ async def _serve_keep_alive(connections: list[asyncio.StreamWriter]) -> asyncio.
                     b"content-length: %d\r\n\r\n%s" % (len(body), body)
                 )
                 await writer.drain()
+        writer.close()
 
     return await asyncio.start_server(handle, "127.0.0.1", 0)
 
 
-@pytest.mark.parametrize("plugin", [LLM, TTS, STT], ids=["llm", "tts", "stt"])
+def _sdk_default_azure_client(**kwargs: Any) -> openai.AsyncAzureOpenAI:
+    return openai.AsyncAzureOpenAI(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("make_client", "expected_connections"),
+    [
+        (lambda **kw: LLM.with_azure(**kw)._client, 1),
+        (lambda **kw: TTS.with_azure(**kw)._client, 1),
+        (lambda **kw: STT.with_azure(**kw)._client, 1),
+        # Control: the SDK's default pool must reconnect, or the clock patch below no longer
+        # reaches the pool and the cases above would pass without the fix.
+        (_sdk_default_azure_client, 2),
+    ],
+    ids=["llm", "tts", "stt", "sdk-default-control"],
+)
 async def test_with_azure_keeps_its_connection_between_turns(
-    plugin: type[LLM] | type[TTS] | type[STT], monkeypatch: pytest.MonkeyPatch
+    make_client: Any, expected_connections: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     connections: list[asyncio.StreamWriter] = []
     server = await _serve_keep_alive(connections)
     port = server.sockets[0].getsockname()[1]
-    model = plugin.with_azure(
+    client = make_client(
         api_key="k", azure_endpoint=f"http://127.0.0.1:{port}", api_version="2025-04-01-preview"
     )
 
     try:
-        await model._client.models.list()
+        await client.models.list()
         # A pause between two turns, as the connection pool measures it.
         monkeypatch.setattr(
             httpcore2._async.http11,
             "time",
             SimpleNamespace(monotonic=lambda: time.monotonic() + 10),
         )
-        await model._client.models.list()
+        await client.models.list()
     finally:
-        await model._client.close()
+        await client.close()
         server.close()
+        await server.wait_closed()
 
-    assert len(connections) == 1
+    assert len(connections) == expected_connections
