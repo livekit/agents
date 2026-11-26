@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -16,9 +16,14 @@ import aiohttp
 import numpy as np
 import pytest
 from aiohttp import web
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import rtc
 from livekit.agents import (
+    Agent,
+    AgentSession,
     APIConnectionError,
     APIConnectOptions,
     APIError,
@@ -29,7 +34,7 @@ from livekit.agents import (
 from livekit.agents.inference.realtime import gpt_live as inference_gpt_live
 from livekit.agents.llm._realtime import gpt_live as gpt_live_model
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
-from livekit.agents.telemetry import pii
+from livekit.agents.telemetry import pii, set_tracer_provider, trace_types, tracer
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
@@ -37,6 +42,8 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
 )
 from livekit.plugins.openai.realtime.gpt_live_types import ServiceTier
 from livekit.plugins.openai.tools import WebSearch
+
+from .trace_schema import assert_trace_well_formed
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
 
@@ -2934,3 +2941,191 @@ async def test_a_client_delegate_is_answered_like_the_models_own(
     finally:
         await session.aclose()
         await model.aclose()
+
+
+def _record_responses(session: GPTLiveSession) -> list[tuple[Any, ...]]:
+    """Each backend response the engine reports, and whether it is its delegation's last."""
+    record: list[tuple[Any, ...]] = []
+    session.on(
+        "_delegated_response", lambda r: record.append((r.response_id, r.text, r.error, r.final))
+    )
+    return record
+
+
+async def _answer(session: GPTLiveSession, call_id: str) -> None:
+    await session._append_items(
+        [
+            llm.FunctionCallOutput(
+                call_id=call_id, name="_get_weather", output="rainy", is_error=False
+            )
+        ]
+    )
+    await asyncio.sleep(0.05)
+
+
+_CREATED = {"type": "response.created", "response": {}}
+
+
+async def test_a_delegation_is_done_once_its_answer_needs_no_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response that calls a tool leaves the delegation open until a later one answers."""
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    record = _record_responses(session)
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        for event in (_CREATED, _function_call_done("call_1"), _completed("resp_1")):
+            session._handle_event(_response_event("item_d1", event))
+        await _answer(session, "call_1")
+        for event in (
+            _CREATED,
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "It is rainy."}],
+                },
+            },
+            _completed("resp_2"),
+        ):
+            session._handle_event(_response_event("item_d1", event))
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+    assert record == [("resp_1", "", None, False), ("resp_2", "It is rainy.", None, True)]
+
+
+async def test_a_failed_response_ends_its_delegation_unless_it_is_continued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An output sent while a response ran still continues the chain after that response fails."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    record = _record_responses(session)
+    failed = {"type": "response.failed", "response": {"error": {"code": "server_error"}}}
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        for event in (_CREATED, _function_call_done("call_1")):
+            session._handle_event(_response_event("item_d1", event))
+        await _answer(session, "call_1")
+        session._handle_event(_response_event("item_d1", failed))
+        await asyncio.sleep(0.05)
+        assert ws.sent[-1]["type"] == "response.create"
+        assert record == [(None, "", "server_error", False)]
+
+        for event in (_CREATED, failed):
+            session._handle_event(_response_event("item_d1", event))
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+    assert record[1:] == [(None, "", "server_error", True)]
+
+
+@pytest.fixture
+def span_exporter() -> Iterator[InMemorySpanExporter]:
+    original_provider = tracer._tracer_provider
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    set_tracer_provider(provider)
+    try:
+        yield exporter
+    finally:
+        set_tracer_provider(original_provider)
+        provider.shutdown()
+
+
+@pytest.mark.no_concurrent
+async def test_a_delegation_and_the_session_usage_reach_the_trace(
+    monkeypatch: pytest.MonkeyPatch, span_exporter: InMemorySpanExporter
+) -> None:
+    """The backend's requests nest in their delegation's span, which ends with its final response
+    or with the session; the voice model's seconds, which no turn owns, are in the session usage at close."""
+    ws = _connect_hook(monkeypatch)
+    async with AgentSession(llm=GPTLiveModel(api_key="sk-test"), aec_warmup_duration=None) as s:
+        await s.start(Agent(instructions="Be concise."))
+        for _ in range(100):
+            if ws.session is not None and ws.session.session_id == "live_test":
+                break
+            await asyncio.sleep(0.01)
+        live = ws.session
+        assert live is not None
+        for event in (
+            {"type": "session.usage.updated", "usage": {"seconds": 14.0}},
+            {
+                "type": "session.delegation.created",
+                "offset_ms": 1000,
+                "delegation": {"id": "item_d1", "type": "delegation", "target": "responses"},
+            },
+            _response_event("item_d1", {"type": "response.created", "response": {}}),
+            _response_event("item_d1", _completed("resp_1")),
+            _response_event("item_d2", {"type": "response.created", "response": {}}),
+        ):
+            live._handle_event(event)
+
+    spans = span_exporter.get_finished_spans()
+    (session_span,) = [s for s in spans if s.name == "agent_session"]
+    (close_span,) = [s for s in spans if s.name == "session_close"]
+    delegation, cut_off = [s for s in spans if s.name == "delegation"]
+    request, _ = [s for s in spans if s.name == "llm_request"]
+    assert delegation.parent and session_span.context
+    assert delegation.parent.span_id == session_span.context.span_id
+    assert request.parent and delegation.context
+    assert request.parent.span_id == delegation.context.span_id
+    assert delegation.attributes[trace_types.ATTR_DELEGATION_ID] == "item_d1"
+    # a delegation still running when the session closes ends with it
+    assert cut_off.attributes[trace_types.ATTR_DELEGATION_ID] == "item_d2"
+    assert cut_off.attributes[trace_types.ATTR_ERROR_TYPE] == "session_closed"
+    assert request.attributes[trace_types.ATTR_GEN_AI_RESPONSE_ID] == "resp_1"
+    assert request.attributes[trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS] == 376
+
+    usage = {
+        u["model"]: u
+        for u in json.loads(str(close_span.attributes[trace_types.ATTR_SESSION_USAGE]))
+    }
+    assert usage["gpt-live-1"]["session_duration"] == 14.0
+    assert usage["gpt-5.6-sol"]["input_tokens"] == 376
+    assert_trace_well_formed(spans)
+
+
+@pytest.mark.no_concurrent
+async def test_a_delegation_keeps_its_span_across_a_handoff_that_reuses_the_session(
+    monkeypatch: pytest.MonkeyPatch, span_exporter: InMemorySpanExporter
+) -> None:
+    """The next agent takes over the realtime session and, with it, the delegations it runs."""
+    ws = _connect_hook(monkeypatch)
+    async with AgentSession(llm=GPTLiveModel(api_key="sk-test"), aec_warmup_duration=None) as s:
+        await s.start(Agent(instructions="Be concise."))
+        for _ in range(100):
+            if ws.session is not None and ws.session.session_id == "live_test":
+                break
+            await asyncio.sleep(0.01)
+        live = ws.session
+        assert live is not None
+        # a superseded response is reported without ending its delegation
+        for _ in range(2):
+            live._handle_event(_response_event("item_d1", _CREATED))
+
+        s.update_agent(Agent(instructions="Be concise."))
+        assert s._update_activity_atask is not None
+        await s._update_activity_atask
+        assert ws.session is live
+
+    spans = span_exporter.get_finished_spans()
+    (delegation,) = [s for s in spans if s.name == "delegation"]
+    requests = [s for s in spans if s.name == "llm_request"]
+    assert [r.attributes[trace_types.ATTR_ERROR_TYPE] for r in requests] == [
+        "superseded",
+        "session_closed",
+    ]
+    assert all(r.parent and r.parent.span_id == delegation.context.span_id for r in requests)
+    assert delegation.attributes[trace_types.ATTR_ERROR_TYPE] == "session_closed"
+    assert_trace_well_formed(spans)

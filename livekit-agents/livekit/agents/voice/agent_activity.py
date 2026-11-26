@@ -7,7 +7,7 @@ import heapq
 import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Coroutine, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from opentelemetry import context as otel_context, trace
@@ -19,6 +19,7 @@ from livekit.agents.metrics.base import Metadata
 from .. import inference, llm, stt, tts, utils, vad
 from ..llm.async_toolset import AsyncToolset
 from ..llm.chat_context import Instructions
+from ..llm.delegation import _DelegatedResponse
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
     StopResponse,
@@ -199,6 +200,8 @@ _OnEnterContextVar = contextvars.ContextVar["_OnEnterData | None"]("agents_activ
 class _ReusableResources:
     stt_pipeline: _STTPipeline | None = None
     rt_session: llm.RealtimeSession | None = None
+    # the delegations still running on rt_session, whose spans move with it
+    delegation_spans: dict[str | None, trace.Span] = field(default_factory=dict)
     turn_detector_stream: _StreamingTurnDetectorStream | None = None
 
     async def cleanup(self) -> None:
@@ -209,6 +212,10 @@ class _ReusableResources:
         if self.rt_session is not None:
             tasks.append(self.rt_session.aclose())
             self.rt_session = None
+        for span in self.delegation_spans.values():
+            gen_ai_telemetry.set_error_type(span, "session_closed")
+            span.end()
+        self.delegation_spans.clear()
         if self.turn_detector_stream is not None:
             tasks.append(self.turn_detector_stream.aclose())
             self.turn_detector_stream = None
@@ -362,6 +369,9 @@ class AgentActivity(RecognitionHooks):
         self._delegation_check_pending = False
         self._delegation_check_atask: asyncio.Task[None] | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
+        # a delegation runs alongside the turns, so its span hangs off the session: opened by its
+        # first response and ended by its final one; one the application runs has none
+        self._delegation_spans: dict[str | None, trace.Span] = {}
         self._realtime_user_input_answered_at: float = 0.0
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
@@ -1191,6 +1201,7 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.off("remote_item_added", self._on_remote_item_added)
                     self._rt_session.off("error", self._on_error)
                     self._rt_session.off("delegation_created", self._on_delegation_created)
+                    self._rt_session.off("_delegated_response", self._on_delegated_response)
                     self._session.off("agent_state_changed", self._on_speaking_for_delegation)
                     self._session.off("user_state_changed", self._on_speaking_for_delegation)
                     self._cancel_delegation_check()
@@ -1203,6 +1214,7 @@ class AgentActivity(RecognitionHooks):
                         self._rt_session._agent_session = None
                     resources.rt_session = self._rt_session
                     self._rt_session = None  # prevent _close_session from closing it
+                    resources.delegation_spans, self._delegation_spans = self._delegation_spans, {}
 
         except Exception:
             # avoid leaking resources
@@ -1302,6 +1314,8 @@ class AgentActivity(RecognitionHooks):
                 logger.debug("reusing realtime session from previous activity")
                 self._rt_session = reuse_resources.rt_session
                 reuse_resources.rt_session = None  # ownership transferred
+                self._delegation_spans = reuse_resources.delegation_spans
+                reuse_resources.delegation_spans = {}
 
                 # clear any stale audio/generation state
                 self._rt_session.interrupt()
@@ -1327,6 +1341,7 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.on("remote_item_added", self._on_remote_item_added)
             self._rt_session.on("error", self._on_error)
             self._rt_session.on("delegation_created", self._on_delegation_created)
+            self._rt_session.on("_delegated_response", self._on_delegated_response)
             self._session.on("agent_state_changed", self._on_speaking_for_delegation)
             self._session.on("user_state_changed", self._on_speaking_for_delegation)
 
@@ -1695,6 +1710,12 @@ class AgentActivity(RecognitionHooks):
             def _on_rt_closed(closed: asyncio.Future[None]) -> None:
                 # after the close, so the final usage reported while closing is still counted
                 rt_session.off("metrics_collected", self._on_metrics_collected)
+                rt_session.off("_delegated_response", self._on_delegated_response)
+                # the session closed under a delegation still in flight
+                for span in self._delegation_spans.values():
+                    gen_ai_telemetry.set_error_type(span, "session_closed")
+                    span.end()
+                self._delegation_spans.clear()
                 if realtime_spans is not None:
                     realtime_spans.clear()
                 self._session._rt_closing.discard(closed)
@@ -2470,6 +2491,72 @@ class AgentActivity(RecognitionHooks):
 
     def _on_delegation_created(self, _: llm.DelegationCreatedEvent) -> None:
         self._cancel_delegation_check()
+
+    def _on_delegated_response(self, ev: _DelegatedResponse) -> None:
+        d_id = ev.delegation_id
+        if (delegation := self._delegation_spans.get(d_id)) is None:
+            delegation = self._delegation_spans[d_id] = tracer.start_span(
+                "delegation",
+                context=self._session._root_span_context,
+                start_time=int(ev.started_at * 1e9),
+                attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+            )
+            if d_id:
+                delegation.set_attribute(trace_types.ATTR_DELEGATION_ID, d_id)
+
+        span = tracer.start_span(
+            "llm_request",
+            context=trace.set_span_in_context(delegation),
+            start_time=int(ev.started_at * 1e9),
+        )
+        try:
+            gen_ai_telemetry.set_request_attributes(
+                span,
+                operation=trace_types.GenAIOperationName.CHAT,
+                provider=ev.provider,
+                model=ev.model,
+                stream=True,
+                output_type=trace_types.GenAIOutputType.TEXT,
+            )
+            if ev.delegation_id:
+                span.set_attribute(trace_types.ATTR_DELEGATION_ID, ev.delegation_id)
+            if ev.error is not None:
+                gen_ai_telemetry.set_error_type(span, ev.error)
+            finish = "tool_call" if ev.function_calls else "stop"
+            gen_ai_telemetry.set_response_attributes(
+                span,
+                response_id=ev.response_id,
+                model=ev.response_model,
+                finish_reasons=[finish] if ev.error is None else None,
+            )
+            if ev.metrics is not None:
+                gen_ai_telemetry.set_usage_attributes(span, ev.metrics)
+                span.set_attribute(trace_types.ATTR_LLM_METRICS, ev.metrics.model_dump_json())
+            if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+                attrs: dict[str, Any] = {
+                    trace_types.ATTR_GEN_AI_TOOL_DEFINITIONS: json.dumps(
+                        gen_ai_telemetry.to_tool_definitions(llm.ToolContext(self.tools).flatten())
+                    )
+                }
+                if ev.instructions:
+                    attrs[trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS] = json.dumps(
+                        [{"type": "text", "content": ev.instructions}]
+                    )
+                if output := gen_ai_telemetry.to_output_messages(
+                    text=ev.text or None, function_calls=ev.function_calls, finish_reason=finish
+                ):
+                    attrs[trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES] = json.dumps(output)
+                span.set_attributes(attrs)
+        except Exception:
+            logger.exception("failed to record a delegated response")
+        finally:
+            end_ns = int(ev.ended_at * 1e9)
+            span.end(end_time=end_ns)
+            if ev.final:
+                if ev.error is not None:
+                    gen_ai_telemetry.set_error_type(delegation, ev.error)
+                del self._delegation_spans[d_id]
+                delegation.end(end_time=end_ns)
 
     def _on_speaking_for_delegation(
         self, ev: AgentStateChangedEvent | UserStateChangedEvent
