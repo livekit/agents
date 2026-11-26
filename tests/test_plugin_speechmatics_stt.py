@@ -5,9 +5,8 @@ Two halves, and they answer different questions:
 - **The plugin's own behaviour** — what a caller configures, what reaches the wire, and
   what the service's messages become. Every test covers one translation across one seam,
   so a failure names the thing that broke rather than "Speechmatics is broken".
-- **Back-compatibility** — the public surface the plugin exposed before Agent STT. Those
-  names and arguments still resolve, and each one says so in the log. Deleted after
-  2026-10-05, along with the `speechmatics-voice` dependency they are served from.
+- **Back-compatibility** — the arguments the plugin exposed before Agent STT still resolve,
+  and each one says so in the log.
 
 Nothing here opens a socket. Live coverage is the k8s-saas e2e suite, which drives the
 real plugin against `/v2/agent`; duplicating it here would only be slower and flakier.
@@ -20,7 +19,6 @@ Run standalone:
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from typing import Any
 
@@ -69,9 +67,7 @@ WIRE_WHITELIST = frozenset(
     }
 )
 
-# The pre-Agent-STT public names, by what a user would have written.
-OPERATING_POINT = "OperatingPoint"
-SPEAKER_FOCUS_MODE = "SpeakerFocusMode"
+# The pre-Agent-STT values, by what a user would have written.
 REMOVED_TURN_MODES = ("ADAPTIVE", "FIXED", "SMART_TURN")
 LEGACY_OPERATING_POINTS = ("enhanced", "standard")
 
@@ -179,16 +175,6 @@ class _StubClient:
 
     async def disconnect(self) -> None:
         self.is_connected = False
-
-
-@pytest.fixture(autouse=True)
-def _reset_deprecation_warnings():
-    """Each symbol shim warns once per process, so tests would otherwise shadow each other."""
-    import livekit.plugins.speechmatics as plugin
-
-    plugin._warned_deprecated.clear()
-    yield
-    plugin._warned_deprecated.clear()
 
 
 # --- Construction and validation -----------------------------------------------------
@@ -689,74 +675,6 @@ async def test_speakers_result_is_stored_not_emitted() -> None:
 # --- Back-compatibility: the pre-Agent-STT public surface ----------------------------
 
 
-def test_operating_point_still_imports_and_warns(caplog) -> None:
-    """`from ... import OperatingPoint` used to fail on upgrade, before any `STT` existed.
-
-    Served from the voice SDK that declared it, so callers get the identical class object
-    they already hold and their `isinstance` checks still pass.
-    """
-    import speechmatics.rt
-    import speechmatics.voice
-
-    with caplog.at_level("WARNING"):
-        from livekit.plugins.speechmatics import OperatingPoint
-
-    assert OperatingPoint is speechmatics.voice.OperatingPoint
-    # voice only re-exported rt's, so the two are one class and either import site matches.
-    assert OperatingPoint is speechmatics.rt.OperatingPoint
-    assert {point.value for point in OperatingPoint} == set(LEGACY_OPERATING_POINTS)
-    assert OPERATING_POINT in caplog.text
-    assert "deprecated" in caplog.text
-
-
-def test_speaker_focus_mode_still_imports_and_warns(caplog) -> None:
-    """Speaker focus has no Agent STT equivalent, so the name resolves and says so."""
-    import speechmatics.voice
-
-    with caplog.at_level("WARNING"):
-        from livekit.plugins.speechmatics import SpeakerFocusMode
-
-    assert SpeakerFocusMode is speechmatics.voice.SpeakerFocusMode
-    assert {member.name for member in SpeakerFocusMode} == {"RETAIN", "IGNORE"}
-    assert SPEAKER_FOCUS_MODE in caplog.text
-    assert "not supported by Agent STT" in caplog.text
-
-
-def test_unknown_attributes_still_raise() -> None:
-    """The shim is a lookup of known names, not a catch-all that invents attributes."""
-    import livekit.plugins.speechmatics as plugin
-
-    with pytest.raises(AttributeError, match="NotAThing"):
-        _ = plugin.NotAThing
-
-
-def test_voice_sdk_stays_off_the_runtime_path() -> None:
-    """What keeps "this PR removes the voice SDK" true.
-
-    The shim imports live inside the `__getattr__` branches, so importing the plugin,
-    constructing `STT`, building the config and passing deprecated kwargs all leave
-    `speechmatics.voice` out of `sys.modules`. Only touching a deprecated *symbol* loads it.
-
-    Runs in a subprocess because import state is process-wide: any earlier test in this
-    file has already pulled voice in.
-    """
-    probe = """
-import sys
-from livekit.plugins.speechmatics import STT
-
-stt = STT(api_key="k", vad=None, focus_mode="retain", operating_point="enhanced")
-stt._prepare_config()
-assert "speechmatics.voice" not in sys.modules, "voice SDK reached the runtime path"
-print("clean")
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, timeout=120
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "clean" in result.stdout
-
-
 def test_update_speakers_is_a_warning_no_op(caplog) -> None:
     """The method only ever updated speaker focus, so there is nothing left for it to do.
 
@@ -830,38 +748,6 @@ def test_non_agent_endpoint_is_reported(monkeypatch, caplog) -> None:
         _stt(vad=None, base_url=f"{DEFAULT_BASE_URL}/")  # a trailing slash is still an endpoint
 
     assert "not an Agent STT endpoint" not in caplog.text
-
-
-def test_old_style_usage_runs(caplog) -> None:
-    """The capstone: the shape the pre-migration README's own examples taught.
-
-    Every line of it used something this migration removed, and all of it now constructs.
-    """
-    usage = """
-from livekit.plugins.speechmatics import (
-    STT,
-    OperatingPoint,
-    SpeakerFocusMode,
-    TurnDetectionMode,
-)
-
-stt = STT(
-    api_key="test-key",
-    vad=None,
-    operating_point=OperatingPoint.ENHANCED,
-    turn_detection_mode=TurnDetectionMode.ADAPTIVE,
-    focus_mode=SpeakerFocusMode.RETAIN,
-)
-stt.update_speakers(focus_speakers=["S1"])
-"""
-    namespace: dict[str, Any] = {}
-
-    with caplog.at_level("WARNING"):
-        exec(usage, namespace)
-
-    assert namespace["stt"].model == DEFAULT_MODEL.value
-    for deprecated in (OPERATING_POINT, SPEAKER_FOCUS_MODE, "ADAPTIVE", "focus_mode"):
-        assert deprecated in caplog.text
 
 
 @pytest.mark.parametrize(
