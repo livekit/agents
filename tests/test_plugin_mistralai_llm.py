@@ -11,9 +11,18 @@ from mistralai.client.errors import (
     HTTPValidationErrorData,
     SDKError,
 )
-from mistralai.client.models import CompletionArgs, MessageOutputEvent, TextChunk, ThinkChunk
+from mistralai.client.models import (
+    CompletionArgs,
+    ConversationUsageInfo,
+    FunctionCallEvent,
+    MessageOutputEvent,
+    ResponseDoneEvent,
+    ResponseStartedEvent,
+    TextChunk,
+    ThinkChunk,
+)
 
-from livekit.agents import APIStatusError, llm
+from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.mistralai.llm import LLM
 
@@ -48,9 +57,12 @@ def _model(conversations: _FakeConversations | None = None, **kwargs: Any) -> LL
     return LLM(client=client, model="test-model", **kwargs)  # type: ignore[arg-type]
 
 
+def _done() -> object:
+    return _event(ResponseDoneEvent(usage=ConversationUsageInfo()))
+
+
 async def _no_events():
-    return
-    yield
+    yield _done()
 
 
 async def _run(model: LLM, **chat_kwargs: Any) -> None:
@@ -160,6 +172,59 @@ class TestLLMErrorHandling:
             assert excinfo.value.retryable is False
             assert len(errors) == 1
             assert errors[0].recoverable is False
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_stream_ending_before_response_done_is_retried(self) -> None:
+        """A stream cut off before any output was reported as an empty, complete reply."""
+
+        async def _events():
+            yield _event(ResponseStartedEvent(conversation_id="conv_1"))
+
+        conversations = _FakeConversations(lambda _: _events())
+        model = _model(conversations=conversations)
+
+        try:
+            with pytest.raises(APIConnectionError):
+                await _run(
+                    model,
+                    conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=1.0),
+                )
+
+            assert conversations.calls == 3
+        finally:
+            await model.aclose()
+
+    @pytest.mark.asyncio
+    async def test_stream_ending_before_response_done_after_output_is_an_error(self) -> None:
+        """A stream cut off mid-reply was reported as complete, with its partial tool call."""
+
+        async def _events():
+            yield _event(MessageOutputEvent(id="msg_1", content="partial"))
+            yield _event(
+                FunctionCallEvent(
+                    id="fc_1", name="get_weather", tool_call_id="call_1", arguments='{"ci'
+                )
+            )
+
+        conversations = _FakeConversations(lambda _: _events())
+        model = _model(conversations=conversations)
+        chunks: list[llm.ChatChunk] = []
+
+        try:
+            with pytest.raises(APIConnectionError) as excinfo:
+                async with model.chat(
+                    chat_ctx=llm.ChatContext.empty(),
+                    conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=1.0),
+                ) as stream:
+                    async for chunk in stream:
+                        chunks.append(chunk)
+
+            assert [chunk.delta.content for chunk in chunks if chunk.delta] == ["partial"]
+            assert not any(chunk.delta and chunk.delta.tool_calls for chunk in chunks)
+            assert conversations.calls == 1
+            assert excinfo.value.retryable is False
         finally:
             await model.aclose()
 
@@ -274,6 +339,7 @@ class TestReasoningEffort:
                 )
             )
             yield _event(MessageOutputEvent(id="msg_1", content="Hello"))
+            yield _done()
 
         conversations = _FakeConversations(lambda _: _events())
         model = _model(conversations=conversations, reasoning_effort="high")
