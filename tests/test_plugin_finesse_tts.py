@@ -572,6 +572,25 @@ async def test_direct_session_evicts_an_unused_voices_pool(
     await tts.aclose()
 
 
+async def test_direct_pool_recycles_before_the_server_session_ttl(
+    server: FakeFinesse, session: aiohttp.ClientSession
+) -> None:
+    from livekit.plugins.finesse.tts import _DIRECT_MAX_SESSION_DURATION
+
+    tts = _tts_direct(server, session)
+    await _collect(tts.synthesize("One.", conn_options=NO_RETRY))
+
+    # The server ends a direct session ~1 hour (3600 s) after it is minted, regardless of use.
+    # The pool must cap the connection's lifetime below that and must not refresh the clock on
+    # reuse, or a connection used often enough never ages out and the server kills it mid-reply.
+    pool = tts._direct_pools[VOICE]
+    assert pool._mark_refreshed_on_get is False
+    assert pool._max_session_duration is not None
+    assert 0 < pool._max_session_duration < 3600
+    assert 0 < _DIRECT_MAX_SESSION_DURATION < 3600
+    await tts.aclose()
+
+
 async def test_direct_session_mints_for_the_streams_snapshot_voice(
     server: FakeFinesse, session: aiohttp.ClientSession
 ) -> None:

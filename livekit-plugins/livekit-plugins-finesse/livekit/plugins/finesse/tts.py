@@ -52,6 +52,12 @@ _SUBPROTOCOL = "finesse.v1"
 # expires) the next synthesis mints a fresh one.
 _SESSION_BUDGET_CHARS = 200_000
 
+# The server ends a direct session roughly an hour after it is minted, regardless of use. A
+# direct pool caps its connection's lifetime below that (and does not refresh the clock on reuse),
+# so a long-lived agent recycles the socket — minting a fresh session — before the server would
+# end it mid-reply. Kept comfortably under the ~3600 s server TTL to absorb an in-flight turn.
+_DIRECT_MAX_SESSION_DURATION = 3300
+
 # Finesse synthesizes at 24 kHz and upsamples above it. Below it, it produces only 8 kHz
 # telephony audio, so the rates it returns are 8000 and 24000 to 48000.
 NATIVE_SAMPLE_RATE = 24000
@@ -271,8 +277,11 @@ class TTS(tts.TTS):
             pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
                 connect_cb=functools.partial(self._connect_direct, voice=voice),
                 close_cb=self._close_ws,
-                max_session_duration=300,
-                mark_refreshed_on_get=True,
+                # A direct connection carries a server session that expires regardless of use, so
+                # its lifetime is capped below that TTL and the clock is not refreshed on reuse:
+                # the pool recycles it (minting a fresh session) before the server ends it.
+                max_session_duration=_DIRECT_MAX_SESSION_DURATION,
+                mark_refreshed_on_get=False,
             )
             self._direct_pools[voice] = pool
         return pool
@@ -476,7 +485,9 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
-        for pool in self._direct_pools.values():
+        # A stream finishing during an awaited aclose() can evict a pool via _release_direct,
+        # so iterate over a snapshot of the values.
+        for pool in list(self._direct_pools.values()):
             await pool.aclose()
         self._direct_pools.clear()
         self._direct_inuse.clear()
