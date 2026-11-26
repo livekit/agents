@@ -5,8 +5,10 @@ use crate::errors::{Invalid, ProviderError};
 use crate::{ApiConnectOptions, Llm, Stt, ToolSpec};
 use std::sync::Arc;
 
-// The Python `module` and `path` of every record here that names none of its own.
-#[crate::host(file(module = "amd", path = "livekit.agents.voice.amd"))]
+// The Python `module` of every record here. Only the public API names
+// `path = "livekit.agents.voice.amd"`; the binding records (the entry, the classifier, the choice
+// request and the run's event union) stay out of that module.
+#[crate::host(file(module = "amd"))]
 const _: () = ();
 
 /// The classifier AMD selects when `llm` is not given and LiveKit Cloud credentials exist.
@@ -18,7 +20,14 @@ pub const DEFAULT_AMD_LLM_MODEL: &str = "google/gemma-4-31b-it";
 pub const DEFAULT_AMD_STT_MODEL: &str = "cartesia/ink-whisper";
 
 /// A per-turn prediction or a stage. `uncertain` and `wait` keep the stage.
-#[crate::host(record(module = "amd", name = "AMDCategory", emit, extract, enum))]
+#[crate::host(record(
+    module = "amd",
+    path = "livekit.agents.voice.amd",
+    name = "AMDCategory",
+    emit,
+    extract,
+    enum
+))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AmdCategory {
@@ -41,7 +50,14 @@ pub enum AmdCategory {
 }
 
 /// Why a prediction was published or why the run completed.
-#[crate::host(record(module = "amd", name = "AMDReason", emit, extract, enum))]
+#[crate::host(record(
+    module = "amd",
+    path = "livekit.agents.voice.amd",
+    name = "AMDReason",
+    emit,
+    extract,
+    enum
+))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AmdReason {
@@ -90,7 +106,14 @@ pub enum AmdReason {
 
 /// Where one AMD run is: `initialized` until entered, `pending` until it listens, `active`
 /// while it listens, `finished` once it completed.
-#[crate::host(record(module = "amd", name = "AMDLifecycle", emit, extract, enum))]
+#[crate::host(record(
+    module = "amd",
+    path = "livekit.agents.voice.amd",
+    name = "AMDLifecycle",
+    emit,
+    extract,
+    enum
+))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AmdLifecycle {
@@ -107,6 +130,7 @@ pub enum AmdLifecycle {
 /// `amd_prediction`: at most one per committed turn.
 #[crate::host(record(
     module = "amd",
+    path = "livekit.agents.voice.amd",
     name = "AMDPredictionEvent",
     pydantic,
     emit,
@@ -151,6 +175,7 @@ pub struct AmdPredictionEvent {
 /// `amd_completed`: once per run, after cleanup.
 #[crate::host(record(
     module = "amd",
+    path = "livekit.agents.voice.amd",
     name = "AMDCompletedEvent",
     pydantic,
     emit,
@@ -179,7 +204,14 @@ pub struct AmdCompletedEvent {
 }
 
 /// One option of an observed IVR menu.
-#[crate::host(record(module = "amd", name = "IVRMenuOption", pydantic, emit, extract))]
+#[crate::host(record(
+    module = "amd",
+    path = "livekit.agents.voice.amd",
+    name = "IVRMenuOption",
+    pydantic,
+    emit,
+    extract
+))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IvrMenuOption {
     pub label: String,
@@ -192,6 +224,7 @@ pub struct IvrMenuOption {
 /// Best-effort observation. This event never authorizes an action.
 #[crate::host(record(
     module = "amd",
+    path = "livekit.agents.voice.amd",
     name = "AMDMenuObservedEvent",
     pydantic,
     emit,
@@ -220,7 +253,14 @@ pub enum AmdEvent {
 
 /// `AMD(...)`'s behavior options, with their defaults. Model and participant selection are the
 /// constructor's own arguments.
-#[crate::host(record(module = "amd", name = "AMDOptions", dataclass, extract, kwargs))]
+#[crate::host(record(
+    module = "amd",
+    path = "livekit.agents.voice.amd",
+    name = "AMDOptions",
+    dataclass,
+    extract,
+    kwargs
+))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct AmdOptions {
     /// Discard pre-answer audio from AMD and the session. When False, listen to subscribed SIP
@@ -388,7 +428,7 @@ pub trait AmdDecisionModel: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<Option<String>, ProviderError>>;
 
     /// `provider/model`, for logs.
-    #[host(call, function = "livekit.agents.voice.amd._decision_label")]
+    #[host(call, function = "livekit.agents.voice.amd._label")]
     fn label(&self) -> Result<String, crate::errors::HostError>;
 }
 

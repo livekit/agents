@@ -357,11 +357,6 @@ AMDMenuObservedEvent.__module__ = "livekit.agents.voice.amd"
 AMDOptions.__annotations__ = get_annotations(AMDOptions, eval_str=True)
 AMDOptions.__module__ = "livekit.agents.voice.amd"
 AMDOptionsKwargs.__module__ = "livekit.agents.voice.amd"
-AmdLlm.__module__ = "livekit.agents.voice.amd"
-AmdDecision.__module__ = "livekit.agents.voice.amd"
-AmdStt.__module__ = "livekit.agents.voice.amd"
-AmdEntry.__module__ = "livekit.agents.voice.amd"
-AmdChoiceRequest.__module__ = "livekit.agents.voice.amd"
 
 
 DEFAULT_AMD_LLM_MODEL: Final = "google/gemma-4-31b-it"

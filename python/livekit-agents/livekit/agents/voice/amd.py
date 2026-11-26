@@ -18,19 +18,22 @@ from livekit import rtc
 
 from .. import _core, inference, llm, stt
 from .._generated import public_voice_amd as _public
-from .._generated.amd import DEFAULT_AMD_LLM_MODEL, DEFAULT_AMD_STT_MODEL
-from .._generated.public_voice_amd import *  # noqa: F403
-from .._generated.public_voice_amd import (
+from .._generated.amd import (
+    DEFAULT_AMD_LLM_MODEL,
+    DEFAULT_AMD_STT_MODEL,
     AmdChoiceRequest,
-    AMDCompletedEvent,
     AmdDecision,
     AmdEntry,
-    AMDLifecycle,
     AmdLlm,
+    AmdStt,
+)
+from .._generated.public_voice_amd import *  # noqa: F403
+from .._generated.public_voice_amd import (
+    AMDCompletedEvent,
+    AMDLifecycle,
     AMDOptions,
     AMDOptionsKwargs,
     AMDPredictionEvent,
-    AmdStt,
 )
 from ..log import logger
 from ..stt import STT
@@ -68,10 +71,6 @@ async def _choose(model: llm.DecisionModel, request: AmdChoiceRequest) -> str | 
     return result.value if isinstance(result, llm.ChoiceResult) else None
 
 
-def _decision_label(model: llm.DecisionModel) -> str:
-    return f"{model.provider}/{model.model}"
-
-
 def _reaches_inference(model: object) -> bool:
     """Whether every request ``model`` makes reaches LiveKit Inference (a fallback chain only
     when each member does): those carry AMD's client feature header."""
@@ -81,6 +80,8 @@ def _reaches_inference(model: object) -> bool:
 
 
 def _label(model: Any) -> str:
+    """``provider/model``: the startup log's name for a model, and a decision model's label in
+    the core's logs."""
     return f"{getattr(model, 'provider', 'unknown')}/{getattr(model, 'model', 'unknown')}"
 
 

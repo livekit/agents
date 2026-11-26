@@ -6447,7 +6447,7 @@ impl ::lk_agents_abi::voice::amd::AmdDecisionModel for AmdDecisionModelProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [host.bind(py)?];
                 Ok((
-                    py.import("livekit.agents.voice.amd")?.getattr("_decision_label")?,
+                    py.import("livekit.agents.voice.amd")?.getattr("_label")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
