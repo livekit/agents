@@ -1,0 +1,21 @@
+python/livekit-agents/livekit/agents/voice/amd.py
+  s_342953b2c18827::t_09231a8ec56db3 359-360,370-375,377-378
+tests/host/test_amd.py
+  s_342953b2c18827::t_cfb8b9d52b025c 1256-1289
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed5a40fbfacb97ae3c0bf9e15441b682154efef9",
+  "prompts": {},
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
