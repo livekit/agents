@@ -1,0 +1,14 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  h_a827ab16c3c189 2137,2139-2140,2154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "da483938cfecd0811179b9af19fd9b9e59e6f884",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
