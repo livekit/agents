@@ -1,0 +1,70 @@
+spec/amd.md
+  s_8ff133f4487d69::t_d31a2449b8ee6f 935
+  h_a827ab16c3c189 218-219,699,757-759,819-821,830-833,837-839,841-844,859-868,870-886,888-889,891-895,908-918,922-927,932-934,936
+  s_342953b2c18827::t_1cb06c7f842f93 806-808
+  h_a827ab16c3c189 869,887,890,928-931
+livekit-agents/livekit/agents/llm/realtime_fallback_adapter.py
+  h_a827ab16c3c189 397-399
+livekit-agents/livekit/agents/voice/_turn_hooks.py
+  h_a827ab16c3c189 25-30
+tests/test_realtime_fallback.py
+  h_a827ab16c3c189 4,35,447
+livekit-agents/livekit/agents/voice/amd/_stt.py
+  h_a827ab16c3c189 6,13-14,65,71-73,83,131-132,136-145,148,151,153-154
+livekit-agents/livekit/agents/voice/tool_executor.py
+  h_a827ab16c3c189 642
+livekit-agents/livekit/agents/voice/agent_session.py
+  h_a827ab16c3c189 1651,1731,1941,2041
+tests/test_tools.py
+  h_a827ab16c3c189 2261,2526
+livekit-agents/livekit/agents/voice/agent_activity.py
+  h_a827ab16c3c189 2137-2139,2153-2156,3031,3036,3066,3236,3351
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_342953b2c18827::t_4448b502f16ae3 193-195
+  h_a827ab16c3c189 25-31,135-138,151-152,228-232,235-236,365,439-444,457-459,462-463,476-477,479-489,536,567,580,756-757,759-760,762-763,766-772,777-784,795-798,878,1477-1478
+  h_a827ab16c3c189 233-234,764
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  h_a827ab16c3c189 1135-1137
+tests/test_amd.py
+  s_358564459882e4::t_5214173f16f999 7028-7029,7032-7033,7640-7643,7650-7653
+  s_8ff133f4487d69::t_b9d2a945abf176 7585-7587,7589-7591,7593-7594,7596-7599,7601-7602,7604-7613,7616-7638,7692-7707
+  h_a827ab16c3c189 619-637,1251,6983-6986,6988,6996-7000,7235,7237-7240,7257,7262,7272,7318,7320-7345,7366-7408,7411-7454,7456-7470,7473-7493,7497,7501-7502,7505-7507,7509-7510,7512,7517,7519-7521,7523-7524,7535,7545-7546,7551-7554,7556-7557,7577,7639,7644-7649,7654-7656,7658-7659,7661,7664-7666,7668-7675,7677-7681,7683-7685,7687-7688,7723
+  h_a827ab16c3c189 7409-7410,7471-7472,7525
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8b2bc0129ae065bee882a9c489f19021a4f1abc3",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  },
+  "sessions": {
+    "s_342953b2c18827": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2a36cb8-e793-4a92-bf42-59db0ee5eff0",
+        "model": "unknown"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_358564459882e4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "257e16d1-fdf7-4bf0-9def-7fc17a0e6c1d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    },
+    "s_8ff133f4487d69": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dee366d8-cc43-4b58-b915-c317339c3e8f",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
