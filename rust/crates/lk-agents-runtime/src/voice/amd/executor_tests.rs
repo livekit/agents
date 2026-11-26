@@ -8,16 +8,21 @@ use crate::room_io::FixedRoom;
 use crate::voice::Executor;
 use crate::voice::session::{CloseOptions, SessionRunner, Timebase};
 use lk_agents_abi::utils::stream::{Closed, ProviderStream, StreamInput, StreamOutput};
+use lk_agents_abi::voice::amd as abi;
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::rtc::{
     ByteStreamIngress, ConnectionState, LocalParticipant, ParticipantIdentity, RemoteParticipant,
     RoomEventSink, RtcError, TextStreamIngress,
 };
+use lk_agents_abi::worker::remote_session::SessionHosting;
 use lk_agents_abi::{AudioFrame, ChatRequest, LlmStream, SpeechEvent, Ts};
 use lk_agents_voice::agent_session::Command;
 use lk_agents_voice::agent_session::VoiceHostEvent;
 use lk_agents_voice::agent_session::commands::HookOutcome;
+use lk_agents_voice::amd::AmdObservation;
+use lk_agents_voice::amd::events::Category;
 use lk_agents_voice::amd::events::{AmdReason, Stage};
+use lk_agents_voice::audio_recognition::TurnId;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -31,6 +36,11 @@ fn no_room() -> FixedRoom {
 
 /// A room-only session, started, over a host that answers every hook at once.
 async fn session() -> VoiceSession {
+    session_with(None).await
+}
+
+/// [`session`], serving `remote` as its remote session host.
+async fn session_with(remote: Option<Arc<Remote>>) -> VoiceSession {
     let room = Arc::new(no_room()) as Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>;
     let args = lk_agents_abi::voice::session::VoiceSessionArgs {
         agent: "agent".into(),
@@ -44,7 +54,7 @@ async fn session() -> VoiceSession {
     let opening = api
         .open(
             Box::new(Executor::new(api.time().clone(), api.spawner())),
-            None,
+            remote.map(|remote| remote as Arc<dyn SessionHosting>),
             move |mut runner: SessionRunner| {
                 Box::pin(async move {
                     while let Some(ev) = runner.next_host_event().await {
@@ -555,4 +565,123 @@ async fn invalid_options_and_a_batch_stt_are_refused_at_entry() {
     // Neither refusal attached a run.
     let run = enter(&api, config(AmdOptions::default())).await;
     assert!(run.is_ok(), "{:?}", run.err());
+}
+
+/// A remote session host that records each AMD event it is sent.
+#[derive(Default)]
+struct Remote(Mutex<Vec<abi::AmdEvent>>);
+
+impl SessionHosting for Remote {
+    fn forward(&self, _: &lk_agents_abi::voice::events::HostWire) {}
+    fn forward_usage(&self, _: &lk_agents_abi::usage::Usage) {}
+    fn forward_error(&self, _: String) {}
+    fn forward_tools_executed(&self, _: &lk_agents_abi::voice::events::ToolsExecutedEvent) {}
+    fn forward_amd(&self, event: &abi::AmdEvent) {
+        self.0.lock().push(event.clone());
+    }
+    fn start(&self) -> BoxFuture<'_, Result<(), lk_agents_abi::errors::HostError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn aclose(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+}
+
+/// A decision model that chooses `category` for every turn.
+struct Chooses(Category);
+
+impl DecisionModel for Chooses {
+    fn label(&self) -> String {
+        "chooses".into()
+    }
+
+    fn choose<'a>(
+        &'a self,
+        _: &Cx,
+        _: &'a ChoiceRequest,
+    ) -> BoxFuture<'a, Result<Option<String>, ProviderError>> {
+        Box::pin(async move { Ok(Some(self.0.as_str().to_owned())) })
+    }
+}
+
+// Catches: a prediction or the completion reaching the run's host before the remote session
+// host. Spec §13: the remote host gets each prediction and the result first, so a console
+// client never sees `amd_completed` after the application reacted to it.
+#[tokio::test(start_paused = true)]
+async fn the_remote_host_hears_each_event_before_the_runs_host() {
+    let remote = Arc::new(Remote::default());
+    let api = session_with(Some(Arc::clone(&remote))).await;
+    let mut config = config(AmdOptions::default());
+    config.classifier = Classifier::Decision(AmdModel::supplied(
+        Arc::new(Chooses(Category::Human)) as Arc<dyn DecisionModel>,
+        false,
+    ));
+    let run = enter(&api, config).await.expect("the run attaches");
+    let (peer, agent) = api.amd_peer().expect("running");
+    let committed = AmdObservation::TurnCommitted {
+        turn: TurnId(1),
+        transcript: "Hello, who is this?".into(),
+        eot_delay: None,
+        skip_reply: false,
+        bound: true,
+        speaking: false,
+        agent,
+        at: api.time().now(),
+    };
+    peer.route.deliver(run.id(), &committed);
+    let mut heard = Vec::new();
+    while let Some(event) = within("the run's next event", run.next_event()).await {
+        let event = host::event(&event);
+        // The event is already forwarded when the run's host reads it.
+        assert_eq!(remote.0.lock().get(heard.len()), Some(&event), "forwarded first");
+        heard.push(event);
+    }
+    assert!(
+        matches!(heard.as_slice(), [abi::AmdEvent::Prediction(_), abi::AmdEvent::Completed(_)]),
+        "{heard:?}"
+    );
+    assert_eq!(*remote.0.lock(), heard, "the remote host heard the same events, once each");
+}
+
+// Catches: a failing host listener that does not end the run, or ends it with another reason.
+// Python: a prediction or menu listener that raises ends the run with `internal_error`
+// (`test_menu_listener_error_ends_detection_with_internal_error`); `AmdRun::fail` is that path.
+#[tokio::test(start_paused = true)]
+async fn a_failed_host_listener_ends_the_run_with_internal_error() {
+    let api = session().await;
+    let run = enter(&api, config(AmdOptions::default())).await.expect("the run attaches");
+    let mut events = run.events().expect("the events");
+    run.fail();
+    let outcome = within("the run's end", run.execute()).await;
+    assert_eq!((outcome.category, outcome.reason), (Stage::Uncertain, AmdReason::InternalError));
+    assert_eq!(drain(&mut events), vec![AmdEvent::Completed(outcome.clone())]);
+    // Only the first completion counts: a later failure or close changes nothing.
+    run.fail();
+    assert_eq!(within("a close", run.close()).await, outcome);
+}
+
+// Catches: `check` refusing a session that would take an attach, accepting one that would
+// refuse it, or attaching anything. Python: `__aenter__`'s session checks run before it creates
+// a model (`test_rejected_entry_does_not_create_owned_models`).
+#[tokio::test(start_paused = true)]
+async fn the_entry_check_answers_as_the_attach_would_and_attaches_nothing() {
+    let api = session().await;
+    check(&api, false).await.expect("an idle session would take a run");
+    check(&api, false).await.expect("a check attaches nothing");
+    let run = enter(&api, config(AmdOptions::default())).await.expect("the run attaches");
+    let refused = check(&api, false).await;
+    assert!(
+        matches!(refused, Err(AmdEnterError::Refused(AmdAttachRefused::AlreadyAttached))),
+        "{:?}",
+        refused.err()
+    );
+    within("the close", run.close()).await;
+    check(&api, false).await.expect("the detached run left the session free");
+    within(
+        "the session close",
+        api.close(CloseReason::UserInitiated, CloseOptions::default(), None),
+    )
+    .await;
+    let closed = check(&api, false).await;
+    assert!(matches!(closed, Err(AmdEnterError::Session(_))), "{:?}", closed.err());
 }
