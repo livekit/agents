@@ -1,0 +1,16 @@
+spec/amd.md
+  h_a827ab16c3c189 644-646,761,870-872,897
+tests/test_amd.py
+  h_a827ab16c3c189 7235,7246,7536-7556
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "90f29027ce14be35d23b5c83a5b828cb18627f68",
+  "prompts": {},
+  "humans": {
+    "h_a827ab16c3c189": {
+      "author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
