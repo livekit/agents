@@ -170,10 +170,10 @@ impl Namespace {
                             StorageError::Unavailable(Unapplied::local(why))
                         })?;
                         let clock = self.env.clock.clone();
-                        let workers = Workers::threads(Background::new(Arc::default(), spawner, clock));
+                        let workers =
+                            Workers::threads(Background::new(Arc::default(), spawner, clock));
                         let storage = SqliteStorage::open(directory, *lease, workers).await?;
                         let storage = storage.with_telemetry(self.cx.clone());
-                        log::info!(target: lk_agents_abi::LOG_TARGET, "local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
                     Config::Cloud { opts, minter } => {

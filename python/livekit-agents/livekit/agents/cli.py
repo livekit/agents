@@ -283,6 +283,7 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     setup_logging("debug", "console")
     ConsoleCall.addr, ConsoleCall.record = connect_addr, record
     server._update_options(ProcessOptions(job_executor_type=JobExecutorType.THREAD))
+    server._ensure_storage(console=True)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
