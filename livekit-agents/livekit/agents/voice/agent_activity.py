@@ -4804,15 +4804,17 @@ class AgentActivity(RecognitionHooks):
         tees.append(fnc_tee)
 
         function_calls: list[llm.FunctionCall] = []
+        generated_ids: set[str] = set()
         generation_ended = False
 
         async def _read_fnc_stream() -> None:
             async for fnc in fnc_stream_for_tracing:
                 function_calls.append(fnc)
+                generated_ids.add(fnc.id)
 
         async def _drain_msg_stream() -> None:
-            async for _ in msg_stream_to_drain:
-                pass
+            async for msg in msg_stream_to_drain:
+                generated_ids.add(msg.message_id)
 
         async def _watch_generation_end() -> None:
             # the provider closes both streams when it ends the response
@@ -4844,9 +4846,26 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*authorization_tasks, *tasks)
             for tee in tees:
                 await tee.aclose()
+            # the server may already hold the reply the user never heard. delete only its items:
+            # the local context may lack those of another reply that is still waiting to play
+            if generated_ids and self.llm.capabilities.mutable_chat_context:
+                local_items = self._agent._chat_ctx.items
+                local_items[:] = [item for item in local_items if item.id not in generated_ids]
+                try:
+                    async with self._rt_chat_ctx_lock:
+                        chat_ctx = self._rt_session.chat_ctx.copy()
+                        chat_ctx.items[:] = [
+                            item for item in chat_ctx.items if item.id not in generated_ids
+                        ]
+                        await self._rt_session.update_chat_ctx(chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to sync chat context to remove never-played messages",
+                        extra={"error": str(e)},
+                    )
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             _record_interruption(speech_handle)
-            return  # TODO(theomonnom): remove the message from the serverside history
+            return
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
