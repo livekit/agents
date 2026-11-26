@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 from livekit import rtc
 
@@ -74,8 +75,11 @@ class AMDTranscriber:
         conn_options: APIConnectOptions,
         *,
         session_stt: bool = True,
+        on_amd_final: Callable[[], None] | None = None,
     ) -> None:
         self._model = model
+        # called when an AMD final joins the open turn, not a turn that already ended
+        self._on_amd_final = on_amd_final
         self._conn_options = conn_options
         self._session_enabled = session_stt or model is None
         self._amd_enabled = model is not None
@@ -122,19 +126,40 @@ class AMDTranscriber:
                             continue  # a blank final must not consume a turn's wait
                         late, self._late = self._late, None
                         if late is None or not late.deliver(transcript):
-                            self.push_transcript(transcript=transcript, source="amd")
+                            heard = self.push_transcript(transcript=transcript, source="amd")
+                            if heard and self._on_amd_final is not None:
+                                self._on_amd_final()
         except Exception as exc:
             self.fail(exc)
 
     def push_transcript(
         self, transcript: str, *, replace: bool = False, source: AMDTranscriptSource = "session"
-    ) -> None:
+    ) -> bool:
+        """Add a final to the open turn. Return whether it gave text from an STT in use."""
         self._current.add(source, transcript, replace=replace)
+        enabled = self._session_enabled if source == "session" else self._amd_enabled
+        return enabled and bool(transcript.strip())
 
-    def end_turn(self, session_transcript: str, *, late_wait: float = 0.0) -> AMDTranscript:
+    @property
+    def session_stt_active(self) -> bool:
+        """Whether turns use the session transcript."""
+        return self._session_enabled
+
+    def heard(self, source: AMDTranscriptSource) -> bool:
+        """Whether the open turn has text from this source."""
+        return bool(self._current.get(source))
+
+    def end_turn(
+        self, session_transcript: str | None = None, *, late_wait: float = 0.0
+    ) -> AMDTranscript:
         """End the turn. Within `late_wait` seconds, the next AMD final still belongs to it
-        when it has no AMD text yet."""
-        self.push_transcript(session_transcript, replace=True, source="session")
+        when it has no AMD text yet.
+
+        `session_transcript` is the session's transcript of the committed turn. It replaces
+        the session finals heard so far. None keeps those finals.
+        """
+        if session_transcript is not None:
+            self.push_transcript(session_transcript, replace=True, source="session")
         turn, self._current = self._current, AMDTurnTranscriptAccumulator()
         # without session STT the turn has no text until its AMD final arrives
         late = (

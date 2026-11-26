@@ -2258,7 +2258,7 @@ def _make_reply_session(speech: Any) -> Any:
     activity.scheduling_paused = False
     session.wait_for_idle = AsyncMock(return_value=activity)
     session.generate_reply = MagicMock(return_value=speech)
-    session.amd = None
+    session._amd_gates_replies = False
     return session
 
 
@@ -2523,7 +2523,7 @@ class TestToolCallEvents:
 
         session = _make_reply_session(_make_fake_speech())
         # AMD rejects direct replies; its next reply sees the updates in the chat context
-        session.amd = object()
+        session._amd_gates_replies = True
         executor = _ToolExecutor()
         run_ctx = _make_run_context_with_session(session, call_id="c9", name="progress_tool")
         await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})

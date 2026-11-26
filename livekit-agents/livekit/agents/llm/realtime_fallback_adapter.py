@@ -394,7 +394,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 was_speaking
                 and self._adapter._regenerate_on_swap
                 and self._agent_session is not None
-                and self._agent_session.amd is None
+                and not self._agent_session._amd_gates_replies
             ):
                 self._agent_session.generate_reply()
 

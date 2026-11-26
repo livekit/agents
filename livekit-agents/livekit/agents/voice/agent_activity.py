@@ -3027,7 +3027,7 @@ class AgentActivity(RecognitionHooks):
         # AMD classifies every turn, so short turns are committed while it runs
         if (
             self.stt is not None
-            and self._session._amd is None
+            and not self._session._amd_gates_replies
             and self._turn_detection != "manual"
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
@@ -3341,7 +3341,7 @@ class AgentActivity(RecognitionHooks):
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
 
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
-        if self._session._amd is not None:
+        if self._session._amd_gates_replies:
             return  # AMD owns replies while it runs, and a voicemail greeting runs long
         if self._scheduling_paused or self._new_turns_blocked:
             logger.warning(

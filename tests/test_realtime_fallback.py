@@ -31,7 +31,7 @@ class _StubAgentSession:
         self.interrupt_calls = 0
         self.generate_reply_calls = 0
         self.current_agent = _StubAgent(chat_ctx if chat_ctx is not None else ChatContext.empty())
-        self.amd: object | None = None
+        self._amd_gates_replies = False
 
     def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
         self.interrupt_calls += 1
@@ -443,7 +443,7 @@ async def test_no_regenerate_while_amd_runs() -> None:
     session = adapter.session()
     session._agent_session = _StubAgentSession(agent_state="speaking")
     # AMD rejects direct replies; its next turn decides whether the agent replies
-    session._agent_session.amd = object()
+    session._agent_session._amd_gates_replies = True
 
     primary.active_session.emit_error(recoverable=False)
     await session._swap_task
