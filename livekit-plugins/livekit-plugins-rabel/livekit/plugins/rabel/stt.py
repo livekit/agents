@@ -224,6 +224,10 @@ class _HostLimits:
     # the agent has a reply under way that the caller has not interrupted: LiveKit starts no early
     # reply until it is interrupted or done (agent_activity's on_preemptive_generation)
     agent_speaking: bool = False
+    # turns are ended by the speech-to-text (`turn_detection="stt"`): LiveKit starts an early reply
+    # on a final only after the speech-to-text's end of speech (audio_recognition:
+    # `_stt_turn_ended`), not on a final within the turn
+    stt_turns: bool = False
 
 
 _DEFAULT_LIMITS = _HostLimits()
@@ -282,6 +286,7 @@ def _host_limits() -> _HostLimits:
             agent_speaking=(
                 (speech := session.current_speech) is not None and not speech.interrupted
             ),
+            stt_turns=turn_detection == "stt",
         )
     except Exception as e:  # noqa: BLE001
         # a setting that cannot be read never touches the speech-to-text's events
@@ -539,6 +544,8 @@ class SpeechStream(stt.RecognizeStream):
         # turn of the speech-to-text's can end and another begin before LiveKit commits, and
         # LiveKit's count runs on over both
         self._lk_starts = 0
+        # LiveKit's `_stt_turn_ended`: the speech-to-text has ended speech since it last started it
+        self._lk_stt_ended = False
         # how this call's speech-to-text has written its final transcripts, for a guess in a
         # language other than English
         self._form = CallForm()
@@ -668,10 +675,12 @@ class SpeechStream(stt.RecognizeStream):
     def _apply(self, ev: stt.SpeechEvent) -> list[stt.SpeechEvent]:
         T = stt.SpeechEventType
         if ev.type == T.START_OF_SPEECH:
+            self._lk_stt_ended = False
             self._end_turn()
             self._turn = self._new_turn(ev.speech_start_time or time.time())
             return [ev]
         if ev.type == T.END_OF_SPEECH:
+            self._lk_stt_ended = True
             if self._turn is not None and self._turn.shown:
                 self._turn.speech_ended = True
             else:
@@ -721,8 +730,12 @@ class SpeechStream(stt.RecognizeStream):
             t.final_kept = t.live is not None and t.words == t.live and lk_unchanged
             if t.final_kept and t.sent_at is not None:
                 t.head_start_ms = _ms(t.final_at - t.sent_at)
+            lim = _host_limits()
+            # LiveKit may start an early reply on a final: at any final with VAD or turn-detector
+            # endpointing, only after the speech-to-text's end of speech with its endpointing
+            on_final = not lim.stt_turns or self._lk_stt_ended
             out = [ev]
-            if self._lk_pre_stale and pre is not None and text.strip() == pre.strip():
+            if on_final and self._lk_pre_stale and pre is not None and text.strip() == pre.strip():
                 # rule 7: LiveKit still remembers the cancelled guess's text, finds this final
                 # unchanged and would start no early reply on it; the final goes first as the early
                 # start on its own words, as LiveKit makes it
@@ -739,9 +752,8 @@ class SpeechStream(stt.RecognizeStream):
             else:
                 # LiveKit starts its own early reply on a final that changes its text
                 # (audio_recognition: transcript_changed)
-                changed = pre is None or text.strip() != pre.strip()
+                changed = on_final and (pre is None or text.strip() != pre.strip())
             if changed:
-                lim = _host_limits()
                 if (
                     lim.early_replies
                     and not lim.agent_speaking

@@ -917,6 +917,9 @@ async def test_the_sessions_settings_are_read_and_the_agents_come_first(
     assert read().early_replies is False
     in_session(monkeypatch, session_with(turn_detection="manual"))
     assert read().early_replies is False
+    # turns ended by the speech-to-text
+    in_session(monkeypatch, session_with(turn_detection="stt"))
+    assert read().stt_turns is True and read().early_replies is True
     not_an_llm = object()  # stands for a realtime model: anything that is not an llm.LLM
     in_session(monkeypatch, session_like(session_with(), llm=not_an_llm))
     assert read().early_replies is False
@@ -949,6 +952,37 @@ async def test_the_sessions_settings_are_read_and_the_agents_come_first(
     assert read() == defaults
     in_session(monkeypatch, object())
     assert read() == defaults
+
+
+@pytest.mark.parametrize("turn_detection", ["stt", "vad"])
+async def test_a_final_within_the_turn_holds_a_guess_only_where_livekit_replies_on_it(
+    monkeypatch: pytest.MonkeyPatch, turn_detection: str
+) -> None:
+    in_session(
+        monkeypatch,
+        session_with(turn_detection=turn_detection, preemptive_generation={"max_retries": 4}),
+    )
+    # a speech-to-text that finalizes a segment before the turn's end (Deepgram)
+    script = [
+        ev(0.00, T.START_OF_SPEECH),
+        ev(0.05, T.INTERIM_TRANSCRIPT, "I'd like", 0.95),
+        ev(0.30, T.INTERIM_TRANSCRIPT, "I'd like to check", 0.95),
+        ev(0.40, T.FINAL_TRANSCRIPT, "I'd like to check."),
+        ev(0.55, T.INTERIM_TRANSCRIPT, "my", 0.95),
+        ev(0.80, T.FINAL_TRANSCRIPT, "my balance."),
+        ev(0.80, T.END_OF_SPEECH),
+    ]
+    api = FakeAPI(answers={"I'd like to check. my": GUESS_BALANCE})
+    out, counts, _, _ = await wrapped_run(script, api)
+    guesses = [e for e in out if e[0] == T.PREFLIGHT_TRANSCRIPT]
+    if turn_detection == "stt":
+        # with the speech-to-text's endpointing LiveKit starts no early reply on that final, so
+        # none waits and the guess is sent
+        assert guesses == [(T.PREFLIGHT_TRANSCRIPT, "my balance.")]
+        assert "guess_held_while_livekit_waits" not in counts
+    else:
+        # with VAD or the turn detector LiveKit's own early reply on that final waits (rule 8)
+        assert guesses == [] and counts["guess_held_while_livekit_waits"] == 1
 
 
 @pytest.mark.parametrize(
