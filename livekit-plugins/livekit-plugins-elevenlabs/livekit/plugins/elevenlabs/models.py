@@ -26,11 +26,19 @@ def is_dialogue_model(model: str) -> bool:
 # https://elevenlabs.io/docs/api-reference/text-to-dialogue/stream#request.body.settings
 # Other models answer voice_settings.clone_strength with a 400 (unsupported_model).
 CLONE_STRENGTH_MODEL_PREFIXES = ("eleven_v4",)
+# eleven_v3 dialogue models only document `stability`; other similarity values
+# make the server finalize the context without audio and without an error.
+SIMILARITY_MODEL_PREFIXES = ("eleven_v4",)
 
 
 def supports_clone_strength(model: str) -> bool:
     """Whether `model` accepts voice_settings.clone_strength."""
     return model.startswith(CLONE_STRENGTH_MODEL_PREFIXES)
+
+
+def supports_dialogue_similarity(model: str) -> bool:
+    """Whether the text-to-dialogue model accepts voice_settings.similarity."""
+    return model.startswith(SIMILARITY_MODEL_PREFIXES)
 
 
 # https://elevenlabs.io/docs/api-reference/text-to-speech/convert#request.query.output_format
