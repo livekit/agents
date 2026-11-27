@@ -94,6 +94,17 @@ def test_resolve_template_renders_each_modality_once() -> None:
     assert instr.render(modality="text") == "You are a helpful assistant.\n\nHandle typed input."
 
 
+def test_resolve_template_keeps_common_of_instructions_kwarg() -> None:
+    # an Instructions kwarg fills its placeholder with what it renders to for each
+    # modality: common plus that modality's addition, never the addition alone
+    persona = Instructions(COMMON, audio=AUDIO)
+
+    instr = Instructions.resolve_template("{persona}\n\nCollect the address.", persona=persona)
+
+    assert instr.render(modality="audio") == f"{COMMON}\n\n{AUDIO}\n\nCollect the address."
+    assert instr.render(modality="text") == f"{COMMON}\n\nCollect the address."
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [
