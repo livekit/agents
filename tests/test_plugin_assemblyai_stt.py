@@ -1285,6 +1285,71 @@ async def test_language_code_singular_in_connect_config():
     assert "language_code" not in query
 
 
+async def test_stream_language_overrides_configured_language_codes():
+    """STT.stream(language=...) overrides the instance's configured language_codes
+    for that stream only, normalizes the code, and reflects it in connect query params."""
+    import json
+    from urllib.parse import parse_qs, urlparse
+
+    from livekit.plugins.assemblyai import STT
+
+    captured: dict = {}
+
+    async def _fake_ws_connect(url, **kwargs):
+        captured["url"] = url
+        return MagicMock()
+
+    stt = STT(api_key="test-key", language_codes=["en"], http_session=MagicMock())
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream(language="Spanish")
+
+    assert stream._opts.language_codes == ["es"]
+    stream._session.ws_connect = _fake_ws_connect
+    await stream._connect_ws()
+
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert json.loads(query["language_codes"][0]) == ["es"]
+
+
+async def test_stream_language_clears_steering_when_empty_or_none():
+    """Passing language=None or language='' to STT.stream() resets steering to NOT_GIVEN."""
+    from livekit.agents.types import NOT_GIVEN
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", language_codes=["en", "es"], http_session=MagicMock())
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream_none = stt.stream(language=None)
+        stream_empty = stt.stream(language="")
+
+    assert stream_none._opts.language_codes is NOT_GIVEN
+    assert stream_empty._opts.language_codes is NOT_GIVEN
+
+
+def test_stream_language_unsupported_on_non_u3_pro_models():
+    """Passing language to STT.stream() raises ValueError on models outside Universal-3 Pro."""
+    from livekit.plugins.assemblyai import STT
+
+    stt = STT(api_key="test-key", model="universal-streaming-english")
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        with pytest.raises(ValueError, match="only supported for Universal-3 Pro"):
+            stt.stream(language="es")
+
+
 async def test_language_codes_absent_from_connect_config_when_unset():
     """language_codes key is omitted from the connect config when not set."""
     from urllib.parse import parse_qs, urlparse
