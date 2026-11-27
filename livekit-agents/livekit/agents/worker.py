@@ -1430,6 +1430,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         if resp.error:
             raise _JobTokenRefusedError(f"the LiveKit server refused the job token: {resp.error}")
 
+        # The claims are not secret. The token is, so it is not logged.
+        logger.debug(
+            "token mode: got a job token from the LiveKit server",
+            extra={
+                "job_id": job_id,
+                "claims": claims,
+                "valid_for": f"{resp.expires_at - time.time():.0f}s",
+            },
+        )
         return resp
 
     async def _update_token(self, token: str) -> None:
