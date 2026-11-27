@@ -830,7 +830,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._proc_pool.on("process_closed", _update_job_status)
             self._proc_pool.on("process_job_launched", _update_job_status)
             self._proc_pool.on("process_job_connected", _send_join_timing)
-            await self._proc_pool.start()
+            # a simulation's jobs arrive only after the worker registers and the run is
+            # created, so the pool warms while that happens
+            await self._proc_pool.start(wait_for_idle=not self._simulation)
 
             self._http_session = aiohttp.ClientSession(
                 proxy=self._http_proxy or None,
