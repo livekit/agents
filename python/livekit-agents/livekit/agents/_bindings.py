@@ -458,9 +458,8 @@ def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
         chat_ctx = cast(llm.ChatContext, req.chat_ctx_host)
     else:
         chat_ctx = llm.ChatContext.from_dict(req.chat_ctx)
-    pools = [req.tools_host, *req.tools_host_extra]
-    held = [cast("Iterable[Tool]", pool) for pool in pools if pool is not None]
-    tools = offered_tools([t for pool in held for t in pool], req.tool_names)
+    held = cast("Iterable[Tool]", req.tools_host or [])
+    tools = offered_tools(list(held), req.tool_names)
     names = {
         tool.info.name
         for tool in tools

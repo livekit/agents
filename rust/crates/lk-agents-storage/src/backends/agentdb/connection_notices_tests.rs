@@ -4,7 +4,7 @@ use super::*;
 /// server ends its socket with `notice` on request id 0, once. A `Hello` it picks is answered
 /// first, so the notice follows it before any request. `answered`: the notice is that request's
 /// answer instead, and the server keeps the socket open.
-async fn serve_draining(
+pub(super) async fn serve_draining(
     notice: ErrorCode,
     drains: fn(&pb::ClientMessage) -> bool,
     answered: bool,
@@ -415,4 +415,46 @@ async fn new_requests_never_wait_behind_a_retiring_socket() {
     assert_eq!(sent(&log, is_exec).len(), 2, "each write went out once");
     assert_eq!(hellos(&log), 2);
     conn.close();
+}
+
+/// Catches: a database answering every request `wrong_shard_server` driving the request and the
+/// redial in a zero-delay loop. The request goes out again at once only the first time, then
+/// reaches its caller `Drained` (nothing applied) for its retry owner to back off; the redial
+/// after a socket that lived no time waits its jittered backoff on the connection's clock.
+#[tokio::test]
+async fn a_database_that_moves_on_every_request_is_resent_once_and_redialed_after_a_backoff() {
+    fn moving(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        match &m.message {
+            Some(pb::client_message::Message::Exec(_)) => {
+                vec![error(ErrorCode::WRONG_SHARD_SERVER, "moved")]
+            }
+            _ => script(m),
+        }
+    }
+    let (url, log) = serve(moving, false).await;
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let background = crate::testing::background();
+    let opts = Options::new(&url, "DB_1");
+    let conn =
+        Conn::dial(opts, minter(), background.spawner, clock.clone(), crate::telemetry::Cx::NONE)
+            .await
+            .unwrap();
+    let deadline = clock.now().saturating_add(Duration::from_secs(60));
+    let exec = conn.exec(&st("UPDATE t SET n = 1", vec![]), deadline).await;
+    assert!(matches!(exec, Err(WriteError::Sent(WsdbError::Drained))), "{exec:?}");
+    let refused = StorageError::from(exec.unwrap_err());
+    assert!(matches!(refused, StorageError::Unavailable(_)), "applied nothing: {refused:?}");
+    assert_eq!(sent(&log, is_exec).len(), 2, "sent again at once, once");
+    // the first redial was at once; the next waits at least half the first step on the clock
+    assert_eq!(hellos(&log), 2);
+    while hellos(&log) < 3 {
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        clock.advance(Duration::from_millis(2));
+        assert!(clock.now() < Ts::from_nanos(1_000_000_000), "never redialed");
+    }
+    let waited = clock.now().saturating_duration_since(Ts::ZERO);
+    assert!(waited >= RETRY_MIN_BACKOFF / 2, "redialed after {waited:?}");
+    conn.aclose().await;
 }

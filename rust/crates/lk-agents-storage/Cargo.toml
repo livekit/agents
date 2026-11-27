@@ -47,6 +47,8 @@ http-body-util = "0.1"
 percent-encoding = "2"
 # Local storage: thread files and the registry; `unixepoch()` reads the injected clock.
 rusqlite = { version = "0.32.1", features = ["bundled", "hooks", "functions"] }
+# The seed of each retry's jitter.
+rand = "0.9"
 
 
 [features]

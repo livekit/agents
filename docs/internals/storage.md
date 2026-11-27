@@ -127,7 +127,7 @@ pub trait Storage: Send + Sync {
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `create_thread`                        | Accept optional scope, attributes and idle TTL; mint an `AT_` id and return only after its metadata and database exist. A partially created thread must not become usable. |
 | `get_thread`                           | Return thread metadata; unknown, deleted or expired threads fail with `NotFound` (Python `ThreadNotFound`).                                                                |
-| `list_threads`                         | Page thread metadata by the supported scope and cursor, with the same ordering and expiry filtering on both backends.                                                      |
+| `list_threads`                         | Page live threads, in an unspecified order stable across pages, of one scope or (empty scope) the project; 50 a page by default, 100 at most; rows leave activity and expiry unset. |
 | `update_thread`                        | Merge attributes (an empty value deletes the key) and apply an idle-TTL update, returning the updated metadata. This is the activity boundary that moves expiry.           |
 | `delete_thread`                        | Make the thread unavailable, coordinate with active handles, and reclaim its metadata and database; repeating deletion is safe.                                            |
 | `open`                                 | Resolve an existing thread and return the shared engine's `Thread` handle. Opening alone does not acquire a partition lease; each lease names the owner that takes it.          |
@@ -710,8 +710,8 @@ that the core or storage producing the event builds; a stored payload of the
 wrong shape for its type is refused when read.
 
 On a call, the voice runtime's own events are recorded as well: agent and
-user state changes, transcripts, interruptions, end-of-turn and
-answering-machine detection. They are the same `AgentSessionEvent`
+user state changes, transcripts, interruptions and end-of-turn
+detection. They are the same `AgentSessionEvent`
 payloads exposed by live session events and are not listed here.
 
 ### Reading it

@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 from pydantic import ConfigDict
 from typing_extensions import TypedDict
 
-from .amd import AMDPredictionEvent
 from .events import (
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
@@ -93,7 +92,7 @@ class EndOfSpeechEvent:
 
     silence_duration: float
     """Silence already elapsed when the event was raised, in seconds (`0.0` on the STT path). `at`
-    includes it, but a host needs it: AMD's post-speech window runs from when speech ended.
+    includes it.
     """
 
 
@@ -322,7 +321,6 @@ HostWire: TypeAlias = (
     | AgentStateChangedEvent
     | UserStateChangedEvent
     | AgentFalseInterruptionEvent
-    | AMDPredictionEvent
     | ItemAddedWire
     | ContextCarriedWire
     | RunStartedWire

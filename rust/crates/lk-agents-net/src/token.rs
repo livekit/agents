@@ -226,6 +226,12 @@ pub fn observability_bearer(
     if uses_job_token(api_key, api_secret) {
         return crate::job_token::observability_token(job);
     }
+    observability_key_bearer(api_key, api_secret)
+}
+
+/// Signs an observability write credential with the key and secret. For an export that belongs
+/// to no job, which has no token in token mode.
+pub fn observability_key_bearer(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
     if api_key.is_empty() || api_secret.is_empty() {
         return Err(ApiError::new(
             ErrorKind::Auth,

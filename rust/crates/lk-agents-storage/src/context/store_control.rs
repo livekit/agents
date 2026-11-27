@@ -1,6 +1,7 @@
 //! A bound task control borrows one short fenced owner and writes only framework state.
 
 use super::*;
+use crate::Unapplied;
 use lk_agents_abi::session::SessionCommands;
 use lk_agents_abi::session::control::{
     BoundSessionControl, ControlOwner, RemoteCancellation, RemoteControlRef, SessionControlScope,
@@ -258,14 +259,13 @@ async fn release_control(
 ) -> Result<(), StorageError> {
     owner.completed = completed;
     let closed = owner.close().await;
-    released
-        .wait()
-        .await
-        .map_err(|_| StorageError::Unavailable("the task control release owner ended".into()))??;
+    released.wait().await.map_err(|_| {
+        StorageError::Unavailable(Unapplied::local("the task control release owner ended"))
+    })??;
     match closed {
         Closed::Clean => Ok(()),
-        Closed::Failed | Closed::TimedOut => {
-            Err(StorageError::Unavailable("the task control owner did not close cleanly".into()))
-        }
+        Closed::Failed | Closed::TimedOut => Err(StorageError::Unavailable(Unapplied::local(
+            "the task control owner did not close cleanly",
+        ))),
     }
 }

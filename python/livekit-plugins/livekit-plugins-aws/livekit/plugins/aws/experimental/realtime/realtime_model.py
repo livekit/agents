@@ -443,7 +443,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     @property
     def provider(self) -> str:
-        return "Amazon"
+        return "aws"
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""

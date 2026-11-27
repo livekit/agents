@@ -71,9 +71,6 @@ pub struct ChatRequest {
     /// The host's live `list[Tool]`. A tool in `tools` with no callable here (one the core runs)
     /// reaches a host model as a placeholder built from `function_schemas`.
     pub tools_host: Option<HostRef>,
-    /// Further pools of host tools the session added on top of the agent's (the IVR navigator's
-    /// `send_dtmf_events`); narrowed with `tools_host` to `tools`, first name wins.
-    pub tools_host_extra: Vec<HostRef>,
     pub conn_options: ApiConnectOptions,
     /// `NOT_GIVEN` is `None`; the provider's own default applies. R2b: this is not "false".
     pub parallel_tool_calls: Option<bool>,
@@ -155,9 +152,6 @@ pub trait ChatRequestView: Send + Sync + Sized + 'static {
     /// The host's live `list[Tool]` pool.
     #[host(getter)]
     fn tools_host(&self) -> Option<HostRef>;
-    /// The pools the session added on top of the agent's.
-    #[host(getter)]
-    fn tools_host_extra(&self) -> Vec<HostRef>;
     #[host(getter)]
     fn parallel_tool_calls(&self) -> Option<bool>;
     #[host(getter)]
@@ -199,10 +193,6 @@ impl ChatRequestView for ChatRequest {
 
     fn tools_host(&self) -> Option<HostRef> {
         self.tools_host.clone()
-    }
-
-    fn tools_host_extra(&self) -> Vec<HostRef> {
-        self.tools_host_extra.clone()
     }
 
     fn parallel_tool_calls(&self) -> Option<bool> {

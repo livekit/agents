@@ -42,6 +42,8 @@ class ProviderEndpoint:
     """Gzip-compressed request bodies, for a provider that accepts them."""
     msgpack_body: bool = False
     """Msgpack request bodies, for a provider that accepts them."""
+    provider: str | None = None
+    """The vendor behind the endpoint, as telemetry names it; `None` reports `unknown`."""
 
 
 class ChatCompletionOptions(TypedDict, total=False):

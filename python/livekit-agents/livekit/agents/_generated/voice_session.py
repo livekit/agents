@@ -72,22 +72,8 @@ class VoiceCommandOriginHook:
     hook: str
 
 
-@dataclass(kw_only=True, slots=True)
-class VoiceCommandOriginAmd:
-    pass
-
-
-@dataclass(kw_only=True, slots=True)
-class VoiceCommandOriginIvr:
-    pass
-
-
 VoiceCommandOrigin: TypeAlias = (
-    VoiceCommandOriginHost
-    | VoiceCommandOriginTool
-    | VoiceCommandOriginHook
-    | VoiceCommandOriginAmd
-    | VoiceCommandOriginIvr
+    VoiceCommandOriginHost | VoiceCommandOriginTool | VoiceCommandOriginHook
 )
 """The captured caller of a voice command. Tool call IDs may be reused, so attribution
 always includes the invocation and operation that actually issued the command.

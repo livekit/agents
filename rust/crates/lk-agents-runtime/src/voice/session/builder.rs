@@ -1,7 +1,7 @@
 /// A realtime session and its registered resource identity.
 pub type RealtimeLeg = (Arc<dyn lk_agents_abi::RealtimeSession>, ResourceId);
 
-use super::shared::{Journal, PeerHandle, Rx, SessionHandle, SessionShared, WatchHub};
+use super::shared::{Journal, PeerHandle, Rx, SessionHandle, SessionShared};
 use super::time::Timebase;
 use crate::telemetry;
 use crate::voice::VoiceRuntimeEvent;
@@ -315,7 +315,7 @@ impl DriverBuilder {
         self.trace.conversation().unwrap_or(session_id).to_owned()
     }
 
-    /// The session's context: what its systems' spans (AMD's, a handoff's) open under.
+    /// The session's context: what its systems' spans (a handoff's) open under.
     pub(crate) fn session_cx(&mut self, session_id: &str) -> telemetry::Cx {
         let root = self.opening().session.context;
         let conversation = self.conversation(session_id);
@@ -348,7 +348,6 @@ impl DriverBuilder {
         let queue = Tx::new(queue_tx);
         let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<super::shared::HostEvent>();
         let (ev_rx, events_end) = super::shared::HostEvents::new(ev_rx);
-        let watch = WatchHub::new();
         let closing = tokio_util::sync::CancellationToken::new();
 
         let mut sinks = Sinks {
@@ -469,21 +468,10 @@ impl DriverBuilder {
             forward_chat_context,
             keyterms,
         });
-        // `ivr_detection=True` is the IVR system's to start; the core starts no system.
-        let ivr_detection = driver.ivr_detection();
         let keyterms_pushed = shared.keyterms.clone();
         let chat_ctx = shared.chat_ctx.clone();
-        let peer = PeerHandle {
-            queue: queue.clone(),
-            events: ev_tx,
-            journal,
-            time,
-            spawner: Arc::clone(&self.spawner),
-            watch,
-            resources: self.resources.clone(),
-            closing: shared.closing.clone(),
-            session: session_cx,
-        };
+        let peer =
+            PeerHandle { queue: queue.clone(), events: ev_tx, journal, time, session: session_cx };
 
         let (conversation, commands) = crate::session::CommandPort::channel(
             32,
@@ -528,7 +516,6 @@ impl DriverBuilder {
                 keyterms: keyterms_pushed,
                 chat_ctx,
                 peer,
-                ivr_detection,
                 speech_ids,
                 id_seed,
             },

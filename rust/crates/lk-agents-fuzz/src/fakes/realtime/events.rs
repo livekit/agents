@@ -30,10 +30,12 @@ impl Socket {
                 st.server.told_created(r, now);
             }
             Happening::MessageAdded { r, previous } => {
-                let item = st.server.responses[r as usize].item.clone().expect("a message");
+                let resp = &st.server.responses[r as usize];
+                let item = resp.item.clone().expect("a message");
                 incoming.push(Incoming::OutputItemAdded {
                     item_id: item.clone(),
                     kind: OutputItemKind::Message,
+                    response_id: Some(resp.id.clone()),
                 });
                 incoming.push(Incoming::ItemAdded {
                     previous_item_id: previous,
@@ -76,6 +78,7 @@ impl Socket {
                 incoming.push(Incoming::OutputItemAdded {
                     item_id: fc.clone(),
                     kind: OutputItemKind::FunctionCall,
+                    response_id: Some(resp.id.clone()),
                 });
                 incoming.push(Incoming::ItemAdded {
                     previous_item_id: resp.item.clone(),

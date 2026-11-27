@@ -88,12 +88,15 @@ class Storage:
         """Unknown, deleted or expired threads raise `ThreadNotFound`."""
     async def list_threads(
         self,
-        scope: str,
-        *,
-        before: str | None = None,
+        scope: str | None = None,
+        page_token: str | None = None,
         limit: int | None = None,
     ) -> ThreadPage:
-        """The threads of one scope, newest first; `before` is the previous page's cursor."""
+        """One page of threads: one `scope`'s, or the project's with none. Pass `next_page_token`
+        back as `page_token` to get the next page; an empty one means the end, and a page may be
+        short while a token is set. The order is unspecified, stable across pages. `limit` is 50
+        when omitted and at most 100.
+        """
     async def update_thread(
         self,
         thread_id: str,

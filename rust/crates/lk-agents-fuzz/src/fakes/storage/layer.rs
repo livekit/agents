@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::storage::{StorageError, Unacknowledged};
+use lk_agents_abi::storage::{StorageError, Unacknowledged, Unapplied};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_runtime::storage::ThreadDbConnection as _;
 use lk_agents_runtime::storage::sql::{SqlValue, Statement};
@@ -87,7 +87,8 @@ impl FakeDatabase {
         let rng = &mut state.layer;
         if rng.u32(0..96) == 0 {
             let (name, message) = SQLITE[rng.usize(0..SQLITE.len())];
-            layer.refused = Some(StorageError::Unavailable(format!("sqlite: {message}")));
+            layer.refused =
+                Some(StorageError::Unavailable(Unapplied::local(format!("sqlite: {message}"))));
             faults.push(StorageFault::Sqlite(name));
             // As an outage's refusal, it may cost the lease its renewal.
             state.faulted = true;

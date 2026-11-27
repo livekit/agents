@@ -21,10 +21,10 @@ use lk_agents_abi::livekit_protocol::agent::ChatMessage;
 use lk_agents_abi::livekit_protocol::agent::ChatRole;
 use lk_agents_abi::livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use lk_agents_abi::livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
-use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::storage::thread::{ItemRow, TaskRow};
+use lk_agents_abi::storage::{StorageError, Unapplied};
 
 pub use outcome::*;
 pub use policy::*;
@@ -183,12 +183,12 @@ pub fn caller_history_of(message: &a2a::Message) -> Result<Option<Value>, Storag
 /// the handler met fails it as that error.
 pub fn host_error(e: ProviderError) -> StorageError {
     let ProviderError::Host { error, .. } = e else {
-        return StorageError::Unavailable(e.to_string());
+        return StorageError::Unavailable(Unapplied::local(e));
     };
     match error.kind {
         HostErrorKind::Cancelled => StorageError::Cancelled(error.message),
         HostErrorKind::NotFound => StorageError::NotFound(error.message),
-        HostErrorKind::Unavailable => StorageError::Unavailable(error.message),
+        HostErrorKind::Unavailable => StorageError::Unavailable(Unapplied::local(error.message)),
         HostErrorKind::LeaseLost => StorageError::LeaseLost(error.message),
         HostErrorKind::VersionConflict
         | HostErrorKind::NotSerializable
@@ -461,7 +461,7 @@ mod tests {
                 "metadata": {"https://livekit.io/a2a/ext/agents/v1/reason": "worker-lost"}})
         );
         assert_eq!(
-            python_reason(&StorageError::Unavailable("lost".into())),
+            python_reason(&StorageError::Unavailable(Unapplied::local("lost"))),
             "StorageUnavailable: lost"
         );
         assert_eq!(python_reason(&StorageError::Cancelled(String::new())), "CancelledError");

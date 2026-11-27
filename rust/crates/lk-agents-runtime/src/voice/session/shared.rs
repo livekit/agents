@@ -5,10 +5,9 @@ use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::Spawner;
 use lk_agents_abi::voice::io::AudioOutput;
 use lk_agents_voice::agent_session::{
-    Answer, Command, Outputs, QueueClosed, RequestId, Sent, SessionView, SystemTap,
-    VoiceCommandOrigin, VoiceEvent, VoiceHostEvent,
+    Answer, Command, Outputs, QueueClosed, RequestId, Sent, SessionView, VoiceCommandOrigin,
+    VoiceEvent, VoiceHostEvent,
 };
-use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::trace::Step;
 use parking_lot::Mutex;
@@ -99,71 +98,6 @@ impl std::fmt::Debug for Tx {
     }
 }
 
-/// One unbounded channel per subscriber; a departed one is forgotten on publish.
-#[derive(Clone, Default)]
-pub struct WatchHub {
-    state: Arc<Mutex<Watchers>>,
-}
-
-#[derive(Default)]
-struct Watchers {
-    closed: bool,
-    taps: Vec<tokio::sync::mpsc::UnboundedSender<SystemTap>>,
-}
-
-impl WatchHub {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut state = self.state.lock();
-        if !state.closed {
-            state.taps.push(tx);
-        }
-        rx
-    }
-
-    /// Cheap with none: the common session runs no system.
-    pub fn publish(&self, item: SystemTap) {
-        let failed = {
-            let mut state = self.state.lock();
-            let mut failed = Vec::new();
-            state.taps.retain(|tap| match tap.send(item.clone()) {
-                Ok(()) => true,
-                Err(error) => {
-                    failed.push(error.0);
-                    false
-                }
-            });
-            failed
-        };
-        // A rejected event can retain host objects; release those outside the hub lock.
-        drop(failed);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.state.lock().taps.is_empty()
-    }
-
-    /// Stop new subscriptions and release producers while preserving queued feed order.
-    pub(crate) fn close(&self) {
-        let taps = {
-            let mut state = self.state.lock();
-            state.closed = true;
-            std::mem::take(&mut state.taps)
-        };
-        drop(taps);
-    }
-}
-
-impl std::fmt::Debug for WatchHub {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WatchHub").field("taps", &self.state.lock().taps.len()).finish()
-    }
-}
-
 /// A host event and, on a speech's `speech_done`, that speech's `reported` writer: the drain
 /// finishes it once the host handled the event, and dropping it unhandled ends the wait.
 pub(crate) type HostEvent = (VoiceHostEvent, Option<lk_agents_net::signal::Producer<bool>>);
@@ -203,38 +137,16 @@ impl HostEvents {
 /// Everything a peer of the host may touch, and nothing else.
 #[derive(Clone)]
 pub struct PeerHandle {
-    /// The loop's queue: commands, and the audio taps' installs.
+    /// The loop's queue.
     pub queue: Tx,
     pub(crate) events: tokio::sync::mpsc::UnboundedSender<HostEvent>,
     pub journal: Journal,
     pub time: Timebase,
-    pub spawner: Arc<dyn lk_agents_abi::Spawner>,
-    pub(crate) watch: WatchHub,
-    pub(crate) resources: crate::voice::resources::Resources,
-    /// Cancelled at `begin_closing`: a system's own drain ends on it like the driver's do.
-    pub closing: tokio_util::sync::CancellationToken,
-    /// The session's context, under its `agent_session`: where a system's spans open.
+    /// The session's context, under its `agent_session`.
     pub session: telemetry::Cx,
 }
 
 impl PeerHandle {
-    pub fn subscribe(&self) -> tokio::sync::mpsc::UnboundedReceiver<SystemTap> {
-        self.watch.subscribe()
-    }
-
-    /// Refused only after the session's receiver has ended; background reporters may discard it.
-    pub fn send(
-        &self,
-        origin: VoiceCommandOrigin,
-        cmd: impl Into<Command>,
-    ) -> Result<(), QueueClosed> {
-        self.queue.send_from(origin, cmd.into())
-    }
-
-    pub fn journal(&self, step: Step) {
-        self.journal.record(step);
-    }
-
     /// A host event to the host's drain; handed back when the drain has gone.
     pub fn deliver(
         &self,
@@ -243,48 +155,11 @@ impl PeerHandle {
     ) -> Result<(), Box<VoiceHostEvent>> {
         self.events.send((event, reported)).map_err(|refused| Box::new(refused.0.0))
     }
-
-    /// A tap to every watcher.
-    pub fn publish(&self, tap: SystemTap) {
-        self.watch.publish(tap);
-    }
-
-    pub fn emit(&self, ev: SessionEvent) {
-        if self.journal.is_on() {
-            self.journal(Step::Emitted(ev.journal_form()));
-        }
-        let _ = self.events.send((VoiceHostEvent::Session(ev), None));
-    }
-
-    /// The microphone's own frames, never the gate's silence. A second tap replaces the first.
-    pub fn install_audio_tap(
-        &self,
-        sink: Arc<dyn lk_agents_abi::StreamInput<lk_agents_abi::AudioFrame>>,
-    ) -> Result<lk_agents_abi::resources::ResourceId, QueueClosed> {
-        let input = sink;
-        let sink = self.resources.register_audio_sink(input.clone());
-        let pending = self.resources.pending(vec![sink]);
-        let channel = lk_agents_voice::audio::AudioChannel::Amd;
-        if let Err(error) = self
-            .queue
-            .send(lk_agents_voice::data_plane::AudioInputRouterCommand::Install { channel, sink })
-        {
-            input.end_input();
-            return Err(error);
-        }
-        pending.submitted();
-        Ok(sink)
-    }
-
-    /// Only if this tap is still the one in place.
-    pub fn remove_audio_tap(&self, tap: lk_agents_abi::resources::ResourceId) {
-        let _ = self.queue.send(lk_agents_voice::data_plane::AudioInputRouterCommand::Remove(tap));
-    }
 }
 
 impl std::fmt::Debug for PeerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PeerHandle").field("time", &self.time).field("watch", &self.watch).finish()
+        f.debug_struct("PeerHandle").field("time", &self.time).finish()
     }
 }
 
@@ -299,7 +174,6 @@ pub struct SessionHandle {
     pub chat_ctx: lk_agents_net::signal::Cell<Arc<lk_agents_abi::ChatContext>>,
     /// What a system runs on; the host starts the systems it configures on this after `start()`.
     pub peer: PeerHandle,
-    pub ivr_detection: bool,
     /// The session's id counter: a host speech call takes its speech's id from it.
     pub speech_ids: Arc<std::sync::atomic::AtomicU64>,
     /// With the counter, a host speech's id (`SpeechId::nth`).

@@ -40,6 +40,7 @@ from ..llm import (
     Tool,
     Toolset,
 )
+from ..log import logger
 from ..stt import STT
 from ..tts import TTS
 from ..types import (
@@ -91,7 +92,6 @@ if TYPE_CHECKING:
     from ..storage.context import ContextStore, _SessionBinding
     from ..storage.session_state import BoundContext
     from ._session_bindings import SessionHost
-    from .amd import AMD
     from .io import TurnHandlingOptions
 
 # The session and the state of the event its callbacks are handling.
@@ -123,7 +123,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
     _bound_context: BoundContext[Context_T] | None
     _session_binding: _SessionBinding | None
     _room: rtc.Room | None
-    _amd: AMD | None
     # what only the core's events settle: failed if they end first
     _event_settled: set[asyncio.Future[Any]]
     _event_snapshots: deque[dict[str, Any]]
@@ -249,11 +248,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         return self._native.state
 
     @property
-    def amd(self) -> AMD | None:
-        """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
-        return self._amd
-
-    @property
     def agent_state(self) -> AgentState:
         """``"initializing"`` until the agent's first state change; read as ``history`` is, as
         of the event being handled inside a callback and the latest delivered elsewhere."""
@@ -365,15 +359,27 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
             else None
         )
         await self._native.start(host.storage, host, job=job)
+        if self.thread is None and ctx is not None and not ctx.is_fake_job():
+            from ..a2a import _RemoteTool
+
+            # a delegate without a token of its own shares the call's thread
+            delegates = [
+                tool.id
+                for tool in [*agent.tools, *self.tools]
+                if isinstance(tool, _RemoteTool) and tool._agent._token is None
+            ]
+            if delegates:
+                logger.warning(
+                    "this call has no thread, so its delegates will refuse it; dispatch the "
+                    "call with thread_id to delegate",
+                    extra={"delegates": delegates},
+                )
         # the session's span is the caller's current span from here: the entrypoint's own spans
         # and the job's RPC handlers nest under it. It stays attached for the rest of the
         # entrypoint, which outlives the session's start; the job's context ends with the job.
         if (span := self._native.span) is not None:
             self._root_span_context = _context(span)
             otel_context.attach(self._root_span_context)
-
-    async def _start_ivr_detection(self, transcript: str | None = None) -> None:
-        await self._adapter._start_ivr_detection(transcript)
 
     async def __aenter__(self) -> VoiceSession[Context_T]:
         return self
@@ -466,8 +472,6 @@ class VoiceSession(_facades.VoiceSession, rtc.EventEmitter[EventTypes], Generic[
         for future in list(self._event_settled):
             if not future.done():
                 future.set_exception(ended)
-        if self._amd is not None:
-            self._amd._release()
 
     def _settled_by_events(self, future: asyncio.Future[Any]) -> None:
         """Fails ``future`` when the core's events end before one settles it."""

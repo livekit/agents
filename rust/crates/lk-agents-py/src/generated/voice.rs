@@ -9,76 +9,6 @@
 
 use pyo3::prelude::*;
 
-// Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
-type AmdFunctionsImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::AmdFunctions;
-
-fn _extract_amd_functions_amd_resolve_max_endpointing_delay_provided(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<AmdFunctionsAmdResolveMaxEndpointingDelayProvidedInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        (crate::py_values::number_from_py::<f64>(obj.as_any(), "provided")).map(Some)
-    }
-}
-type AmdFunctionsAmdResolveMaxEndpointingDelayProvidedInput = ::std::option::Option<f64>;
-
-fn _extract_amd_functions_amd_resolve_max_endpointing_delay_activity(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<AmdFunctionsAmdResolveMaxEndpointingDelayActivityInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        (crate::py_values::number_from_py::<f64>(obj.as_any(), "activity")).map(Some)
-    }
-}
-type AmdFunctionsAmdResolveMaxEndpointingDelayActivityInput = ::std::option::Option<f64>;
-
-/// `_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
-/// else the default. `provided` is `None` only when the key was absent: an explicit default
-/// still beats a disagreeing activity. Seconds, as the options hold them.
-#[pyfunction]
-#[pyo3(signature = (provided, activity))]
-pub fn amd_resolve_max_endpointing_delay(
-    py: Python<'_>,
-    #[pyo3(from_py_with = _extract_amd_functions_amd_resolve_max_endpointing_delay_provided)]
-    provided: AmdFunctionsAmdResolveMaxEndpointingDelayProvidedInput,
-    #[pyo3(from_py_with = _extract_amd_functions_amd_resolve_max_endpointing_delay_activity)]
-    activity: AmdFunctionsAmdResolveMaxEndpointingDelayActivityInput,
-) -> PyResult<f64> {
-    let out = py.detach(|| <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_resolve_max_endpointing_delay(provided, activity));
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// `AMDPredictionEvent.is_human`.
-#[pyfunction]
-#[pyo3(signature = (prediction))]
-pub fn amd_prediction_is_human(py: Python<'_>, prediction: Bound<'_, PyAny>) -> PyResult<bool> {
-    let prediction =
-        crate::generated::records::amd::amd_prediction_event_from_py(prediction.as_any())?;
-    let out = py.detach(|| {
-        <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_prediction_is_human(
-            prediction,
-        )
-    });
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// `AMDPredictionEvent.is_machine`.
-#[pyfunction]
-#[pyo3(signature = (prediction))]
-pub fn amd_prediction_is_machine(py: Python<'_>, prediction: Bound<'_, PyAny>) -> PyResult<bool> {
-    let prediction =
-        crate::generated::records::amd::amd_prediction_event_from_py(prediction.as_any())?;
-    let out = py.detach(|| {
-        <AmdFunctionsImpl as ::lk_agents_abi::voice::amd::AmdFunctions>::amd_prediction_is_machine(
-            prediction,
-        )
-    });
-    ::pyo3::PyResult::Ok(out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
 type HostAudioReceiverImpl =
     <crate::generated::implementations::Selected as super::Implementations>::HostAudioReceiver;
@@ -3046,13 +2976,6 @@ fn _extract_voice_session_release_override_layer(
 }
 type VoiceSessionReleaseOverrideLayerInput = u64;
 
-fn _extract_voice_session_ivr_start_max_silence(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<VoiceSessionIvrStartMaxSilenceInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "max_silence")
-}
-type VoiceSessionIvrStartMaxSilenceInput = f64;
-
 fn _extract_voice_session_filler_start_delay(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<VoiceSessionFillerStartDelayInput> {
@@ -3702,62 +3625,6 @@ impl VoiceSession {
         ::pyo3::PyResult::Ok(super::voice::SpeechHandle(out))
     }
 
-    /// `IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
-    /// `IVRActivity.tools`. A second start is journalled, not run.
-    #[pyo3(signature = (max_silence = 5.0, tools = None, *, tools_host = None))]
-    fn ivr_start(
-        &self,
-        py: Python<'_>,
-        #[pyo3(from_py_with = _extract_voice_session_ivr_start_max_silence)]
-        max_silence: VoiceSessionIvrStartMaxSilenceInput,
-        tools: Option<Bound<'_, PyAny>>,
-        tools_host: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        let tools = tools
-            .map(|v| {
-                v.try_iter().and_then(|items| {
-                    items
-                        .map(|item| {
-                            let item = item?;
-                            crate::generated::records::tool_options::tool_spec_from_py(
-                                item.as_any(),
-                            )
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                })
-            })
-            .transpose()?;
-        let tools_host =
-            tools_host.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
-        py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::ivr_start(&self.0, max_silence, tools, tools_host)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    /// `AMD._run`: the answering-machine detector over its config, classifier LLM, tools and
-    /// optional STT. It listens once the callee answers in the session's room; the verdict comes
-    /// back as `amd_result`. Returns false if another detector is already attached; the host
-    /// must not publish a rejected detector as the session's owner.
-    #[pyo3(signature = (cfg, llm, tools, stt, participant_identity))]
-    fn attach_amd(
-        &self,
-        py: Python<'_>,
-        cfg: Bound<'_, PyAny>,
-        llm: Bound<'_, PyAny>,
-        tools: Option<Bound<'_, PyAny>>,
-        stt: Option<Bound<'_, PyAny>>,
-        participant_identity: ::std::option::Option<::std::string::String>,
-    ) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let cfg = crate::generated::records::amd::amd_config_from_py(cfg.as_any())?;
-        let llm = crate::generated::llm::LlmProxy::from_host(llm.as_any())?;
-        let tools = tools.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
-        let stt =
-            stt.map(|v| crate::generated::stt::SttProxy::from_host(v.as_any())).transpose()?;
-        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::attach_amd(&self.0, cfg, llm, tools, stt, participant_identity)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(out)
-    }
-
     /// `_aclose_impl`: the hooks' `closing`, the close itself, the turn-detector stream, the
     /// remote session host, the room io, then the session's toolsets. Idempotent: a second call
     /// waits for the first.
@@ -4162,39 +4029,6 @@ impl VoiceSession {
             .transpose()?;
         let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::say(&self.0, text, audio, allow_interruptions, add_to_chat_ctx, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(super::voice::SpeechHandle(out))
-    }
-
-    /// `_start_ivr_detection(transcript)`: a final the navigator counts as if heard.
-    #[pyo3(signature = (text))]
-    fn ivr_final(&self, py: Python<'_>, text: ::std::string::String) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::ivr_final(&self.0, text)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    /// `AMD.started`: the detector listens (the callee answered, no verdict out yet).
-    fn amd_listening(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::amd_listening(
-                &self.0,
-            )
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    /// `AMD.execute()`'s interrupt and `_resume_authorization()`, after its IVR hand-off.
-    fn amd_execute(&self, py: Python<'_>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::amd_execute(&self.0)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    /// `AMD.aclose()`. Idempotent.
-    fn amd_close(&self, py: Python<'_>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::amd_close(&self.0)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
     }
 
     /// `session.keyterms`: the list the recogniser was last handed; `None` before any push.
@@ -12504,43 +12338,6 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
         })
     }
 
-    fn closing(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::clone::Clone::clone(&self.host);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "SessionHooks._core_closing",
-            &crate::py_calls::calling_context(&self.context),
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py)?.getattr("_core_closing")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-
     fn on_user_turn_completed<'a>(
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,
@@ -13190,43 +12987,6 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
                 let o = out.value.bind(py);
                 let out = (crate::py_objects::native::<dyn ::lk_agents_abi::voice::session_owner::SessionBindingsPort>(o.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("SessionHost.prepare", ": expected native session bindings"))))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
-            })
-        })
-    }
-
-    fn started(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::clone::Clone::clone(&self.host);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "SessionHost.started",
-            &crate::py_calls::calling_context(&self.context),
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py)?.getattr("started")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
             })
         })
     }

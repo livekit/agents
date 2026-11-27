@@ -178,7 +178,8 @@ pub(crate) async fn dial(url: &str, db: &str) -> Result<Conn, WsdbError> {
     let mut opts = Options::new(url, db);
     opts.reconnect.min_backoff = Duration::from_millis(10);
     let background = crate::testing::background();
-    Conn::dial(opts, minter(), background.spawner, background.clock).await
+    Conn::dial(opts, minter(), background.spawner, background.clock, crate::telemetry::Cx::NONE)
+        .await
 }
 
 #[tokio::test]
@@ -467,7 +468,7 @@ async fn a_slow_stream_does_not_stall_another_stream() {
     let deadline = conn.0.clock.now().saturating_add(Duration::from_secs(2));
     let query = pb::client_message::Message::Query(statement(&st("SELECT", vec![])));
     let mut frame = pb::ClientMessage { request_id: 0, message: Some(query) };
-    let mut stalled = conn.send(&mut frame, deadline, conn.window()).await.unwrap();
+    let mut stalled = conn.send(&mut frame, deadline, conn.window(), &mut false).await.unwrap();
     let exec = conn.exec(&st("INSERT", vec![]), deadline).await;
     assert_eq!(exec.expect("answered past the stalled stream").rows_affected, 1);
     // the stalled stream reads what its window held, then that it was cancelled
@@ -524,7 +525,8 @@ async fn dropping_the_last_handle_closes_the_connection() {
     assert!(inner.upgrade().is_none(), "its tasks no longer hold it");
 }
 
-/// Real time until armed; then whichever task reads the time panics (waits still work).
+/// Real time until armed; then a spawned task that reads the time panics (waits still work),
+/// while the test's own body, outside any task, still times its requests.
 #[derive(Default)]
 struct Failing {
     real: lk_agents_net::clock::RealClock,
@@ -533,7 +535,8 @@ struct Failing {
 
 impl Failing {
     fn check(&self) {
-        assert!(!self.armed.load(Ordering::Acquire), "the clock failed");
+        let in_task = tokio::task::try_id().is_some();
+        assert!(!(self.armed.load(Ordering::Acquire) && in_task), "the clock failed");
     }
 }
 
@@ -558,7 +561,9 @@ async fn a_supervisor_that_dies_mid_redial_fails_later_requests() {
     let opts = Options::new(&url, "DB_1");
     let clock = Arc::new(Failing::default());
     let spawner = crate::testing::background().spawner;
-    let conn = Conn::dial(opts, minter(), spawner, clock.clone()).await.unwrap();
+    let conn = Conn::dial(opts, minter(), spawner, clock.clone(), crate::telemetry::Cx::NONE)
+        .await
+        .unwrap();
     assert!(conn.exec(&st("drop", vec![]), conn.deadline()).await.is_err());
     // The next request wakes the redial, whose dial deadline panics the supervisor.
     let (insert, deadline) = (st("INSERT", vec![]), conn.deadline());
@@ -683,3 +688,18 @@ mod notices;
 
 #[path = "connection_deadlines_tests.rs"]
 mod deadlines;
+
+#[path = "connection_metrics_tests.rs"]
+mod metrics;
+
+/// Catches: a connection reference read from text that only looks like agent-db's suffix, or
+/// from one naming another request. Only `(conn <ref>, request <id>)` ending the description and
+/// naming this request's id is taken.
+#[test]
+fn the_conn_ref_is_read_only_from_the_suffix_naming_this_request() {
+    assert_eq!(conn_ref("no such table: t (conn k3x9, request 7)", 7), Some("k3x9"));
+    assert_eq!(conn_ref("no such table: t (conn k3x9, request 7)", 8), None);
+    assert_eq!(conn_ref("no such table: t (conn k3x9, request 7) trailing", 7), None);
+    assert_eq!(conn_ref("x (conn a b, request 7)", 7), None);
+    assert_eq!(conn_ref("no such table: t", 7), None);
+}

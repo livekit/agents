@@ -264,6 +264,67 @@ fn registry_rules_refuse_mistakes() {
     }
 }
 
+// Catches: a product statistic carrying content, free text or an `lk.pii.*` key: its export is
+// LiveKit's and must never hold customer data.
+#[test]
+fn product_statistics_hold_only_bounded_values() {
+    let read = |decl: &str| {
+        let decl = format!("use crate::telemetry::decl::{{Content, Label}};\n{decl}");
+        let krate = Crate::from_files(
+            "abi",
+            &[
+                ("lib.rs", "pub mod telemetry; pub mod productstats;"),
+                ("telemetry/mod.rs", "pub mod decl; pub mod semconv;"),
+                ("telemetry/decl.rs", DECL),
+                ("telemetry/semconv.rs", SEMCONV),
+                ("productstats.rs", &decl),
+            ],
+        )?;
+        telemetry::read(&krate)
+    };
+    let group = |field: &str| format!("/// R.\n#[derive(Attrs)]\npub struct R {{ {field} }}");
+    read(&group("/// P.\n#[attr(\"lk.productstats.p\")] pub p: Vec<Label>, /// V.\n#[attr(\"lk.productstats.v\")] pub v: Label,")).unwrap();
+    for field in [
+        "/// T.\n#[attr(\"lk.productstats.t\")] pub t: String,",
+        "/// T.\n#[attr(\"lk.productstats.t\")] pub t: Vec<String>,",
+        "/// T.\n#[attr(\"lk.pii.t\")] pub t: Content<String>,",
+    ] {
+        let error = read(&group(field)).err().unwrap_or_else(|| panic!("accepted: {field}"));
+        assert!(error.contains("a product statistic is a closed enum"), "{error}");
+    }
+}
+
+// Catches: a customer declaration in `productstats` (exported to LiveKit) or a product statistic
+// declared elsewhere, either one recordable into the other audience's pipeline.
+#[test]
+fn product_statistics_live_in_productstats_and_nowhere_else() {
+    let read = |stats: &str, other: &str| {
+        let krate = Crate::from_files(
+            "abi",
+            &[
+                ("lib.rs", "pub mod telemetry; pub mod productstats; pub mod other;"),
+                ("telemetry/mod.rs", "pub mod decl; pub mod semconv;"),
+                ("telemetry/decl.rs", DECL),
+                ("telemetry/semconv.rs", SEMCONV),
+                ("productstats.rs", stats),
+                ("other.rs", other),
+            ],
+        )?;
+        telemetry::read(&krate)
+    };
+    let metric = |name: &str, audience: &str| {
+        format!(
+            "/// M.\n#[metric(name = \"lk.{name}\", kind = Counter, unit = \"1\"{audience})]\n#[derive(Attrs)]\npub struct M;"
+        )
+    };
+    let stats = ", audience = ProductStats";
+    read(&metric("productstats.m", stats), &metric("other.m", "")).unwrap();
+    let error = read(&metric("productstats.m", ""), "").err().expect("accepted");
+    assert!(error.contains("is `audience = ProductStats`"), "{error}");
+    let error = read("", &metric("other.m", stats)).err().expect("accepted");
+    assert!(error.contains("lives in `productstats`"), "{error}");
+}
+
 // Catches: an output missing a declaration or misreporting it, a dependency key redefined in
 // the Weaver registry, or the pins lost.
 #[test]

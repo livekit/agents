@@ -3,7 +3,7 @@ use crate::audio_recognition::TurnId;
 use lk_agents_abi::telemetry::decl::{Seconds, SpanContext, SpanDecl};
 use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::session::{
-    AgentSessionEnd, Amd, DrainAgentActivity, OnEnter, OnExit, StartAgentActivity, UpdateAgent,
+    AgentSessionEnd, DrainAgentActivity, OnEnter, OnExit, StartAgentActivity, UpdateAgent,
 };
 use lk_agents_telemetry::span::{ManualSpan, Reserved, Trace};
 use std::collections::BTreeMap;
@@ -77,11 +77,6 @@ pub(crate) struct Arriving {
     pub(crate) agent: String,
     pub(crate) update: Option<Reserved<UpdateAgent>>,
     pub(crate) activity: Reserved<StartAgentActivity>,
-}
-
-/// The answering-machine detection the runtime's detector runs, from its attach to its verdict.
-pub(crate) struct AmdDetection {
-    pub(crate) span: ManualSpan<Amd>,
 }
 
 /// The event-loop stalls a session saw, which `agent_session` ends with.

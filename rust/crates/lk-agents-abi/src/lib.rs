@@ -28,6 +28,7 @@ pub mod invoke;
 pub mod llm;
 pub mod media;
 pub mod metrics;
+pub mod productstats;
 pub mod recorder;
 pub mod resources;
 pub mod session;

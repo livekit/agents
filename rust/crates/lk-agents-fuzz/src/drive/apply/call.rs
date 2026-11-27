@@ -74,14 +74,11 @@ impl Run {
             | Input::Recorder { .. }
             | Input::PushVideo { .. } => self.call_io(at, input),
             Input::Dtmf { .. }
-            | Input::Ivr { .. }
             | Input::SetStaticKeyterms { .. }
             | Input::HookDone { .. }
             | Input::HookDoneLate { .. }
             | Input::HostMetrics { .. }
-            | Input::AvatarError { .. }
-            | Input::PauseAuthorization { .. }
-            | Input::ResumeAuthorization { .. } => self.call_workflow(input),
+            | Input::AvatarError { .. } => self.call_workflow(input),
             Input::Drain { .. } | Input::Close { .. } | Input::Run { .. } => {
                 self.call_lifecycle(input)
             }
@@ -481,12 +478,6 @@ impl Run {
     fn call_workflow(&mut self, input: &Input) -> Option<Pending> {
         let api = &self.api;
         match input {
-            Input::PauseAuthorization {} => {
-                api.send_from(VoiceCommandOrigin::Amd, SpeechCommand::PauseAuthorization).ok()?
-            }
-            Input::ResumeAuthorization {} => {
-                api.send_from(VoiceCommandOrigin::Amd, SpeechCommand::ResumeAuthorization).ok()?
-            }
             Input::HostMetrics {} => api.report_avatar_metrics(avatar_metrics()).ok()?,
             Input::AvatarError {} => {
                 let error = lk_agents_abi::errors::ApiError::new(
@@ -510,11 +501,6 @@ impl Run {
             Input::SetStaticKeyterms { terms } => {
                 api.send(Command::SetStaticKeyterms(terms.clone())).ok()?
             }
-            Input::Ivr { input, silence, text: UserText(text) } => match input {
-                IvrInput::Start => api.ivr_start(secs(*silence), None, None).ok()?,
-                IvrInput::SeedTranscript => api.ivr_final(text.clone()).ok()?,
-                IvrInput::Close => api.send(IvrCommand::Close).ok()?,
-            },
             Input::Dtmf { input, key, digits, confirm, timeout } => match input {
                 DtmfInput::Start => {
                     let reply = api

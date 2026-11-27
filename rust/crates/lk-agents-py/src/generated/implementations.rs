@@ -130,7 +130,6 @@ impl super::Implementations for Selected {
     type WebSocketMux = ::lk_agents_runtime::inference::websocket::Mux;
     type WebSocketPacing = ::lk_agents_runtime::inference::websocket::Pacing;
     type InferenceVad = ::lk_agents_runtime::inference::vad::LocalVad;
-    type AmdFunctions = ::lk_agents_runtime::voice::AmdRules;
     type HostAudioReceiver = ::lk_agents_runtime::avatar::host_receiver::HostAudioReceiver;
     type DataStreamAudioOutput = ::lk_agents_runtime::avatar::output::DataStreamAudioOutput;
     type DataStreamAudioReceiver = ::lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;

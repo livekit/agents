@@ -191,7 +191,6 @@ pub trait Implementations: 'static {
     type WebSocketMux: ::lk_agents_abi::utils::websocket::WebSocketMux;
     type WebSocketPacing: ::lk_agents_abi::utils::websocket::WebSocketPacing;
     type InferenceVad: ::lk_agents_abi::vad::inference::InferenceVad;
-    type AmdFunctions: ::lk_agents_abi::voice::amd::AmdFunctions;
     type HostAudioReceiver: ::lk_agents_abi::voice::avatar::HostAudioReceiver;
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
@@ -334,8 +333,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inference::local_models_init, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_markup_provider_key, m)?)?;
     m.add_function(wrap_pyfunction!(inference::min_reasoning_effort, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::amd_auto_select_models, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::amd_is_evaluated_model, m)?)?;
     m.add_function(wrap_pyfunction!(inference::llm_unsupported_params, m)?)?;
     m.add_function(wrap_pyfunction!(inference::eot_select, m)?)?;
     m.add_function(wrap_pyfunction!(inference::stt_fallback_capabilities, m)?)?;
@@ -421,8 +418,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<telemetry::TelemetrySpan>()?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_install, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::configure, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::diagnostics, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_export, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::set_capture_content, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
@@ -481,9 +476,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<utils::WebSocketPacing>()?;
     m.add_class::<vad::InferenceVad>()?;
     m.add_class::<vad::InferenceVadStream>()?;
-    m.add_function(wrap_pyfunction!(voice::amd_resolve_max_endpointing_delay, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::amd_prediction_is_human, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::amd_prediction_is_machine, m)?)?;
     m.add_class::<voice::HostAudioReceiver>()?;
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::DataStreamAudioReceiver>()?;

@@ -1,4 +1,3 @@
-pub mod amd;
 mod audio;
 pub mod background_audio;
 pub mod console;
@@ -10,7 +9,6 @@ pub use events::VoiceRuntimeEvent;
 mod generation;
 mod input;
 mod io;
-mod ivr;
 mod keyterm_detection;
 mod legs;
 mod local_input;
@@ -46,7 +44,6 @@ use std::sync::Arc;
 
 pub use lk_agents_voice::agent_session::lifecycle::SessionStartPlans;
 pub use lk_agents_voice::agent_session::options::InterruptionGateRules;
-pub use lk_agents_voice::amd::machine::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
 pub use lk_agents_voice::workflows::WorkflowRules;
@@ -310,8 +307,6 @@ impl VoiceRuntime {
             runtime.realtime.insert(id, connection);
             runtime.pump_realtime(id, session);
         }
-        let ivr_detection = runtime.shared.view.with(|v| v.config.effective().turn.ivr_detection());
-        ivr::start(runtime.peer.clone(), ivr_detection, &runtime.shared.tasks);
         if let Some(room_io) = room_io {
             let io_queue = runtime.reports.clone();
             let rtc_queue = runtime.reports.clone();
@@ -534,7 +529,6 @@ impl VoiceRuntime {
     /// path: late stream results and installed sinks retain their cleanup owners until settled.
     fn close_queue(&mut self) -> Vec<VoiceEvent> {
         self.queue.close();
-        self.peer.watch.close();
         let requests = self.shared.speeches.requests(self.reports.clone());
         let mut inputs: Vec<VoiceEvent> = std::mem::take(&mut *requests.lock())
             .into_iter()
@@ -760,8 +754,7 @@ impl Drop for VoiceRuntime {
         self.pending_legs.clear();
         self.driver.release_all_providers();
         // The spans end here only when the session never closed; either way they go out below.
-        let abandoned = self.driver.abandon_spans();
-        telemetry::session_ended(self.driver.spans_swept(), abandoned);
+        self.driver.abandon_spans();
         let effects = self.driver.take_outbox();
         self.perform_voice(effects);
         self.calls.clear();

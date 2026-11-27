@@ -189,7 +189,7 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         """Provider display name used in metrics."""
-        return "Palabra"
+        return "palabra"
 
     def update_options(
         self,

@@ -54,7 +54,6 @@ pub const SPANS: &[Declared] = &[
     Declared::of::<session::EventLoopBlocked>(),
     Declared::of::<session::RpcHandler>(),
     Declared::of::<session::RpcCall>(),
-    Declared::of::<session::Amd>(),
     Declared::of::<session::KeytermDetection>(),
     Declared::of::<user_turn::UserTurn>(),
     Declared::of::<user_turn::UserSpeaking>(),

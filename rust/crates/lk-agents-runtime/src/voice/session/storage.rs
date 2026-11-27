@@ -3,6 +3,7 @@ use crate::voice::VoiceRuntime;
 use crate::voice::session::Tx;
 use lk_agents_abi::StreamInput;
 use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::storage::Unapplied;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::storage::voice::VoiceStore as _;
 use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
@@ -269,7 +270,7 @@ impl Drop for StorageReporter {
         if let Some((speech, request)) = self.owed
             && !self.answered.load(Ordering::Acquire)
         {
-            let result = Err(StorageError::Unavailable("the storage task ended".into()));
+            let result = Err(StorageError::Unavailable(Unapplied::local("the storage task ended")));
             let _ = self.tx.send(VoiceEvent::StorageAnswered { speech, request, result });
         }
     }
@@ -353,8 +354,9 @@ impl ConversationReceipt {
 impl Drop for ConversationReceipt {
     fn drop(&mut self) {
         if let Some(read) = self.read.take() {
-            let result =
-                Err(StorageError::Unavailable("the conversation checkpoint task ended".into()));
+            let result = Err(StorageError::Unavailable(Unapplied::local(
+                "the conversation checkpoint task ended",
+            )));
             let _ = self.tx.send(VoiceEvent::ConversationSaved {
                 sequence: self.sequence,
                 read,

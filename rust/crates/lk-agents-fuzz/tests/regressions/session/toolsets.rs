@@ -99,7 +99,6 @@ impl toolsets::ScopesPort for ObservedScopes {
 
 struct Hooks {
     scopes: OnceLock<Arc<dyn toolsets::ScopesPort>>,
-    closing: signal::Producer<bool>,
 }
 
 impl SessionHooks for Hooks {
@@ -123,12 +122,6 @@ impl SessionHooks for Hooks {
         _: &HostRef,
     ) -> Result<Vec<lk_agents_abi::agent::FunctionToolInfo>, HostError> {
         Ok(Vec::new())
-    }
-    fn closing(&self, _: &Cx) -> BoxFuture<'_, Result<(), HostError>> {
-        Box::pin(async move {
-            self.closing.set(true);
-            Ok(())
-        })
     }
     fn on_user_turn_completed<'a>(
         &'a self,
@@ -179,8 +172,7 @@ impl SessionHooks for Hooks {
 fn session_shutdown_joins_the_toolset_close_after_its_activation_waiter_is_cancelled() {
     simulate(async {
         let refs: Arc<dyn RefRegistry> = Arc::new(Refs);
-        let (closing_hook, host_closing) = signal::signal(false);
-        let hooks = Arc::new(Hooks { scopes: OnceLock::new(), closing: closing_hook });
+        let hooks = Arc::new(Hooks { scopes: OnceLock::new() });
         let setup = Setup { tts: false, tools: Vec::new(), ..Default::default() };
         let mut run = Run::start_with(&setup, 0, Default::default(), |args, _| {
             args.hooks = Some(hooks.clone());
@@ -213,11 +205,15 @@ fn session_shutdown_joins_the_toolset_close_after_its_activation_waiter_is_cance
         activation.cancel();
         assert!(activation.await.is_err());
 
-        // The host owns and drives aclose independently of the harness's runtime pump. Its
-        // closing hook proves this task initialized the shared close before another waiter.
-        let closing = session.aclose("user_initiated".into(), false).unwrap();
-        let owner = session.spawner().spawn(closing);
-        host_closing.wait_map(|closing| closing.then_some(())).await.unwrap();
+        // The host owns and drives aclose independently of the harness's runtime pump. Its first
+        // poll initializes the shared close before another waiter.
+        let mut first = session.aclose("user_initiated".into(), false).unwrap();
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(first.as_mut().poll(cx).is_pending()))
+                .await,
+            "the close waits on the session"
+        );
+        let owner = session.spawner().spawn(first);
         let mut closing = session.aclose("user_initiated".into(), false).unwrap();
         let boundary_closed = is_closed.clone();
         let observer = session.spawner().spawn(async move {

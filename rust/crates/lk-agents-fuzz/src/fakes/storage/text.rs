@@ -4,7 +4,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 
-use lk_agents_abi::storage::{StorageError, Unacknowledged};
+use lk_agents_abi::storage::{StorageError, Unacknowledged, Unapplied};
 use lk_agents_abi::{Clock, Ts};
 use lk_agents_runtime::net::owned::Background;
 use lk_agents_runtime::storage::backends::sqlite::{FileConnection, SqliteStorage, Workers};
@@ -173,8 +173,9 @@ impl Faults {
         let now = self.clock.now();
         if !self.enabled.load(Ordering::Acquire) {
             if now < *self.down_until.lock() {
-                plan.refused =
-                    Some(StorageError::Unavailable("the database is unreachable".into()));
+                plan.refused = Some(StorageError::Unavailable(Unapplied::local(
+                    "the database is unreachable",
+                )));
                 self.faulted.store(true, Ordering::Release);
             }
             return plan;
@@ -202,7 +203,8 @@ impl Faults {
             _ => {}
         }
         if now < *down_until {
-            plan.refused = Some(StorageError::Unavailable("the database is unreachable".into()));
+            plan.refused =
+                Some(StorageError::Unavailable(Unapplied::local("the database is unreachable")));
         }
         if plan.refused.is_some() || plan.answer_lost || plan.worker_dies {
             self.faulted.store(true, Ordering::Release);
@@ -231,7 +233,9 @@ impl ThreadDbConnection for FaultyConnection {
     async fn query(&self, statement: Statement) -> Result<Vec<Row>, StorageError> {
         let plan = self.faults.plan(false);
         if !self.faults.wait(plan.before).await {
-            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "the operation's deadline passed",
+            )));
         }
         if let Some(error) = plan.refused {
             return Err(error);
@@ -246,7 +250,9 @@ impl ThreadDbConnection for FaultyConnection {
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         let plan = self.faults.plan(true);
         if !self.faults.wait(plan.before).await {
-            return Err(StorageError::Unavailable("the operation's deadline passed".into()));
+            return Err(StorageError::Unavailable(Unapplied::local(
+                "the operation's deadline passed",
+            )));
         }
         if let Some(error) = plan.refused {
             return Err(error);

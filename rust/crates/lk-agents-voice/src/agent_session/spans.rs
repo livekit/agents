@@ -1,5 +1,5 @@
 use crate::agent::Source;
-use crate::agent_session::{AmdSpan, VoiceDriver};
+use crate::agent_session::VoiceDriver;
 use crate::events::ErrorEvent;
 use crate::telemetry;
 use lk_agents_abi::Ts;
@@ -133,31 +133,6 @@ impl VoiceDriver {
         );
     }
 
-    /// The AMD detector attached (`amd` opens, as the detector reserved it) or released its
-    /// verdict (it ends).
-    pub(crate) fn amd_span(&mut self, ev: &AmdSpan) {
-        let Some(root) = &self.session.span else { return };
-        let p = match ev {
-            AmdSpan::Attached(reserved) => {
-                if self.session.amd.is_none() {
-                    let span = self.telemetry.open_in_reserved(root, *reserved, telemetry::Amd);
-                    self.session.amd = Some(telemetry::AmdDetection { span });
-                }
-                return;
-            }
-            AmdSpan::Verdict(p) => p,
-        };
-        let Some(amd) = self.session.amd.take() else { return };
-        let verdict = telemetry::AmdVerdict {
-            category: p.category.into(),
-            reason: p.reason.as_str().to_owned(),
-            speech_duration: telemetry::Seconds(p.speech_duration.as_secs_f64()),
-            delay: telemetry::Seconds(p.delay.as_secs_f64()),
-            transcript: telemetry::Content(p.transcript.clone()),
-        };
-        self.telemetry.end(amd.span, Some(verdict));
-    }
-
     /// The room's connection state changed: the session's event.
     pub(crate) fn connection_span_event(&mut self, state: ConnectionState) {
         let Some(root) = &self.session.span else { return };
@@ -238,14 +213,11 @@ impl VoiceDriver {
     }
 
     /// The close: every entity still owning a span ends it, children first (the activity's user
-    /// turns, agent turns and callbacks, the AMD detection, the keyterm pass, `session_start`,
+    /// turns, agent turns and callbacks, the keyterm pass, `session_start`,
     /// `session_close`), then the session. The sweep after it finds nothing.
     pub(crate) fn close_spans(&mut self) {
         let Some(root) = self.session.span.take() else { return };
         self.close_activity();
-        if let Some(amd) = self.session.amd.take() {
-            self.telemetry.end(amd.span, None);
-        }
         self.keyterm_span_ended(None);
         if let Some(start) = self.session.starting.take() {
             self.telemetry.end(start.span, ());
@@ -265,15 +237,14 @@ impl VoiceDriver {
     }
 
     /// The runtime drops the session without its close (a cut-off loop): every span still open
-    /// ends as at a close and joins the outbox. `true` when the session was open.
-    pub fn abandon_spans(&mut self) -> bool {
+    /// ends as at a close and joins the outbox.
+    pub fn abandon_spans(&mut self) {
         if self.session.span.is_none() {
-            return false;
+            return;
         }
         log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice session ended without its close");
         self.close_spans();
         self.flush_spans();
-        true
     }
 
     /// Spans the session's close sweep ended because their owner never did: a bug.

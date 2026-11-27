@@ -33,7 +33,7 @@ impl Rule for ItemsCarryTheirPayload {
     const CONTRACT: Contract = Contract {
         id: "items_carry_their_payload",
         guarantee: "An assistant message of a step cut short is marked interrupted; messages name the models that timed them; items and metrics are stamped on the wall clock within the session; metrics carry their label, non-negative durations and the speech id they are attributed to.",
-        examples: &[a_named_reply],
+        examples: &[a_named_reply, a_restored_turn_corrected],
         counterexamples: &[
             a_reply_naming_no_model,
             an_interrupted_reply_marked_whole,
@@ -55,6 +55,9 @@ impl Rule for ItemsCarryTheirPayload {
         let mut spoken: BTreeMap<(u64, u32), bool> = BTreeMap::new();
         let mut speech_ids: BTreeMap<u64, String> = BTreeMap::new();
         let mut realtime: std::collections::BTreeSet<u64> = Default::default();
+        // Messages whose record the store last gave back: its protocol holds no model metadata,
+        // so a later version of one (a correction) names what the store kept.
+        let mut restored: std::collections::BTreeSet<&str> = Default::default();
         for (at, step) in journal {
             match step {
                 Step::Emitted(SessionEvent::SpeechCreated { speech, kind, .. }) => {
@@ -82,7 +85,9 @@ impl Rule for ItemsCarryTheirPayload {
                     // A pipeline reply's message, which the reference stamps with its models (a
                     // realtime one, and a `say`, it does not).
                     let pipeline = matches!(source, Source::Reply { speech, .. } if !realtime.contains(&speech.0));
-                    message_names_models(r, check, m, at, pipeline);
+                    if !restored.contains(m.id.as_str()) {
+                        message_names_models(r, check, m, at, pipeline);
+                    }
                     // A step cut short is recorded as cut (one whose voice failed may be too).
                     if let Some((speech, _)) = step.filter(|k| spoken.get(k) == Some(&true))
                         && m.role == Role::Assistant
@@ -91,6 +96,9 @@ impl Rule for ItemsCarryTheirPayload {
                             format!("item {} of a step cut short says it was not interrupted", m.id)
                         });
                     }
+                }
+                Step::Emitted(SessionEvent::HistoryReloaded { items, .. }) => {
+                    restored.extend(items.iter().map(ChatItem::id));
                 }
                 Step::Emitted(SessionEvent::MetricsCollected { metrics, speech, .. }) => {
                     let id = speech.and_then(|s| speech_ids.get(&s.0).map(String::as_str));
@@ -136,13 +144,10 @@ fn message_names_models(
 /// Whether the session had an STT at `at`: a recognition stream open, and no agent since taken
 /// over without one (its turn, decided as the old one's stream closes, names no STT).
 fn stt_open(r: &Recording, at: &Observed) -> bool {
-    // The session's recogniser: the answering-machine detector's own transcribes for it alone.
     let open = r
         .opened()
         .iter()
-        .filter(|o| {
-            o.kind == Kind::Stt && o.detail != crate::record::Detail::AmdStt && o.at.seq <= at.seq
-        })
+        .filter(|o| o.kind == Kind::Stt && o.at.seq <= at.seq)
         .any(|o| {
             !r.closed().iter().any(|(c, k, n)| *k == Kind::Stt && *n == o.nth && c.seq <= at.seq)
         });
@@ -261,6 +266,32 @@ fn recorded(interrupted: bool) -> Authored {
 /// A whole reply, naming its model, flagged as its step ended.
 fn a_named_reply() -> Recording {
     recorded(false).journal(reply(false, named())).done()
+}
+
+/// A user turn named its STT; the store gave the message back without it (its protocol holds no
+/// model metadata) and a late final rewrote that record (seed 2032).
+fn a_restored_turn_corrected() -> Recording {
+    let turn = |stt: Option<MetricsMetadata>| {
+        let mut m = ChatMessage::text("item_user_1", Role::User, "hello", epoch());
+        m.metrics.transcription_delay = Some(0.1);
+        m.metrics.stt_metadata = stt;
+        ChatItem::Message(m)
+    };
+    let added = |item: ChatItem| {
+        Step::Emitted(SessionEvent::ConversationItemAdded {
+            item: Box::new(item),
+            agent: "agent".into(),
+            source: Source::UserTurn { turn: lk_agents_voice::audio_recognition::TurnId(1) },
+            visibility: lk_agents_voice::agent::Visibility::Both,
+        })
+    };
+    Authored::new()
+        .journal(Step::Core(CoreStep::WallEpoch { at: epoch() }))
+        .opens(Kind::Stt, crate::record::Detail::None)
+        .journal(added(turn(named())))
+        .journal(Step::Emitted(SessionEvent::HistoryReloaded { items: vec![turn(None)] }))
+        .journal(added(turn(None)))
+        .done()
 }
 
 /// The LLM timed the reply, and the item names no model.

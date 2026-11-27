@@ -116,6 +116,9 @@ pub struct ProviderEndpoint {
     /// Msgpack request bodies, for a provider that accepts them.
     #[host(default = false)]
     pub msgpack_body: bool,
+    /// The vendor behind the endpoint, as telemetry names it; `None` reports `unknown`.
+    #[host(default = None)]
+    pub provider: Option<String>,
 }
 
 /// `inference.LLM`: the LiveKit Inference gateway's LLM, or an OpenAI-compatible provider's.

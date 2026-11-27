@@ -28,7 +28,6 @@ pub(crate) struct ReplyResources {
     pub tts: Option<Arc<dyn Tts>>,
     pub dynamic_instructions: Option<Arc<dyn lk_agents_abi::agent::HostInstructions>>,
     pub toolset: Arc<lk_agents_voice::tool_executor::Toolset>,
-    pub tools_host_extra: Vec<lk_agents_abi::HostRef>,
     pub output_nodes: crate::voice::nodes::OutputNodes,
 }
 
@@ -71,7 +70,6 @@ impl ReplyExecution {
                 })
                 .transpose()?,
             toolset: plan.providers.toolset.clone(),
-            tools_host_extra: plan.providers.tools_host_extra.clone(),
             output_nodes: crate::voice::nodes::OutputNodes {
                 transcription: plan
                     .providers

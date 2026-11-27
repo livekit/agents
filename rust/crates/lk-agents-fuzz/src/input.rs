@@ -295,9 +295,8 @@ impl Make for AgentTurn {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Confidence(pub u8);
 
-/// The arguments a model hands a tool, as the JSON text on the wire. Drawn from the shapes the
-/// driver's own tools take -- the answering-machine classifier's `save_prediction(label)` and
-/// `postpone_termination(seconds)` -- and the empty object every host tool accepts here.
+/// The arguments a model hands a tool, as the JSON text on the wire: a few small objects, one cut
+/// short by a leaked chat-template token, and the empty object every host tool accepts here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolArgs(pub String);
 
@@ -404,16 +403,6 @@ plain_enum! {
     TurnMode { Default, Stt, Manual }
 }
 plain_enum! {
-    /// What the IVR navigator is told.
-    IvrInput { Start, SeedTranscript, Close }
-}
-plain_enum! {
-    /// What happens to `AMD` past its attach: the SIP callee answers (`sip.callStatus` goes
-    /// `active`), the developer runs `execute()` on its verdict (the IVR hand-off included), or
-    /// closes it (`async with` left).
-    AmdInput { Answer, Execute, Close }
-}
-plain_enum! {
     /// What the console's CLI asks the session (`SessionRequest`), one of each kind.
     ConsoleAsk { Ping, History, AgentInfo, RunInput, State, RtcStats, Usage, Framework, Mute, Finalize }
 }
@@ -479,8 +468,8 @@ macro_rules! unreferenced {
 
 unreferenced!(
     bool, AgentText, UserText, Millis, Count, String, IoKind, SayInput, ToolAnswer, HookAnswer,
-    Knob, TurnMode, IvrInput, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker,
-    RtEvent, DtmfInput, DtmfKey, AmdInput, AgentTurn, SpeechWait
+    Knob, TurnMode, Models, Role, RoomIn, ConsoleAsk, Confidence, ToolArgs, Speaker, RtEvent,
+    DtmfInput, DtmfKey, AgentTurn, SpeechWait
 );
 
 impl<K: Resource> Referenced for Ref<K> {
@@ -615,8 +604,6 @@ inputs! {
     FillerStart { tool: Ref<Tool>, speech: Ref<Speech>, delay: Millis, interval: Option<Millis>, text: Option<AgentText> }
         opens [Filler] leaf speech::FillerStart;
     FillerStop { filler: Ref<Filler> } leaf speech::FillerStop;
-    PauseAuthorization { } leaf speech::PauseAuthorization;
-    ResumeAuthorization { } leaf speech::ResumeAuthorization;
     CommitTurn { skip_reply: bool } leaf turn::Commit;
     /// `start_user_turn()`: a turn opens; the driver keeps its handle.
     StartUserTurn { } leaf turn::StartUser;
@@ -656,7 +643,6 @@ inputs! {
     HostMetrics { } leaf command::HostMetrics;
     /// The avatar lifecycle's report that the avatar did not join in time.
     AvatarError { } leaf command::AvatarError;
-    Ivr { input: IvrInput, silence: Millis, text: UserText } leaf command::Ivr;
     SetStaticKeyterms { terms: Vec<String> } leaf command::SetStaticKeyterms;
     /// `GetDtmfTask`'s event half: `Start` a collection of `digits + 1` keys (`#` stops,
     /// `confirm` reads the sequence back, `timeout` is the per-digit debounce), forward the SIP
@@ -669,9 +655,6 @@ inputs! {
     /// The body waits on it; answering the tool first is the await cancelled. Made by the
     /// conversation's tool bodies, never drawn uniformly.
     VoiceTask { tool: Ref<Tool>, agent: String, reply: bool } opens [Answer] leaf command::VoiceTask never true;
-    /// The answering-machine detector's host calls (`amd_start_*`, `amd_settle`, `execute()`,
-    /// `aclose()`), which reach its own system rather than the driver: no command leaf.
-    Amd { input: AmdInput };
     Run { user_input: Option<UserText> } leaf command::Run;
 
     FeedText { stream: Ref<Stream>, text: AgentText };
@@ -782,8 +765,6 @@ not_sent! {
     command::Speech => "a family, not a leaf: its leaves are in the table";
     command::Turn => "a family, not a leaf: its leaves are in the table";
     command::Activity => "a family, not a leaf: its leaves are in the table";
-    turn::SkipReplies => "the answering-machine detector's own, on its verdict and close (`Amd`)";
-    command::AmdSpan => "the answering-machine detector's own, on its attach and verdict (`Amd`)";
     command::DelegateUsage => "an agent tool's in-process child reports its usage; no fake runs one";
 }
 

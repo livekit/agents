@@ -38,8 +38,8 @@ impl Talk {
         }
     }
 
-    /// What the model sends on one chat request, in order. A request offering the
-    /// answering-machine classifier's, input router's or keyterm detector's tool is answered with it;
+    /// What the model sends on one chat request, in order. A request offering the input router's or
+    /// keyterm detector's tool is answered with it;
     /// otherwise the model reaches for one of the agent's tools or says one to three of the
     /// agent's lines. A failing model fails anywhere in it, before its first chunk or partway.
     fn answer(&mut self, chat: u32) -> Vec<Input> {
@@ -85,22 +85,6 @@ impl Talk {
                     .to_string()
             };
             Some((RECORD_KEYTERMS_TOOL.to_owned(), ToolArgs(args)))
-        } else if offered(&self.run, SAVE_PREDICTION_TOOL) {
-            // Each label the tool accepts, a postponement (one past the clamp included), and an
-            // answer without the label, which the classifier must ignore.
-            let choices = AmdCategory::ALL.len() + 2;
-            let (name, args) = match self.rng.usize(0..choices) {
-                i if i < AmdCategory::ALL.len() => (
-                    SAVE_PREDICTION_TOOL,
-                    format!(r#"{{"label":"{}"}}"#, AmdCategory::ALL[i].as_str()),
-                ),
-                i if i == AmdCategory::ALL.len() => (
-                    POSTPONE_TERMINATION_TOOL,
-                    format!(r#"{{"seconds":{}}}"#, self.rng.u64(0..=MAX_EXTENSION_SECS as u64 + 2)),
-                ),
-                _ => (SAVE_PREDICTION_TOOL, "{}".to_owned()),
-            };
-            Some((name.to_owned(), ToolArgs(args)))
         } else if !self.run.setup.tools.is_empty() && self.rng.u8(0..100) < self.host.tool_calls {
             let tools = &self.run.setup.tools;
             let name = tools[self.rng.usize(0..tools.len())].clone();

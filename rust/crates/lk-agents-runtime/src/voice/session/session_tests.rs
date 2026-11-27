@@ -641,8 +641,6 @@ fn invalid<T>(r: Result<T, CommandRefused>) -> String {
 #[tokio::test(start_paused = true)]
 async fn host_arguments_are_checked_before_anything_is_sent() {
     let api = unobserved(no_room(), None);
-    assert!(invalid(api.ivr_start(-1.0, None, None)).contains("max_silence"));
-    assert!(invalid(api.ivr_start(f64::NAN, None, None)).contains("max_silence"));
     let filler = |delay, interval, speech: &str| {
         api.filler_start(
             "call".into(),
@@ -691,7 +689,6 @@ async fn rare_host_calls_reach_a_running_session() {
     HostSpeech::wait_until_created(&*recorded).await.unwrap();
 
     assert_eq!(api.keyterms(), None);
-    assert!(!api.amd_listening());
     assert!(api.usage().models.is_empty());
 
     api.shutdown(false);
@@ -759,7 +756,6 @@ pub(super) fn option_kwargs() -> lk_agents_abi::voice::session_options::SessionK
         min_consecutive_speech_delay: 0.0,
         expressive: Default::default(),
         aec_warmup_duration: Maybe::NotGiven,
-        ivr_detection: false,
         user_away_timeout: Some(15.0),
         transcription_timeout: None,
         final_transcript_timeout: 2.0,

@@ -1,6 +1,6 @@
 use super::*;
 use lk_agents_abi::errors::Invalid;
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, Unapplied};
 use lk_agents_abi::text_session::{LiveTurnOrigin, LiveTurnReport};
 use lk_agents_net::task::ScopedTask;
 
@@ -80,9 +80,9 @@ impl Driver {
         match command {
             OwnerCommand::CancelTasks { tasks, done } => {
                 if self.session.live_dialogue_pending() {
-                    done.resolve(Err(StorageError::Unavailable(
-                        "an opaque write is pending".into(),
-                    )));
+                    done.resolve(Err(StorageError::Unavailable(Unapplied::local(
+                        "an opaque write is pending",
+                    ))));
                 } else {
                     let unowned = self.session.unowned_live_tasks(&tasks);
                     effects.extend(self.session.cancel_live_tasks(&tasks, self.clock.now()));

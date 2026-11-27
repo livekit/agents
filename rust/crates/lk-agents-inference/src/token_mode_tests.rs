@@ -81,7 +81,6 @@ fn a_model_needs_no_key_and_a_request_outside_a_job_fails_clearly() {
         String::new(),
     )
     .unwrap();
-    assert!(lk_agents_inference::amd::auto_select_models(URL, "", ""));
     let eot = lk_agents_inference::eot::select(Some("v1"), false, false, "https://x", "", "", true);
     assert_eq!(eot.unwrap().model, lk_agents_abi::tokenize::language::TurnDetectorModel::V1);
 

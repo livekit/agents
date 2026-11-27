@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::StorageError;
 use crate::sql::{BatchResult, Row, Statement};
 use async_trait::async_trait;
 use livekit_api::services::threads::ThreadClient;
@@ -24,9 +23,10 @@ use lk_agents_abi::{Clock, Ts};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::owned::Background;
 
-use crate::telemetry::{Cx, StorageWrite};
+use crate::backends::thread_page_limit;
+use crate::telemetry::{self, Cx, StorageOp, StorageOutcome, StorageRetryReason, StorageWrite};
 use crate::thread::{LeaseTiming, Resend, Retry, SchemaCell, Thread};
-use crate::{Storage, ThreadDbConnection};
+use crate::{Storage, StorageError, ThreadDbConnection, Unapplied};
 pub use connection::{Conn, Options as ConnOptions, WriteError, WsdbError};
 
 // The threads service owns thread metadata; agent-db holds each thread's database, over `wsdb`.
@@ -83,16 +83,52 @@ fn api_code(code: &str) -> ErrorCode {
 }
 
 /// A server's refusal of a request that changed nothing, by its code: the codes naming a cause of
-/// their own as it, one that may succeed if sent again `Unavailable`, any other final (`too_large`
-/// included: no caller branches on it, its description names the limit).
+/// their own as it, one that may succeed if sent again `Unavailable` for its reason, any other
+/// final (`too_large` included: no caller branches on it, its description names the limit).
 fn refused(code: ErrorCode, message: String) -> StorageError {
-    match code {
-        ErrorCode::NOT_FOUND => StorageError::NotFound(message),
-        ErrorCode::UNAUTHENTICATED | ErrorCode::PERMISSION_DENIED => {
+    match (code, code.retry()) {
+        (ErrorCode::NOT_FOUND, _) => StorageError::NotFound(message),
+        (ErrorCode::UNAUTHENTICATED | ErrorCode::PERMISSION_DENIED, _) => {
             StorageError::Unauthorized(message)
         }
-        _ if code.retryable() => StorageError::Unavailable(format!("{code}: {message}")),
-        _ => StorageError::Invalid(format!("{code}: {message}")),
+        (_, Some(reason)) => {
+            StorageError::Unavailable(Unapplied::new(reason, format!("{code}: {message}")))
+        }
+        (_, None) => StorageError::Invalid(format!("{code}: {message}")),
+    }
+}
+
+impl WsdbError {
+    /// Why a request it refused unapplied may be sent again, or a socket it ended redialed.
+    pub(crate) fn retry_reason(&self) -> StorageRetryReason {
+        match self {
+            Self::Server { code, .. } => code.retry().unwrap_or(StorageRetryReason::Unavailable),
+            Self::Closed => StorageRetryReason::Local,
+            Self::Drained => StorageRetryReason::Drained,
+            _ => StorageRetryReason::Transport,
+        }
+    }
+
+    /// Who owns a request's outcome when it failed with this: an answer's by its code; a drain the
+    /// move's; an answer that did not decode the server's; a lost or overrun answer no one's said.
+    pub(crate) fn class(&self) -> StorageOutcome {
+        match self {
+            Self::Server { code, .. } => code.class(),
+            Self::Drained => StorageOutcome::Redirect,
+            Self::Closed | Self::TooLarge(_) => StorageOutcome::Client,
+            Self::Protocol(_) => StorageOutcome::Server,
+            Self::Disconnected | Self::Io(_) | Self::Timeout | Self::Overrun => {
+                StorageOutcome::Unknown
+            }
+        }
+    }
+}
+
+impl WriteError {
+    /// What failed, sent or not.
+    pub(crate) fn error(&self) -> &WsdbError {
+        let (Self::NotSent(error) | Self::Sent(error)) = self;
+        error
     }
 }
 
@@ -106,7 +142,7 @@ impl From<WsdbError> for StorageError {
             | WsdbError::Timeout
             | WsdbError::Io(_)
             | WsdbError::Drained
-            | WsdbError::Overrun => StorageError::Unavailable(e.to_string()),
+            | WsdbError::Overrun => StorageError::Unavailable(Unapplied::new(e.retry_reason(), e)),
             WsdbError::Server { code, message } => refused(code, message),
             WsdbError::Protocol(m) => StorageError::Invalid(m),
             WsdbError::TooLarge(_) => {
@@ -116,14 +152,15 @@ impl From<WsdbError> for StorageError {
     }
 }
 
-/// A sent write answered with a code that applied nothing is refused, as an unsent one is; one
+/// A sent write answered with a code that applied nothing, or drained unanswered (the server's
+/// notice says it applied nothing), is refused, as an unsent one is; one
 /// answered with a code that may have applied, or never answered (a dropped or closed socket, a
 /// timeout, a malformed answer, a server going away), may have committed: `Uncertain`. Only a
 /// sent write can be.
 impl From<WriteError> for StorageError {
     fn from(e: WriteError) -> Self {
         match e {
-            WriteError::NotSent(e) => e.into(),
+            WriteError::NotSent(e) | WriteError::Sent(e @ WsdbError::Drained) => e.into(),
             WriteError::Sent(e @ WsdbError::Server { code, .. }) if !code.maybe_applied() => {
                 e.into()
             }
@@ -136,10 +173,23 @@ impl From<WriteError> for StorageError {
 /// is refused by the agent-db code its REST error body's `code` answers.
 pub fn service_error(e: ServiceError) -> StorageError {
     match e {
-        ServiceError::Twirp(ServerError::Request(e)) => StorageError::Unavailable(e.to_string()),
+        ServiceError::Twirp(ServerError::Request(e)) => {
+            StorageError::Unavailable(Unapplied::new(StorageRetryReason::Transport, e))
+        }
         ServiceError::Twirp(ServerError::Twirp(c)) => refused(api_code(&c.code), c.msg),
         ServiceError::Twirp(e) => StorageError::Invalid(e.to_string()),
         other => StorageError::Invalid(other.to_string()),
+    }
+}
+
+/// Who owns a threads-service call's outcome: an answered error is classed by the agent-db code its
+/// REST error body answers; a lost request, a wait run out or an answer that did not decode said
+/// nothing.
+fn service_class<T>(out: &Option<Result<T, ServiceError>>) -> StorageOutcome {
+    match out {
+        Some(Ok(_)) => StorageOutcome::Ok,
+        Some(Err(ServiceError::Twirp(ServerError::Twirp(c)))) => api_code(&c.code).class(),
+        Some(Err(_)) | None => StorageOutcome::Unknown,
     }
 }
 
@@ -201,7 +251,7 @@ impl AgentDbStorage {
         env: &ProcessEnv,
     ) -> Result<Self, StorageError> {
         let unavailable = |what: &str, e: lk_agents_net::env::ProcessError| {
-            StorageError::Unavailable(format!("{what}: {e}"))
+            StorageError::Unavailable(Unapplied::local(format!("{what}: {e}")))
         };
         let spawner = (env.spawner)().map_err(|e| unavailable("storage runtime", e))?;
         let background = Background::new(Arc::default(), spawner, env.clock.clone());
@@ -218,7 +268,8 @@ impl AgentDbStorage {
             minter.api_secret(),
             http.client(),
         ));
-        let (cx, pool) = (env.tracer.root(), Arc::new(DbPool::new(env.clock.clone())));
+        let cx = env.tracer.root();
+        let pool = Arc::new(DbPool::new(env.clock.clone(), cx.clone()));
         Ok(Self { data_plane, opts, minter, api, pool, background, cx })
     }
 
@@ -231,38 +282,47 @@ impl AgentDbStorage {
         self.api.threads()
     }
 
-    /// `call` under the storage deadline: past it, `None`.
+    /// `call` under the storage deadline: past it, `None`. Measured as `op`.
     async fn bounded<T>(
         &self,
+        op: StorageOp,
         call: impl Future<Output = Result<T, ServiceError>>,
     ) -> Option<Result<T, ServiceError>> {
         let clock = &*self.background.clock;
-        lk_agents_abi::before(clock, Some(crate::deadline::or_default(clock)), call).await.ok()
+        let started = clock.now();
+        let out =
+            lk_agents_abi::before(clock, Some(crate::deadline::or_default(clock)), call).await.ok();
+        let took = clock.now().saturating_duration_since(started);
+        telemetry::request(&self.cx, op, service_class(&out), took);
+        out
     }
 
     /// A threads-service read under the storage deadline, sent again while it is refused
     /// unapplied or its request is lost.
-    async fn read<T, F>(&self, call: impl Fn() -> F) -> Result<T, StorageError>
+    async fn read<T, F>(&self, op: StorageOp, call: impl Fn() -> F) -> Result<T, StorageError>
     where
         F: Future<Output = Result<T, ServiceError>>,
     {
         let read = || async {
-            match self.bounded(call()).await {
+            match self.bounded(op, call()).await {
                 Some(out) => out.map_err(service_error),
-                None => Err(StorageError::Unavailable("threads service: no answer in time".into())),
+                None => Err(StorageError::Unavailable(Unapplied::new(
+                    StorageRetryReason::Transport,
+                    "threads service: no answer in time",
+                ))),
             }
         };
-        Retry::new(self.background.clock.clone()).send(read).await
+        Retry::new(self.background.clock.clone(), &self.cx).send(read).await
     }
 
     /// A threads-service write under the storage deadline, sent again only while it is refused
     /// unapplied: one sent and unanswered by then is `Uncertain`.
-    async fn write<T, F>(&self, call: impl Fn() -> F) -> Result<T, StorageError>
+    async fn write<T, F>(&self, op: StorageOp, call: impl Fn() -> F) -> Result<T, StorageError>
     where
         F: Future<Output = Result<T, ServiceError>>,
     {
         let write = || async {
-            match self.bounded(call()).await {
+            match self.bounded(op, call()).await {
                 Some(out) => out.map_err(service_write_error),
                 None => Err(StorageError::Uncertain(Unacknowledged::sent(
                     "threads service: no answer in time",
@@ -281,20 +341,23 @@ impl AgentDbStorage {
             opts.reconnect = self.opts.reconnect.clone();
             let (spawner, clock) = (self.background.spawner.clone(), self.background.clock.clone());
             // boxed: the dial's future is large, and the open holds it across its resends
-            match Box::pin(Conn::dial(opts, self.minter.clone(), spawner, clock)).await {
+            let dial = Conn::dial(opts, self.minter.clone(), spawner, clock, self.cx.clone());
+            match Box::pin(dial).await {
                 Ok(conn) => Ok(conn),
                 Err(e) if e.is_final() => Err(e.into()),
-                Err(e) => Err(StorageError::Unavailable(e.to_string())),
+                Err(e) => Err(StorageError::Unavailable(Unapplied::new(e.retry_reason(), e))),
             }
         };
         let clock = &*self.background.clock;
         let bounded = || async {
             let deadline = Some(crate::deadline::or_default(clock));
-            let timed_out =
-                |_| StorageError::Unavailable(format!("dial {thread_id}: no answer in time"));
+            let timed_out = |_| {
+                let why = format!("dial {thread_id}: no answer in time");
+                StorageError::Unavailable(Unapplied::new(StorageRetryReason::Transport, why))
+            };
             lk_agents_abi::before(clock, deadline, dial()).await.map_err(timed_out)?
         };
-        Retry::new(self.background.clock.clone()).send(bounded).await
+        Retry::new(self.background.clock.clone(), &self.cx).send(bounded).await
     }
 }
 
@@ -303,26 +366,32 @@ impl Storage for AgentDbStorage {
     /// Sent again while refused unapplied; the create carries no idempotency key (the threads
     /// service takes none), so a lost response is `Uncertain`.
     async fn create_thread(&self, request: CreateRequest) -> Result<ThreadRecord, StorageError> {
-        self.write(|| self.threads().create(request.clone())).await
+        self.write(StorageOp::ThreadCreate, || self.threads().create(request.clone())).await
     }
 
     async fn get_thread(&self, thread_id: &str) -> Result<ThreadRecord, StorageError> {
-        self.read(|| self.threads().get(thread_id)).await
+        self.read(StorageOp::ThreadGet, || self.threads().get(thread_id)).await
     }
 
     async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError> {
-        self.read(|| self.threads().list(request.clone())).await
+        let request = ListRequest { limit: thread_page_limit(request.limit), ..request };
+        let mut page =
+            self.read(StorageOp::ThreadList, || self.threads().list(request.clone())).await?;
+        for thread in &mut page.threads {
+            (thread.last_active, thread.expires_at) = (None, None);
+        }
+        Ok(page)
     }
 
     /// Sent again while refused unapplied; a lost response is `Uncertain`, never sent again: a
     /// later update could otherwise be overwritten by this one landing after it.
     async fn update_thread(&self, request: UpdateRequest) -> Result<ThreadRecord, StorageError> {
-        self.write(|| self.threads().update(request.clone())).await
+        self.write(StorageOp::ThreadUpdate, || self.threads().update(request.clone())).await
     }
 
     /// Repeat-safe: a thread already gone is deleted.
     async fn delete_thread(&self, thread_id: &str) -> Result<(), StorageError> {
-        match self.write(|| self.threads().delete(thread_id)).await {
+        match self.write(StorageOp::ThreadDelete, || self.threads().delete(thread_id)).await {
             Err(StorageError::NotFound(_)) => Ok(()),
             out => out,
         }
@@ -362,7 +431,8 @@ impl Storage for AgentDbStorage {
             limit: limit.clamp(1, 500) as i32,
             ..Default::default()
         };
-        let page = self.read(|| self.threads().items(request.clone())).await?;
+        let page =
+            self.read(StorageOp::ThreadItems, || self.threads().items(request.clone())).await?;
         let items = page
             .items
             .into_iter()
@@ -395,7 +465,8 @@ impl Storage for AgentDbStorage {
                 page_token,
                 ..Default::default()
             };
-            let page = self.read(|| self.threads().tasks(request.clone())).await?;
+            let page =
+                self.read(StorageOp::ThreadTasks, || self.threads().tasks(request.clone())).await?;
             for task in page.tasks {
                 let state = task_state(task.status)?;
                 tasks.push(ThreadTask {
@@ -515,7 +586,7 @@ impl Pooled {
     where
         R: Future<Output = Result<T, WsdbError>>,
     {
-        let mut retry = Retry::new(self.pool.clock.clone());
+        let mut retry = Retry::new(self.pool.clock.clone(), &self.pool.cx);
         loop {
             self.live()?;
             match retry.attempt(read()).await {
@@ -532,7 +603,7 @@ impl Pooled {
     /// A parked connection is no longer this handle's.
     fn live(&self) -> Result<(), StorageError> {
         match self.closed.load(Ordering::Acquire) {
-            true => Err(StorageError::Unavailable("the database is closed".into())),
+            true => Err(StorageError::Unavailable(Unapplied::local("the database is closed"))),
             false => Ok(()),
         }
     }
@@ -550,6 +621,8 @@ const IDLE_TOTAL: usize = 64;
 struct DbPool {
     idle: Mutex<Vec<(String, Idle)>>,
     clock: Arc<dyn Clock>,
+    /// Where its connections' resends are counted.
+    cx: Cx,
 }
 
 struct Idle {
@@ -565,8 +638,8 @@ impl Idle {
 }
 
 impl DbPool {
-    fn new(clock: Arc<dyn Clock>) -> Self {
-        Self { idle: Mutex::default(), clock }
+    fn new(clock: Arc<dyn Clock>, cx: Cx) -> Self {
+        Self { idle: Mutex::default(), clock, cx }
     }
 
     fn take(&self, database_id: &str) -> Option<Idle> {

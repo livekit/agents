@@ -28,24 +28,6 @@ EndedSpan: TypeAlias = "_HostEndedSpan"
 EndedSpanEvent: TypeAlias = "_HostEndedSpanEvent"
 
 
-@dataclass(kw_only=True, slots=True)
-class TelemetryDiagnostics:
-    """The process's export counters."""
-
-    dropped: int
-    """Records refused by a full queue or a metric cardinality limit, or abandoned at a deadline."""
-    failed: int
-    """Records in requests the endpoint refused or that failed in transport."""
-    conflicts: int
-    """Configuration that could not apply."""
-    incomplete_cleanup: int
-    """Job closes and shutdowns that reached their deadline before every record was sent."""
-    swept_spans: int
-    """Spans a voice session's close ended because their owner never did (a framework bug)."""
-    abandoned_sessions: int
-    """Voice sessions dropped without their close; their open spans were ended and exported."""
-
-
 SpanContext = _HostSpanContext
 
 

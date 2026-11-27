@@ -57,7 +57,7 @@ class WizperSTT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Fal"
+        return "fal"
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):

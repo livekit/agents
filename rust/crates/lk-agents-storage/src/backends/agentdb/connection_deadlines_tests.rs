@@ -47,7 +47,13 @@ async fn a_dial_attempt_ends_at_the_callers_deadline() {
     opts.dial_timeout = Duration::from_secs(60);
     let background = crate::testing::background();
     let deadline = background.clock.now().saturating_add(Duration::from_millis(200));
-    let dial = Conn::dial(opts, minter(), background.spawner, background.clock);
+    let dial = Conn::dial(
+        opts,
+        minter(),
+        background.spawner,
+        background.clock,
+        crate::telemetry::Cx::NONE,
+    );
     let dial =
         tokio::time::timeout(Duration::from_secs(5), crate::deadline::within(deadline, dial));
     let err = dial.await.expect("the dial outlived its caller's deadline").err().unwrap();

@@ -81,7 +81,6 @@ impl VoiceDriver {
         if self.session.closing_span.is_none() {
             self.session.closing_span = self.session_close_span(reason, drain, error.as_ref());
         }
-        self.record_effect(VoiceEffect::Tap(crate::agent_session::SystemTap::CloseRequested));
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close);
         // Stopped before the drain so a key pressed during it is not collected.
         self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
@@ -457,14 +456,9 @@ impl VoiceDriver {
             | Command::HostMetrics(_)
             | Command::AvatarError(_)
             | Command::DelegateUsage(_)
-            | Command::AmdSpan(_)
             | Command::SetStaticKeyterms(_)
             | Command::Recorder(_)
-            | Command::Ivr(_)
-            | Command::Dtmf(DtmfCommand::Cancel { .. })
-            | Command::Speech(
-                SpeechCommand::PauseAuthorization | SpeechCommand::ResumeAuthorization,
-            ) => return,
+            | Command::Dtmf(DtmfCommand::Cancel { .. }) => return,
         };
         self.record_trace(CoreStep::PortFailure(lost));
         self.settle_undelivered(kind, call);

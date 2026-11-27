@@ -118,7 +118,7 @@ side is one module, `livekit/agents/telemetry.py`, of about 200 lines, over the 
 | --- | --- |
 | Provider | `_Span`, `_Tracer` and `_TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
-| Public functions | `configure`, `set_capture_content` and `diagnostics`, generated forwarding to `_core` (`public_telemetry`) |
+| Public functions | `configure` and `set_capture_content`, generated forwarding to `_core` (`public_telemetry`) |
 | Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation in the copied context a host call runs in, and capture), `_LoopMonitor` (the event loop's heartbeat; see [Event-loop stalls](#event-loop-stalls)) |
 | Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler`, recorded by room I/O, which intercepts the room's RPC calls and handlers |
 
@@ -316,10 +316,9 @@ byte charges) are synchronous functions in `lk_agents_core::telemetry::policy`;
 the exporter calls them once per record and destination.
 
 Queues are bounded by record count and retained bytes. A full queue drops the
-record and counts it; `diagnostics()` reports the counts. Export never blocks a
-session step, a tool call or the worker heartbeat, and an export failure never
-fails a conversation. Flush and shutdown share the job's cleanup deadline with
-the session report upload.
+record. Export never blocks a session step, a tool call or the worker
+heartbeat, and an export failure never fails a conversation. Flush and shutdown
+share the job's cleanup deadline with the session report upload.
 
 ## Span API
 
@@ -340,7 +339,7 @@ Everything that carries attributes is one kind of thing, a struct deriving
 
 ```rust
 /// One request to an LLM provider, retries included.
-#[span(name = "llm_request", parent = LlmNode | KeytermDetection | Amd | AgentRun, end = LlmRequestEnd)]
+#[span(name = "llm_request", parent = LlmNode | KeytermDetection | AgentRun, end = LlmRequestEnd)]
 #[derive(Attrs)]
 pub struct LlmRequest {
     #[attr("gen_ai.request.model", label)]
@@ -541,7 +540,7 @@ every record, as the `EverySpan` group and the identity stamp.
 | A span cannot drift from its entity | the entity owns it: moving or removing the entity moves the span |
 | A span ends once | `end` consumes it |
 | A span ends at all | `Drop` asserts it was ended (debug builds, so every test and the DST); the mistake fails at the line that dropped the entity |
-| Nothing ends silently at close | a session close removes each live entity through its own removal path with the `closed` outcome; nothing ends spans in bulk. `Trace::close` then sweeps whatever remains: a non-zero sweep fails the DST and is a warning plus `telemetry.diagnostics().swept_spans` in production |
+| Nothing ends silently at close | a session close removes each live entity through its own removal path with the `closed` outcome; nothing ends spans in bulk. `Trace::close` then sweeps whatever remains: a non-zero sweep fails the DST and is a warning in production |
 | A session's spans always reach the exporter | the session closes on every exit path before the job's final flush; DST rule `sessions_export_their_root` |
 | A child is opened only under a declared parent | `open_in` takes `&telemetry::ManualSpan<P>` with `P: ParentOf<D>`; `open` exists only for declarations whose parent is the session |
 | One clock | the runtime's injected clock, the voice core's `now` and the `Trace` anchor all come from the `ProcessEnv` clock, so a `ScopedSpan` nested under a sans-I/O span shares its timeline |
@@ -563,7 +562,6 @@ dropped or left open without the type system or the `Drop` assertion noticing.
 | `agent_turn`, `agent_speaking` | the speech's scheduler entry, then the record of its running tool calls |
 | `start_agent_activity` + `on_enter`, `drain_agent_activity` + `on_exit` | the callback's hook record |
 | `update_agent` | the activity's agent update, ended once done and no callback runs under it |
-| `amd` | the session's AMD detection, from the detector's attach to its verdict |
 | `keyterm_detection` | the keyterm slot's pass in flight |
 
 Core work that continues in the runtime (an LLM node, a TTS node, a tool call)
@@ -737,6 +735,18 @@ endpoint, not Cloud.
 | `lk.agents.teardown.overrun` | `stage`: `session_close`, `lease_release` | a teardown ran past its bound | any |
 | `lk.agents.storage.write_uncertain` | `write`: `acquire`, `commit`, `release`, ... | a write's outcome was still unknown when its resends ran out | more than 5 in 10 min |
 
+### Storage client metrics
+
+agent-db as the framework sees it, beside agent-store's server-side `db_requests_total{op,class}`
+(`telemetry/storage.rs`). Recorded in `lk-agents-storage` where the connection and the one retry
+owner (`thread::Retry`) already decide; no log of their own.
+
+| Metric | Labels | Means |
+| --- | --- | --- |
+| `lk.agents.storage.request_duration` (s) | `op`: `exec`, `batch`, `query`, `hello`, `thread_create`, `thread_get`, `thread_list`, `thread_update`, `thread_delete`, `thread_items`, `thread_tasks`; `class`: `ok`, `client`, `redirect`, `capacity`, `server`, `unknown` | one request from its call to its last answer: its wait for a socket and the connection's resend to a moved database included, a retry owner's later attempt not (that is a request of its own). `class` is agent-store's class of the answer's code; `unknown` is no answer (lost, timed out) or an unknown code |
+| `lk.agents.storage.retries` | `reason`: `moved`, `unavailable`, `snapshot_expired`, `capacity`, `drained`, `transport`, `local` | a request sent again: by the connection after a drain, or by the retry owner after a refusal that applied nothing |
+| `lk.agents.storage.redials` | `reason` | a socket dialed again, under why the last one ended or why the last dial failed |
+
 ## Report records
 
 Records Cloud reads as OTLP logs are typed:
@@ -780,7 +790,7 @@ consumer can link a transcript row to its trace without matching timestamps.
 
 Queue bounds are sized so a session's end-of-session burst (every chat item,
 the usage summary and the evaluations) fits without dropping; records beyond the
-bound are dropped and counted, never truncated.
+bound are dropped, never truncated.
 
 ## Session report
 

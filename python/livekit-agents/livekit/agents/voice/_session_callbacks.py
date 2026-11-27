@@ -14,7 +14,6 @@ from livekit import rtc
 from .. import _core, llm, stt, tts
 from .._bindings import chat_request, tool_specs
 from .._generated.agent_run import FunctionToolInfo
-from .._generated.amd import AMDPredictionEvent
 from .._generated.avatar_errors import AvatarError
 from .._generated.output_errors import AudioOutputError
 from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
@@ -147,10 +146,6 @@ class _AgentHooks:
         return [
             infos.get(spec["name"]) or FunctionToolInfo(spec=spec) for spec in tool_specs(tools)
         ]
-
-    async def _core_closing(self) -> None:
-        if self._session._amd is not None:
-            await self._session._amd.aclose()
 
     async def _core_on_user_turn_completed(
         self,
@@ -451,11 +446,6 @@ def _on_error(self: VoiceSession[Any], wire: SessionErrorWire) -> None:
     self.emit("error", ErrorEvent(error=error, source=source))
 
 
-def _on_amd_result(self: VoiceSession[Any], wire: AMDPredictionEvent) -> None:
-    if self._amd is not None:
-        self._amd._on_prediction(wire)
-
-
 def _on_text_input(self: VoiceSession[Any], wire: TextInputWire) -> None:
     if (callback := self._text_input_cb) is None or self._tasks.closed:
         return
@@ -514,7 +504,6 @@ _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
     MetricsCollectedWire: _on_metrics,
     SessionErrorWire: _on_error,
     CloseWire: _on_close,
-    AMDPredictionEvent: _on_amd_result,
     TextInputWire: _on_text_input,
     DeleteRoomRequested: _on_delete_room,
 }

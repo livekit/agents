@@ -32,14 +32,14 @@ pub(crate) use lk_agents_telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
 };
 
-/// The GenAI registry's spelling of a provider, `unknown` when it has none.
-pub fn provider_name(provider: &str) -> String {
-    gen_ai::provider_name(provider).unwrap_or_else(|| "unknown".to_owned())
+/// The provider a span or metric names: the vendor id the model declares, `unknown` without one.
+pub fn provider_name(id: &ProviderId) -> String {
+    id.vendor().unwrap_or("unknown").to_owned()
 }
 
-/// A model's `M` labels: its provider as the GenAI registry spells it, and its name.
+/// A model's `M` labels: its declared provider and its name.
 pub fn model_labels(id: &ProviderId) -> ModelLabels {
-    ModelLabels::of(Some(&provider_name(&id.provider)), Some(&id.model))
+    ModelLabels::of(Some(&provider_name(id)), Some(&id.model))
 }
 
 fn seconds(from: u64, to: u64) -> f64 {
@@ -103,7 +103,7 @@ impl LlmTrace {
                 cx,
                 LlmRequest {
                     operation: GenAiOperation::Chat,
-                    provider: provider_name(&id.provider),
+                    provider: provider_name(&id),
                     model: id.model.clone(),
                     stream: true,
                     output_type: OutputType::Text,
@@ -158,7 +158,7 @@ impl LlmTrace {
             span.cx(),
             LlmRequestRun {
                 attempt: Attempt {
-                    provider: provider_name(&self.id.provider),
+                    provider: provider_name(&self.id),
                     model: self.id.model.clone(),
                     retry_count,
                 },
@@ -244,7 +244,7 @@ impl LlmTrace {
         let Some(span) = self.span.take() else { return metrics };
         let cx = span.cx();
         let usage = self.usage.clone().unwrap_or_default();
-        let provider = provider_name(&self.id.provider);
+        let provider = provider_name(&self.id);
         let labels = || GenAiLabels {
             operation: GenAiOperation::Chat,
             provider: Label(provider.clone()),
@@ -380,7 +380,7 @@ impl TtsTrace {
         let target = TtsTarget {
             streaming,
             label: tts.label(),
-            provider: provider_name(&id.provider),
+            provider: provider_name(&id),
             model: id.model.clone(),
         };
         use lk_agents_telemetry::start;
@@ -414,7 +414,7 @@ impl TtsTrace {
             &self.cx,
             TtsRequestRun {
                 attempt: Attempt {
-                    provider: provider_name(&self.id.provider),
+                    provider: provider_name(&self.id),
                     model: self.id.model.clone(),
                     retry_count,
                 },

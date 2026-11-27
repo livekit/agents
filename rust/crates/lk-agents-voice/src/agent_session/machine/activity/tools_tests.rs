@@ -360,12 +360,7 @@ fn foreground_holds_follow_the_captured_tool_owner_even_with_reused_call_ids() {
         assert_eq!(asks.len(), 1);
         assert_eq!(asks[0].speech, expected, "stale tool must not own replacement foreground hold");
     }
-    for caller in [
-        VoiceCommandOrigin::Host,
-        VoiceCommandOrigin::Hook { hook: "on_enter".into() },
-        VoiceCommandOrigin::Amd,
-        VoiceCommandOrigin::Ivr,
-    ] {
+    for caller in [VoiceCommandOrigin::Host, VoiceCommandOrigin::Hook { hook: "on_enter".into() }] {
         assert_eq!(driver.tool_speech(&caller), None);
     }
 }

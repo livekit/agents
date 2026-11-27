@@ -13,15 +13,7 @@ from opentelemetry.util.types import AttributeValue
 
 from livekit.agents._core import SpanKind, StatusCode
 
-from .telemetry import (
-    EndedSpan,
-    EvaluationRecord,
-    Outcome,
-    ReportTag,
-    SessionReport,
-    SpanContext,
-    TelemetryDiagnostics,
-)
+from .telemetry import EndedSpan, EvaluationRecord, Outcome, ReportTag, SessionReport, SpanContext
 
 class TelemetrySpan:
     """A span started through the host's OpenTelemetry API (an application span, or a framework span
@@ -61,9 +53,10 @@ class TelemetrySpan:
     def end(self, end_time: int | None = None) -> None:
         """Ends the span; later calls do nothing."""
 
-def _core_telemetry_install(sdk_version: str) -> None:
+def _core_telemetry_install(sdk_version: str, *, python_version: str | None = None) -> None:
     """Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
-    the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
+    the `OTEL_EXPORTER_OTLP_*` environment, and the process's product statistics unless they
+    are opted out of. Later calls do nothing.
     """
 
 def configure(
@@ -76,12 +69,6 @@ def configure(
     """Send the process's spans and metrics to an OTLP/HTTP protobuf endpoint; arguments override
     the `OTEL_EXPORTER_OTLP_*` environment.
     """
-
-def diagnostics() -> TelemetryDiagnostics:
-    """The process's export counters."""
-
-def _core_telemetry_conflict() -> None:
-    """Counts a configuration conflict the host found (a tracer provider it cannot bridge)."""
 
 def _core_telemetry_export(span: EndedSpan, *, job: str | None = None) -> None:
     """Records a span the application's OpenTelemetry SDK ended (the bridge of an SDK provider),

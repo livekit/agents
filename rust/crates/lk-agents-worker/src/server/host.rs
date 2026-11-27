@@ -148,7 +148,15 @@ impl ServerConfig for Configuration {
 
     fn delegation_url(&self, endpoint: String) -> Result<String, WorkerError> {
         let serving = self.serving.lock().clone();
-        self.get().delegation_url(&serving, &endpoint)
+        let mut settings = self.get();
+        // a job process copies its settings while importing the app, before the worker's
+        // environment is applied, so the endpoints URL is read again here
+        if settings.endpoints_url.is_empty()
+            && let Some(url) = lk_agents_net::env::server_setting("LIVEKIT_AGENT_ENDPOINTS_URL")
+        {
+            settings.endpoints_url = url;
+        }
+        settings.delegation_url(&serving, &endpoint)
     }
 }
 

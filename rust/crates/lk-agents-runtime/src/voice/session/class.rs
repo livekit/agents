@@ -16,7 +16,7 @@ use lk_agents_voice::agent_session::options::{
 };
 use lk_agents_voice::agent_session::{
     ActivityCommand, AudioInputHandle, DrainRefused, FillerSource, FillerStart,
-    GenerateReplyRequest, HoldId, IoKind, IvrCommand, TurnCommand,
+    GenerateReplyRequest, HoldId, IoKind, TurnCommand,
 };
 use lk_agents_voice::filler_scheduler::FillerId;
 
@@ -245,7 +245,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 handoffs: Arc::default(),
                 eot: args.turn_detector,
                 options: options.clone(),
-                call_room: rtc_room,
                 remote,
                 job: args.job,
                 job_run: args.job_run,
@@ -546,59 +545,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         Ok(speech)
     }
 
-    fn ivr_start(
-        &self,
-        max_silence: f64,
-        tools: Option<Vec<ToolSpec>>,
-        tools_host: Option<HostRef>,
-    ) -> Result<(), CommandRefused> {
-        if !(max_silence.is_finite() && max_silence >= 0.0) {
-            return Err(CommandRefused::Invalid(
-                "ivr_start: max_silence must be a finite, non-negative number of seconds"
-                    .to_owned(),
-            ));
-        }
-        // The session's tools extended, then the navigator started.
-        if let Some(specs) = tools {
-            self.send(Command::Ivr(IvrCommand::AddTools(Toolset {
-                specs,
-                host: tools_host,
-                agent: None,
-            })))?;
-        }
-        Ok(self.send(Command::Ivr(IvrCommand::Start {
-            max_silence: Duration::from_secs_f64(max_silence),
-        }))?)
-    }
-
-    fn attach_amd(
-        &self,
-        cfg: lk_agents_abi::voice::amd::AmdConfigKwargs,
-        llm: Arc<dyn Llm>,
-        tools: Option<HostRef>,
-        stt: Option<Arc<dyn Stt>>,
-        participant_identity: Option<String>,
-    ) -> Result<bool, CommandRefused> {
-        let config = lk_agents_voice::amd::machine::classifier::AmdConfig::resolve(&cfg)
-            .map_err(|e| CommandRefused::Invalid(e.to_string()))?;
-        let setup = lk_agents_voice::amd::AmdSetup {
-            config,
-            prompt: cfg
-                .detection
-                .prompt
-                .unwrap_or_else(|| lk_agents_abi::voice::amd::AMD_PROMPT.to_owned()),
-            llm: llm_leg(llm, self.conn.llm),
-            tools_host: tools,
-            stt: stt.map(|s| {
-                let conn = self.conn.stt.or_else(|| s.conn_options()).unwrap_or_default();
-                s.with_conn_options(&conn).unwrap_or(s)
-            }),
-            room: self.host.call_room.clone(),
-            participant: participant_identity,
-        };
-        Ok(VoiceSession::attach_amd(self, setup)?)
-    }
-
     fn aclose(
         &self,
         reason: String,
@@ -874,32 +820,6 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         }
     }
 
-    fn ivr_final(&self, text: String) -> Result<(), SessionRefused> {
-        self.send(IvrCommand::SeedTranscript { text })
-    }
-
-    fn amd_listening(&self) -> bool {
-        self.running(|r| Ok(r.amd.as_ref().is_some_and(|amd| amd.listening()))).unwrap_or(false)
-    }
-
-    fn amd_execute(&self) -> Result<(), SessionRefused> {
-        self.running(|r| {
-            if let Some(handle) = &r.amd {
-                handle.execute();
-            }
-            Ok(())
-        })
-    }
-
-    fn amd_close(&self) -> Result<(), SessionRefused> {
-        self.running(|r| {
-            if let Some(handle) = r.amd.take() {
-                handle.close();
-            }
-            Ok(())
-        })
-    }
-
     fn keyterms(&self) -> Option<Vec<String>> {
         match &*self.stage.lock() {
             Stage::Running(r) => r.keyterms.get(),
@@ -964,11 +884,6 @@ impl VoiceSession {
         Box::pin(async move {
             closed
                 .get_or_init(|| async move {
-                    if let Some(hooks) = &hooks
-                        && let Err(e) = hooks.closing(&telemetry::Cx::NONE).await
-                    {
-                        hooks.hook_failed(lk_agents_abi::voice::events::HookName::Closing, e.host_ref.clone());
-                    }
                     closing.await;
                     if let Some(eot) = eot
                         && lk_agents_abi::timeout(

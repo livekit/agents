@@ -346,9 +346,6 @@ pub struct SessionKwargs {
     pub expressive: Maybe<Expressive>,
     /// Unsaid is the default warmup, `None` none at all (outbound SIP).
     pub aec_warmup_duration: Maybe<Option<f64>>,
-    /// IVR navigation from the session's start; private, `AMD(ivr_detection=)` is the public one.
-    #[host(rename = "_ivr_detection", default = false)]
-    pub ivr_detection: bool,
     /// `None` disables the away timer.
     #[host(default = 15.0)]
     pub user_away_timeout: Option<f64>,
@@ -413,7 +410,7 @@ debug_record!(TurnHandlingKwargs {
 
 debug_record!(SessionKwargs {
     turn_handling, max_tool_steps, min_consecutive_speech_delay,
-    ivr_detection, user_away_timeout, transcription_timeout,
+    user_away_timeout, transcription_timeout,
     final_transcript_timeout, session_close_transcript_timeout;
     aec_warmup_duration, expressive
 });
@@ -564,7 +561,6 @@ pub struct ResolvedSessionOptions {
     pub endpointing_overrides: EndpointingOverrides,
     pub max_tool_steps: u32,
     pub min_consecutive_speech_delay: f64,
-    pub ivr_detection: bool,
     pub user_away_timeout: Option<f64>,
     pub transcription_timeout: Option<f64>,
     pub final_transcript_timeout: f64,

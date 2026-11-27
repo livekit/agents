@@ -9,7 +9,7 @@ use rusqlite::types::ValueRef;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
-use crate::{StorageError, ThreadDbConnection};
+use crate::{StorageError, ThreadDbConnection, Unapplied};
 use lk_agents_abi::storage::Unacknowledged;
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _};
 use lk_agents_net::owned::Background;
@@ -198,7 +198,7 @@ impl SqliteThread {
 }
 
 fn closed() -> StorageError {
-    StorageError::Unavailable("the database is closed".into())
+    StorageError::Unavailable(Unapplied::local("the database is closed"))
 }
 
 #[async_trait]
@@ -289,7 +289,7 @@ pub fn sqlite_error(e: rusqlite::Error) -> StorageError {
                     | Code::OutOfMemory
             ) =>
         {
-            StorageError::Unavailable(format!("sqlite: {e}"))
+            StorageError::Unavailable(Unapplied::local(format!("sqlite: {e}")))
         }
         _ => StorageError::Invalid(format!("sqlite: {e}")),
     }

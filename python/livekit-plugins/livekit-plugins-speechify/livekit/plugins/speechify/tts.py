@@ -200,7 +200,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Speechify"
+        return "speechify"
 
     def prewarm(self) -> None:
         """Open the HTTPS connection to the Speechify API ahead of the first request.

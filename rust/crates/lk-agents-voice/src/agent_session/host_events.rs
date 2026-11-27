@@ -215,7 +215,6 @@ impl SessionEvent {
                     created_at: host_stamp,
                 })
             }
-            SessionEvent::AmdResult { verdict } => HostWire::AmdResult(verdict.clone()),
             SessionEvent::ConversationItemAdded { item, agent, visibility, .. } => {
                 HostWire::ItemAdded(w::ItemAddedWire {
                     item: (**item).clone(),

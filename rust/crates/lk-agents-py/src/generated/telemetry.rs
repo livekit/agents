@@ -207,13 +207,19 @@ type TelemetryImpl =
     <crate::generated::implementations::Selected as super::Implementations>::Telemetry;
 
 /// Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
-/// the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
+/// the `OTEL_EXPORTER_OTLP_*` environment, and the process's product statistics unless they
+/// are opted out of. Later calls do nothing.
 #[pyfunction]
-#[pyo3(signature = (sdk_version))]
-pub fn _core_telemetry_install(py: Python<'_>, sdk_version: ::std::string::String) -> PyResult<()> {
+#[pyo3(signature = (sdk_version, *, python_version = None))]
+pub fn _core_telemetry_install(
+    py: Python<'_>,
+    sdk_version: ::std::string::String,
+    python_version: ::std::option::Option<::std::string::String>,
+) -> PyResult<()> {
     py.detach(|| {
         <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_install(
             sdk_version,
+            python_version,
         )
     });
     Ok(())
@@ -247,24 +253,6 @@ pub fn configure(
         })
         .transpose()?;
     py.detach(|| <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_configure(endpoint, headers, metadata, allow_pii)).map_err(|e: ::lk_agents_abi::telemetry::host::TelemetryConfigError| <::lk_agents_abi::telemetry::host::TelemetryConfigError as crate::py_errors::HostException>::to_py_err(&e))?;
-    Ok(())
-}
-
-/// The process's export counters.
-#[pyfunction]
-pub fn diagnostics<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(
-        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_diagnostics,
-    );
-    crate::generated::records::telemetry::telemetry_diagnostics_to_py(py, out)
-}
-
-/// Counts a configuration conflict the host found (a tracer provider it cannot bridge).
-#[pyfunction]
-pub fn _core_telemetry_conflict(py: Python<'_>) -> PyResult<()> {
-    py.detach(
-        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_conflict,
-    );
     Ok(())
 }
 

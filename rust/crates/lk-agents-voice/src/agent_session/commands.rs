@@ -34,8 +34,6 @@ pub enum Command {
     AvatarError(lk_agents_abi::errors::ProviderError),
     /// What an agent tool's child, run in process for a tool call, consumed.
     DelegateUsage(lk_agents_abi::usage::Usage),
-    #[vocabulary(kind = IvrCommandKind)]
-    Ivr(IvrCommand),
     /// `update_options(keyterms=..)`: replaces the user list; the effective list is pushed to the
     /// STT.
     SetStaticKeyterms(Vec<String>),
@@ -47,41 +45,11 @@ pub enum Command {
     Run(Box<crate::run_result::RunSpec>),
     #[vocabulary(kind = VoiceTaskCommandKind)]
     VoiceTask(crate::agent_session::machine::activity::voice_task::VoiceTaskCommand),
-    /// From `VoiceCommandOrigin::Amd`: the detector attached or released its verdict; its `amd`
-    /// span is the session trace's.
-    AmdSpan(AmdSpan),
-}
-
-/// The answering-machine detector's span, as the detector reports it.
-#[derive(Debug, Clone)]
-pub enum AmdSpan {
-    /// Attached: `amd` opens with the context the detector's classification runs under.
-    Attached(lk_agents_telemetry::span::Reserved<lk_agents_abi::telemetry::spans::session::Amd>),
-    /// Released its verdict: `amd` ends.
-    Verdict(lk_agents_abi::voice::amd::AmdPrediction),
 }
 
 /// Monotonic within a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HookId(pub u64);
-
-/// `AMD.execute()` sends `AddTools`, `Start` then `SeedTranscript` on a `machine-ivr` verdict.
-#[derive(Debug, Clone, lk_agents_abi::Vocabulary)]
-#[vocabulary(kind = IvrCommandKind)]
-pub enum IvrCommand {
-    /// A running navigator stands.
-    Start {
-        max_silence: std::time::Duration,
-    },
-    /// A final counted as if heard (AMD's greeting), so the first menu repeat is the second chunk.
-    SeedTranscript {
-        text: String,
-    },
-    Close,
-    /// Added to the **session's** tools before `Start` and AMD's resume; acted on by the core, not
-    /// relayed.
-    AddTools(crate::tool_executor::Toolset),
-}
 
 #[derive(Debug, lk_agents_abi::Vocabulary)]
 pub enum HookOutcome {
@@ -242,12 +210,6 @@ impl From<SpeechCommand> for Command {
     }
 }
 
-impl From<IvrCommand> for Command {
-    fn from(c: IvrCommand) -> Command {
-        Command::Ivr(c)
-    }
-}
-
 impl From<ActivityCommand> for Command {
     fn from(c: ActivityCommand) -> Command {
         Command::Activity(c)
@@ -291,10 +253,6 @@ pub enum TurnCommand {
     Override(Box<crate::agent_session::options::OverrideLayer>),
     /// The `override_options` block ended, however it ended.
     ReleaseOverride(u64),
-    /// `AMD._on_end_of_turn`, from `VoiceCommandOrigin::Amd`: while the detector holds a machine verdict under
-    /// `interrupt_on_machine`, every turn is committed with no reply (the developer is leaving a
-    /// voicemail over the greeting's tail). Cleared when the detector closes.
-    SkipReplies(bool),
 }
 
 /// One collection at a time.
@@ -392,11 +350,6 @@ pub enum SpeechCommand {
     FillerStop {
         id: FillerId,
     },
-    /// `VoiceCommandOrigin::Amd` only: nothing is authorized until `ResumeAuthorization`. A flag, not a
-    /// counter.
-    PauseAuthorization,
-    /// The head is authorized in this cycle.
-    ResumeAuthorization,
 }
 
 /// `generate_reply(...)`: one reply, on a pipeline or a realtime session.
@@ -651,11 +604,9 @@ impl Command {
             | Command::HostMetrics(_)
             | Command::AvatarError(_)
             | Command::DelegateUsage(_)
-            | Command::Ivr(_)
             | Command::SetStaticKeyterms(_)
             | Command::Dtmf(_)
-            | Command::Run(_)
-            | Command::AmdSpan(_) => Vec::new(),
+            | Command::Run(_) => Vec::new(),
         }
     }
 }

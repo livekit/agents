@@ -19,15 +19,15 @@ use lk_agents_telemetry::span::IdSource;
 pub(crate) use agent_turn::{AgentTurnSpan, Reply};
 pub(crate) use lk_agents_abi::telemetry::spans::user_turn::EouSource;
 pub(crate) use lk_agents_telemetry::span::{ManualSpan, Reserved, Trace, seeded_ids};
-pub(crate) use session::{AmdDetection, Arriving, Blocking, Holding, HookSpan, ItemTurns, Under};
+pub(crate) use session::{Arriving, Blocking, Holding, HookSpan, ItemTurns, Under};
 pub(crate) use user_turn::{Endpointing, Stt, UserTurnSpan};
 
 pub(crate) use lk_agents_abi::telemetry::record::{Record, SpanContext};
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, AgentStateChanged, Amd, AmdVerdict, CloseReason, ConnectionStateChanged,
-    DrainAgentActivity, EventLoopBlockedEvent, KeytermDetection, KeytermDetectionEnd, OnEnter,
-    OnExit, ParticipantDisconnected, ParticipantLinked, PauseAgentActivity, ResumeAgentActivity,
+    AgentSession, AgentStateChanged, CloseReason, ConnectionStateChanged, DrainAgentActivity,
+    EventLoopBlockedEvent, KeytermDetection, KeytermDetectionEnd, OnEnter, OnExit,
+    ParticipantDisconnected, ParticipantLinked, PauseAgentActivity, ResumeAgentActivity,
     SessionClose, SessionStart, StartAgentActivity, UpdateAgent, UserStateChanged,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::user_turn::{

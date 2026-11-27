@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.util
 import os
 import signal
 import socket
 import sys
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,7 +21,20 @@ if TYPE_CHECKING:
 
 
 async def run(module: str, marker: Path, registered: bool) -> None:
-    application = importlib.import_module(module)
+    if os.environ.get("E2E_APP_MAIN"):
+        # A script such as an example's main.py is `__main__` while its server runs, as under
+        # `livekit.agents start main.py`: a spawned job process re-imports it as `__mp_main__`
+        # before the worker's environment reaches it. Run as `__mp_main__`, its own
+        # `cli.run_app` stays out.
+        spec = importlib.util.find_spec(module)
+        assert spec is not None and spec.origin is not None
+        application = types.ModuleType("__mp_main__")
+        application.__file__ = spec.origin
+        sys.modules["__main__"] = sys.modules["__mp_main__"] = application
+        code = compile(Path(spec.origin).read_text(), spec.origin, "exec")
+        exec(code, application.__dict__)
+    else:
+        application = importlib.import_module(module)
     factory = getattr(application, "create_app", None)
     if factory is not None:
         if registered:
@@ -34,11 +49,6 @@ async def run(module: str, marker: Path, registered: bool) -> None:
     server = application.server
     if not isinstance(server, AgentServer):
         raise TypeError(f"{module}.server must be an AgentServer")
-    if os.environ.get("E2E_APP_MAIN"):
-        # A script such as an example's main.py: `python main.py` job processes re-import it as
-        # `__mp_main__`, which is where its server and its endpoints exist. Here the runner is
-        # `__main__`, so job processes import the app module instead.
-        server._preload_modules = (*server._preload_modules, module)
     stopped = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

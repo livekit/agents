@@ -6,7 +6,9 @@ use crate::backends::sqlite::SqliteStorage;
 use crate::testing::Backend;
 use crate::thread::LeaseTiming;
 use crate::{CommitOptions, RunOptions, Storage};
-use livekit_protocol::agent::agent_thread::{CreateRequest, ListRequest, UpdateRequest};
+use livekit_protocol::agent::agent_thread::{
+    CreateRequest, ListRequest, Thread as ThreadRecord, UpdateRequest,
+};
 
 fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     Some(pbjson_types::Duration { seconds, nanos: 0 })
@@ -18,6 +20,27 @@ fn attributes(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 
 fn not_found<T: std::fmt::Debug>(r: Result<T, StorageError>) -> bool {
     matches!(r, Err(StorageError::NotFound(_)))
+}
+
+/// Every page of `scope`'s listing, `limit` rows a page, following each page's token; no page
+/// holds more than the page size.
+async fn pages(s: &dyn Storage, scope: &str, limit: i32) -> Vec<ThreadRecord> {
+    let mut threads = Vec::new();
+    let mut page_token = String::new();
+    loop {
+        let request = ListRequest { scope: scope.into(), page_token, limit };
+        let page = s.list_threads(request).await.unwrap();
+        assert!(page.threads.len() <= crate::backends::thread_page_limit(limit) as usize);
+        threads.extend(page.threads);
+        if page.next_page_token.is_empty() {
+            return threads;
+        }
+        page_token = page.next_page_token;
+    }
+}
+
+fn ids(threads: &[ThreadRecord]) -> Vec<String> {
+    threads.iter().map(|t| t.thread_id.clone()).collect()
 }
 
 async fn a_thread_is_created_read_listed_and_updated(backend: Backend) {
@@ -37,13 +60,7 @@ async fn a_thread_is_created_read_listed_and_updated(backend: Backend) {
         attributes(&[("topic", "billing")])
     );
 
-    let page = s.list_threads(ListRequest { scope: scope.clone(), limit: 1, ..Default::default() });
-    let page = page.await.unwrap();
-    assert_eq!(page.threads.len(), 1);
-    let rest = ListRequest { scope: scope.clone(), page_token: page.next_page_token, limit: 1 };
-    let rest = s.list_threads(rest).await.unwrap();
-    let mut listed: Vec<String> =
-        page.threads.iter().chain(&rest.threads).map(|t| t.thread_id.clone()).collect();
+    let mut listed = ids(&pages(&**s, &scope, 1).await);
     listed.sort();
     let mut created = vec![first.thread_id.clone(), second.thread_id.clone()];
     created.sort();
@@ -89,8 +106,7 @@ async fn an_expired_thread_reads_as_not_found(backend: Backend) {
     let t = s.create_thread(req).await.unwrap();
     tokio::time::sleep(Duration::from_millis(2100)).await;
     assert!(not_found(s.get_thread(&t.thread_id).await));
-    let listed = s.list_threads(ListRequest { scope, ..Default::default() }).await.unwrap();
-    assert!(listed.threads.is_empty());
+    assert!(pages(&**s, &scope, 0).await.is_empty());
     store.close().await;
 }
 
@@ -115,12 +131,95 @@ async fn a_commit_does_not_extend_expiry(backend: Backend) {
     store.close().await;
 }
 
+/// A paged walk lists every thread of the scope exactly once; no scope lists the project's
+/// threads, every scope's; a listed row leaves activity and expiry to `get_thread`.
+async fn threads_list_every_thread_once_by_scope_or_project(backend: Backend) {
+    let store = backend.store(LeaseTiming::default()).await;
+    let s = &store.storage;
+    let (scope, other) = (crate::shortuuid("user-"), crate::shortuuid("user-"));
+    let mut made = Vec::new();
+    for scope in [&scope, &scope, &scope, &other] {
+        let request =
+            CreateRequest { scope: scope.clone(), idle_ttl: ttl(3600), ..Default::default() };
+        made.push(s.create_thread(request).await.unwrap());
+    }
+
+    let listed = pages(&**s, &scope, 2).await;
+    let mut expected = ids(&made[..3]);
+    let mut listed_ids = ids(&listed);
+    expected.sort();
+    listed_ids.sort();
+    assert_eq!(listed_ids, expected, "two pages of the scope, no gap or duplicate");
+    for t in &listed {
+        assert_eq!((t.last_active, t.expires_at), (None, None), "{}: live fields", t.thread_id);
+        assert_eq!(t.idle_ttl.map(|d| d.seconds), Some(3600));
+    }
+
+    let project = ids(&pages(&**s, "", 0).await);
+    for t in &made {
+        assert!(project.contains(&t.thread_id), "{} missing from the project's list", t.thread_id);
+    }
+
+    for t in &made {
+        s.delete_thread(&t.thread_id).await.unwrap();
+    }
+    store.close().await;
+}
+
 crate::contract!(
+    threads_list_every_thread_once_by_scope_or_project,
     a_thread_is_created_read_listed_and_updated,
     a_deleted_thread_is_gone_and_deleting_again_is_safe,
     an_expired_thread_reads_as_not_found,
     a_commit_does_not_extend_expiry,
 );
+
+/// Pages hold 50 threads when no limit is given and 100 at most; a full walk of pages of 7 lists
+/// every thread exactly once, each page full until the last; a token continues only the scope
+/// that issued it, and a malformed one is refused.
+#[tokio::test]
+async fn sqlite_thread_pages_walk_every_thread_once() {
+    let store = Backend::Sqlite.store(LeaseTiming::default()).await;
+    let s = &*store.storage;
+    let scope = crate::shortuuid("user-");
+    let mut made = Vec::new();
+    for _ in 0..101 {
+        let request = CreateRequest { scope: scope.clone(), ..Default::default() };
+        made.push(s.create_thread(request).await.unwrap().thread_id);
+    }
+    for (limit, rows) in [(0, 50), (1000, 100)] {
+        let request = ListRequest { scope: scope.clone(), limit, ..Default::default() };
+        let page = s.list_threads(request).await.unwrap();
+        assert_eq!(page.threads.len(), rows, "limit {limit}");
+        assert!(!page.next_page_token.is_empty());
+    }
+
+    let mut sizes = Vec::new();
+    let mut listed = Vec::new();
+    let mut page_token = String::new();
+    loop {
+        let request = ListRequest { scope: scope.clone(), page_token, limit: 7 };
+        let page = s.list_threads(request).await.unwrap();
+        sizes.push(page.threads.len());
+        listed.extend(ids(&page.threads));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        page_token = page.next_page_token;
+    }
+    assert_eq!(sizes, [vec![7; 14], vec![3]].concat());
+    made.sort();
+    listed.sort();
+    assert_eq!(listed, made, "no gap or duplicate");
+
+    let first = ListRequest { scope: scope.clone(), limit: 2, ..Default::default() };
+    let token = s.list_threads(first).await.unwrap().next_page_token;
+    let elsewhere = ListRequest { scope: "other".into(), page_token: token, limit: 2 };
+    assert!(matches!(s.list_threads(elsewhere).await, Err(StorageError::Invalid(_))));
+    let broken = ListRequest { scope, page_token: "broken".into(), limit: 2 };
+    assert!(matches!(s.list_threads(broken).await, Err(StorageError::Invalid(_))));
+    store.close().await;
+}
 
 /// Local ids name files: anything but a plain `AT_` id is refused before a path is built, and a
 /// database file the registry does not list (a create that crashed before its registry row) is

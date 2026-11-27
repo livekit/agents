@@ -6,7 +6,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
-from urllib.parse import urlparse
 
 import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -56,7 +55,7 @@ from openai.types.shared_params import Reasoning as ReasoningParam, ResponsesMod
 from ..log import logger
 from ..models import supports_reasoning_effort
 from ..tools import OpenAITool
-from ..utils import error_kind, http_timeout
+from ..utils import error_kind, http_timeout, vendor
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
 Verbosity = Literal["low", "medium", "high"]
@@ -323,6 +322,7 @@ class LLM(llm.LLM):
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
+        _provider: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Create a new instance of OpenAI Responses LLM.
@@ -366,6 +366,7 @@ class LLM(llm.LLM):
         )
         self._client = client
         self._owns_client = client is None
+        self._provider = vendor(_provider, own_endpoint=is_given(base_url) or client is not None)
         self._ws: _ResponsesWebsocket | None = None
 
         self._response_cache = _ResponseCache()
@@ -421,11 +422,7 @@ class LLM(llm.LLM):
 
     @property
     def provider(self) -> str:
-        if self._ws is not None:
-            return urlparse(str(self._ws.url)).netloc
-        if self._client is not None:
-            return self._client.base_url.netloc.decode("utf-8")
-        return ""
+        return self._provider
 
     def chat(
         self,

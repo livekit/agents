@@ -599,7 +599,7 @@ impl RealtimeSpans {
             &shared.trace.clone().under::<telemetry::AgentTurn>(turn?),
             telemetry::RealtimeInference {
                 operation: telemetry::GenAiOperation::GenerateContent,
-                provider: telemetry::provider_name(&model.provider),
+                provider: telemetry::provider_name(&model),
                 model: model.model,
                 stream: true,
                 output_type: if shared.audio_output().is_some() {
@@ -644,12 +644,11 @@ impl RealtimeSpans {
             Some(at) => {
                 let (_, ended) = state.ended.remove(at).expect("the position is in range");
                 drop(state);
-                let provider = model.as_ref().map(|p| p.provider.as_str()).unwrap_or_default();
                 let late = telemetry::start(
                     &session.clone().under::<telemetry::RealtimeInference>(ended),
                     telemetry::RealtimeMetrics {
                         operation: telemetry::GenAiOperation::GenerateContent,
-                        provider: telemetry::provider_name(provider),
+                        provider: telemetry::provider_name(&model.clone().unwrap_or_default()),
                         model: model.as_ref().map(|p| p.model.clone()).unwrap_or_default(),
                         response: response(m, model.as_ref()),
                     },

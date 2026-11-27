@@ -9,7 +9,7 @@ use lk_agents_abi::FunctionCall;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::decl::{BoolString, GenAiContent, Label, json};
-use lk_agents_abi::telemetry::host::{EndedSpan, TelemetryConfigError, TelemetryDiagnostics};
+use lk_agents_abi::telemetry::host::{EndedSpan, TelemetryConfigError};
 use lk_agents_abi::telemetry::instruments::{
     ConnectionAcquireTime, ExecuteToolDuration, InterruptionNumRequests, LlmInputAudioTokens,
     LlmInputCachedTokens, LlmInputTextTokens, LlmInputTokens, LlmOutputAudioTokens,
@@ -21,6 +21,7 @@ use lk_agents_abi::telemetry::spans::agent_turn::FunctionToolEnd;
 pub use lk_agents_abi::telemetry::{host, policy, record};
 use lk_agents_net::export::ExporterSlot;
 use lk_agents_net::export::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
+use lk_agents_net::export::productstats::{self, ProductStats};
 pub use lk_agents_net::export::profile;
 pub use lk_agents_net::export::stall::stall_message;
 pub(crate) use lk_agents_net::export::stall::{Blocked, event_loop_blocked};
@@ -32,8 +33,6 @@ pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds
 pub(crate) use lk_agents_abi::telemetry::health::{TeardownOverrun, TeardownStage};
 pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;
-#[cfg(test)]
-pub(crate) use lk_agents_abi::telemetry::record::{Record, RecordSink, Value};
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::agent_turn::{
     AgentTurn, FunctionTool, LlmNode, LlmNodeEnd, RealtimeInference, RealtimeMetrics, TtsNode,
@@ -48,7 +47,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::job::{
     WaitForAudioTrack, WaitForAudioTrackEnd, WaitForParticipant,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, Amd, KeytermDetection, RpcCall, RpcEnd, RpcHandler, SessionStart, SetupToolsets,
+    AgentSession, KeytermDetection, RpcCall, RpcEnd, RpcHandler, SessionStart, SetupToolsets,
     StartAgentActivity, UpdateAgent,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
@@ -75,12 +74,6 @@ struct Process {
     tracer: Tracer,
     /// `configure()`'s application endpoint, applied at installation when it comes first.
     app: Mutex<Option<AppConfig>>,
-    /// Configuration conflicts the host found (a tracer provider it cannot bridge).
-    conflicts: AtomicU64,
-    /// Spans a voice session's close ended because their owner never did (a framework bug).
-    swept_spans: AtomicU64,
-    /// Voice sessions dropped without their close; their open spans were ended and exported.
-    abandoned_sessions: AtomicU64,
     /// The rate limit on the process's `event_loop_blocked` spans.
     blocked: Blocked,
     /// The voice sessions running, which a stall of their job's loop is folded into.
@@ -126,9 +119,6 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
         slot,
         tracer,
         app: Mutex::new(None),
-        conflicts: AtomicU64::new(0),
-        swept_spans: AtomicU64::new(0),
-        abandoned_sessions: AtomicU64::new(0),
         blocked: Blocked::default(),
         sessions: Mutex::new(BTreeMap::new()),
     }
@@ -136,12 +126,6 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
 
 fn seed() -> u64 {
     lk_agents_telemetry::random_seed()
-}
-
-/// A voice session ended: the spans its close swept and whether it was dropped without it.
-pub(crate) fn session_ended(swept: u32, abandoned: bool) {
-    PROCESS.swept_spans.fetch_add(u64::from(swept), Ordering::Relaxed);
-    PROCESS.abandoned_sessions.fetch_add(u64::from(abandoned), Ordering::Relaxed);
 }
 
 /// The process tracer.
@@ -152,6 +136,7 @@ pub fn tracer() -> Tracer {
 /// A forked child abandons its parent's exporter and draws its own ids.
 pub(crate) fn reinit() {
     PROCESS.slot.forget();
+    productstats::forget();
     PROCESS.tracer.reseed(seed());
 }
 
@@ -161,7 +146,13 @@ pub async fn shutdown() {
     if let Some(exporter) = PROCESS.slot.take() {
         exporter.shutdown(SHUTDOWN_TIMEOUT).await;
     }
+    if let Some(stats) = productstats::take() {
+        stats.shutdown(PRODUCT_STATS_SHUTDOWN_TIMEOUT).await;
+    }
 }
+
+/// How long the process-exit flush of product statistics may take.
+const PRODUCT_STATS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn allow_pii_from_env() -> bool {
     std::env::var("LIVEKIT_TELEMETRY_ALLOW_PII").is_ok_and(|v| {
@@ -181,7 +172,7 @@ fn env_app() -> Option<AppConfig> {
 pub struct Telemetry;
 
 impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
-    fn _core_telemetry_install(sdk_version: String) {
+    fn _core_telemetry_install(sdk_version: String, python_version: Option<String>) {
         let process = &*PROCESS;
         if process.slot.get().is_some() {
             return;
@@ -192,6 +183,10 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
                 return log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry not started: {error}");
             }
         };
+        productstats::install(|| {
+            let resource = productstats::resource(&sdk_version, python_version.as_deref());
+            ProductStats::start(&*spawner, crate::process::host_clock(), resource)
+        });
         let exporter = process.slot.install(|| {
             let identity = ProcessIdentity::from_env(SdkName::Python, sdk_version);
             Exporter::start(&*spawner, crate::process::host_clock(), identity, Limits::default())
@@ -236,23 +231,6 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
             exporter.configure_app(config);
         }
         Ok(())
-    }
-
-    fn _core_telemetry_diagnostics() -> TelemetryDiagnostics {
-        let d = PROCESS.slot.get().map(|e| e.diagnostics()).unwrap_or_default();
-        let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-        TelemetryDiagnostics {
-            dropped: d.dropped,
-            failed: d.failed,
-            conflicts: d.conflicts + read(&PROCESS.conflicts),
-            incomplete_cleanup: d.incomplete_cleanup,
-            swept_spans: read(&PROCESS.swept_spans),
-            abandoned_sessions: read(&PROCESS.abandoned_sessions),
-        }
-    }
-
-    fn _core_telemetry_conflict() {
-        PROCESS.conflicts.fetch_add(1, Ordering::Relaxed);
     }
 
     fn _core_telemetry_export(span: EndedSpan, job: Option<String>) {

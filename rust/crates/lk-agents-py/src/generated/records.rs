@@ -3238,262 +3238,6 @@ pub mod agent_run {
     }
 }
 
-pub mod amd {
-    use pyo3::prelude::*;
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
-    static AMD_CATEGORY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn amd_category_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::voice::amd::AmdCategory> {
-        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-        match &*value {
-            "human" => Ok(::lk_agents_abi::voice::amd::AmdCategory::Human),
-            "machine-ivr" => Ok(::lk_agents_abi::voice::amd::AmdCategory::MachineIvr),
-            "machine-vm" => Ok(::lk_agents_abi::voice::amd::AmdCategory::MachineVm),
-            "machine-unavailable" => {
-                Ok(::lk_agents_abi::voice::amd::AmdCategory::MachineUnavailable)
-            }
-            "uncertain" => Ok(::lk_agents_abi::voice::amd::AmdCategory::Uncertain),
-            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "AMDCategory: {other:?} is not one of 'human', 'machine-ivr', 'machine-vm', 'machine-unavailable', 'uncertain'"
-            ))),
-        }
-    }
-
-    pub fn amd_category_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::amd::AmdCategory,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let value = match value {
-            ::lk_agents_abi::voice::amd::AmdCategory::Human => "human",
-            ::lk_agents_abi::voice::amd::AmdCategory::MachineIvr => "machine-ivr",
-            ::lk_agents_abi::voice::amd::AmdCategory::MachineVm => "machine-vm",
-            ::lk_agents_abi::voice::amd::AmdCategory::MachineUnavailable => "machine-unavailable",
-            ::lk_agents_abi::voice::amd::AmdCategory::Uncertain => "uncertain",
-        };
-        crate::py_calls::call(
-            AMD_CATEGORY.import(py, "livekit.agents._generated.amd", "AMDCategory")?.as_any(),
-            (value,),
-            None,
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
-    static AMD_PREDICTION_EVENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn amd_prediction_event_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::voice::amd::AmdPrediction> {
-        let py = obj.py();
-        if !obj.is_instance(AMD_PREDICTION_EVENT.import(
-            py,
-            "livekit.agents._generated.amd",
-            "AMDPredictionEvent",
-        )?)? {
-            return Err(super::not_a(obj, "AMDPredictionEvent"));
-        }
-        Ok(::lk_agents_abi::voice::amd::AmdPrediction {
-            speech_duration: crate::py_values::attr_with(
-                obj,
-                "AMDPredictionEvent",
-                "speech_duration",
-                |v| {
-                    crate::py_values::extract_at::<::std::time::Duration>(
-                        v,
-                        "AMDPredictionEvent.speech_duration",
-                    )
-                },
-            )?,
-            category: crate::py_values::attr_with(obj, "AMDPredictionEvent", "category", |v| {
-                crate::generated::records::amd::amd_category_from_py(v)
-            })?,
-            reason: crate::py_values::attr_with(obj, "AMDPredictionEvent", "reason", |v| {
-                crate::py_values::str_from_py(v)
-            })?,
-            transcript: crate::py_values::attr_with(
-                obj,
-                "AMDPredictionEvent",
-                "transcript",
-                |v| v.extract::<::std::string::String>(),
-            )?,
-            delay: crate::py_values::attr_with(obj, "AMDPredictionEvent", "delay", |v| {
-                crate::py_values::extract_at::<::std::time::Duration>(v, "AMDPredictionEvent.delay")
-            })?,
-        })
-    }
-
-    pub fn amd_prediction_event_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::amd::AmdPrediction,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::amd::AmdPrediction {
-            speech_duration,
-            category,
-            reason,
-            transcript,
-            delay,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "speech_duration",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_duration, py)?,
-        )?;
-        kwargs.set_item(
-            "category",
-            crate::generated::records::amd::amd_category_to_py(py, category)?,
-        )?;
-        kwargs.set_item("reason", crate::py_values::str_to_py(py, &reason))?;
-        kwargs
-            .set_item("transcript", ::pyo3::IntoPyObjectExt::into_bound_py_any(transcript, py)?)?;
-        kwargs.set_item("delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(delay, py)?)?;
-        crate::py_calls::call(
-            AMD_PREDICTION_EVENT
-                .import(py, "livekit.agents._generated.amd", "AMDPredictionEvent")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
-
-    pub fn detection_options_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::voice::amd::AmdDetectionOptions> {
-        let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
-        Ok(::lk_agents_abi::voice::amd::AmdDetectionOptions {
-            human_speech_threshold: match obj.get_item("human_speech_threshold")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::py_values::number_from_py::<f64>(
-                        v.as_any(),
-                        "DetectionOptions.human_speech_threshold",
-                    ))?,
-                ),
-                _ => None,
-            },
-            human_silence_threshold: match obj.get_item("human_silence_threshold")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::py_values::number_from_py::<f64>(
-                        v.as_any(),
-                        "DetectionOptions.human_silence_threshold",
-                    ))?,
-                ),
-                _ => None,
-            },
-            machine_silence_threshold: match obj.get_item("machine_silence_threshold")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::py_values::number_from_py::<f64>(
-                        v.as_any(),
-                        "DetectionOptions.machine_silence_threshold",
-                    ))?,
-                ),
-                _ => None,
-            },
-            no_speech_threshold: match obj.get_item("no_speech_threshold")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::py_values::number_from_py::<f64>(
-                        v.as_any(),
-                        "DetectionOptions.no_speech_threshold",
-                    ))?,
-                ),
-                _ => None,
-            },
-            timeout: match obj.get_item("timeout")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::py_values::number_from_py::<f64>(
-                        v.as_any(),
-                        "DetectionOptions.timeout",
-                    ))?,
-                ),
-                _ => None,
-            },
-            max_endpointing_delay: match obj.get_item("max_endpointing_delay")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::py_values::number_from_py::<f64>(
-                        v.as_any(),
-                        "DetectionOptions.max_endpointing_delay",
-                    ))?,
-                ),
-                _ => None,
-            },
-            prompt: match obj.get_item("prompt")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => {
-                    Some((v.as_any().extract::<::std::string::String>())?)
-                }
-                _ => None,
-            },
-        })
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
-
-    pub fn transcript_source_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::voice::amd::TranscriptSource> {
-        let value = obj.extract::<::pyo3::pybacked::PyBackedStr>()?;
-        match &*value {
-            "stt" => Ok(::lk_agents_abi::voice::amd::TranscriptSource::SessionStt),
-            "amd_stt" => Ok(::lk_agents_abi::voice::amd::TranscriptSource::AmdStt),
-            other => Err(::pyo3::exceptions::PyValueError::new_err(format!(
-                "TranscriptSource: {other:?} is not one of 'stt', 'amd_stt'"
-            ))),
-        }
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/amd.rs.
-
-    pub fn amd_config_from_py(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::voice::amd::AmdConfigKwargs> {
-        let obj = obj.cast::<::pyo3::types::PyDict>().map_err(|_| super::not_a(obj, "dict"))?;
-        Ok(::lk_agents_abi::voice::amd::AmdConfigKwargs {
-            detection: {
-                let v = obj.get_item("detection")?.ok_or_else(|| {
-                    ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.detection")
-                })?;
-                (crate::generated::records::amd::detection_options_from_py(v.as_any()))?
-            },
-            max_endpointing_delay: match obj.get_item("max_endpointing_delay")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
-                    (crate::py_values::number_from_py::<f64>(
-                        v.as_any(),
-                        "AMDConfig.max_endpointing_delay",
-                    ))?,
-                ),
-                _ => None,
-            },
-            source: match obj.get_item("source")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => {
-                    Some((crate::generated::records::amd::transcript_source_from_py(v.as_any()))?)
-                }
-                _ => None,
-            },
-            wait_until_finished: {
-                let v = obj.get_item("wait_until_finished")?.ok_or_else(|| {
-                    ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.wait_until_finished")
-                })?;
-                (v.as_any().extract::<bool>())?
-            },
-            interrupt_on_machine: {
-                let v = obj.get_item("interrupt_on_machine")?.ok_or_else(|| {
-                    ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.interrupt_on_machine")
-                })?;
-                (v.as_any().extract::<bool>())?
-            },
-            ivr_detection: {
-                let v = obj.get_item("ivr_detection")?.ok_or_else(|| {
-                    ::pyo3::exceptions::PyKeyError::new_err("AMDConfig.ivr_detection")
-                })?;
-                (v.as_any().extract::<bool>())?
-            },
-        })
-    }
-}
-
 pub mod avatar {
     use pyo3::prelude::*;
 
@@ -9883,6 +9627,13 @@ pub mod llm_provider_options {
                 "msgpack_body",
                 |v| v.extract::<bool>(),
             )?,
+            provider: crate::py_values::attr_with(obj, "ProviderEndpoint", "provider", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
         })
     }
 }
@@ -17580,10 +17331,6 @@ pub mod session_options {
                 }
                 None => ::lk_agents_abi::Maybe::NotGiven,
             },
-            ivr_detection: match obj.get_item("_ivr_detection")? {
-                Some(v) if !crate::py_values::is_not_given(&v)? => (v.as_any().extract::<bool>())?,
-                _ => false,
-            },
             user_away_timeout: match obj.get_item("user_away_timeout")? {
                 Some(v) if !crate::py_values::is_not_given(&v)? => {
                     (if v.as_any().is_none() {
@@ -17938,7 +17685,6 @@ pub mod session_options {
             endpointing_overrides,
             max_tool_steps,
             min_consecutive_speech_delay,
-            ivr_detection,
             user_away_timeout,
             transcription_timeout,
             final_transcript_timeout,
@@ -18001,10 +17747,6 @@ pub mod session_options {
         dict.set_item(
             "min_consecutive_speech_delay",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(min_consecutive_speech_delay, py)?,
-        )?;
-        dict.set_item(
-            "ivr_detection",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(ivr_detection, py)?,
         )?;
         dict.set_item(
             "user_away_timeout",
@@ -19674,9 +19416,6 @@ pub mod session_wire {
             ::lk_agents_abi::voice::events::HostWire::AgentFalseInterruption(x) => {
                 crate::generated::records::events::agent_false_interruption_event_to_py(py, x)?
             }
-            ::lk_agents_abi::voice::events::HostWire::AmdResult(x) => {
-                crate::generated::records::amd::amd_prediction_event_to_py(py, x)?
-            }
             ::lk_agents_abi::voice::events::HostWire::ItemAdded(x) => {
                 crate::generated::records::session_wire::item_added_wire_to_py(py, x)?
             }
@@ -20124,6 +19863,49 @@ pub mod storage_class {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
+    static THREAD_SUMMARY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn thread_summary_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::storage::ThreadSummary,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::storage::ThreadSummary {
+            thread_id,
+            scope,
+            attributes,
+            created_at,
+            idle_ttl_seconds,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;
+        kwargs.set_item("scope", ::pyo3::IntoPyObjectExt::into_bound_py_any(scope, py)?)?;
+        kwargs.set_item("attributes", {
+            let d = ::pyo3::types::PyDict::new(py);
+            for (k, x) in attributes {
+                d.set_item(
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                )?;
+            }
+            d.into_any()
+        })?;
+        kwargs
+            .set_item("created_at", ::pyo3::IntoPyObjectExt::into_bound_py_any(created_at, py)?)?;
+        kwargs.set_item(
+            "idle_ttl_seconds",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(idle_ttl_seconds, py)?,
+        )?;
+        crate::py_calls::call(
+            THREAD_SUMMARY
+                .import(py, "livekit.agents._generated.storage_class", "ThreadSummary")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
     static THREAD_PAGE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -20131,7 +19913,7 @@ pub mod storage_class {
         py: Python<'py>,
         value: ::lk_agents_abi::storage::ThreadPage,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::storage::ThreadPage { threads, before } = value;
+        let ::lk_agents_abi::storage::ThreadPage { threads, next_page_token } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
             "threads",
@@ -20139,12 +19921,15 @@ pub mod storage_class {
                 py,
                 threads
                     .into_iter()
-                    .map(|x| crate::generated::records::storage_class::thread_info_to_py(py, x))
+                    .map(|x| crate::generated::records::storage_class::thread_summary_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),
         )?;
-        kwargs.set_item("before", ::pyo3::IntoPyObjectExt::into_bound_py_any(before, py)?)?;
+        kwargs.set_item(
+            "next_page_token",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(next_page_token, py)?,
+        )?;
         crate::py_calls::call(
             THREAD_PAGE
                 .import(py, "livekit.agents._generated.storage_class", "ThreadPage")?
@@ -23463,47 +23248,6 @@ pub mod telemetry {
         let value =
             ::lk_agents_abi::telemetry::host::EndedSpanEvent { name, attributes, timestamp };
         Ok(value)
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
-    static TELEMETRY_DIAGNOSTICS: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn telemetry_diagnostics_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::telemetry::host::TelemetryDiagnostics,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::host::TelemetryDiagnostics {
-            dropped,
-            failed,
-            conflicts,
-            incomplete_cleanup,
-            swept_spans,
-            abandoned_sessions,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("dropped", ::pyo3::IntoPyObjectExt::into_bound_py_any(dropped, py)?)?;
-        kwargs.set_item("failed", ::pyo3::IntoPyObjectExt::into_bound_py_any(failed, py)?)?;
-        kwargs.set_item("conflicts", ::pyo3::IntoPyObjectExt::into_bound_py_any(conflicts, py)?)?;
-        kwargs.set_item(
-            "incomplete_cleanup",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(incomplete_cleanup, py)?,
-        )?;
-        kwargs.set_item(
-            "swept_spans",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(swept_spans, py)?,
-        )?;
-        kwargs.set_item(
-            "abandoned_sessions",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(abandoned_sessions, py)?,
-        )?;
-        crate::py_calls::call(
-            TELEMETRY_DIAGNOSTICS
-                .import(py, "livekit.agents._generated.telemetry", "TelemetryDiagnostics")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
     }
 
     // Declared in rust/crates/lk-agents-abi/src/telemetry/record.rs.
@@ -29009,10 +28753,6 @@ pub mod voice_session {
         ::pyo3::sync::PyOnceLock::new();
     static VOICE_COMMAND_ORIGIN_HOOK: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
-    static VOICE_COMMAND_ORIGIN_AMD: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-    static VOICE_COMMAND_ORIGIN_IVR: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
 
     pub fn voice_command_origin_from_py(
         obj: &Bound<'_, PyAny>,
@@ -29067,23 +28807,9 @@ pub mod voice_session {
                 })?,
             });
         }
-        if obj.is_instance(VOICE_COMMAND_ORIGIN_AMD.import(
-            py,
-            "livekit.agents._generated.voice_session",
-            "VoiceCommandOriginAmd",
-        )?)? {
-            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Amd);
-        }
-        if obj.is_instance(VOICE_COMMAND_ORIGIN_IVR.import(
-            py,
-            "livekit.agents._generated.voice_session",
-            "VoiceCommandOriginIvr",
-        )?)? {
-            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Ivr);
-        }
         Err(super::not_a(
             obj,
-            "VoiceCommandOriginHost | VoiceCommandOriginTool | VoiceCommandOriginHook | VoiceCommandOriginAmd | VoiceCommandOriginIvr",
+            "VoiceCommandOriginHost | VoiceCommandOriginTool | VoiceCommandOriginHook",
         ))
     }
 
@@ -29148,20 +28874,6 @@ pub mod voice_session {
                     Some(&kwargs),
                 )
             }
-            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Amd => crate::py_calls::call(
-                VOICE_COMMAND_ORIGIN_AMD
-                    .import(py, "livekit.agents._generated.voice_session", "VoiceCommandOriginAmd")?
-                    .as_any(),
-                (),
-                None,
-            ),
-            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Ivr => crate::py_calls::call(
-                VOICE_COMMAND_ORIGIN_IVR
-                    .import(py, "livekit.agents._generated.voice_session", "VoiceCommandOriginIvr")?
-                    .as_any(),
-                (),
-                None,
-            ),
         }
     }
 

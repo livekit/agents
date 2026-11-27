@@ -21,6 +21,8 @@ pub mod host;
 pub mod instruments;
 pub mod record;
 pub mod report;
+pub mod runner;
+pub mod storage;
 
 /// Keys and names owned by the registries the agents registry depends on. A declaration names
 /// these constants; it never redeclares their keys as literals (`lk-agents-codegen --check`).
@@ -117,7 +119,7 @@ pub mod spans;
 
 use std::sync::Arc;
 
-use decl::SpanDecl;
+use decl::{Observability, SpanDecl};
 use record::{JobKey, Record, SpanContext};
 
 /// What records a context's spans: the process tracer (`lk_agents_telemetry::Tracer`), or
@@ -216,7 +218,7 @@ impl Cx {
 
     /// The same context under `span`, a framework span of type `P` recorded elsewhere (a voice
     /// effect's `SpanContext`).
-    pub fn under<P: SpanDecl>(mut self, span: SpanContext) -> Cx {
+    pub fn under<P: SpanDecl<Audience = Observability>>(mut self, span: SpanContext) -> Cx {
         self.current = Some(Current { span, name: Some(P::NAME) });
         self
     }

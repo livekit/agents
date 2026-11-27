@@ -7,8 +7,8 @@ use std::time::SystemTime;
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, EventDecl, HasEvent, Instrument, KeyValues, MetricDecl, Number, Parent, SpanDecl,
-    finish_span,
+    Attrs, EventDecl, HasEvent, Instrument, KeyValues, MetricDecl, Number, Observability, Parent,
+    SpanDecl, finish_span,
 };
 use lk_agents_abi::telemetry::record::{
     EventRecord, FRAMEWORK, Key, Measurement, Record, RecordSink, SpanRecord, Status,
@@ -174,13 +174,17 @@ fn debug_check_parent<D: SpanDecl>(cx: &Cx) {
 }
 
 /// Opens a child of `cx`'s current span.
-pub fn start<D: SpanDecl>(cx: &Cx, decl: D) -> ScopedSpan<D> {
+pub fn start<D: SpanDecl<Audience = Observability>>(cx: &Cx, decl: D) -> ScopedSpan<D> {
     start_at(cx, decl, cx.now_nanos())
 }
 
 /// Opens a child of `cx`'s current span that started at `start` (unix nanoseconds): work that
 /// began before the process knew of it (a job, from its receipt).
-pub fn start_at<D: SpanDecl>(cx: &Cx, decl: D, start: u64) -> ScopedSpan<D> {
+pub fn start_at<D: SpanDecl<Audience = Observability>>(
+    cx: &Cx,
+    decl: D,
+    start: u64,
+) -> ScopedSpan<D> {
     const {
         assert!(!D::MANUAL, "a `handle = Manual` declaration is opened by its owning entity");
     }
@@ -231,8 +235,25 @@ pub fn event_at<D: SpanDecl + HasEvent<E>, E: EventDecl>(
     }
 }
 
-/// Records one measurement of a declared instrument, for `cx`'s job.
-pub fn measure<M: MetricDecl>(cx: &Cx, labels: &M, value: impl Into<Number>) {
+/// Records one measurement of a declared instrument, for `cx`'s job. Only a customer instrument
+/// records here:
+///
+/// ```
+/// use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
+/// lk_agents_telemetry::measure(&lk_agents_telemetry::Cx::NONE, &WorkerProcessReadyDuration, 1.0);
+/// ```
+///
+/// A product statistic does not compile:
+///
+/// ```compile_fail,E0271
+/// use lk_agents_abi::productstats::testkit::TestDuration;
+/// lk_agents_telemetry::measure(&lk_agents_telemetry::Cx::NONE, &TestDuration, 1.0);
+/// ```
+pub fn measure<M: MetricDecl<Audience = Observability>>(
+    cx: &Cx,
+    labels: &M,
+    value: impl Into<Number>,
+) {
     let mut out = KeyValues::new();
     labels.write(&mut out);
     let Some(recorder) = cx.recorder() else { return };
@@ -249,7 +270,7 @@ pub fn measure<M: MetricDecl>(cx: &Cx, labels: &M, value: impl Into<Number>) {
 
 /// A child of `cx`'s current span that a voice core opens later, starting now: startup work runs
 /// under it before the core exists.
-pub fn reserve<D: SpanDecl>(cx: &Cx) -> Reserved<D> {
+pub fn reserve<D: SpanDecl<Audience = Observability>>(cx: &Cx) -> Reserved<D> {
     debug_check_parent::<D>(cx);
     Reserved::new(cx.child_context(), cx.now_nanos())
 }
@@ -342,5 +363,5 @@ impl<D: SpanDecl> Drop for ScopedSpan<D> {
 }
 
 #[cfg(test)]
-#[path = "scoped_tests.rs"]
+#[path = "observability_tests.rs"]
 mod tests;

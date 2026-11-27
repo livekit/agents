@@ -91,7 +91,7 @@ fn receipt() -> StorageStep {
         speech: 1,
         operation: StorageOperation::Settle,
         delivered: true,
-        result: Err(lk_agents_abi::storage::StorageError::Unavailable("outage".into())),
+        result: Err(lk_agents_abi::storage::StorageError::Unavailable(lk_agents_abi::storage::Unapplied::local("outage"))),
     }
 }
 

@@ -35,7 +35,6 @@ from .._core import (
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
 from .agent_run import SayOutcome
-from .amd import AMDConfig, AMDPredictionEvent
 from .avatar import AudioReceiverObservation, MediaFrame
 from .avatar_options import AvatarOptions
 from .avatar_queue import QueueEffects
@@ -80,18 +79,6 @@ from .voice_session import (
     VoiceTaskValue,
 )
 from .workflows import CapturePlan, DtmfEvent, InstructionsArg, TwilioDial
-
-def amd_resolve_max_endpointing_delay(provided: float | None, activity: float | None) -> float:
-    """`_resolve_classifier`'s `max_endpointing_delay`: explicit option, else the activity's,
-    else the default. `provided` is `None` only when the key was absent: an explicit default
-    still beats a disagreeing activity. Seconds, as the options hold them.
-    """
-
-def amd_prediction_is_human(prediction: AMDPredictionEvent) -> bool:
-    """`AMDPredictionEvent.is_human`."""
-
-def amd_prediction_is_machine(prediction: AMDPredictionEvent) -> bool:
-    """`AMDPredictionEvent.is_machine`."""
 
 class HostAudioReceiver:
     """The avatar runner's receiver over a host `AudioReceiver`: its audio read from `audio` when
@@ -729,29 +716,6 @@ class VoiceSession:
         tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
         `on_enter`, it is that hook's reply.
         """
-    def ivr_start(
-        self,
-        max_silence: float = 5.0,
-        tools: Sequence[ToolSpec] | None = None,
-        *,
-        tools_host: object | None = None,
-    ) -> None:
-        """`IVRActivity.start()`: `max_silence` is `max_silence_duration` in seconds; `tools` is
-        `IVRActivity.tools`. A second start is journalled, not run.
-        """
-    def attach_amd(
-        self,
-        cfg: AMDConfig,
-        llm: LLM[Any],
-        tools: object | None,
-        stt: STT[Any] | None,
-        participant_identity: str | None,
-    ) -> bool:
-        """`AMD._run`: the answering-machine detector over its config, classifier LLM, tools and
-        optional STT. It listens once the callee answers in the session's room; the verdict comes
-        back as `amd_result`. Returns false if another detector is already attached; the host
-        must not publish a rejected detector as the session's owner.
-        """
     async def aclose(self, *, reason: str = "user_initiated", drain: bool = False) -> None:
         """`_aclose_impl`: the hooks' `closing`, the close itself, the turn-detector stream, the
         remote session host, the room io, then the session's toolsets. Idempotent: a second call
@@ -868,14 +832,6 @@ class VoiceSession:
         end. With `audio`, those frames play instead of the TTS and `text`, a `str`, is still
         committed. The handle is the promise the session fulfils.
         """
-    def ivr_final(self, text: str) -> None:
-        """`_start_ivr_detection(transcript)`: a final the navigator counts as if heard."""
-    def amd_listening(self) -> bool:
-        """`AMD.started`: the detector listens (the callee answered, no verdict out yet)."""
-    def amd_execute(self) -> None:
-        """`AMD.execute()`'s interrupt and `_resume_authorization()`, after its IVR hand-off."""
-    def amd_close(self) -> None:
-        """`AMD.aclose()`. Idempotent."""
     def keyterms(self) -> list[str] | None:
         """`session.keyterms`: the list the recogniser was last handed; `None` before any push."""
     def agent_chat_ctx(self) -> list[ChatItem]:

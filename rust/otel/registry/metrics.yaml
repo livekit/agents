@@ -193,6 +193,55 @@
       ]
     },
     {
+      "id": "metric.lk.agents.storage.redials",
+      "type": "metric",
+      "metric_name": "lk.agents.storage.redials",
+      "instrument": "counter",
+      "unit": "{redial}",
+      "stability": "development",
+      "brief": "Sockets dialed again for a connection whose socket ended or whose last dial failed.",
+      "attributes": [
+        {
+          "ref": "reason",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.agents.storage.request_duration",
+      "type": "metric",
+      "metric_name": "lk.agents.storage.request_duration",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Time one request took as its client saw it, from its call to its last answer: its wait for a socket and the connection's own resend to a moved database included, a retry owner's later attempt not.",
+      "attributes": [
+        {
+          "ref": "op",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "class",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.agents.storage.retries",
+      "type": "metric",
+      "metric_name": "lk.agents.storage.retries",
+      "instrument": "counter",
+      "unit": "{retry}",
+      "stability": "development",
+      "brief": "Requests sent again: by the connection to a database that moved, or by the retry owner after a refusal that applied nothing.",
+      "attributes": [
+        {
+          "ref": "reason",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
       "id": "metric.lk.agents.storage.write_uncertain",
       "type": "metric",
       "metric_name": "lk.agents.storage.write_uncertain",

@@ -25,10 +25,10 @@ pub mod thread;
 pub mod voice;
 
 pub use backends::{Storage, ThreadDbConnection};
-pub use lk_agents_abi::storage::StorageError;
 pub use lk_agents_abi::storage::thread::{
     LeaseAfterCommit, PartitionAccess, TaskPickup, TaskWrite, WhenHeld, timestamp,
 };
+pub use lk_agents_abi::storage::{StorageError, Unapplied};
 pub use lk_agents_net::strings::shortuuid;
 pub use thread::db::{Commit, Committed, EventWrite, Fence, TaskQuery};
 pub use thread::lease::{Holder, Lease};

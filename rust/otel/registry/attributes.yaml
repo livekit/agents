@@ -3,6 +3,37 @@
 {
   "groups": [
     {
+      "id": "registry.livekit.agents.productstats",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats`.",
+      "attributes": [
+        {
+          "id": "lk.productstats.arch",
+          "type": "string",
+          "stability": "development",
+          "brief": "The CPU architecture (`std::env::consts::ARCH`)."
+        },
+        {
+          "id": "lk.productstats.framework.version",
+          "type": "string",
+          "stability": "development",
+          "brief": "The framework's version."
+        },
+        {
+          "id": "lk.productstats.os",
+          "type": "string",
+          "stability": "development",
+          "brief": "The operating system (`std::env::consts::OS`)."
+        },
+        {
+          "id": "lk.productstats.python.version",
+          "type": "string",
+          "stability": "development",
+          "brief": "The Python version the framework runs on."
+        }
+      ]
+    },
+    {
       "id": "registry.livekit.agents.health",
       "type": "attribute_group",
       "brief": "Attributes declared in `lk_agents_abi::telemetry::health`.",
@@ -355,6 +386,85 @@
           "type": "any",
           "stability": "development",
           "brief": "The `Usage` model's entries: one per model and kind; absent when nothing was used."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.runner",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::telemetry::runner`.",
+      "attributes": [
+        {
+          "id": "lk.productstats.runner.kind",
+          "type": {
+            "members": [
+              {
+                "id": "production",
+                "value": "production",
+                "brief": "production",
+                "stability": "development"
+              },
+              {
+                "id": "development",
+                "value": "development",
+                "brief": "development",
+                "stability": "development"
+              },
+              {
+                "id": "ci",
+                "value": "ci",
+                "brief": "ci",
+                "stability": "development"
+              },
+              {
+                "id": "unknown",
+                "value": "unknown",
+                "brief": "unknown",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Production, development, CI or unknown."
+        },
+        {
+          "id": "lk.productstats.runner.launch",
+          "type": {
+            "members": [
+              {
+                "id": "dev",
+                "value": "dev",
+                "brief": "dev",
+                "stability": "development"
+              },
+              {
+                "id": "console",
+                "value": "console",
+                "brief": "console",
+                "stability": "development"
+              },
+              {
+                "id": "simulation",
+                "value": "simulation",
+                "brief": "simulation",
+                "stability": "development"
+              },
+              {
+                "id": "start",
+                "value": "start",
+                "brief": "start",
+                "stability": "development"
+              },
+              {
+                "id": "none",
+                "value": "none",
+                "brief": "none",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The command that started the process."
         }
       ]
     },
@@ -1109,73 +1219,6 @@
           "brief": "Label of the agent running the activity."
         },
         {
-          "id": "lk.amd.category",
-          "type": {
-            "members": [
-              {
-                "id": "human",
-                "value": "human",
-                "brief": "human",
-                "stability": "development"
-              },
-              {
-                "id": "machine_ivr",
-                "value": "machine-ivr",
-                "brief": "machine-ivr",
-                "stability": "development"
-              },
-              {
-                "id": "machine_vm",
-                "value": "machine-vm",
-                "brief": "machine-vm",
-                "stability": "development"
-              },
-              {
-                "id": "machine_unavailable",
-                "value": "machine-unavailable",
-                "brief": "machine-unavailable",
-                "stability": "development"
-              },
-              {
-                "id": "uncertain",
-                "value": "uncertain",
-                "brief": "uncertain",
-                "stability": "development"
-              }
-            ]
-          },
-          "stability": "development",
-          "brief": "AMD classification."
-        },
-        {
-          "id": "lk.amd.delay",
-          "type": "double",
-          "stability": "development",
-          "brief": "Seconds from the call start to the verdict.",
-          "annotations": {
-            "livekit": {
-              "unit": "s"
-            }
-          }
-        },
-        {
-          "id": "lk.amd.reason",
-          "type": "string",
-          "stability": "development",
-          "brief": "Why the detector decided."
-        },
-        {
-          "id": "lk.amd.speech_duration",
-          "type": "double",
-          "stability": "development",
-          "brief": "Seconds of speech the detector heard.",
-          "annotations": {
-            "livekit": {
-              "unit": "s"
-            }
-          }
-        },
-        {
           "id": "lk.blocking.count",
           "type": "int",
           "stability": "development",
@@ -1443,17 +1486,6 @@
           },
           "stability": "development",
           "brief": "State before the transition."
-        },
-        {
-          "id": "lk.pii.amd.transcript",
-          "type": "string",
-          "stability": "development",
-          "brief": "The transcript the verdict was made on.",
-          "annotations": {
-            "livekit": {
-              "sensitivity": "pii"
-            }
-          }
         },
         {
           "id": "lk.pii.rpc.payload",
@@ -1896,6 +1928,184 @@
           },
           "stability": "development",
           "brief": "How the turn ended."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.storage",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::telemetry::storage`.",
+      "attributes": [
+        {
+          "id": "class",
+          "type": {
+            "members": [
+              {
+                "id": "ok",
+                "value": "ok",
+                "brief": "ok",
+                "stability": "development"
+              },
+              {
+                "id": "client",
+                "value": "client",
+                "brief": "client",
+                "stability": "development"
+              },
+              {
+                "id": "redirect",
+                "value": "redirect",
+                "brief": "redirect",
+                "stability": "development"
+              },
+              {
+                "id": "capacity",
+                "value": "capacity",
+                "brief": "capacity",
+                "stability": "development"
+              },
+              {
+                "id": "server",
+                "value": "server",
+                "brief": "server",
+                "stability": "development"
+              },
+              {
+                "id": "unknown",
+                "value": "unknown",
+                "brief": "unknown",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Who owns its outcome."
+        },
+        {
+          "id": "op",
+          "type": {
+            "members": [
+              {
+                "id": "exec",
+                "value": "exec",
+                "brief": "exec",
+                "stability": "development"
+              },
+              {
+                "id": "batch",
+                "value": "batch",
+                "brief": "batch",
+                "stability": "development"
+              },
+              {
+                "id": "query",
+                "value": "query",
+                "brief": "query",
+                "stability": "development"
+              },
+              {
+                "id": "hello",
+                "value": "hello",
+                "brief": "hello",
+                "stability": "development"
+              },
+              {
+                "id": "thread_create",
+                "value": "thread_create",
+                "brief": "thread_create",
+                "stability": "development"
+              },
+              {
+                "id": "thread_get",
+                "value": "thread_get",
+                "brief": "thread_get",
+                "stability": "development"
+              },
+              {
+                "id": "thread_list",
+                "value": "thread_list",
+                "brief": "thread_list",
+                "stability": "development"
+              },
+              {
+                "id": "thread_update",
+                "value": "thread_update",
+                "brief": "thread_update",
+                "stability": "development"
+              },
+              {
+                "id": "thread_delete",
+                "value": "thread_delete",
+                "brief": "thread_delete",
+                "stability": "development"
+              },
+              {
+                "id": "thread_items",
+                "value": "thread_items",
+                "brief": "thread_items",
+                "stability": "development"
+              },
+              {
+                "id": "thread_tasks",
+                "value": "thread_tasks",
+                "brief": "thread_tasks",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The request."
+        },
+        {
+          "id": "reason",
+          "type": {
+            "members": [
+              {
+                "id": "moved",
+                "value": "moved",
+                "brief": "moved",
+                "stability": "development"
+              },
+              {
+                "id": "unavailable",
+                "value": "unavailable",
+                "brief": "unavailable",
+                "stability": "development"
+              },
+              {
+                "id": "snapshot_expired",
+                "value": "snapshot_expired",
+                "brief": "snapshot_expired",
+                "stability": "development"
+              },
+              {
+                "id": "capacity",
+                "value": "capacity",
+                "brief": "capacity",
+                "stability": "development"
+              },
+              {
+                "id": "drained",
+                "value": "drained",
+                "brief": "drained",
+                "stability": "development"
+              },
+              {
+                "id": "transport",
+                "value": "transport",
+                "brief": "transport",
+                "stability": "development"
+              },
+              {
+                "id": "local",
+                "value": "local",
+                "brief": "local",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Why it was sent again."
         }
       ]
     },

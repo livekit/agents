@@ -198,20 +198,23 @@ impl Storage {
         })
     }
 
-    /// The threads of one scope, newest first; `before` is the previous page's cursor.
-    #[pyo3(signature = (scope, *, before = None, limit = None))]
+    /// One page of threads: one `scope`'s, or the project's with none. Pass `next_page_token`
+    /// back as `page_token` to get the next page; an empty one means the end, and a page may be
+    /// short while a token is set. The order is unspecified, stable across pages. `limit` is 50
+    /// when omitted and at most 100.
+    #[pyo3(signature = (scope = None, page_token = None, limit = None))]
     fn list_threads<'py>(
         &self,
         py: Python<'py>,
-        scope: ::std::string::String,
-        before: ::std::option::Option<::std::string::String>,
+        scope: ::std::option::Option<::std::string::String>,
+        page_token: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_storage_list_threads_limit)]
         limit: StorageListThreadsLimitInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::list_threads(&this, scope, before, limit)
+            let out = <StorageImpl as ::lk_agents_abi::storage::Storage>::list_threads(&this, scope, page_token, limit)
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(

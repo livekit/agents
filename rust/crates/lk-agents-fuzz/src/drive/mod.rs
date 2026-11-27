@@ -47,14 +47,12 @@ use lk_agents_voice::{
         AgentSessionOptions, Deployment, InterruptionGate, InterruptionGateInputs, RealtimeGate,
         SttGate, TurnDetection, resolve_interruption_detector,
     },
-    agent_session::{
-        HoldId, HookId, SpeechCommand, TurnCommand, VoiceCommandOrigin, VoiceHostEvent,
-    },
+    agent_session::{HoldId, HookId, TurnCommand, VoiceHostEvent},
     events::SessionEvent,
     filler_scheduler::FillerId,
     trace::{
-        CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, ProviderKind, SpeechStep,
-        Step, ToolStep, TurnStep,
+        CoreStep, GenerationStep, HandoffStep, PlayoutStep, ProviderKind, SpeechStep, Step,
+        ToolStep, TurnStep,
     },
 };
 use tokio::{
@@ -66,8 +64,8 @@ use crate::{
     check::{Failure, Subject, check_all},
     fakes::{self, Control, Record, Registry, SAMPLE_RATE, SAMPLES_PER_CHUNK, Slot},
     input::{
-        AgentText, AmdInput, Confidence, ConsoleAsk, Count, DtmfInput, HookAnswer, Input, IvrInput,
-        Knob, Millis, Models, Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
+        AgentText, Confidence, ConsoleAsk, Count, DtmfInput, HookAnswer, Input, Knob, Millis,
+        Models, Ref, Role, RoomIn, RtEvent, SayInput, ToolAnswer, TurnMode, UserText,
     },
     record::step_name,
     record::{
@@ -141,11 +139,6 @@ pub struct Setup {
     /// `Realtime` journal family exists only under one. `Some` describes the server the session
     /// is built against.
     pub realtime: Option<RealtimeSetup>,
-    /// `ivr_detection`: `Some(true)` navigates from the session's start. The navigator itself
-    /// runs in every session, as `start()` spawns it.
-    pub ivr: Option<bool>,
-    /// The answering-machine detector, attached as `AMD(session, ...)` attaches it.
-    pub amd: Option<AmdSetup>,
     /// Static keyterms, which is also what makes the session have a keyterm pass at all.
     pub keyterms: Vec<String>,
     /// The agents override nodes (each as the default does): the opening agent these, every agent
@@ -403,29 +396,6 @@ pub struct KeytermDetectionSetup {
     pub timeout_ms: Option<u64>,
 }
 
-/// `AMD(session, ...)`: its switches, its recogniser, and what the room says once it is attached.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct AmdSetup {
-    pub interrupt_on_machine: bool,
-    pub ivr_detection: bool,
-    pub wait_until_finished: bool,
-    /// `AMD(stt=..)`: a recogniser of AMD's own; otherwise the session's finals.
-    pub own_stt: bool,
-    pub answer: AmdAnswer,
-}
-
-/// What the callee does in the room AMD awaits them in: joins with their audio (listening opens
-/// at once), joins as a SIP call the case answers later (`Amd { Answer }` sets `sip.callStatus`
-/// to `active`), or has not joined (`participant_missing` once the track wait runs out, unless
-/// they join in time).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum AmdAnswer {
-    #[default]
-    Track,
-    Sip,
-    Missing,
-}
-
 /// The realtime server a session is built against: what it can do, as its capabilities say.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RealtimeSetup {
@@ -531,8 +501,6 @@ impl Default for Setup {
             lagging_output: false,
             output_fault: None,
             unreported_clear: None,
-            ivr: None,
-            amd: None,
             stt_model: 0,
             stt_speech: fakes::SttSpeech::default(),
             tts_latency: None,

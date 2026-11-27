@@ -692,22 +692,30 @@ mod silent_segment {
     }
 
     fn cut_silent_segment(after_close: Vec<Input>) -> Outcome {
+        let setup = Setup { speech_gap_ms: Some(GAP_MS), ..Setup::default() };
         let mut inputs = vec![
-            Input::PauseAuthorization {},
+            // An empty reply plays out, so the next speech waits out the gap unauthorized.
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(20) },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(20) },
             Input::GenerateReply { user_input: None, instructions: None, allow: None },
             Input::Advance { ms: Millis(20) },
             // The words start a synthesis, which never ends: no `LlmEnd`.
-            Input::LlmText { chat: Ref::new(0), text: AgentText("Hello there.".into()) },
+            Input::LlmText { chat: Ref::new(1), text: AgentText("Hello there.".into()) },
             Input::Advance { ms: Millis(20) },
             Input::SetAudioOutput { attach: false },
-            Input::ResumeAuthorization {},
-            Input::Advance { ms: Millis(20) },
+            Input::Advance { ms: Millis(GAP_MS) },
             Input::Close { drain: false },
             Input::Advance { ms: Millis(20) },
         ];
         inputs.extend(after_close);
-        run(Case { setup: Setup::default(), inputs, ..Case::default() })
+        let outcome = run(Case { setup, inputs, ..Case::default() });
+        assert!(outcome.reached.iter().any(|s| s == "Speech::FloorArmed"), "{outcome:?}");
+        outcome
     }
+
+    const GAP_MS: u64 = 2_000;
 }
 
 mod tts_first_byte_anchor {

@@ -180,7 +180,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Simplismart"
+        return "simplismart"
 
     @property
     def model(self) -> str:

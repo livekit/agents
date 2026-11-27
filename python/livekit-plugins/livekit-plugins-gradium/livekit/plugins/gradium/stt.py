@@ -132,7 +132,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Gradium"
+        return "gradium"
 
     @property
     def session(self) -> http.HttpSession:

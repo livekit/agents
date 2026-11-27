@@ -220,7 +220,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Google Cloud Platform"
+        return "google"
 
     def update_options(
         self,

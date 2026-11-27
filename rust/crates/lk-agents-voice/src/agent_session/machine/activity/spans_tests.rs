@@ -3,7 +3,7 @@ use crate::agent_session::machine::activity::scheduling::{
     SpeechId, SpeechKind, VoiceRunParticipation,
 };
 use crate::agent_session::room::RoomLinkConfig;
-use crate::agent_session::{AmdSpan, Close, HookKind, Now, SessionParts, VoiceDriver};
+use crate::agent_session::{Close, HookKind, Now, SessionParts, VoiceDriver};
 use crate::audio_recognition::{
     EndOfTurnInfo, EouDetected, EouPredicted, TurnDetectionMode, TurnId, UserTurnCommitVerdict,
 };
@@ -218,7 +218,7 @@ fn reply(user: Option<lk_agents_abi::MetricsReport>) -> Reply {
         llm: Some(lk_agents_abi::ProviderId {
             label: "openai.LLM".into(),
             model: "gpt-4o".into(),
-            provider: "api.openai.com".into(),
+            provider: "openai".into(),
         }),
     }
 }
@@ -583,15 +583,12 @@ fn the_close_ends_every_open_span_itself() {
     let reason = lk_agents_abi::voice::events::CloseReason::UserInitiated;
     s.d.begin_closing(ms(50), Close { reason, drain: true, error: None });
     speak(&mut s, 100, 200, "wait");
-    let amd = reserved(&s, 7, ms(160));
-    s.at(160);
-    s.d.amd_span(&AmdSpan::Attached(amd));
     let records = s.close(1_000);
     well_formed(&records);
     assert_eq!(records.last().map(|s| s.name.to_string()), Some("agent_session".into()));
     assert_eq!(parent(&records, one(&records, "drain_agent_activity")), "session_close");
     assert_eq!(attr(one(&records, "user_turn"), "lk.user_turn.outcome"), Some(&st("closed")));
-    for name in ["on_exit", "agent_turn", "amd", "session_close"] {
+    for name in ["on_exit", "agent_turn", "session_close"] {
         one(&records, name);
     }
     assert!(s.drain().is_empty(), "nothing after the close");
@@ -644,7 +641,7 @@ fn an_interrupted_reply_records_its_wait_cause_and_playout() {
     assert!((v - 0.4).abs() < 1e-9, "{v}");
     assert_eq!(
         m.labels,
-        [("model_provider".into(), st("api.openai.com")), ("model_name".into(), st("gpt-4o"))]
+        [("model_provider".into(), st("openai")), ("model_name".into(), st("gpt-4o"))]
     );
 }
 
@@ -975,8 +972,7 @@ fn a_handoff_opens_the_spans_its_toolset_setup_reserved() {
 }
 
 // Catches: stalls recorded only as their own spans, with the session's totals and its
-// `event_loop_blocked` events missing; or totals written for a session that never stalled; or
-// AMD's `amd` drawn anew instead of the span its classification runs under.
+// `event_loop_blocked` events missing; or totals written for a session that never stalled.
 #[test]
 fn event_loop_stalls_fold_into_the_session() {
     let mut s = opened();
@@ -984,9 +980,6 @@ fn event_loop_stalls_fold_into_the_session() {
     s.d.event_loop_blocked(Duration::from_millis(200));
     s.at(200);
     s.d.event_loop_blocked(Duration::from_millis(600));
-    let amd = reserved(&s, 70, ms(300));
-    s.at(300);
-    s.d.amd_span(&AmdSpan::Attached(amd));
     let records = s.close(1_000);
     well_formed(&records);
     let session = one(&records, "agent_session");
@@ -996,7 +989,6 @@ fn event_loop_stalls_fold_into_the_session() {
     let events: Vec<_> = session.events.iter().filter(|e| e.name == "event_loop_blocked").collect();
     assert_eq!(events.len(), 2);
     assert!(events[1].attributes.contains(&("lk.blocking.duration".into(), Value::Double(0.6))));
-    assert_eq!(one(&records, "amd").context, amd.context);
 
     let records = opened().close(1_000);
     assert_eq!(attr(one(&records, "agent_session"), "lk.blocking.count"), None);

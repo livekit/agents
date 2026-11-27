@@ -628,7 +628,6 @@ pub struct Providers {
     /// A provider with no duplex path arrives adapted by the executor's `TtsAdapter`.
     /// A per-turn override rides on [`ReplyContext::toolset`] instead.
     pub toolset: Arc<Toolset>,
-    pub tools_host_extra: Vec<lk_agents_abi::HostRef>,
     /// The `transcription_node` of the agent the reply was
     /// created under.
     pub output_nodes: crate::agent_session::OutputNodes,

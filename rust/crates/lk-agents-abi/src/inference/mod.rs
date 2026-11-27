@@ -100,14 +100,6 @@ pub trait InferenceModels {
     #[host(function)]
     fn min_reasoning_effort(model: String) -> Option<String>;
 
-    /// Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`).
-    #[host(function)]
-    fn amd_auto_select_models(livekit_url: String, api_key: String, api_secret: String) -> bool;
-
-    /// Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table.
-    #[host(function)]
-    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, Invalid>;
-
     /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
     /// is the request's `reasoning_effort` and `reasoning` the effort of its Responses
     /// `reasoning`.

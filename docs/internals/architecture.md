@@ -135,7 +135,7 @@ a reader can tell from the path what is state and what is output:
   happen. Effects never carry behavior beyond data.
 - **`mod.rs`** is the subject's entry: `pub mod machine; pub mod effects;`, the re-exports
   callers use, and the records both sides share. These are configuration, setup, limits and
-  observations that are neither state nor output (`AmdSetup`, `StreamBudget`).
+  observations that are neither state nor output (`StreamBudget`).
 
 `machine` is a single file until it has several owners or outgrows the file limit, then a
 directory with one file per owner (`generation/machine/audio_playback.rs`,
@@ -239,7 +239,7 @@ audio; it does not authorize playback, route room tracks, or report what a perso
 | --- | --- |
 | `lk-agents-abi` | Public export declarations and typed boundary records: chat items, events, effects, errors and resource descriptions; contracts and data, plus the hand-written Python plugin bases (`stt.py`, `tts.py`, `llm.py`, `realtime.py`, `vad.py`) beside their proxy traits |
 | `lk-agents-core` | Shared AgentRun, request planning, the attempt machine every retried request shares (connection limits, retry allowance and backoff, total deadline, cleanup), tool/approval/recovery and output acceptance; backend TextSession routing/frame composition; A2A endpoint policies and task transitions (`lk_agents_core::a2a`) over ABI-declared storage request/result records and error types; MCP tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification; chat formatting, tool-argument processing, JSON repair, tool search and deterministic run/event assertions; speech tokenization and expressive markup (`lk_agents_core::tokenize`, `lk_agents_core::markup`); telemetry destination policy, metric admission and session report records (`lk_agents_core::telemetry`); no voice lifecycle or transport dependency |
-| `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
+| `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async database I/O, AgentDB and SQLite backends, shared thread/run/lease engine; see [storage](storage.md#rust-interface) for contracts and typed errors |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
 | `lk-agents-net` | Async I/O: the shared transport: HTTP with per-limit deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; telemetry's export (`lk_agents_net::export`): the OTLP exporter for every telemetry destination and the process's exporter slot, the LiveKit Cloud session report and recording upload with its own bounded admission, the host span (`_core.TelemetrySpan`) and `Tagger` classes, event-loop stall recording, the job's sampled stack profile (`export/profile`, pprof, carried by the recording upload) and the worker's Prometheus exposition (`export/prometheus.rs`); the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
@@ -472,8 +472,6 @@ lk-agents-runtime/src/
     io.rs               session output assembly and transcript-wrapper ownership
     transcription/      transcript synchronizer execution and its behavioral contracts
     generation/         admitted reply resource snapshots, provider/TTS/playout/forwarding pumps
-    ivr.rs              IVR timers and feed over voice's navigator effects
-    amd.rs              AMD timers, classification stream, tap stream, callee wait
     background_audio.rs mixer pump, file/stream reads, track publish/unpublish
     keyterm_detection.rs keyterm extraction's provider stream, reported to voice's detection pass
     console.rs          the console TCP port adapter

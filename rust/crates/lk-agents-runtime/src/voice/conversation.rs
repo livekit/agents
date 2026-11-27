@@ -9,7 +9,7 @@ use lk_agents_abi::session::{
     InputAdmission, InputRequestRef, InputRoute, InputRoutingRequest, SessionCheckpoint,
     SessionInputCommand, snapshot::SessionSnapshot,
 };
-use lk_agents_abi::storage::StorageError;
+use lk_agents_abi::storage::{StorageError, Unapplied};
 use lk_agents_core::session::{input, remote};
 use lk_agents_net::{signal, task::ScopedTask};
 use serde_json::Value;
@@ -88,12 +88,16 @@ pub(super) async fn checkpointed(work: &Option<Work>) -> Advance {
     match work {
         Some(Work::Opening { result, .. }) => {
             Advance::Opened(result.wait().await.unwrap_or_else(|_| {
-                Err(StorageError::Unavailable("the checkpoint acquisition task ended".into()))
+                Err(StorageError::Unavailable(Unapplied::local(
+                    "the checkpoint acquisition task ended",
+                )))
             }))
         }
         Some(Work::Writing { result, .. }) => {
             Advance::Written(result.wait().await.unwrap_or_else(|_| {
-                Err(StorageError::Unavailable("the conversation checkpoint task ended".into()))
+                Err(StorageError::Unavailable(Unapplied::local(
+                    "the conversation checkpoint task ended",
+                )))
             }))
         }
         None | Some(Work::Closing { .. }) => std::future::pending().await,

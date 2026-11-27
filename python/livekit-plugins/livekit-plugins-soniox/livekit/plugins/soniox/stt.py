@@ -269,7 +269,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Soniox"
+        return "soniox"
 
     async def _recognize_impl(
         self,

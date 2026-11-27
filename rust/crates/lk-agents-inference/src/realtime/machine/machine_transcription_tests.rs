@@ -143,6 +143,7 @@ fn a_settled_xai_transcript_arriving_after_the_answer_is_not_held_until_another_
         Incoming::OutputItemAdded {
             item_id: "answer".into(),
             kind: crate::realtime::protocol::OutputItemKind::Message,
+            response_id: Some("reply".into()),
         },
         Incoming::AudioTranscriptDelta {
             item_id: "answer".into(),
@@ -183,4 +184,58 @@ fn a_settled_xai_transcript_arriving_after_the_answer_is_not_held_until_another_
             .iter()
             .any(|e| matches!(e, Event::InputTranscription(t) if t.is_final))
     );
+}
+
+// Catches: a cancelled response's message announced after the next response was created played
+// as the new reply's. The cancelled reply still streams what it generated; when its
+// `response.output_item.added` lands after the next `response.created`, only the response id it
+// names tells it apart, and the session truncated both messages as the new reply's: one past the
+// audio the server holds for it (DST seed 5025).
+#[test]
+fn a_cancelled_response_message_announced_late_is_not_the_next_replys() {
+    use crate::realtime::{dialect::OPENAI, protocol::OutputItemKind};
+    let mut m = crate::realtime::testfix::machine(OPENAI);
+    m.open(at(0));
+    let generation = m.connection_generation();
+    let added = |item: &str, response: &str| Incoming::OutputItemAdded {
+        item_id: item.into(),
+        kind: OutputItemKind::Message,
+        response_id: Some(response.into()),
+    };
+    let said = |item: &str| Incoming::AudioTranscriptDelta {
+        item_id: item.into(),
+        delta: "words ".into(),
+        start_time: None,
+    };
+    let message = |id: &str| {
+        ChatItem::Message(lk_agents_abi::ChatMessage::new(
+            id,
+            lk_agents_abi::Role::Assistant,
+            vec![],
+            std::time::SystemTime::UNIX_EPOCH,
+        ))
+    };
+    let mut events = Vec::new();
+    for event in [
+        Incoming::ResponseCreated { response_id: "cancelled".into(), client_event_id: None },
+        Incoming::ResponseCreated { response_id: "next".into(), client_event_id: None },
+        added("tail", "cancelled"),
+        said("tail"),
+        added("answer", "next"),
+        said("answer"),
+        Incoming::OutputItemDone { item: message("tail") },
+        Incoming::OutputItemDone { item: message("answer") },
+    ] {
+        events.extend(m.incoming_on(generation, at(1), event).events);
+    }
+    let told = |id: &str| {
+        events.iter().any(|e| match e {
+            Event::MessageStarted(s) => s.message_id == id,
+            Event::TextDelta(d) => d.message_id == id,
+            Event::MessageDone(d) => d.message_id == id,
+            _ => false,
+        })
+    };
+    assert!(told("answer"), "the next reply's message is told: {events:?}");
+    assert!(!told("tail"), "the cancelled reply's message is nobody's: {events:?}");
 }

@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use serde_json::Value;
 
 use super::store::ContextStore;
-use crate::StorageError;
 use crate::voice::VoiceStore;
+use crate::{StorageError, Unapplied};
 
 pub(crate) struct Checkpoint(Mutex<Scope>);
 
@@ -95,14 +95,16 @@ impl SessionCheckpoint for Checkpoint {
                     let written = owner.store.save_checkpoint(&owner.run_id, history).await;
                     let closed = owner.close().await;
                     let released = released.wait().await.map_err(|_| {
-                        StorageError::Unavailable("the checkpoint release task ended".into())
+                        StorageError::Unavailable(Unapplied::local(
+                            "the checkpoint release task ended",
+                        ))
                     })?;
                     let saved = written?;
                     released?;
                     match closed {
                         Closed::Clean => Ok(saved),
                         Closed::Failed | Closed::TimedOut => Err(StorageError::Unavailable(
-                            "the conversation checkpoint did not close cleanly".into(),
+                            Unapplied::local("the conversation checkpoint did not close cleanly"),
                         )),
                     }
                 }
@@ -126,9 +128,9 @@ impl SessionCheckpoint for Checkpoint {
                 return Err(StorageError::Cancelled("the voice checkpoint owner ended".into()));
             }
             result.wait().await.map_err(|_| {
-                StorageError::Unavailable(
-                    "the voice checkpoint writer ended before its receipt".into(),
-                )
+                StorageError::Unavailable(Unapplied::local(
+                    "the voice checkpoint writer ended before its receipt",
+                ))
             })?
         })
     }

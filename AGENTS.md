@@ -210,7 +210,7 @@ python/livekit-agents/livekit/agents/   # the public Python API and host adapter
 ├── cli.py              # dev / start subcommands invoked by `lk agent`
 ├── text_session.py     # Backend conversations continued through a context store binding
 ├── evals.py            # Conversation judges (simulation context and verdicts: _generated/simulation.py)
-├── telemetry.py        # OTel API provider adapter, configure, GenAI message capture, diagnostics
+├── telemetry.py        # OTel API provider adapter, configure, GenAI message capture
 ├── _generated/         # Generated implementations and forwarding modules (never edited)
 └── _core.pyi           # Generated stubs of the Rust core extension
 

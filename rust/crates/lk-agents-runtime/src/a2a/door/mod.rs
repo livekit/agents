@@ -12,7 +12,7 @@ use lk_agents_abi::a2a::door::{
 };
 use lk_agents_abi::a2a::turn::TurnHost;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::storage::{Storage as _, StorageError, StorageNamespace};
+use lk_agents_abi::storage::{Storage as _, StorageError, StorageNamespace, Unapplied};
 use lk_agents_abi::worker::http::EndpointExchange;
 use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
@@ -83,8 +83,9 @@ impl A2ADoor for Door {
         let namespace = storage.downcast::<Namespace>().map_err(|_| {
             StorageError::Invalid("an A2A door needs this process's Storage".into())
         })?;
-        let spawner = (env.spawner)()
-            .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
+        let spawner = (env.spawner)().map_err(|error| {
+            StorageError::Unavailable(Unapplied::local(format!("A2A runtime: {error}")))
+        })?;
         lk_agents_core::a2a::card::agent_card(config.endpoint.clone())
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
         if config.partition_key.is_empty() {

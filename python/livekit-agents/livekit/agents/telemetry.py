@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import platform
 import threading
 import traceback
 from collections.abc import Iterator, Mapping, Sequence
@@ -27,11 +28,11 @@ _provider_adopted = False
 
 
 def _install() -> None:
-    # Adopts the global provider if unset, bridges an SDK provider, else reports a conflict.
+    # Adopts the global provider if unset and bridges an SDK provider; any other is left alone.
     global _provider_adopted
     from .version import __version__
 
-    _core._core_telemetry_install(__version__)
+    _core._core_telemetry_install(__version__, python_version=platform.python_version())
     if _provider_adopted:
         return
     _provider_adopted = True
@@ -40,8 +41,6 @@ def _install() -> None:
         trace.set_tracer_provider(_TracerProvider())
     elif _is_sdk(provider):
         provider.add_span_processor(_bridge())  # type: ignore[attr-defined]
-    elif not isinstance(provider, _TracerProvider):
-        _core._core_telemetry_conflict()
 
 
 class _LoopMonitor:

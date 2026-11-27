@@ -45,7 +45,7 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Spitch"
+        return "spitch"
 
     def _synthesize(
         self, chunk: tts.SpeechChunk, *, conn_options: APIConnectOptions

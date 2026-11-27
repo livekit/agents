@@ -57,7 +57,7 @@ async def token(request: Request) -> Response:
 
 
 async def list_threads(request: Request) -> Response:
-    """The browser's threads, newest first."""
+    """A page of the browser's threads, in the store's (unspecified) order."""
     scope = scope_of(request)
     if scope is None:
         return Response(status_code=400)

@@ -290,7 +290,7 @@ class _Connection(tts.TTS[Literal["slng_event"]]):
 
     @property
     def provider(self) -> str:
-        return "SLNG"
+        return "slng"
 
     def update_options(
         self,
@@ -459,7 +459,7 @@ class TTS(tts.FallbackAdapter[Literal["slng_event"]]):
 
     @property
     def provider(self) -> str:
-        return "SLNG"
+        return "slng"
 
     def update_options(
         self,

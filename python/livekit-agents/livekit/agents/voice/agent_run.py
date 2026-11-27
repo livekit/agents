@@ -661,7 +661,7 @@ async def _unexpected_value(ctx: RunContext[Any], value: Any) -> Any:
 
 
 def _voice_tools(binding: _VoiceBinding) -> ToolContext:
-    # resolved per call: session tools may be added after the frame was installed (IVR's DTMF)
+    # resolved per call: the session's tools may change after the frame was installed
     agent_tools, session_tools = _call_tools(binding.agent, binding.session)
     return ToolContext([*agent_tools, *session_tools])
 

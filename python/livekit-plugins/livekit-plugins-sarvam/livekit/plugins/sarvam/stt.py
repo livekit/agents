@@ -252,7 +252,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Sarvam"
+        return "sarvam"
 
     async def recognize(
         self,

@@ -42,12 +42,23 @@ class ThreadInfo:
 
 
 @dataclass(kw_only=True, slots=True)
-class ThreadPage:
-    """One page of `list_threads`, newest first."""
+class ThreadSummary:
+    """A listed thread: its activity and expiry come from `get_thread`."""
 
-    threads: list[ThreadInfo]
-    before: str
-    """The next page's cursor; empty at the end."""
+    thread_id: str
+    scope: str
+    attributes: dict[str, str]
+    created_at: int
+    idle_ttl_seconds: int
+
+
+@dataclass(kw_only=True, slots=True)
+class ThreadPage:
+    """One page of `list_threads`."""
+
+    threads: list[ThreadSummary]
+    next_page_token: str
+    """The next page's `page_token`; empty at the end."""
 
 
 @dataclass(kw_only=True, slots=True)

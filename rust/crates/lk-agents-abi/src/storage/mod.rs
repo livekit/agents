@@ -43,7 +43,7 @@ pub enum StorageError {
     /// an answer that did not decode.
     #[error("storage unavailable: {0}")]
     #[host(kind = "livekit.agents.storage.StorageUnavailable")]
-    Unavailable(String),
+    Unavailable(Unapplied),
     /// An unknown, deleted or expired thread, or a stream, task or database that is not there.
     #[error("not found: {0}")]
     #[host(kind = "livekit.agents.storage.ThreadNotFound")]
@@ -95,6 +95,34 @@ impl Unacknowledged {
 impl std::fmt::Display for Unacknowledged {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// Why a request was refused before it applied: what its retry owner counts a resend under, and
+/// what to say of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unapplied {
+    pub reason: crate::telemetry::storage::StorageRetryReason,
+    pub message: String,
+}
+
+impl Unapplied {
+    pub fn new(
+        reason: crate::telemetry::storage::StorageRetryReason,
+        message: impl std::fmt::Display,
+    ) -> Self {
+        Self { reason, message: message.to_string() }
+    }
+
+    /// Refused in this process: a local database busy or closed, a task that ended.
+    pub fn local(message: impl std::fmt::Display) -> Self {
+        Self::new(crate::telemetry::storage::StorageRetryReason::Local, message)
+    }
+}
+
+impl std::fmt::Display for Unapplied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
     }
 }
 
@@ -219,12 +247,15 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn get_thread(&self, thread_id: String) -> Result<ThreadInfo, StorageError>;
 
-    /// The threads of one scope, newest first; `before` is the previous page's cursor.
+    /// One page of threads: one `scope`'s, or the project's with none. Pass `next_page_token`
+    /// back as `page_token` to get the next page; an empty one means the end, and a page may be
+    /// short while a token is set. The order is unspecified, stable across pages. `limit` is 50
+    /// when omitted and at most 100.
     #[host(await)]
     async fn list_threads(
         &self,
-        scope: String,
-        #[host(kw, default = None)] before: Option<String>,
+        #[host(default = None)] scope: Option<String>,
+        #[host(default = None)] page_token: Option<String>,
         #[host(default = None)] limit: Option<u32>,
     ) -> Result<ThreadPage, StorageError>;
 
@@ -312,14 +343,30 @@ pub struct ThreadInfo {
     pub idle_ttl_seconds: i64,
 }
 
-/// One page of `list_threads`, newest first.
+/// A listed thread: its activity and expiry come from `get_thread`.
+#[crate::host(record(module = "storage_class", emit))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadSummary {
+    pub thread_id: String,
+    pub scope: String,
+    pub attributes: BTreeMap<String, String>,
+    pub created_at: i64,
+    pub idle_ttl_seconds: i64,
+}
+
+/// One page of `list_threads`.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadPage {
-    pub threads: Vec<ThreadInfo>,
-    /// The next page's cursor; empty at the end.
-    pub before: String,
+    pub threads: Vec<ThreadSummary>,
+    /// The next page's `page_token`; empty at the end.
+    pub next_page_token: String,
 }
+
+/// The default `list_threads` page.
+pub const DEFAULT_THREAD_PAGE: i32 = 50;
+/// The largest `list_threads` page.
+pub const MAX_THREAD_PAGE: i32 = 100;
 
 /// One chat item of a thread.
 #[crate::host(record(module = "storage_class", emit))]

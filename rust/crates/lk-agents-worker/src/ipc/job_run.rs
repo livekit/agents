@@ -553,6 +553,9 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         api_key: String,
         api_secret: String,
     ) -> Result<Self, WorkerError> {
+        if !fake_job {
+            lk_agents_net::export::productstats::configure(&url, &api_key, &api_secret);
+        }
         let configured = std::env::var("LIVEKIT_OBSERVABILITY_URL").ok();
         let observability_url =
             lk_agents_net::strings::observability_url(&url, configured.as_deref());

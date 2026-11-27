@@ -65,7 +65,7 @@ impl Rule for FirstAudioIsPrompt {
                 Tag::Generated { generation, chunk: 0 } => (Kind::Generation, generation),
                 _ => continue,
             };
-            // The last authorization before it played: one a hold (AMD's) took back is renewed.
+            // The last authorization before it played.
             let may = journal.iter().take_while(|(a, _)| a.seq < pushed.seq).filter_map(|(a, s)| {
                 matches!(s, Step::Speech(SpeechStep::Authorized { speech: sp }) if sp.0 == speech)
                     .then_some(*a)

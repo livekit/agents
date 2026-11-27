@@ -3,6 +3,7 @@ use crate::agent_session::lifecycle::SessionStartPlans;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::storage::Unapplied;
 use lk_agents_core::markup::ChatMessageExt;
 use std::sync::Arc;
 
@@ -208,7 +209,7 @@ fn bound_storage_loss_and_failed_commit_close_the_call_with_a_storage_error() {
         VoiceEvent::StorageAnswered {
             speech: SpeechId(7),
             request: crate::agent_session::StorageRequest::Commit,
-            result: Err(StorageError::Unavailable("write failed".into())),
+            result: Err(StorageError::Unavailable(Unapplied::local("write failed"))),
         },
     ] {
         let mut driver = driver();

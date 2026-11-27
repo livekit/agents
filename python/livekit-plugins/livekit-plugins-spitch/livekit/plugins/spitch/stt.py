@@ -46,7 +46,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Spitch"
+        return "spitch"
 
     def update_options(self, language: str) -> None:
         self._opts.language = LanguageCode(language) if language else self._opts.language

@@ -1,4 +1,3 @@
-pub mod amd;
 pub mod avatar;
 pub mod avatar_queue;
 pub mod background_audio;

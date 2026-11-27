@@ -27,7 +27,7 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     let pooled = Pooled {
         conn,
         schema: SchemaCell::default(),
-        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE)),
         closed: AtomicBool::new(false),
     };
     let result =
@@ -45,12 +45,13 @@ async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
     pooled.conn.aclose().await;
 }
 
-/// agent-store answers `retry` (1003) when a write applied nothing and `commit_unknown_result`
-/// (1021) when its durable flush failed after SQLite committed: the first is a retryable refusal,
-/// the second `Uncertain`. Before, both were unknown codes, so a write failed `Invalid` and was
-/// never retried.
+/// agent-store answers `retry` (1003) when a write applied nothing under pressure, `unavailable`
+/// (1004) when the owner could not serve it, `snapshot_expired` (1007) when a read held its
+/// snapshot too long, and `commit_unknown_result` (1021) when its durable flush failed after
+/// SQLite committed: the first three are retryable refusals, the last `Uncertain`. Before, each was
+/// an unknown code, so a write failed `Invalid` or `Uncertain` and was never retried.
 #[tokio::test]
-async fn retry_refuses_a_sent_write_and_commit_unknown_result_leaves_it_uncertain() {
+async fn retryable_codes_refuse_a_sent_write_and_commit_unknown_result_leaves_it_uncertain() {
     use connection::tests::{dial, error, hello_ok, serve};
     use connection::wire as pb;
     fn answers(code: ErrorCode, message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
@@ -63,26 +64,39 @@ async fn retry_refuses_a_sent_write_and_commit_unknown_result_leaves_it_uncertai
     fn retry(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         answers(ErrorCode::RETRY, m)
     }
+    fn unavailable(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        answers(ErrorCode::UNAVAILABLE, m)
+    }
+    fn snapshot_expired(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+        answers(ErrorCode::SNAPSHOT_EXPIRED, m)
+    }
     fn commit_unknown(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
         answers(ErrorCode::COMMIT_UNKNOWN_RESULT, m)
     }
     type Script = fn(&pb::ClientMessage) -> Vec<pb::ServerMessage>;
-    for (code, script) in [("retry", retry as Script), ("commit_unknown_result", commit_unknown)] {
+    for (code, script) in [
+        ("retry", retry as Script),
+        ("unavailable", unavailable),
+        ("snapshot_expired", snapshot_expired),
+        ("commit_unknown_result", commit_unknown),
+    ] {
         let (url, _) = serve(script, false).await;
         let conn = dial(&url, "DB_1").await.unwrap();
         let pooled = Pooled {
             conn,
             schema: SchemaCell::default(),
-            pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+            pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE)),
             closed: AtomicBool::new(false),
         };
         let result = pooled.batch(vec![Statement::raw("UPDATE partitions SET version = 2")]).await;
         match code {
-            "retry" => assert!(
-                matches!(result, Err(StorageError::Unavailable(ref e)) if e.contains("retry")),
-                "{result:?}"
+            "commit_unknown_result" => {
+                assert!(matches!(result, Err(StorageError::Uncertain(_))), "{result:?}")
+            }
+            _ => assert!(
+                matches!(result, Err(StorageError::Unavailable(ref e)) if e.message.starts_with(code)),
+                "{code}: {result:?}"
             ),
-            _ => assert!(matches!(result, Err(StorageError::Uncertain(_))), "{result:?}"),
         }
         pooled.conn.aclose().await;
     }
@@ -131,7 +145,7 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
         opts.reconnect.min_backoff = Duration::from_millis(10);
         let minter = TokenMinter::new("devkey", "secret").unwrap();
         let background = crate::testing::background();
-        Conn::dial(opts, minter, background.spawner, background.clock)
+        Conn::dial(opts, minter, background.spawner, background.clock, crate::telemetry::Cx::NONE)
     };
     let conn = dial().await.unwrap();
     let exec = conn.exec(&Statement::raw("UPDATE t SET n = 1"), conn.deadline()).await;
@@ -140,7 +154,7 @@ async fn a_socket_closed_after_a_write_was_sent_leaves_it_uncertain() {
     let pooled = Pooled {
         conn: dial().await.unwrap(),
         schema: SchemaCell::default(),
-        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()))),
+        pool: Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE)),
         closed: AtomicBool::new(false),
     };
     let batch = pooled.batch(vec![Statement::raw("UPDATE t SET n = 2")]).await;
@@ -290,7 +304,7 @@ async fn pooled(
 ) -> (Pooled, connection::tests::Served) {
     let (url, seen) = connection::tests::serve(script, false).await;
     let conn = connection::tests::dial(&url, "DB_1").await.unwrap();
-    let pool = Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new())));
+    let pool = Arc::new(DbPool::new(Arc::new(lk_agents_net::clock::RealClock::new()), Cx::NONE));
     let pooled =
         Pooled { conn, schema: SchemaCell::default(), pool, closed: AtomicBool::new(false) };
     (pooled, seen)
@@ -563,4 +577,255 @@ async fn thread_calls_end_at_the_storage_deadline() {
     let write = crate::deadline::within(soon(), storage.update_thread(update)).await;
     assert!(matches!(write, Err(StorageError::Uncertain(_))), "{write:?}");
     storage.close().await;
+}
+
+/// Runs `request`, stepping `clock` 2 ms at a time once the tasks have run what they can; the
+/// virtual instants at which `seen` first held each further frame `kind` picks.
+async fn frames_over_virtual_time<T>(
+    clock: &lk_agents_abi::VirtualClock,
+    seen: &connection::tests::Served,
+    kind: fn(&connection::wire::ClientMessage) -> bool,
+    request: impl Future<Output = T>,
+) -> (T, Vec<Ts>) {
+    let (mut request, mut at) = (std::pin::pin!(request), Vec::new());
+    loop {
+        for _ in 0..20 {
+            let poll = std::future::poll_fn(|cx| std::task::Poll::Ready(request.as_mut().poll(cx)));
+            if let std::task::Poll::Ready(out) = poll.await {
+                at.resize(frames(seen, kind), clock.now());
+                return (out, at);
+            }
+            tokio::task::yield_now().await;
+        }
+        at.resize(frames(seen, kind), clock.now());
+        clock.advance(Duration::from_millis(2));
+        assert!(clock.now() < Ts::from_nanos(60_000_000_000), "the request never ended");
+    }
+}
+
+/// Catches: a database answering every request `wrong_shard_server` or `retry` (1003) resending
+/// it in a zero-delay loop. Only a moved request's first resend is immediate; every later one
+/// waits a jittered backoff (at least half of 100 ms, doubling), its retry owner's or its
+/// redial's, and the retries stop before the caller's deadline. Reads and writes alike reach
+/// their caller `Unavailable`.
+#[tokio::test]
+async fn a_request_refused_on_every_attempt_backs_off_until_its_deadline() {
+    fn moving(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        match is_query(m) || is_batch(m) {
+            true => vec![connection::tests::error(ErrorCode::WRONG_SHARD_SERVER, "moved")],
+            false => connection::tests::script(m),
+        }
+    }
+    fn busy(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        match is_query(m) || is_batch(m) {
+            true => vec![connection::tests::error(ErrorCode::RETRY, "snapshot too old")],
+            false => connection::tests::script(m),
+        }
+    }
+    type Script = fn(&connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage>;
+    let ms = Duration::from_millis;
+    for (name, script, immediate) in [("moved", moving as Script, 2), ("retry", busy, 1)] {
+        for write in [false, true] {
+            let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+            let (url, seen) = connection::tests::serve(script, false).await;
+            let background = crate::testing::background();
+            let opts = connection::Options::new(url, "DB_1");
+            let minter = TokenMinter::new("devkey", "secret").unwrap();
+            let conn = Conn::dial(
+                opts,
+                minter,
+                background.spawner,
+                clock.clone(),
+                crate::telemetry::Cx::NONE,
+            )
+            .await
+            .unwrap();
+            let pool = Arc::new(DbPool::new(clock.clone(), Cx::NONE));
+            let pooled = Pooled {
+                conn,
+                schema: SchemaCell::default(),
+                pool,
+                closed: AtomicBool::new(false),
+            };
+            let deadline = clock.now().saturating_add(crate::deadline::REQUEST_TIMEOUT + ms(1000));
+            let kind = if write { is_batch } else { is_query };
+            let request = crate::deadline::within(deadline, async {
+                let statement = Statement::raw("UPDATE t SET n = 1");
+                let out = match write {
+                    true => {
+                        let clock = pooled.pool.clock.clone();
+                        let resend = Resend::new(clock, &Cx::NONE, StorageWrite::Context);
+                        resend.send(|| pooled.batch(vec![statement.clone()])).await.map(drop)
+                    }
+                    false => pooled.query(statement.clone()).await.map(drop),
+                };
+                pooled.conn.aclose().await;
+                out
+            });
+            let (out, at) = frames_over_virtual_time(&clock, &seen, kind, request).await;
+            let case = format!("{name}, write {write}: {at:?}");
+            assert!(matches!(out, Err(StorageError::Unavailable(_))), "{case}: {out:?}");
+            // the moved request went out again with no backoff
+            assert!(at[immediate - 1] < Ts::ZERO.saturating_add(ms(40)), "{case}");
+            // each later attempt waited at least half its step (50 ms), less the ticks a frame
+            // can take to be seen; a zero-delay loop shows a tick or two
+            for pair in at[immediate - 1..].windows(2) {
+                assert!(pair[1].saturating_duration_since(pair[0]) >= ms(30), "{case}");
+            }
+            // a resend starts only while a whole request fits before the deadline: within the
+            // first second, a few doubling steps
+            assert!(*at.last().unwrap() < deadline && at.len() <= 2 * 5, "{case}");
+        }
+    }
+}
+
+/// agent-db lists with pages of 50 by default and 100 at most, project-wide with no scope and no
+/// sort order; a row it answers with activity and expiry reaches the host without them.
+#[tokio::test]
+async fn cloud_thread_listing_caps_pages() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let heads = Arc::new(Mutex::new(Vec::new()));
+    let seen = heads.clone();
+    let peer = lk_agents_net::task::TokioSpawner::current().spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut bytes = [0; 4096];
+            while !request.ends_with(b"\r\n\r\n") {
+                let n = socket.read(&mut bytes).await.unwrap();
+                assert_ne!(n, 0);
+                request.extend_from_slice(&bytes[..n]);
+            }
+            seen.lock().push(String::from_utf8(request).unwrap());
+            let body = serde_json::to_vec(&json!({
+                "items": [{
+                    "threadId": "AT_1", "scope": "user:1", "attributes": {"title": "Renewal"},
+                    "createdAt": "2026-01-01T00:00:00Z", "lastActive": "2026-01-02T00:00:00Z",
+                    "expiresAt": "2026-01-03T00:00:00Z", "idleTtl": "86400s"
+                }],
+                "pageInfo": {"nextCursor": "next", "hasMore": true}
+            }))
+            .unwrap();
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len(),
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+        }
+    });
+    let storage = Namespace::new(
+        &ProcessEnv::current_runtime(),
+        None,
+        Some(url),
+        Some("key".into()),
+        Some("secret".into()),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let page = storage.list_threads(None, None, None).await.unwrap();
+    assert_eq!(page.next_page_token, "next");
+    let row = &page.threads[0];
+    assert_eq!(
+        (row.thread_id.as_str(), row.created_at, row.idle_ttl_seconds),
+        ("AT_1", 1767225600, 86400)
+    );
+    storage.list_threads(None, None, Some(500)).await.unwrap();
+    peer.await.unwrap();
+    storage.aclose().await;
+    let heads = heads.lock();
+    assert!(heads[0].starts_with("GET /v0/projects/p_/threads?"), "{}", heads[0]);
+    assert!(heads[0].contains("page.pageSize=50") && !heads[0].contains("scope="), "{}", heads[0]);
+    assert!(!heads[0].contains("sortOrder"), "{}", heads[0]);
+    assert!(heads[1].contains("page.pageSize=100"), "{}", heads[1]);
+}
+
+/// Catches: an agent-db error answer's `(conn <ref>, request <id>)` lost on the caller's error or
+/// missing from the client's log line, so a customer's error text maps to no agent-db line. A
+/// refused read keeps it on its error, and its line names the connection and the request id the
+/// client sent.
+#[tokio::test]
+async fn an_error_answer_names_its_connection_and_request_on_the_error_and_the_log() {
+    use crate::telemetry::log_keys;
+    fn refused(m: &connection::wire::ClientMessage) -> Vec<connection::wire::ServerMessage> {
+        if is_query(m) {
+            let description = format!("no such table: t (conn k3x9, request {})", m.request_id);
+            return vec![connection::tests::error(ErrorCode::SQL_ERROR, &description)];
+        }
+        connection::tests::script(m)
+    }
+    logs::capture();
+    let (pooled, seen) = pooled(refused).await;
+    let error = pooled.query(Statement::raw("SELECT * FROM t")).await.unwrap_err();
+    let request = seen.lock().iter().find(|m| is_query(m)).unwrap().request_id;
+    let named = format!("(conn k3x9, request {request})");
+    assert!(matches!(&error, StorageError::Invalid(m) if m.ends_with(&named)), "{error:?}");
+    let line = logs::naming("k3x9").expect("the answer's log line");
+    assert_eq!(line.field(log_keys::AGENTDB_REQUEST_ID), Some(request.to_string().as_str()));
+    assert_eq!(line.field(log_keys::AGENTDB_DATABASE_ID), Some("DB_1"));
+    assert_eq!(line.field(log_keys::AGENTDB_CODE), Some("sql_error"));
+    pooled.conn.aclose().await;
+}
+
+/// The `log` lines naming an agent-db connection, with their key-values as text.
+mod logs {
+    use crate::telemetry::log_keys;
+    use parking_lot::Mutex;
+
+    pub(super) struct Line(Vec<(String, String)>);
+
+    impl Line {
+        pub(super) fn field(&self, key: &str) -> Option<&str> {
+            self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        }
+    }
+
+    static LINES: Mutex<Vec<Line>> = Mutex::new(Vec::new());
+
+    struct Fields(Vec<(String, String)>);
+
+    impl<'kvs> log::kv::VisitSource<'kvs> for Fields {
+        fn visit_pair(
+            &mut self,
+            key: log::kv::Key<'kvs>,
+            value: log::kv::Value<'kvs>,
+        ) -> Result<(), log::kv::Error> {
+            self.0.push((key.to_string(), value.to_string()));
+            Ok(())
+        }
+    }
+
+    struct Capture;
+
+    impl log::Log for Capture {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            let mut fields = Fields(Vec::new());
+            if record.key_values().visit(&mut fields).is_ok()
+                && fields.0.iter().any(|(k, _)| k == log_keys::AGENTDB_CONN_REF)
+            {
+                LINES.lock().push(Line(fields.0));
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    /// Makes the capture the test process's logger.
+    pub(super) fn capture() {
+        if log::set_logger(&Capture).is_ok() {
+            log::set_max_level(log::LevelFilter::Trace);
+        }
+    }
+
+    /// The line naming connection `conn_ref`, taken out.
+    pub(super) fn naming(conn_ref: &str) -> Option<Line> {
+        let mut lines = LINES.lock();
+        let i = lines.iter().position(|l| l.field(log_keys::AGENTDB_CONN_REF) == Some(conn_ref))?;
+        Some(lines.remove(i))
+    }
 }

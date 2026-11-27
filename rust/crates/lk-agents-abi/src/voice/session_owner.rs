@@ -83,8 +83,6 @@ pub trait SessionHost: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
     ) -> BoxFuture<'_, Result<Arc<dyn SessionBindingsPort>, HostError>>;
-    #[host(await, name = "started")]
-    fn started(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "closed")]
     fn closed(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     /// The running session's bindings of `providers`, the slots whose effective provider changed

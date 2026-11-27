@@ -64,7 +64,6 @@ job_entrypoint                          job dispatch to entrypoint exit; events 
 │   ├── keyterm_detection > llm_request outside a reply
 │   ├── pause_agent_activity, resume_agent_activity
 │   ├── update_agent > drain_agent_activity > on_exit, start_agent_activity > on_enter
-│   ├── amd > llm_request
 │   ├── event_loop_blocked
 │   ├── rpc_handler
 │   └── session_close > drain_agent_activity > on_exit
@@ -127,7 +126,6 @@ keep true:
 | `realtime_inference`, `realtime_metrics` | realtime TTFT and tokens |
 | `function_tool` | tool stage; tool time per turn; Agent Insights tool duration |
 | `eou_detection` | end-of-turn stage |
-| `amd` | answering-machine rows in the transcript |
 | lifecycle spans (`session_start`, `session_close`, `update_agent`, `job_shutdown`, `rpc_*`, `event_loop_blocked`) | activity rows with titles from their attributes |
 | any other direct child of a container | an activity row titled by its name, colored by substring (`llm`, `tts`, `stt`, `eou`, `tool`, `speaking`) |
 
@@ -146,7 +144,7 @@ framework sends content as recorded and keys it so the redaction finds it.
 | `chat_history.json` is `{"items": [...]}` in the `ChatContext` dictionary shape; `metrics.started_speaking_at` and `stopped_speaking_at` are unix seconds on the header's `start_time` clock | the transcript encoder is golden-tested against that shape |
 | `session_summary` is a JSON object of at most 16 KiB forwarded to agent evaluations (`agent-evals.sessions`); billing reads the audio's own duration | the summary is a declared record within the bound |
 | Metrics sums and histograms must be delta; a record's room is read from the first top-level `room_id` or `roomID` attribute | Cloud metrics are delta; the identity stamp writes `room_id` beside the shared `lk.room_id` |
-| A 401 "project data recording is disabled by owner" applies to every signal | the destination stops for that job and counts the refusal |
+| A 401 "project data recording is disabled by owner" applies to every signal | the destination stops for that job |
 
 Compatibility rules:
 
@@ -241,7 +239,6 @@ and `user_state_changed` (`lk.old_state`, `lk.new_state`),
 | `event_loop_blocked` | the job's first `agent_session`, else the span current when the loop's watch opened | `lk.blocking.duration`, `lk.blocking.threshold` (s), `lk.blocking.severity` (`warning`, `error`), `lk.blocking.stack` (the loop thread's 20 deepest frames, `function (file:line)`, when py-spy can read them), `lk.blocking.import` (the file being imported, if any), `lk.blocking.suppressed` (int); error status at `error` severity; at most 30 per minute; see [Event-loop stalls](telemetry.md#event-loop-stalls) |
 | `rpc_handler` (kind `SERVER`) | `agent_session`, else `job_entrypoint` before the session starts | `rpc.method`, `lk.rpc.request_id`, `lk.rpc.caller_identity`, `lk.rpc.response_timeout` (s), `lk.rpc.handler_registered` (bool), `lk.rpc.payload_size` (int, bytes), `lk.pii.rpc.payload` (first 1024 characters); `lk.rpc.error_code` (int) on error, the SDK's cancel reason (`RESPONSE_TIMEOUT`, `RECIPIENT_DISCONNECTED`) when it cancelled the handler; `lk.rpc.response_size`, `lk.pii.rpc.response` on success |
 | `rpc_call` (kind `CLIENT`) | current | `rpc.method`, `lk.rpc.destination_identity`, `lk.rpc.payload_size`, `lk.pii.rpc.payload`, `lk.rpc.response_timeout`; `lk.rpc.error_code` on error; `lk.rpc.response_size`, `lk.pii.rpc.response` on success |
-| `amd` | `agent_session` | at the verdict: `lk.amd.category` (string), `lk.amd.reason`, `lk.amd.speech_duration`, `lk.amd.delay` (double, s), `lk.pii.amd.transcript` |
 | `keyterm_detection` | the replying `agent_turn`, else `agent_session` | `gen_ai.request.model`, `gen_ai.provider.name` at start; `lk.keyterms.count`, `lk.keyterms.added`, `lk.keyterms.removed` (int) at end |
 
 ### User turn

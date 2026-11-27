@@ -231,7 +231,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     @property
     def provider(self) -> str:
-        return "Ultravox"
+        return "ultravox"
 
     def _ensure_http_session(self) -> http.HttpSession:
         """Ensure HTTP session is available."""

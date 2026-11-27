@@ -30,7 +30,6 @@ pub struct Executor {
 }
 
 /// Owns a source and its registered sink until adoption; dropped unadopted, it closes.
-/// AMD keeps this owner armed throughout its private STT drain.
 pub struct OpeningLeg {
     channel: AudioChannel,
     sink: ResourceId,
@@ -117,17 +116,6 @@ impl OpeningLeg {
 
     pub(super) fn resource(&self) -> ResourceId {
         self.sink
-    }
-
-    pub(super) fn stt_source(&mut self) -> Option<&mut lk_agents_abi::SttSource> {
-        match &mut *self.source {
-            PendingLeg::Stt(source) => Some(source),
-            PendingLeg::Vad(_) => None,
-        }
-    }
-
-    pub(super) async fn close(self) -> Closed {
-        self.source.close().await
     }
 }
 

@@ -204,7 +204,6 @@ pub const fn defaults(legs: &SessionLegs) -> AgentSessionOptions {
                 max_words: Maybe::Given(None),
                 max_duration: Maybe::Given(None),
             },
-            ivr_detection: Some(false),
             push_to_talk: Some(false),
         },
         speech: SpeechOptions {
@@ -309,7 +308,6 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
         min_consecutive_speech_delay,
         expressive: _,
         aec_warmup_duration,
-        ivr_detection,
         user_away_timeout,
         transcription_timeout,
         final_transcript_timeout,
@@ -317,7 +315,6 @@ pub fn session_layer(kw: &SessionKwargs) -> AgentSessionOptions {
     } = kw.clone();
 
     let mut o = turn_handling_layer(&session_turn_handling(kw));
-    o.turn.ivr_detection = Some(ivr_detection);
     o.speech.max_tool_steps = Some(count(max_tool_steps));
     o.speech.min_consecutive_speech_delay = Some(secs(min_consecutive_speech_delay));
     o.timers.user_away = Maybe::Given(user_away_timeout.map(secs));
@@ -375,7 +372,6 @@ pub fn resolved_session_options(
                         max_retries,
                     },
                 user_turn_limit: UserTurnLimitOptions { max_words, max_duration },
-                ivr_detection,
                 push_to_talk,
             },
         speech: SpeechOptions { max_tool_steps, min_consecutive_speech_delay },
@@ -428,7 +424,6 @@ pub fn resolved_session_options(
         },
         max_tool_steps: max_tool_steps.resolved(),
         min_consecutive_speech_delay: secs(min_consecutive_speech_delay.resolved()),
-        ivr_detection: ivr_detection.resolved(),
         user_away_timeout: user_away.resolved().map(secs),
         transcription_timeout: transcription_timeout.resolved().map(secs),
         final_transcript_timeout: secs(final_transcript_timeout.resolved()),

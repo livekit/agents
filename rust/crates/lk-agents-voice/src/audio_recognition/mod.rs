@@ -45,7 +45,7 @@ pub struct CommitInputs<'a> {
     pub rt_turn_detection: bool,
     pub interruption_detection: bool,
     pub backchannel_over_agent: bool,
-    /// After AMD has had its say.
+    /// `commit_user_turn(skip_reply=True)`.
     pub skip_reply: bool,
     /// Started by a final with no onset since the previous commit: a late final.
     pub late: bool,

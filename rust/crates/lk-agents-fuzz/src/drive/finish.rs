@@ -161,25 +161,10 @@ impl Run {
             (0..self.outstanding(Input::ClaimUserTurn {}, Input::ReleaseUserTurn {}))
                 .map(|_| Input::ReleaseUserTurn {}),
         );
-        // A latched pause stops the scheduler authorizing anything at all, so a speech waiting on
-        // it is waiting on the case, not on the driver.
-        out.extend(
-            (0..self.outstanding(Input::PauseAuthorization {}, Input::ResumeAuthorization {}))
-                .map(|_| Input::ResumeAuthorization {}),
-        );
         // A turn left mid-decision parks forever. `ClearTurn` is the product's neutral release; a
         // synthetic final would invent caller words and a commit would ask for a reply.
         if self.turn_undecided() {
             out.push(Input::ClearTurn {});
-        }
-        // A navigator the case started is the case's to close: left running, it prompts again at
-        // every silence and the release never gets quiet.
-        if self.ivr_navigating() {
-            out.push(Input::Ivr {
-                input: IvrInput::Close,
-                silence: Millis(0),
-                text: UserText(String::new()),
-            });
         }
         out
     }
@@ -218,23 +203,6 @@ impl Run {
             count(|s| matches!(s, Step::Speech(SpeechStep::StepSpoken { .. }))),
             count(|s| matches!(s, Step::Emitted(SessionEvent::SpeechCreated { .. }))),
         )
-    }
-
-    /// Whether the IVR navigator has acted since the case last closed it: the navigator's own
-    /// triggers, against the case's closes, in order.
-    fn ivr_navigating(&self) -> bool {
-        let last_close = self
-            .record
-            .sent(|i| matches!(i, Input::Ivr { input: IvrInput::Close, .. }).then_some(()))
-            .filter(|(_, (), accepted)| *accepted)
-            .map(|(at, (), _)| at.seq)
-            .last();
-        self.record
-            .journal_where(|step| match step {
-                Step::Detector(DetectorStep::IvrTriggered { .. }) => Some(()),
-                _ => None,
-            })
-            .any(|(at, ())| last_close.is_none_or(|close| at.seq > close))
     }
 
     /// How far to move the clock in one release round: just past the furthest deadline the driver
@@ -322,11 +290,11 @@ impl Run {
     /// Every deadline the driver journalled, in milliseconds, and whether it is the recorder's
     /// periodic flush: its timers, and the retries it waits out on its own.
     fn deadlines(&self) -> impl Iterator<Item = (bool, u64)> + '_ {
-        use lk_agents_voice::{agent_session::effects::Timer, trace::TimerName};
+        use lk_agents_voice::agent_session::effects::Timer;
         self.record
             .journal_where(|step| match step {
                 Step::Core(CoreStep::TimerArmed { timer, at }) => {
-                    Some((*timer == TimerName::Session(Timer::RecorderFlush), *at))
+                    Some((*timer == Timer::RecorderFlush, *at))
                 }
                 Step::Generation(GenerationStep::RetryArmed { at, .. }) => Some((false, *at)),
                 // A playout taking a missing finish as lost once its margin passes.

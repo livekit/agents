@@ -8,6 +8,7 @@ use livekit_protocol::agent::agent_thread::{
 };
 
 use crate::StorageError;
+use crate::backends::thread_page_limit;
 use crate::cursor::Cursor;
 use crate::sql::{Bind, Cells, Row, SqlValue, Statement, statement};
 use crate::thread::db;
@@ -24,10 +25,6 @@ pub use connection::{FileConnection, Workers, batch, query, sqlite_error};
 
 // `registry.sqlite` holds metadata and `threads/<AT_id>.sqlite` each thread; processes sharing a
 // directory coordinate through database leases and fences.
-
-/// The largest `ListThreads` page.
-const MAX_THREAD_PAGE: i32 = 200;
-const DEFAULT_THREAD_PAGE: i32 = 100;
 
 /// A local thread id: `AT_` then letters, digits, `-` or `_`; anything else is refused before a
 /// path is built from it.
@@ -49,7 +46,9 @@ const REGISTRY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS threads (
   expires_at INTEGER NOT NULL
 )";
 
-const REGISTRY_SCOPE_INDEX: &str = "CREATE INDEX IF NOT EXISTS threads_scope_activity ON threads (scope, last_active DESC, thread_id DESC)";
+// A scope's listing seeks this index; the project's seeks the primary key.
+const REGISTRY_SCOPE_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS threads_scope ON threads (scope, thread_id)";
 
 // One current registry format; unreleased layouts are not migrated.
 const REGISTRY_METADATA: &str = "CREATE TABLE IF NOT EXISTS registry_schema (
@@ -89,21 +88,21 @@ VALUES (:thread_id, :scope, :attributes, :now, :now, :idle_ttl, :expires_at)
 "#
 }
 
+// One page of live threads by id, past the previous page's last id: a scope's or the project's.
 statement! {
-    /// One page of a scope's live threads, last active first, then by id, past the previous
-    /// page's last row, `(before_at, before_id)`.
-    SelectRegistryPage<'a> {
-        scope: &'a str,
-        now: i64,
-        before_at: i64,
-        before_id: &'a str,
-        limit: i64,
-    } => r#"
+    SelectScopeThreads<'a> { scope: &'a str, now: i64, after: &'a str, limit: i64 } => r#"
 SELECT thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at
-FROM threads WHERE scope = :scope
+FROM threads WHERE scope = :scope AND thread_id > :after
   AND (expires_at = 0 OR expires_at > :now)
-  AND (last_active < :before_at OR (last_active = :before_at AND thread_id < :before_id))
-ORDER BY last_active DESC, thread_id DESC LIMIT :limit
+ORDER BY thread_id LIMIT :limit
+"#
+}
+
+statement! {
+    SelectAllThreads<'a> { now: i64, after: &'a str, limit: i64 } => r#"
+SELECT thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at
+FROM threads WHERE thread_id > :after AND (expires_at = 0 OR expires_at > :now)
+ORDER BY thread_id LIMIT :limit
 "#
 }
 
@@ -302,36 +301,26 @@ impl Storage for SqliteStorage {
         self.live(thread_id).await
     }
 
-    /// Last active first, then by id; the cursor is bound to its scope.
     async fn list_threads(&self, request: ListRequest) -> Result<ListResponse, StorageError> {
-        let limit = match request.limit {
-            0 => DEFAULT_THREAD_PAGE,
-            n => n.clamp(1, MAX_THREAD_PAGE),
+        let limit = thread_page_limit(request.limit);
+        let scope = request.scope.as_str();
+        let listing = ("threads", scope);
+        let after = Cursor::position(Some(&request.page_token), listing, String::new())?;
+        let (now, after, limit_plus_one) = (self.now_ms(), after.as_str(), i64::from(limit) + 1);
+        let select = if scope.is_empty() {
+            SelectAllThreads { now, after, limit: limit_plus_one }.bind()
+        } else {
+            SelectScopeThreads { scope, now, after, limit: limit_plus_one }.bind()
         };
-        let listing = ("threads", &request.scope);
-        let (before_at, before_id) =
-            Cursor::position(Some(&request.page_token), listing, (i64::MAX, String::new()))?;
-        let select = SelectRegistryPage {
-            scope: &request.scope,
-            now: self.now_ms(),
-            before_at,
-            before_id: &before_id,
-            limit: i64::from(limit + 1),
-        }
-        .bind();
         let rows = self.registry.query(select).await?;
-        let mut threads =
-            rows.iter().map(|r| thread_record(r).map(|(t, _)| t)).collect::<Result<Vec<_>, _>>()?;
-        let more = threads.len() > limit as usize;
-        threads.truncate(limit as usize);
+        let mut threads = Vec::with_capacity(rows.len());
+        for row in rows.iter().take(limit as usize) {
+            let (mut thread, _) = thread_record(row)?;
+            (thread.last_active, thread.expires_at) = (None, None);
+            threads.push(thread);
+        }
         let next_page_token = match threads.last() {
-            Some(t) if more => {
-                let at = t
-                    .last_active
-                    .as_ref()
-                    .map_or(0, |c| c.seconds * 1000 + i64::from(c.nanos) / 1_000_000);
-                Cursor::encode(listing, (at, &t.thread_id))
-            }
+            Some(last) if rows.len() > limit as usize => Cursor::encode(listing, &last.thread_id),
             _ => String::new(),
         };
         Ok(ListResponse { threads, next_page_token })
@@ -392,8 +381,10 @@ impl Storage for SqliteStorage {
 mod tests {
     use super::*;
 
+    /// Each listing seeks an index: a page reads its rows, never sorts the registry, whichever
+    /// scope it lists.
     #[test]
-    fn registry_pages_seek_by_scope_without_sorting() {
+    fn registry_pages_seek_without_sorting() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute(REGISTRY_SCHEMA, []).unwrap();
         conn.execute(REGISTRY_SCOPE_INDEX, []).unwrap();
@@ -406,21 +397,23 @@ mod tests {
         .unwrap();
         conn.execute("INSERT INTO threads VALUES ('AT_wanted', 'wanted', '{}', 1, 1, 0, 0)", [])
             .unwrap();
-        let mut statement = conn.prepare(SelectRegistryPage::SQL).unwrap();
-        let ids = statement
-            .query_map(
-                rusqlite::named_params! {
-                    ":scope": "wanted", ":now": 0, ":before_at": i64::MAX,
-                    ":before_id": "", ":limit": 10,
-                },
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        assert_eq!(ids, ["AT_wanted"]);
-        assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
-        assert!(statement.get_status(rusqlite::StatementStatus::VmStep) < 500);
+        type Params<'a> = &'a [(&'a str, &'a dyn rusqlite::ToSql)];
+        let cases: [(&str, Params); 2] =
+            [(SelectScopeThreads::SQL, &[(":scope", &"wanted")]), (SelectAllThreads::SQL, &[])];
+        for (sql, scope) in cases {
+            let mut statement = conn.prepare(sql).unwrap();
+            let mut params: Vec<(&str, &dyn rusqlite::ToSql)> =
+                vec![(":now", &0), (":after", &""), (":limit", &10)];
+            params.extend_from_slice(scope);
+            let ids = statement
+                .query_map(params.as_slice(), |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(ids.len(), if scope.is_empty() { 10 } else { 1 }, "{sql}");
+            assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0, "{sql}");
+            assert!(statement.get_status(rusqlite::StatementStatus::VmStep) < 500, "{sql}");
+        }
     }
 
     /// Each registry read returns the columns `thread_record` reads, in its order.
@@ -428,7 +421,7 @@ mod tests {
     fn registry_reads_return_thread_record_columns() {
         let columns = "thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at";
         let one_line = |sql: &str| sql.split_whitespace().collect::<Vec<_>>().join(" ");
-        for sql in [SelectRegistryThread::SQL, SelectRegistryPage::SQL] {
+        for sql in [SelectRegistryThread::SQL, SelectScopeThreads::SQL, SelectAllThreads::SQL] {
             assert!(one_line(sql).starts_with(&format!("SELECT {columns} FROM")), "{sql}");
         }
         let update = one_line(UpdateRegistryThread::SQL);

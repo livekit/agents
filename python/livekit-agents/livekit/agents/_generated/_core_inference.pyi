@@ -64,12 +64,6 @@ def tts_markup_provider_key(model: str) -> str:
 def min_reasoning_effort(model: str) -> str | None:
     """The lowest reasoning effort the model supports, or `None` if it has no such control."""
 
-def amd_auto_select_models(livekit_url: str, api_key: str, api_secret: str) -> bool:
-    """Whether AMD may fill in its own LLM and STT from the gateway (`detector.py:184-194`)."""
-
-def amd_is_evaluated_model(model: str, kind: str) -> bool:
-    """Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table."""
-
 def llm_unsupported_params(
     model: str,
     *,

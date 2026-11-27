@@ -10,7 +10,7 @@ use crate::agent_session::effects::{AudioOp, VoiceEffect};
 use crate::agent_session::effects::{GateCause, GateOp, Timer};
 use crate::agent_session::machine::activity::scheduling::{PreemptiveDiscard, SpeechId, Status};
 use crate::agent_session::options::AgentSessionOptions;
-use crate::agent_session::{Answer, RequestId, VoiceCommandOrigin, VoiceDriver};
+use crate::agent_session::{Answer, RequestId, VoiceDriver};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechError;
@@ -238,20 +238,10 @@ pub enum TurnSettled {
 }
 
 impl VoiceDriver {
-    /// `session.interrupt()`, or the AMD's verdict: a detector's cut, not a host interrupt, so
-    /// it records no `HostInterrupt` step.
+    /// `session.interrupt()`.
     pub(crate) fn host_interrupt_all(&mut self, now: Ts, force: bool, call: Option<RequestId>) {
-        let cause = match self.command_origin {
-            VoiceCommandOrigin::Amd => InterruptCause::Detector,
-            VoiceCommandOrigin::Host
-            | VoiceCommandOrigin::Tool { .. }
-            | VoiceCommandOrigin::Hook { .. }
-            | VoiceCommandOrigin::Ivr => InterruptCause::Host,
-        };
-        if cause == InterruptCause::Host {
-            self.record_trace(InterruptStep::HostInterrupt { speech: None, force });
-        }
-        match self.interrupt_all(now, force, cause) {
+        self.record_trace(InterruptStep::HostInterrupt { speech: None, force });
+        match self.interrupt_all(now, force, InterruptCause::Host) {
             Ok(speeches) => {
                 self.activity.interrupt_waiters.push(InterruptWaiter { speeches, call })
             }
@@ -808,8 +798,7 @@ impl VoiceDriver {
                 socket_told = self.activity.is_realtime_speech(id);
             }
         }
-        // The next speech (AMD's hold, or the consecutive-speech gap) counts as current, so AMD's
-        // forced interrupt cuts the reply made under the hold.
+        // The next speech, behind the consecutive-speech gap, counts as current.
         let candidate = self.activity.speech_scheduler.next_speech();
         if let Some(id) = candidate.filter(|id| !kept.contains(id))
             && self.interrupt_or_refuse(now, id, force, cause)?

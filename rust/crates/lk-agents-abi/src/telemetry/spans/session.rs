@@ -4,7 +4,7 @@ use super::job::JobEntrypoint;
 use crate::telemetry::decl::{Attrs, Content, Current, Seconds, SpanValue, event, span};
 use crate::telemetry::semconv::{otel, protocol};
 use crate::voice::events::{AgentState, UserState};
-use crate::voice::{amd, rtc};
+use crate::voice::rtc;
 
 /// The agent session, `session.start()` to the end of close.
 #[span(
@@ -365,54 +365,6 @@ pub struct RpcEnd {
     /// A handler is registered for the method: false once the call failed as unsupported.
     #[attr("lk.rpc.handler_registered")]
     pub handler_registered: Option<bool>,
-}
-
-/// Answering-machine detection, from the detector's attach to its verdict.
-#[span(name = "amd", parent = AgentSession, end = Option<AmdVerdict>, handle = Manual)]
-#[derive(Attrs)]
-pub struct Amd;
-
-#[derive(Attrs)]
-pub struct AmdVerdict {
-    /// AMD classification.
-    #[attr("lk.amd.category")]
-    pub category: AmdCategory,
-    /// Why the detector decided.
-    #[attr("lk.amd.reason")]
-    pub reason: String,
-    /// Seconds of speech the detector heard.
-    #[attr("lk.amd.speech_duration")]
-    pub speech_duration: Seconds,
-    /// Seconds from the call start to the verdict.
-    #[attr("lk.amd.delay")]
-    pub delay: Seconds,
-    /// The transcript the verdict was made on.
-    #[attr("lk.pii.amd.transcript")]
-    pub transcript: Content<String>,
-}
-
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AmdCategory {
-    Human,
-    #[wire = "machine-ivr"]
-    MachineIvr,
-    #[wire = "machine-vm"]
-    MachineVm,
-    #[wire = "machine-unavailable"]
-    MachineUnavailable,
-    Uncertain,
-}
-
-impl From<amd::AmdCategory> for AmdCategory {
-    fn from(category: amd::AmdCategory) -> Self {
-        match category {
-            amd::AmdCategory::Human => Self::Human,
-            amd::AmdCategory::MachineIvr => Self::MachineIvr,
-            amd::AmdCategory::MachineVm => Self::MachineVm,
-            amd::AmdCategory::MachineUnavailable => Self::MachineUnavailable,
-            amd::AmdCategory::Uncertain => Self::Uncertain,
-        }
-    }
 }
 
 /// Keyterm detection over the conversation, under the replying turn or the session.

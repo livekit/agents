@@ -73,9 +73,8 @@ pub(crate) struct VoiceSessionState {
     /// `session.output` as the core decides with it.
     pub(crate) outputs: Outputs,
     pub(crate) output_bindings: machine::output::OutputBindings,
-    /// `AgentSession._tools`, and the hosts that run them.
+    /// `AgentSession._tools`.
     pub(crate) tools: crate::tool_executor::Toolset,
-    pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
     pub(crate) keyterms: Option<crate::keyterm_detection::KeytermSlot>,
     /// `stt_context_options["forward_chat_context"]` (default on).
     pub(crate) forward_chat_context: bool,
@@ -91,8 +90,6 @@ pub(crate) struct VoiceSessionState {
     pub(crate) providers: std::collections::BTreeSet<lk_agents_abi::resources::ResourceId>,
     /// `expressive=`, the session's and the active agent's.
     pub(crate) expressive: crate::generation::ExpressiveLayers,
-    /// `session._amd._on_end_of_turn(info)` would answer `True`: the AMD's (`SkipReplies`).
-    pub(crate) amd_skips_replies: bool,
     /// The session's span (`agent_session`), from `start()` to the end of the close.
     pub(crate) span: Option<crate::telemetry::ManualSpan<crate::telemetry::AgentSession>>,
     /// The opening's `session_start`, until it and the first agent's activity are done.
@@ -100,8 +97,6 @@ pub(crate) struct VoiceSessionState {
     /// The close's `session_close`, from its request to the close. It opens before `closing`
     /// exists: the exits the request issues run under it.
     pub(crate) closing_span: Option<crate::telemetry::ManualSpan<crate::telemetry::SessionClose>>,
-    /// The answering-machine detection, from the detector's attach to its verdict.
-    pub(crate) amd: Option<crate::telemetry::AmdDetection>,
     /// The event-loop stalls, which `agent_session` ends with.
     pub(crate) blocking: crate::telemetry::Blocking,
     /// The turn span of each chat item, for the session report.
@@ -183,7 +178,6 @@ impl VoiceSessionState {
             outputs,
             output_bindings: Default::default(),
             tools: Default::default(),
-            tool_hosts: Vec::new(),
             keyterms: None,
             forward_chat_context: true,
             recorder: crate::agent_session::RecorderIo::new(start_recorder),
@@ -193,11 +187,9 @@ impl VoiceSessionState {
             idle: IdleHolds::default(),
             providers: Default::default(),
             expressive: Default::default(),
-            amd_skips_replies: false,
             span: None,
             starting: None,
             closing_span: None,
-            amd: None,
             blocking: Default::default(),
             item_turns: Default::default(),
             storage: storage::StorageTurns::new(storage_enabled),
@@ -263,22 +255,6 @@ impl VoiceSessionState {
     /// Past the hard edge no command may take effect any more.
     pub(crate) fn closing_past_edge(&self) -> bool {
         self.close_phase().is_some_and(ClosePhase::past_edge)
-    }
-
-    /// `AgentSession._tools.extend(tools)`: new names join every request from this command on (no
-    /// `AgentConfigUpdate`, as in the reference). The names added.
-    pub(crate) fn extend_tools(&mut self, tools: crate::tool_executor::Toolset) -> Vec<String> {
-        let mut added = Vec::new();
-        for spec in tools.specs {
-            if !self.tools.specs.iter().any(|o| o.name == spec.name) {
-                added.push(spec.name.clone());
-                self.tools.specs.push(spec);
-            }
-        }
-        if !added.is_empty() {
-            self.tool_hosts.extend(tools.host);
-        }
-        added
     }
 
     /// `NotGiven` keeps the provider; `Given(None)` clears it. A new one is prewarmed; in-flight

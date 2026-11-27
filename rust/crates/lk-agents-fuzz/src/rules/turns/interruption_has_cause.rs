@@ -95,8 +95,7 @@ impl Rule for InterruptionHasCause {
                             speech: owner, ..
                         }) if owner.0 == speech)
                 }),
-                InterruptCause::Detector
-                | InterruptCause::Superseded
+                InterruptCause::Superseded
                 | InterruptCause::ScheduleRejected => true,
             };
             check.expect(

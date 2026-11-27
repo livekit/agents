@@ -5,7 +5,6 @@ pub mod console;
 
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::usage::{ModelUsage, Usage};
-use lk_agents_abi::voice::amd::AmdCategory;
 use lk_agents_abi::voice::events::{AgentState, ToolEndStatus, ToolReplyStatus};
 pub use lk_agents_abi::worker::remote_session::{
     AgentInfo, FrameworkInfo, IoUpdate, RemoteSessionState, RtcStats, SessionPort,
@@ -36,16 +35,6 @@ fn encode_user_state(s: UserState) -> proto::UserState {
         UserState::Speaking => proto::UserState::UsSpeaking,
         UserState::Listening => proto::UserState::UsListening,
         UserState::Away => proto::UserState::UsAway,
-    }
-}
-
-fn encode_amd_category(c: AmdCategory) -> proto::AmdCategory {
-    match c {
-        AmdCategory::Human => proto::AmdCategory::AmdHuman,
-        AmdCategory::MachineIvr => proto::AmdCategory::AmdMachineIvr,
-        AmdCategory::MachineVm => proto::AmdCategory::AmdMachineVm,
-        AmdCategory::MachineUnavailable => proto::AmdCategory::AmdMachineUnavailable,
-        AmdCategory::Uncertain => proto::AmdCategory::AmdUncertain,
     }
 }
 
@@ -109,15 +98,7 @@ pub fn encode_wire(
         WireEvent::SessionUsageUpdated(v) => Event::SessionUsageUpdated(pb::SessionUsageUpdated {
             usage: Some(encode_session_usage(&v.usage)),
         }),
-        // Not `AgentSession` events: the AMD and EOT back-channels.
-        WireEvent::AmdPrediction(v) => Event::AmdPrediction(pb::AmdPrediction {
-            speech_duration: Some(encode_duration_secs(v.speech_duration)),
-            category: encode_amd_category(v.category) as i32,
-            reason: v.reason,
-            transcript: v.transcript,
-            delay: Some(encode_duration_secs(v.delay)),
-            ..Default::default()
-        }),
+        // Not an `AgentSession` event: the EOT back-channel.
         WireEvent::EotPrediction(v) => Event::EotPrediction(pb::EotPrediction {
             // `as f32`, as the reference narrows a float to the proto's `float`.
             probability: v.probability as f32,
@@ -222,7 +203,7 @@ fn tool_update_wire(update: &lk_agents_abi::voice::events::ToolUpdate) -> ToolUp
 }
 
 /// The session events `SessionHost` forwards to the client (`register_session`'s handlers, and the
-/// AMD and end-of-turn back-channels), in their wire shapes, each with the stamp it keeps: a user
+/// end-of-turn back-channel), in their wire shapes, each with the stamp it keeps: a user
 /// state change is back-dated to the speech boundary, every other event is sent stamped now. The
 /// conversation items are the ones `conversation_item_added` is emitted for (messages and
 /// handoffs); the core's other session events have no wire form here.
@@ -230,9 +211,7 @@ pub fn session_event(
     wire: &lk_agents_abi::voice::events::HostWire,
 ) -> Option<(WireEvent, Option<f64>)> {
     use lk_agents_abi::voice::events::HostWire as W;
-    use lk_agents_abi::worker::remote_session::{
-        AmdPredictionWire, ErrorWire, OverlappingSpeechWire,
-    };
+    use lk_agents_abi::worker::remote_session::{ErrorWire, OverlappingSpeechWire};
     let event = match wire {
         W::AgentStateChanged(ev) => WireEvent::AgentStateChanged(ev.clone()),
         W::UserStateChanged(ev) => {
@@ -240,13 +219,6 @@ pub fn session_event(
         }
         W::UserTranscript(ev) => WireEvent::UserInputTranscribed(ev.clone()),
         W::EotPrediction(ev) => WireEvent::EotPrediction(ev.clone()),
-        W::AmdResult(p) => WireEvent::AmdPrediction(AmdPredictionWire {
-            speech_duration: p.speech_duration.as_secs_f64(),
-            category: p.category,
-            reason: p.reason.as_str().to_owned(),
-            transcript: p.transcript.clone(),
-            delay: p.delay.as_secs_f64(),
-        }),
         W::AgentFalseInterruption(ev) => WireEvent::AgentFalseInterruption(ev.clone()),
         W::ItemAdded(ev) if matches!(ev.item, ChatItem::Message(_) | ChatItem::AgentHandoff(_)) => {
             WireEvent::ConversationItemAdded(Box::new(ev.clone()))

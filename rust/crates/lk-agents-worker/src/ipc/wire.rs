@@ -82,6 +82,8 @@ pub struct Hello {
     pub http_proxy: Option<String>,
     /// Silence from the worker past this long means it is gone: the child stops.
     pub health_timeout_ms: Option<u64>,
+    /// The command that started the worker, which the job's runner reads.
+    pub launch: lk_agents_abi::telemetry::runner::Launch,
 }
 
 pub use lk_agents_abi::worker::job::StartJob;

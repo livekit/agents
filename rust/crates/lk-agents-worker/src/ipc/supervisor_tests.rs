@@ -374,7 +374,12 @@ fn job() -> StartJob {
 }
 
 fn hello() -> Hello {
-    Hello { asyncio_debug: false, http_proxy: None, health_timeout_ms: None }
+    Hello {
+        asyncio_debug: false,
+        http_proxy: None,
+        health_timeout_ms: None,
+        launch: lk_agents_abi::telemetry::runner::Launch::None,
+    }
 }
 
 /// The supervisor's diagnostics and the runner it launched, as the test drives them.

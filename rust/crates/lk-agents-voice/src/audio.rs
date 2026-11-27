@@ -44,7 +44,6 @@ pub fn audio_gate(i: &GateInputs) -> bool {
 /// | `Realtime`     | `Raw`       | `Substituted` |
 /// | `Eot`          | `Converted` | `Substituted` |
 /// | `Interruption` | `Converted` | `Real`        |
-/// | `Amd`          | `Raw`       | `Real`        |
 ///
 /// `Interruption` hears the user while the agent speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, lk_agents_abi::Vocabulary)]
@@ -54,7 +53,6 @@ pub enum AudioChannel {
     Realtime,
     Eot,
     Interruption,
-    Amd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,20 +64,17 @@ pub enum Feed {
 }
 
 impl AudioChannel {
-    pub const ALL: [AudioChannel; 6] = [
+    pub const ALL: [AudioChannel; 5] = [
         AudioChannel::Stt,
         AudioChannel::Vad,
         AudioChannel::Realtime,
         AudioChannel::Eot,
         AudioChannel::Interruption,
-        AudioChannel::Amd,
     ];
 
     pub const fn feed(self) -> Feed {
         match self {
-            AudioChannel::Stt | AudioChannel::Vad | AudioChannel::Realtime | AudioChannel::Amd => {
-                Feed::Raw
-            }
+            AudioChannel::Stt | AudioChannel::Vad | AudioChannel::Realtime => Feed::Raw,
             AudioChannel::Eot | AudioChannel::Interruption => Feed::Converted,
         }
     }
@@ -98,7 +93,6 @@ impl AudioChannel {
             AudioChannel::Realtime => Leg::Realtime,
             AudioChannel::Eot => Leg::Eot,
             AudioChannel::Interruption => Leg::Interruption,
-            AudioChannel::Amd => Leg::Amd,
         }
     }
 }
