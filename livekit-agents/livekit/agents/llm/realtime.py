@@ -24,7 +24,9 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 @dataclass
 class InputSpeechStartedEvent:
-    pass
+    started_at: float | None = None
+    """When the user began speaking, set by a provider whose event marks the user's own speech;
+    its speech events then bound the ``user_turn`` span when no VAD or STT does."""
 
 
 @dataclass

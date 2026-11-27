@@ -216,11 +216,14 @@ def _maybe_json(raw: str) -> Any:
         return raw
 
 
-def to_system_instructions(chat_ctx: ChatContext) -> list[dict[str, Any]]:
+def to_system_instructions(source: ChatContext | str) -> list[dict[str, Any]]:
     """LiveKit carries an agent's instructions as the ``system``/``developer`` messages the
     chat context starts with, but they originate from ``Agent(instructions=...)`` rather
-    than from the conversation, so they are reported as instructions rather than history."""
-    return _instruction_parts(_split_instructions(chat_ctx.items)[0])
+    than from the conversation, so they are reported as instructions rather than history.
+    A realtime model takes them out of band instead, so that path passes the string."""
+    if isinstance(source, str):
+        return [_text_part(source)] if source else []
+    return _instruction_parts(_split_instructions(source.items)[0])
 
 
 def to_input_messages(chat_ctx: ChatContext) -> list[dict[str, Any]]:

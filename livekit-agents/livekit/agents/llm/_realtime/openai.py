@@ -1923,9 +1923,10 @@ class RealtimeSession(
     def _handle_input_audio_buffer_speech_started(
         self, event: InputAudioBufferSpeechStartedEvent
     ) -> None:
+        started_at = time.time()
         if event.item_id:
-            self._input_speech_started_at[event.item_id] = time.time()
-        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+            self._input_speech_started_at[event.item_id] = started_at
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent(started_at=started_at))
 
     def _handle_input_audio_buffer_speech_stopped(
         self, _: InputAudioBufferSpeechStoppedEvent

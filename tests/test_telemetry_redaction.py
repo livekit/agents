@@ -337,6 +337,7 @@ SAFE_KEYS = frozenset(
         "lk.eou.endpointing_delay",
         "lk.eou.language",
         "lk.transcript_confidence",
+        "lk.user_turn.start_estimated",
         "lk.stt.events",
         "lk.transcription_delay",
         "lk.end_of_turn_delay",

@@ -71,6 +71,8 @@ def _make_recognition(
     ar._speech_start_time = None
     # only reached by the stt-mode END_OF_SPEECH / START_OF_SPEECH branches
     ar._user_turn_span = None
+    ar._held_user_turn = None
+    ar._realtime_transcription = False
     ar._user_turn_start = None
     ar._turn_detector_stream = None
     ar._eou_wait_span = None

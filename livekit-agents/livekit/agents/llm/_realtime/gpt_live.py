@@ -1012,7 +1012,10 @@ class GPTLiveSession(
                 )
             )
             if role == "user":
-                self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+                self.emit(
+                    "input_speech_started",
+                    llm.InputSpeechStartedEvent(started_at=speech.started_at),
+                )
         if role == "assistant" and (user := self._speech.get("user")) is not None:
             # the model's transcript reaching past the caller's pause ends their replied turn: it
             # runs behind the caller's, so their words from before it have arrived already

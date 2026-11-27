@@ -250,7 +250,9 @@ def _end_user_turn_span(info: _EndOfTurnInfo) -> None:
 
     Module-level: tests drive the reply tasks with stand-in activities."""
     if info.user_turn_span_adopted and info.user_turn_span is not None:
-        if info.user_turn_span.is_recording():
+        if info.release_user_turn_span is not None:
+            info.release_user_turn_span()
+        elif info.user_turn_span.is_recording():
             info.user_turn_span.end()
         info.user_turn_span_adopted = False
 
@@ -1421,6 +1423,8 @@ class AgentActivity(RecognitionHooks):
             stt_aligned_transcript=bool(self.stt.capabilities.aligned_transcript)
             if self.stt
             else False,
+            realtime_transcription=isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.user_transcription,
         )
         stt_pipeline = reuse_resources.stt_pipeline if reuse_resources else None
         turn_detector_stream = reuse_resources.turn_detector_stream if reuse_resources else None
@@ -2417,11 +2421,18 @@ class AgentActivity(RecognitionHooks):
 
         self._interruption_detected = False
 
-    def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
+    def _on_input_speech_started(self, ev: llm.InputSpeechStartedEvent) -> None:
         # a new turn: the pending judgment is stale, and the new turn's judgment covers it
         self._cancel_delegation_check()
         if self.vad is None or self.using_default_vad:
-            self._session._update_user_state("speaking")
+            turn_span = (
+                self._audio_recognition._on_realtime_speech_started(ev.started_at)
+                if self._audio_recognition is not None and ev.started_at is not None
+                else None
+            )
+            # user_speaking nests under the turn, as it does under a VAD-opened one
+            with tracer.use_span(turn_span) if turn_span is not None else contextlib.nullcontext():
+                self._session._update_user_state("speaking")
             if self._audio_recognition:
                 self._audio_recognition._on_start_of_speech(
                     started_at=time.time(),
@@ -2452,6 +2463,9 @@ class AgentActivity(RecognitionHooks):
                 )
 
             self._session._update_user_state("listening")
+            if self._audio_recognition:
+                # after user_speaking ends, so the turn closes around it
+                self._audio_recognition._on_realtime_speech_stopped()
 
         if ev.user_transcription_enabled:
             self._session._user_input_transcribed(
@@ -2468,6 +2482,19 @@ class AgentActivity(RecognitionHooks):
         )
 
         if ev.is_final:
+            if (
+                self.stt is None
+                and self._audio_recognition is not None
+                and isinstance(self.llm, llm.RealtimeModel)
+            ):
+                self._audio_recognition._on_realtime_user_transcript(
+                    transcript=ev.transcript,
+                    confidence=ev.confidence,
+                    turn_started_at=ev.turn_started_at,
+                    model=self.llm.model,
+                    provider=self.llm.provider,
+                )
+
             msg = llm.ChatMessage(
                 role="user",
                 content=[ev.transcript],
@@ -4696,6 +4723,7 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
                 instructions=instructions,
                 tools=tools,
+                user_input=user_input,
             )
         finally:
             # reset tool_choice and tools
@@ -4760,6 +4788,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
+        user_input: str | None = None,
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -4774,6 +4803,7 @@ class AgentActivity(RecognitionHooks):
                     model_settings=model_settings,
                     instructions=instructions,
                     tools=tools,
+                    user_input=user_input,
                     inference_span=inference_span,
                 )
             finally:
@@ -4788,10 +4818,15 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
         tools: list[llm.Tool | llm.Toolset] | None = None,
+        user_input: str | None = None,
         inference_span: trace.Span,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
+        if instructions is not None:
+            current_span.set_attribute(trace_types.ATTR_INSTRUCTIONS, instructions)
+        if user_input is not None:
+            current_span.set_attribute(trace_types.ATTR_USER_INPUT, user_input)
 
         room_io = self._session._room_io
         if room_io and room_io.room.isconnected():
@@ -4825,6 +4860,23 @@ class AgentActivity(RecognitionHooks):
         if self._realtime_spans is not None and generation_ev.response_id:
             self._realtime_spans[generation_ev.response_id] = inference_span
         tool_ctx = llm.ToolContext(tools if tools is not None else self.tools)
+        # enabling capture later must not emit a response with no request beside it
+        record_content = (
+            inference_span.is_recording() and gen_ai_telemetry.capture_content_enabled()
+        )
+        if record_content:
+            system_instructions = gen_ai_telemetry.to_system_instructions(
+                self._render_realtime_instructions(self._agent.instructions)
+            )
+            if instructions:
+                # this turn's own instructions reached the provider with the response request
+                system_instructions += gen_ai_telemetry.to_system_instructions(instructions)
+            gen_ai_telemetry.set_content_attributes(
+                inference_span,
+                system_instructions=system_instructions,
+                input_messages=gen_ai_telemetry.to_input_messages(self._agent._chat_ctx),
+                tool_definitions=gen_ai_telemetry.to_tool_definitions(tool_ctx.flatten()),
+            )
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -5233,6 +5285,15 @@ class AgentActivity(RecognitionHooks):
 
         if trace_text_parts:
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, "\n".join(trace_text_parts))
+        if record_content:
+            gen_ai_telemetry.set_content_attributes(
+                inference_span,
+                output_messages=gen_ai_telemetry.to_output_messages(
+                    text="\n".join(trace_text_parts) or None,
+                    function_calls=function_calls,
+                    finish_reason=gen_ai_telemetry.finish_reason_for(function_calls=function_calls),
+                ),
+            )
 
         # sync local chat ctx to the realtime server to remove any items the
         # model added but the user never heard (interrupted before we pulled

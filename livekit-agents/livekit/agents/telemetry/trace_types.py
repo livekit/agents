@@ -159,6 +159,7 @@ ATTR_STT_EVENTS = "lk.stt.events"
 received_at (SpeechEvent.created_at, Unix seconds), type, and transcript_length
 (characters in the first alternative)."""
 ATTR_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
+ATTR_USER_TURN_START_ESTIMATED = "lk.user_turn.start_estimated"
 ATTR_TRANSCRIPTION_DELAY = "lk.transcription_delay"
 ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 ATTR_EOU_SOURCE = "lk.eou.source"

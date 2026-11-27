@@ -41,6 +41,8 @@ def _closable_recognition() -> AudioRecognition:
     ar._backchannel_boundary_timer = None
     ar._AudioRecognition__stt_context = None
     ar._user_turn_span = None
+    ar._held_user_turn = None
+    ar._realtime_transcription = False
     ar._stt_events = []
     ar._user_turn_start = None
     ar._eou_wait_span = None
@@ -429,6 +431,8 @@ def _vad_recognition() -> AudioRecognition:
     ar._turn_detector_stream = None
     ar._end_of_turn_task = None
     ar._user_turn_span = None
+    ar._held_user_turn = None
+    ar._realtime_transcription = False
     ar._user_turn_start = None
     ar._eou_wait_span = None
     ar._eou_wait_started_at_ns = None
