@@ -318,13 +318,14 @@ def test_provider_format_preserves_distinct_assistant_ids_with_slashes(fmt: str)
 
 @pytest.mark.parametrize("response_id", ["reply", "conversation/reply/1"])
 @pytest.mark.parametrize("explicit_group", [False, True])
+@pytest.mark.parametrize("call_count", [1, 2])
 def test_provider_format_groups_calls_with_the_full_assistant_id(
-    response_id: str, explicit_group: bool
+    response_id: str, explicit_group: bool, call_count: int
 ) -> None:
     ctx = ChatContext()
     ctx.add_message(role="user", content="Look up both orders")
     ctx.add_message(role="assistant", content="Checking both orders", id=response_id)
-    for i in range(2):
+    for i in range(call_count):
         ctx.items.append(
             FunctionCall(
                 id=f"unrelated_{i}" if explicit_group else f"{response_id}/fnc_{i}",
@@ -334,7 +335,7 @@ def test_provider_format_groups_calls_with_the_full_assistant_id(
                 arguments=f'{{"order": {i}}}',
             )
         )
-    for i in reversed(range(2)):
+    for i in reversed(range(call_count)):
         ctx.items.append(
             FunctionCallOutput(call_id=f"call_{i}", output=f"Order {i} shipped", is_error=False)
         )
@@ -357,10 +358,45 @@ def test_provider_format_groups_calls_with_the_full_assistant_id(
                     "type": "function",
                     "function": {"name": "lookup_order", "arguments": '{"order": 1}'},
                 },
+            ][:call_count],
+        },
+        *(
+            [{"role": "tool", "tool_call_id": "call_1", "content": "Order 1 shipped"}]
+            if call_count == 2
+            else []
+        ),
+        {"role": "tool", "tool_call_id": "call_0", "content": "Order 0 shipped"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "call_item_id", ["session/query/tool", "session/query/fnc_lookup", "session/query/fnc_0/extra"]
+)
+def test_provider_format_keeps_legacy_call_ids_separate_from_user_messages(
+    call_item_id: str,
+) -> None:
+    ctx = ChatContext()
+    ctx.add_message(role="user", content="Look up the order", id="session/query")
+    ctx.items.append(
+        FunctionCall(id=call_item_id, call_id="call", name="lookup_order", arguments="{}")
+    )
+    ctx.items.append(FunctionCallOutput(call_id="call", output="Shipped", is_error=False))
+
+    messages, _ = ctx.to_provider_format("openai")
+
+    assert messages == [
+        {"role": "user", "content": "Look up the order"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call",
+                    "type": "function",
+                    "function": {"name": "lookup_order", "arguments": "{}"},
+                }
             ],
         },
-        {"role": "tool", "tool_call_id": "call_1", "content": "Order 1 shipped"},
-        {"role": "tool", "tool_call_id": "call_0", "content": "Order 0 shipped"},
+        {"role": "tool", "tool_call_id": "call", "content": "Shipped"},
     ]
 
 

@@ -163,7 +163,12 @@ def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
             # A generated call appends /fnc_N to its assistant message's full ID.
             # Keep any slashes already present in that ID; they do not join messages.
             if item.type == "function_call":
-                group_id = item.group_id or item.id.rsplit("/", 1)[0]
+                parent_id, separator, call_index = item.id.rpartition("/fnc_")
+                group_id = item.group_id or (
+                    parent_id
+                    if separator and call_index.isdecimal()
+                    else item.id.split("/")[0]  # legacy IDs without a generated suffix
+                )
             else:
                 group_id = item.id
             if group_id not in item_groups:
