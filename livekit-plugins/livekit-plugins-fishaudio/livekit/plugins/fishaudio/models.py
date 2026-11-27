@@ -1,6 +1,6 @@
 from typing import Literal
 
-TTSModels = Literal["s1", "s2-pro", "s2.1-pro", "drama-3"]
+TTSModels = Literal["s1", "s2-pro", "s2.1-pro", "s3-pro", "drama-3"]
 
 STTModels = Literal["transcribe-stream-1"]
 

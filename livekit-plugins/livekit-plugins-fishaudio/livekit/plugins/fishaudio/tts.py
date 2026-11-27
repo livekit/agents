@@ -25,7 +25,7 @@ from .log import logger
 from .models import LatencyMode, MP3Bitrate, OpusBitrate, OutputFormat, TTSModels
 from .version import __version__
 
-DEFAULT_MODEL: TTSModels = "s2.1-pro"
+DEFAULT_MODEL: TTSModels = "s3-pro"
 DEFAULT_VOICE_ID = "933563129e564b19a115bedd57b7406a"
 DEFAULT_BASE_URL = "https://api.fish.audio"
 NUM_CHANNELS = 1
@@ -107,7 +107,7 @@ class TTS(tts.TTS):
         Args:
             api_key (NotGivenOr[str]): Fish Audio API key. Reads ``FISH_API_KEY`` if unset.
             model (TTSModels | str): TTS model to use: ``"s1"``, ``"s2-pro"``, ``"s2.1-pro"``,
-                or ``"drama-3"``. Defaults to ``"s2.1-pro"``.
+                ``"s3-pro"``, or ``"drama-3"``. Defaults to ``"s3-pro"``.
             voice_id (NotGivenOr[str]): Voice model ID. Fish Audio's API refers to this
                 as ``reference_id``; it's the same value either way.
             output_format (OutputFormat): Audio output format. Defaults to ``"wav"``.

@@ -9,19 +9,19 @@ from livekit.agents.types import NOT_GIVEN
 pytestmark = pytest.mark.plugin("fishaudio")
 
 
-def test_default_model_is_s2_1_pro():
-    """A bare TTS() defaults to the s2.1-pro model."""
+def test_default_model_is_s3_pro():
+    """A bare TTS() defaults to the s3-pro model."""
     from livekit.plugins.fishaudio import TTS
 
     tts = TTS(api_key="test-key")
-    assert tts.model == "s2.1-pro"
+    assert tts.model == "s3-pro"
 
 
 def test_model_variants_accepted():
-    """s1, s2-pro, s2.1-pro, and drama-3 are all accepted."""
+    """s1, s2-pro, s2.1-pro, s3-pro, and drama-3 are all accepted."""
     from livekit.plugins.fishaudio import TTS
 
-    for model in ("s1", "s2-pro", "s2.1-pro", "drama-3"):
+    for model in ("s1", "s2-pro", "s2.1-pro", "s3-pro", "drama-3"):
         assert TTS(api_key="test-key", model=model).model == model
 
 
