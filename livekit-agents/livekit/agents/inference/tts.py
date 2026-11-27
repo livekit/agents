@@ -22,7 +22,7 @@ from .._exceptions import (
 )
 from ..language import LanguageCode
 from ..log import logger
-from ..tts._provider_format import drop_bracket_cues
+from ..tts._provider_format import native_cues_to_expr
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -812,9 +812,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         # lazily in _run would race with the next turn/session mutating the shared
         # TTS instance.
         self._expressive = tts._expressive
-        # alignment arrives finer-grained than a cue, so drop_bracket_cues parks the tail
+        # alignment arrives finer-grained than a cue, so native_cues_to_expr parks the tail
         # of an unclosed span here between messages
         self._held_tokens: list[TimedString] = []
+        self._held_needs_sep: list[bool] = [False]
         # lower for the model this stream sends, not whatever update_options picks
         # mid-utterance (fishaudio s2.1-pro and drama-3 lower differently)
         self._markup_key = tts.markup._provider_key()
@@ -953,14 +954,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                         # the provider aligned the *converted* text, so under expressive it
                         # carries native cues that were never spoken
                         output_emitter.push_timed_transcript(
-                            drop_bracket_cues(aligned, self._held_tokens)
+                            native_cues_to_expr(
+                                aligned, self._held_tokens, hold_sep=self._held_needs_sep
+                            )
                             if self._expressive
                             else aligned
                         )
                 elif msg_type == "done":
                     if self._held_tokens:  # release an unclosed span, cue unresolved
                         output_emitter.push_timed_transcript(
-                            drop_bracket_cues([], self._held_tokens, final=True)
+                            native_cues_to_expr(
+                                [],
+                                self._held_tokens,
+                                final=True,
+                                hold_sep=self._held_needs_sep,
+                            )
                         )
                     output_emitter.end_input()
                     break

@@ -9,19 +9,25 @@ provider's instruction block advertises only what that provider supports.
 
 from __future__ import annotations
 
+import random
+from collections.abc import Callable
+
 import pytest
 
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.tts._provider_format import (
     TranscriptMarkupStripper,
     convert_markup,
+    drop_bracket_cues,
     expression_attribute,
     llm_instructions,
+    native_cues_to_expr,
     normalize_markup,
     split_all_markup,
     strip_all_markup,
     strip_expr_markup,
 )
+from livekit.agents.types import TimedString
 
 pytestmark = pytest.mark.unit
 
@@ -634,3 +640,220 @@ def test_only_the_stranded_separator_goes() -> None:
     assert strip_expr_markup(turn) == "Intro:\n    indented text"
     # and a marker mid-line still leaves exactly one separator
     assert strip_all_markup('a <expr type="sound" label="laugh"/> b') == "a b"
+
+
+# ---------------------------------------------------------------------------
+# TTS-aligned transcripts: the provider aligned the converted text
+# ---------------------------------------------------------------------------
+
+
+def _filter_by_message(
+    cue_filter: Callable[..., list[TimedString]], messages: list[list[str]]
+) -> str:
+    """Feed each list as one alignment message; return the surviving transcript."""
+    held: list[TimedString] = []
+    hold_sep = [False]
+    out: list[TimedString] = []
+    for words in messages:
+        out += cue_filter([TimedString(w) for w in words], held, hold_sep=hold_sep)
+    out += cue_filter([], held, final=True, hold_sep=hold_sep)
+    return "".join(out)
+
+
+def _drop_bracket_cues_by_message(messages: list[list[str]]) -> str:
+    return _filter_by_message(drop_bracket_cues, messages)
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        # a wrapping tag keeps its spoken inner words
+        ([["Dial ", "<spell>911</spell> ", "now. "]], "Dial 911 now. "),
+        ([["Code ", "<spell>ABC ", "123</spell>. "]], "Code ABC 123. "),
+        ([["It ", "was ", "<whisper>a ", "secret</whisper>. "]], "It was a secret. "),
+        # a native emotion goes back to the expr marker it was lowered from
+        (
+            [['<emotion value="calm"/> ', "Let's ", "begin. "]],
+            '<expr type="expression" label="calm"/> Let\'s begin. ',
+        ),
+        # any other self-closing tag vanishes and leaves a single separator
+        ([["Meet ", "me ", '<break time="1s"/> ', "tomorrow. "]], "Meet me tomorrow. "),
+        # a tag split at its space straddles two alignment messages
+        ([["Meet ", "me ", "<break "], ['time="1s"/> ', "tomorrow. "]], "Meet me tomorrow. "),
+        ([["Meet ", "me<break "], ['time="1s"/> ', "tomorrow. "]], "Meet me tomorrow. "),
+        (
+            [["Hi ", "<emotion "], ['value="calm"/> ', "there. "]],
+            'Hi <expr type="expression" label="calm"/> there. ',
+        ),
+        # an opening tag ending a message keeps the space before it for the words after
+        ([["say ", "<spell>"], ["911</spell> "]], "say 911 "),
+        # bracket cues go too
+        ([["[laugh] ", "hi "]], "hi "),
+        # prose and unknown tags survive
+        ([["3 ", "< ", "5 "]], "3 < 5 "),
+        ([["<b>bold</b> "]], "<b>bold</b> "),
+        # an unclosed tag-shaped "<" is released at the end of the stream
+        ([["a ", "<spe"]], "a <spe"),
+        # spell and break with no space between them, one message vs split messages
+        (
+            [["Dial ", "<spell>911</spell><break ", 'time="1s"/> ', "now. "]],
+            "Dial 911 now. ",
+        ),
+        (
+            [["Dial ", "<spell>911</spell><break "], ['time="1s"/> ', "now. "]],
+            "Dial 911 now. ",
+        ),
+        # character alignment: a split pause with a space on both sides, and glued to a word
+        (
+            [list("Meet me <break "), list('time="500ms"/> tomorrow.')],
+            "Meet me tomorrow.",
+        ),
+        (
+            [list("Meet me<break "), list('time="500ms"/> tomorrow.')],
+            "Meet me tomorrow.",
+        ),
+        # a message that emits nothing keeps the pending separator for the held cue
+        (
+            [list("Meet me<break "), list('time="'), list('500ms"/> tomorrow.')],
+            "Meet me tomorrow.",
+        ),
+        # a message that only closes the held cue keeps the separator for the next cue
+        (
+            [list("Well[sigh]<break "), list('time="500ms"/>'), list("[breathe] hello.")],
+            "Well hello.",
+        ),
+        # text emitted after that settles the separator, so a later cue leaves just one
+        (
+            [list("Well<break "), list('time="500ms"/>'), list(" hello. "), list("[sigh] bye.")],
+            "Well hello. bye.",
+        ),
+    ],
+)
+def test_aligned_native_markup_becomes_what_the_llm_wrote(
+    messages: list[list[str]], expected: str
+) -> None:
+    assert _filter_by_message(native_cues_to_expr, messages) == expected
+
+
+def test_aligned_native_markup_keeps_word_timings() -> None:
+    tokens = [
+        TimedString("Dial ", start_time=0.0, end_time=0.2),
+        TimedString("<spell>911</spell> ", start_time=0.2, end_time=0.8),
+    ]
+    out = native_cues_to_expr(tokens, [])
+    assert [(str(t), t.start_time, t.end_time) for t in out] == [
+        ("Dial ", 0.0, 0.2),
+        ("911 ", 0.2, 0.8),
+    ]
+
+
+def test_aligned_expression_reaches_the_transcript_attribute() -> None:
+    # the room transcript strips the restored marker and publishes it as lk.expression
+    stripper = TranscriptMarkupStripper()
+    shown = "".join(
+        stripper.push(t)
+        for t in native_cues_to_expr(
+            [TimedString('<emotion value="calm"/> '), TimedString("Let's "), TimedString("begin.")],
+            [],
+            final=True,
+        )
+    )
+    shown += stripper.flush()
+    assert shown == "Let's begin."
+    assert stripper.expression_attribute() == {
+        "lk.expression": '{"expression":"calm","mood":"calm"}'
+    }
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [["Meet ", "me[long ", "pause] ", "tomorrow. "]],
+        # the cue glued to "me" straddles two alignment messages
+        [["Meet ", "me[long "], ["pause] ", "tomorrow. "]],
+    ],
+)
+def test_bracket_cue_glued_to_a_word_keeps_its_separator(messages: list[list[str]]) -> None:
+    assert _drop_bracket_cues_by_message(messages) == "Meet me tomorrow. "
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        # a complete multiword cue right before a split cue stays whole
+        ([["[clear ", "throat][really "], ["calm] ", "Welcome ", "back."]], "Welcome back."),
+        # a word between a closed cue and a split one is held on its own
+        ([["[laugh]you[long "], ["pause] ", "there."]], "you there."),
+        # one message closes a multiword cue and opens the next
+        (
+            [["Meet ", "me ", "[speak "], ["softly][laugh"], ["] ", "tomorrow."]],
+            "Meet me tomorrow.",
+        ),
+    ],
+)
+def test_split_bracket_cue_after_a_closed_cue_leaks_no_cue_text(
+    messages: list[list[str]], expected: str
+) -> None:
+    assert _drop_bracket_cues_by_message(messages) == expected
+
+
+def test_bracket_cue_split_across_messages_leaves_one_separator() -> None:
+    assert (
+        _drop_bracket_cues_by_message([["Meet ", "[long "], ["pause] ", "tomorrow. "]])
+        == "Meet tomorrow. "
+    )
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        # a word ends one message and a leading cue opens the next
+        ([list("Meet"), list("[sigh] me.")], "Meet me."),
+        # a cue ending a message may be glued to the word that follows it
+        ([list("Meet [sigh]"), list("me.")], "Meet me."),
+        # a cue closing at the end of a message after its space was already emitted
+        ([list("Meet [si"), list("gh]"), list(" me.")], "Meet me."),
+        # adjacent cues leave a single separator, in one message or split between them
+        ([list("Meet [sigh][laugh] me.")], "Meet me."),
+        ([list("Meet [long pause] "), list("[sigh] me.")], "Meet me."),
+        ([list("Meet [long"), list(" pause] [sigh] me.")], "Meet me."),
+        # a run glued to words on both sides keeps the space inside it as the separator
+        ([list("Meet[sigh] [laugh]me.")], "Meet me."),
+        ([list("Meet[sigh] "), list("[laugh]me.")], "Meet me."),
+    ],
+)
+def test_character_aligned_cues_leave_one_separator(
+    messages: list[list[str]], expected: str
+) -> None:
+    assert _drop_bracket_cues_by_message(messages) == expected
+
+
+_FUZZ_WORDS = ["Meet", "me.", "911", "a"]
+_FUZZ_CUES = [
+    "[sigh]",
+    "[long pause]",
+    '<break time="500ms"/>',
+    '<emotion value="calm"/>',
+    "<spell>AB</spell>",
+]
+
+
+@pytest.mark.parametrize("cue_filter", [drop_bracket_cues, native_cues_to_expr])
+def test_alignment_message_boundaries_do_not_change_the_transcript(
+    cue_filter: Callable[..., list[TimedString]],
+) -> None:
+    # the provider chooses where character alignment messages break, so any split of the
+    # same text must give the transcript that filtering it whole gives
+    rng = random.Random(0)
+    for _ in range(3000):
+        text = "".join(
+            rng.choice(_FUZZ_WORDS + _FUZZ_CUES) + rng.choice([" ", ""])
+            for _ in range(rng.randint(1, 6))
+        ).strip()
+        cuts = sorted(rng.sample(range(1, len(text)), min(len(text) - 1, rng.randint(1, 4))))
+        messages = [list(text[a:b]) for a, b in zip([0, *cuts], [*cuts, len(text)], strict=True)]
+        whole = _filter_by_message(cue_filter, [list(text)])
+        split = _filter_by_message(cue_filter, messages)
+        # only whitespace at the very start or end of the stream may differ
+        assert split.strip() == whole.strip(), (text, cuts)
+        assert "  " not in whole.strip(), text

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from ._mood import match_mood
@@ -1577,7 +1577,13 @@ class TranscriptMarkupStripper:
 
 
 _BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
-# cap on how long an unclosed "[" is held before it is released as plain text
+# one native XML tag delimiter of any provider: opening, closing, or self-closing
+_NATIVE_XML_TAG_RE = re.compile(
+    r"</?(?:" + "|".join(re.escape(tag) for tag in _ALL_MARKUP_TAGS) + r")(?=[\s/>])[^<>]*>"
+)
+# a native emotion/expression tag, which carries the reply's mood
+_NATIVE_EXPRESSION_RE = re.compile(r'<(?:emotion|expression)\b[^>]*?\bvalue="(?P<value>[^"]*)"')
+# cap on how long an unclosed "[" or "<" is held before it is released as plain text
 _MAX_HELD_CHARS = 256
 
 
@@ -1594,7 +1600,11 @@ def _retext(token: TimedString, text: str) -> TimedString:
 
 
 def drop_bracket_cues(
-    tokens: list[TimedString], held: list[TimedString], *, final: bool = False
+    tokens: list[TimedString],
+    held: list[TimedString],
+    *,
+    final: bool = False,
+    hold_sep: list[bool] | None = None,
 ) -> list[TimedString]:
     """Remove bracket cues from TTS-aligned tokens, keeping the survivors' timings.
 
@@ -1608,34 +1618,123 @@ def drop_bracket_cues(
     *held* carries the tail of an unclosed span across calls; pass the same list every time
     and call once more with ``final=True`` at end of stream to release it.
     """
+    return _filter_cues(tokens, held, final=final, xml=False, hold_sep=hold_sep)
+
+
+def native_cues_to_expr(
+    tokens: list[TimedString],
+    held: list[TimedString],
+    *,
+    final: bool = False,
+    hold_sep: list[bool] | None = None,
+) -> list[TimedString]:
+    """Turn the native markup in TTS-aligned tokens back into what the LLM wrote.
+
+    :func:`drop_bracket_cues` plus the XML-shaped natives ``convert_markup`` produces
+    (Cartesia's ``<spell>A7X9</spell>``, ``<break time="1s"/>``, xAI's ``<whisper>``). The
+    transcript becomes the stored assistant message, so it must hold only the ``<expr/>``
+    dialect the LLM writes: a wrapping tag keeps its spoken inner words, a native emotion
+    becomes the ``<expr type="expression"/>`` marker it was lowered from (the transcript
+    sinks strip it and surface it as ``lk.expression``), and any other tag goes.
+
+    Uses the same *held*/``final`` protocol as :func:`drop_bracket_cues`.
+    """
+    return _filter_cues(tokens, held, final=final, xml=True, hold_sep=hold_sep)
+
+
+def _hold_from(text: str, *, xml: bool) -> int:
+    """Where to start holding *text* back so a cue still open at its end is judged whole.
+
+    Past ``_MAX_HELD_CHARS`` nothing is held, since a lone ``[`` or ``<`` must not stall
+    the transcript. A cue glued to a word (``me[long``) holds that word too: released alone,
+    the word loses its separator, and the cue then opens the next call and takes the space
+    after it. The word ends at a closed cue as well, so a cue before it
+    (``[clear throat][long``) is never cut at its inner space and leaked as text.
+    """
+    open_at = len(text)
+    if (bracket := text.rfind("[")) > text.rfind("]"):
+        open_at = bracket
+    if xml and (angle := text.rfind("<")) > text.rfind(">"):
+        # only a tag-shaped "<" is held, so "3 < 5" isn't stalled
+        nxt = text[angle + 1 : angle + 2]
+        if not nxt or nxt == "/" or nxt.isalpha():
+            open_at = min(open_at, angle)
+    if open_at == len(text) or len(text) - open_at > _MAX_HELD_CHARS:
+        return len(text)
+    word_breaks = (" ", "\n", "]", ">") if xml else (" ", "\n", "]")
+    return max(text.rfind(c, 0, open_at) for c in word_breaks) + 1
+
+
+def _filter_cues(
+    tokens: list[TimedString],
+    held: list[TimedString],
+    *,
+    final: bool,
+    xml: bool,
+    hold_sep: list[bool] | None = None,
+) -> list[TimedString]:
     tokens = held + tokens
     held.clear()
     text = "".join(tokens)
-    if "[" not in text:
+    if "[" not in text and not (xml and "<" in text):
+        _settle_sep(tokens, hold_sep)
         return tokens
 
-    dropped: set[int] = set()
-    for match in _BRACKET_SPAN_RE.finditer(text):
-        start, end = match.span()
-        # take one of the spaces the cue sat between, so it leaves a single separator
-        if start > 0 and text[start - 1] == " " and (end == len(text) or text[end] == " "):
-            start -= 1
-        elif start == 0 and end < len(text) and text[end] == " ":
-            end += 1
-        dropped.update(range(start, end))
+    matches = list(_BRACKET_SPAN_RE.finditer(text))
+    if xml:
+        matches += _NATIVE_XML_TAG_RE.finditer(text)
 
-    # hold from an unclosed "[" so a cue straddling messages is still judged as a whole;
-    # past _MAX_HELD_CHARS give up, since a lone bracket must not stall the transcript
-    hold_from = len(text)
-    if not final and (open_at := text.rfind("[")) > text.rfind("]"):
-        if len(text) - open_at <= _MAX_HELD_CHARS:
-            hold_from = open_at
+    dropped: set[int] = set()
+    inserted: dict[int, str] = {}
+    # [start, end, vanishes, inner space or -1]; vanishing cues apart by at most spaces form
+    # one run, so the spaces around "[sigh] [laugh]" collapse like those around a single cue
+    runs: list[list[Any]] = []
+    for match in sorted(matches, key=lambda m: m.start()):
+        start, end = match.span()
+        if xml and (expression := _NATIVE_EXPRESSION_RE.match(match.group())):
+            dropped.update(range(start, end))
+            inserted[start] = f'<expr type="expression" label="{expression["value"]}"/>'
+            continue
+        # a wrapping tag's delimiters border spoken words, so only a vanishing cue joins a run
+        vanishes = match.group().startswith("[") or match.group().endswith("/>")
+        if vanishes and runs and runs[-1][2] and not text[runs[-1][1] : start].strip(" "):
+            if runs[-1][3] < 0 and runs[-1][1] < start:
+                runs[-1][3] = runs[-1][1]
+            runs[-1][1] = end
+        else:
+            runs.append([start, end, vanishes, -1])
+
+    hold_from = len(text) if final else _hold_from(text, xml=xml)
+    if not final and runs and runs[-1][2] and runs[-1][1] == len(text):
+        # a cue ending the text is held until what follows it shows whether the space
+        # before it is a separator
+        if len(text) - runs[-1][0] <= _MAX_HELD_CHARS:
+            hold_from = min(hold_from, runs[-1][0])
+
+    # the text emitted before this call ends in a word, which a space here must separate
+    after_word = bool(hold_sep and hold_sep[0])
+    for start, end, vanishes, inner in runs:
+        space_before = start > 0 and text[start - 1] == " "
+        space_after = end < len(text) and text[end] == " "
+        dropped.update(range(start, end))
+        # leave a single separator from the spaces the run sat between
+        if space_before and (space_after or (vanishes and end == len(text) == hold_from)):
+            dropped.add(start - 1)
+        elif start == 0 and space_after and not after_word:
+            dropped.add(end)
+        elif not space_before and not space_after and inner >= 0:
+            # glued to words on both sides, the space inside the run is the separator
+            leading = start == 0 and not after_word
+            if not leading and end < len(text):
+                dropped.discard(inner)
 
     out: list[TimedString] = []
     pos = 0
     for token in tokens:
         emit = "".join(
-            c for i, c in enumerate(token, start=pos) if i < hold_from and i not in dropped
+            inserted.get(i, "") + ("" if i in dropped else c)
+            for i, c in enumerate(token, start=pos)
+            if i < hold_from
         )
         keep = "".join(c for i, c in enumerate(token, start=pos) if i >= hold_from)
         pos += len(token)
@@ -1643,7 +1742,20 @@ def drop_bracket_cues(
             out.append(token if emit == str(token) else _retext(token, emit))
         if keep:
             held.append(token if keep == str(token) else _retext(token, keep))
+
+    _settle_sep(out, hold_sep)
     return out
+
+
+def _settle_sep(out: list[TimedString], hold_sep: list[bool] | None) -> None:
+    """Record whether the text emitted so far ends in a word.
+
+    A cue opening the next call would take the space after it, which is then the only
+    separator from that word. Only emitted text settles it: a call that emits nothing,
+    even one closing a held cue, leaves the last emitted word still needing the space.
+    """
+    if hold_sep is not None and (last := "".join(out)):
+        hold_sep[0] = not last[-1].isspace()
 
 
 _SELF_CLOSING_TAGS: dict[str, list[str]] = {
