@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 import httpx2 as httpx
 
 import openai
-from livekit.agents import llm
+from livekit.agents import APIError, llm
 from livekit.agents.inference.llm import (
     LLMStream as _LLMStream,
     PromptCacheOptions,
@@ -43,7 +43,12 @@ from livekit.agents.utils import is_given, resolve_env_int
 from openai.types import ReasoningEffort
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
+from .log import logger
 from .models import (
+    _REASONING_EFFORT_LOW_MODELS,
+    _REASONING_EFFORT_NONE_MODELS,
+    _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS,
+    _TOOLS_REQUIRE_RESPONSES_API_MODELS,
     CerebrasChatModels,
     ChatModels,
     CometAPIChatModels,
@@ -137,17 +142,10 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model in [
-                "gpt-5.1",
-                "gpt-5.2",
-                "gpt-5.4",
-                "gpt-5.4-mini",
-                "gpt-5.5",
-                "gpt-5.6-luna",
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-            ]:
+            if model in _REASONING_EFFORT_NONE_MODELS:
                 reasoning_effort = "none"
+            elif model in _REASONING_EFFORT_LOW_MODELS:
+                reasoning_effort = "low"
             else:
                 reasoning_effort = "minimal"
 
@@ -1062,6 +1060,18 @@ class LLM(llm.LLM):
         if is_given(response_format):
             extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
 
+        # hosted tools are dropped on chat completions, so only function tools count
+        has_function_tools = bool(tools and llm.ToolContext(tools).function_tools)
+        if has_function_tools and self._opts.model in _REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS:
+            if self._opts.reasoning_effort != "none":
+                logger.warning(
+                    "%s only supports reasoning_effort='none' with function tools, "
+                    "overriding reasoning_effort=%r",
+                    self._opts.model,
+                    self._opts.reasoning_effort,
+                )
+            extra["reasoning_effort"] = "none"
+
         return LLMStream(
             self,
             model=self._opts.model,
@@ -1073,6 +1083,9 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
+            tools_require_responses_api=(
+                has_function_tools and self._opts.model in _TOOLS_REQUIRE_RESPONSES_API_MODELS
+            ),
         )
 
     def _resolve_prompt_cache_breakpoints(self) -> bool:
@@ -1101,7 +1114,9 @@ class LLMStream(_LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         prompt_cache_breakpoints: bool = False,
+        tools_require_responses_api: bool = False,
     ) -> None:
+        self._tools_require_responses_api = tools_require_responses_api
         super().__init__(
             llm,
             model=model,
@@ -1114,3 +1129,13 @@ class LLMStream(_LLMStream):
             extra_kwargs=extra_kwargs,
             prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
+
+    async def _run(self) -> None:
+        # raised in the stream so AgentSession's error policy counts it like a provider error
+        if self._tools_require_responses_api:
+            raise APIError(
+                f"{self._model} does not support function tools on /v1/chat/completions; "
+                "use openai.responses.LLM instead",
+                retryable=False,
+            )
+        await super()._run()

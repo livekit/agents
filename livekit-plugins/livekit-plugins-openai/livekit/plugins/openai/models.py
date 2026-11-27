@@ -21,12 +21,21 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-6.2-astra",
+    "gpt-6.2-sol",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-5.6",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
+    "gpt-5.4-nano",
     "gpt-5.3-chat-latest",
     "gpt-5.2",
     "gpt-5.2-chat-latest",
@@ -279,18 +288,74 @@ SambaNovaChatModels = Literal[
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-5.6",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
+        "gpt-5.4-nano",
         "gpt-5.2",
         "gpt-5.1",
         "gpt-5",
         "gpt-5-mini",
         "gpt-5-nano",
     ]
+
+
+# Lowest tier these accept is "none"; everything else in _supports_reasoning_effort falls back
+# to "minimal", which the gpt-5.6 family rejects outright.
+_REASONING_EFFORT_NONE_MODELS: frozenset[str] = frozenset(
+    {
+        "gpt-6.1-terra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-5.6",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.2",
+        "gpt-5.1",
+    }
+)
+
+# Lowest tier these accept is "low": they reject both "none" and "minimal".
+_REASONING_EFFORT_LOW_MODELS: frozenset[str] = frozenset(
+    {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol"}
+)
+
+# models that reject any reasoning_effort value but "none" once function tools are attached on
+# /v1/chat/completions; docs list only gpt-6-luna/sol, but gpt-5.5/5.6 still 400 (probed 2026-11-26)
+_REASONING_EFFORT_TOOL_REQUIRES_NONE_MODELS: frozenset[str] = frozenset(
+    {
+        "gpt-6.1-terra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-5.6",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.5",
+    }
+)
+
+# models that reject function tools on /v1/chat/completions at every reasoning_effort ("none" is
+# not a supported value for them); they only take tools through the Responses API
+_TOOLS_REQUIRE_RESPONSES_API_MODELS: frozenset[str] = frozenset(
+    {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol"}
+)
 
 
 @dataclass
