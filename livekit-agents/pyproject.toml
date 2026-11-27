@@ -155,6 +155,7 @@ xai = ["livekit-plugins-xai>=1.9.0"]
 zoom-ai = ["livekit-plugins-zoom-ai>=1.9.0"]
 phonic = ["livekit-plugins-phonic>=1.9.0"]
 did = ["livekit-plugins-did>=1.9.0"]
+rabel = ["livekit-plugins-rabel>=1.9.0"]
 
 
 [project.urls]
