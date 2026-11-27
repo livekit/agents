@@ -608,6 +608,7 @@ class SpeechStream(stt.SpeechStream):
                 drain_started.clear()
                 completion_required.clear()
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),

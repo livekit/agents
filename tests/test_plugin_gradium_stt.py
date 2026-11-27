@@ -10,6 +10,54 @@ import pytest
 pytestmark = pytest.mark.plugin("gradium")
 
 
+@pytest.mark.parametrize("stop_s", [0.4, 0.0, None])
+async def test_endpoint_uses_end_text_timing(monkeypatch, stop_s):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import aiohttp
+
+    from livekit.agents import stt
+    from livekit.plugins.gradium import stt as gradium_stt
+
+    messages = asyncio.Queue()
+
+    def send(data):
+        messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(data), ""))
+
+    send({"type": "text", "text": "hello", "start_s": 0.1})
+    if stop_s is not None:
+        send({"type": "end_text", "stop_s": stop_s})
+    for _ in range(7):
+        send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
+    send({"type": "text", "text": "again", "start_s": 1.0})
+    for _ in range(7):
+        send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
+    ws = SimpleNamespace(receive=messages.get, send_str=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr(gradium_stt.SpeechStream, "_connect_ws", AsyncMock(return_value=ws))
+    provider = gradium_stt.STT(api_key="test-key", http_session=SimpleNamespace(), vad_flush=False)
+    stream = provider.stream()
+    stream.start_time_offset = 7.0
+    endpoints = 0
+    try:
+        async with asyncio.timeout(2):
+            async for event in stream:
+                if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                    endpoints += 1
+                    if endpoints == 1 and stop_s:
+                        assert event.alternatives[0].end_time == pytest.approx(7.4)
+                    else:
+                        assert event.alternatives == []
+                    if endpoints == 2:
+                        break
+            else:
+                pytest.fail("missing endpoint")
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
 def test_stt_default_language():
     """STT defaults to English."""
     from livekit.plugins.gradium import STT
@@ -17,6 +65,95 @@ def test_stt_default_language():
     stt = STT(api_key="test-key")
 
     assert stt._opts.language == "en"
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("vad_flush", [True, False])
+async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad_flush):
+    import base64
+
+    from livekit.agents import APIConnectOptions, stt
+    from livekit.plugins.gradium import STT
+
+    from .stt_reconnect import ReconnectClock, wait_until
+
+    clock = ReconnectClock(monkeypatch)
+    options = {} if vad_flush else {"vad_flush": False}
+    provider = STT(api_key="test-key", http_session=clock, **options)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream.start_time_offset = 7.0
+
+    def sent_duration(ws):
+        return sum(
+            len(base64.b64decode(data["audio"])) / (24000 * 2)
+            for message in ws.sent
+            if isinstance(message, str) and (data := json.loads(message))["type"] == "audio"
+        )
+
+    async def check_turn(index, *, captured_at, provider_start, expected_end):
+        await clock.push(stream, captured_at=captured_at)
+        stream.flush()
+        ws = clock.sockets[-1]
+        await wait_until(lambda: sent_duration(ws) >= provider_start + 1.0 - 1e-6)
+        ws.respond({"type": "text", "text": "hello", "start_s": provider_start + 0.1})
+        step = {"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]}
+        ws.respond(step)
+        if vad_flush:
+            await wait_until(lambda: sent_duration(ws) >= provider_start + 1.48 - 1e-6)
+        # The boundary precedes the padding, even when its reply arrives after it.
+        ws.respond({"type": "end_text", "stop_s": provider_start + 0.4})
+        for _ in range(6):
+            ws.respond(step)
+        async for event in stream:
+            if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+                assert event.alternatives[0].start_time == pytest.approx(expected_end - 0.3)
+            if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                assert event.alternatives[0].end_time == pytest.approx(expected_end)
+                return
+        pytest.fail(f"missing endpoint for turn {index}")
+
+    try:
+        import asyncio
+
+        async with asyncio.timeout(5):
+            for index in range(3):
+                await check_turn(
+                    index,
+                    captured_at=1000.0 + index,
+                    provider_start=index * (1.48 if vad_flush else 1.0),
+                    expected_end=7.4 + index,
+                )
+            stream.update_options(buffer_size_seconds=0.1)
+            await wait_until(lambda: len(clock.sockets) == 2)
+            await check_turn(3, captured_at=1010.0, provider_start=0.0, expected_end=17.4)
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+
+def test_padded_timeline_settles_padding_behind_each_timestamp():
+    from livekit.plugins.gradium.stt import _PaddedTimeline
+
+    sample_rate = 24000
+    timeline = _PaddedTimeline(sample_rate)
+    turns = 1000
+    for turn in range(turns):
+        provider_start = turn * 1.48
+        timeline.add_audio(sample_rate)
+        assert timeline.remove_padding(provider_start + 0.1) == pytest.approx(turn + 0.1)
+        timeline.add_padding(int(0.48 * sample_rate))
+        # the boundary precedes padding that was sent before its reply arrived
+        assert timeline.remove_padding(provider_start + 0.4) == pytest.approx(turn + 0.4)
+        # a timestamp inside the padding stays at the padding's start
+        assert timeline.remove_padding(provider_start + 1.2) == pytest.approx(turn + 1.0)
+        assert len(timeline._pending_padding) <= 1
+
+    assert timeline.remove_padding(turns * 1.48 + 0.1) == pytest.approx(turns + 0.1)
+    assert not timeline._pending_padding
+
+    timeline.reset()
+    timeline.add_audio(sample_rate)
+    assert timeline.remove_padding(0.5) == pytest.approx(0.5)
 
 
 def test_stt_custom_language():
@@ -86,3 +223,20 @@ async def test_speech_stream_sends_language_in_json_config():
 
     setup_msg = json.loads(sent_messages[0])
     assert setup_msg["json_config"] == {"language": "pt", "temp": 0.3}
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.gradium.stt import STT
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(buffer_size_seconds=0.1))
+    finally:
+        await stream.aclose()
+        await provider.aclose()
