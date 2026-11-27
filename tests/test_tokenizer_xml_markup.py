@@ -612,6 +612,21 @@ class TestBatchTokenizer:
         sentences = self.tok.tokenize(text)
         _assert_wrapping_tag_intact(sentences, "spell")
 
+    def test_closing_tag_after_sentence_end_stays_with_its_sentence(self) -> None:
+        """A wrapping span that ends its sentence ("...secret.</expr>") must not
+        swallow the next sentence: the closing tag belongs to the span it closes."""
+        text = (
+            "First we talk normally about the plan. "
+            '<expr type="prosody" label="whisper">Keep this plan between us.</expr> '
+            "Then we go back to normal speech."
+        )
+        sentences = self.tok.tokenize(text)
+        assert sentences == [
+            "First we talk normally about the plan.",
+            '<expr type="prosody" label="whisper">Keep this plan between us.</expr>',
+            "Then we go back to normal speech.",
+        ]
+
     def test_mixed_tags(self) -> None:
         """Self-closing + wrapping + break tags in one text."""
         text = (
