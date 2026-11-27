@@ -16,13 +16,13 @@ from livekit.agents.tts._provider_format import (
     TranscriptMarkupStripper,
     convert_markup,
     drop_bracket_cues,
-    drop_native_cues,
     expression_attribute,
     llm_instructions,
     normalize_markup,
     split_all_markup,
     strip_all_markup,
     strip_expr_markup,
+    strip_native_markup,
 )
 from livekit.agents.types import TimedString
 
@@ -640,59 +640,52 @@ def test_only_the_stranded_separator_goes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# drop_native_cues: native cues in a TTS alignment of the converted text
+# TTS-aligned transcripts: the provider aligned the converted text
 # ---------------------------------------------------------------------------
 
 
-def _drop_all(chunks: list[list[str]]) -> str:
-    """Feed each chunk as one alignment message; return the surviving transcript."""
+@pytest.mark.parametrize(
+    ("aligned", "expected"),
+    [
+        # a wrapping tag keeps its spoken inner words
+        ("Dial <spell>911</spell> now. ", "Dial 911 now. "),
+        # a self-closing tag vanishes and leaves a single separator
+        ('<emotion value="calm"/> Let\'s begin. ', "Let's begin. "),
+        ('Meet me <break time="1s"/> tomorrow.', "Meet me tomorrow."),
+        # expr markers are the LLM's own and stay, as everywhere in chat history
+        ('Say <expr type="spell">A7X9</expr>.', 'Say <expr type="spell">A7X9</expr>.'),
+        # prose and unknown tags survive
+        ("3 < 5 and <b>bold</b>", "3 < 5 and <b>bold</b>"),
+    ],
+)
+def test_native_markup_stripped_from_aligned_text(aligned: str, expected: str) -> None:
+    assert strip_native_markup(aligned) == expected
+
+
+def _drop_bracket_cues_by_message(messages: list[list[str]]) -> str:
+    """Feed each list as one alignment message; return the surviving transcript."""
     held: list[TimedString] = []
     out: list[TimedString] = []
-    for chunk in chunks:
-        out += drop_native_cues([TimedString(t) for t in chunk], held)
-    out += drop_native_cues([], held, final=True)
+    for words in messages:
+        out += drop_bracket_cues([TimedString(w) for w in words], held)
+    out += drop_bracket_cues([], held, final=True)
     return "".join(out)
 
 
 @pytest.mark.parametrize(
-    ("chunks", "expected"),
+    "messages",
     [
-        # a wrapping tag keeps its spoken inner words, only the delimiters go
-        ([["Dial ", "<spell>911</spell> ", "now. "]], "Dial 911 now. "),
-        ([["Code ", "<spell>ABC ", "123</spell>. "]], "Code ABC 123. "),
-        # a self-closing tag vanishes and leaves a single separator
-        ([["a ", '<emotion value="calm"/> ', "b "]], "a b "),
-        # a tag split across alignment messages is held until it closes
-        ([["a ", "<break "], ['time="1s"/> ', "b "]], "a b "),
-        # an opening tag ending a message keeps the space before it for the words after
-        ([["say ", "<spell>"], ["911</spell> "]], "say 911 "),
-        # bracket cues still go
-        ([["[laugh] ", "hi "]], "hi "),
-        # prose and unknown tags survive
-        ([["3 ", "< ", "5 "]], "3 < 5 "),
-        ([["<b>bold</b> "]], "<b>bold</b> "),
-        # an unclosed tag-shaped "<" is released at the end of the stream
-        ([["a ", "<spe"]], "a <spe"),
+        [["Meet ", "me[long ", "pause] ", "tomorrow. "]],
+        # the cue glued to "me" straddles two alignment messages
+        [["Meet ", "me[long "], ["pause] ", "tomorrow. "]],
     ],
 )
-def test_aligned_transcript_keeps_spoken_words_without_native_cues(
-    chunks: list[list[str]], expected: str
-) -> None:
-    assert _drop_all(chunks) == expected
+def test_bracket_cue_glued_to_a_word_keeps_its_separator(messages: list[list[str]]) -> None:
+    assert _drop_bracket_cues_by_message(messages) == "Meet me tomorrow. "
 
 
-def test_drop_native_cues_keeps_word_timings() -> None:
-    tokens = [
-        TimedString("Dial ", start_time=0.0, end_time=0.2),
-        TimedString("<spell>911</spell> ", start_time=0.2, end_time=0.8),
-    ]
-    out = drop_native_cues(tokens, [])
-    assert [(str(t), t.start_time, t.end_time) for t in out] == [
-        ("Dial ", 0.0, 0.2),
-        ("911 ", 0.2, 0.8),
-    ]
-
-
-def test_drop_bracket_cues_leaves_xml_alone() -> None:
-    tokens = [TimedString("<spell>911</spell> "), TimedString("[laugh] ")]
-    assert "".join(drop_bracket_cues(tokens, [])) == "<spell>911</spell> "
+def test_bracket_cue_split_across_messages_leaves_one_separator() -> None:
+    assert (
+        _drop_bracket_cues_by_message([["Meet ", "[long "], ["pause] ", "tomorrow. "]])
+        == "Meet tomorrow. "
+    )

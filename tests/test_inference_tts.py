@@ -184,38 +184,6 @@ async def test_alignment_words_keep_one_separator(
     assert [(w.start_time, w.end_time) for w in timed] == [(0.0, 0.2), (0.2, 0.5)]
 
 
-async def test_expressive_cartesia_alignment_drops_native_xml_tags() -> None:
-    # cartesia aligns the converted text, so its native tags come back as words; a
-    # self-closing tag split at its space straddles two alignment messages
-    first = {
-        "type": "output_alignment",
-        "words": [
-            {"word": "Dial", "start": 0.0, "end": 0.2},
-            {"word": "<spell>911</spell>", "start": 0.2, "end": 0.8},
-            {"word": "<break", "start": 0.8, "end": 0.8},
-        ],
-    }
-    second = {
-        "type": "output_alignment",
-        "words": [
-            {"word": 'time="1s"/>', "start": 0.8, "end": 1.8},
-            {"word": "now.", "start": 1.8, "end": 2.1},
-        ],
-    }
-    tts = _make_tts("cartesia/sonic-3", extra_kwargs={"add_timestamps": True})
-    tts._set_expressive(True)
-
-    events = await _synthesize(
-        tts,
-        [_AUDIO, first, second, {"type": "done"}],
-        'Dial <expr type="spell">911</expr> <expr type="break" label="1s"/> now.',
-    )
-
-    timed = [t for event in events for t in event.frame.userdata[USERDATA_TIMED_TRANSCRIPT]]
-    assert list(map(str, timed)) == ["Dial ", "911 ", "now. "]
-    assert [(w.start_time, w.end_time) for w in timed] == [(0.0, 0.2), (0.2, 0.8), (1.8, 2.1)]
-
-
 async def test_model_switch_mid_stream_keeps_the_stream_dialect() -> None:
     tts = _make_tts("fishaudio/s2.1-pro")
     tts._set_expressive(True)

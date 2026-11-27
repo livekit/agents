@@ -336,6 +336,81 @@ async def test_turn_keeps_its_transcript_when_the_tts_sends_no_timings() -> None
     assert agent_messages and agent_messages[0].text_content
 
 
+class _TaggedAlignedTTS(tts.TTS):
+    """An aligned TTS that, like Cartesia, aligns every word it was sent, native tags too."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
+            sample_rate=SAMPLE_RATE,
+            num_channels=1,
+        )
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.ChunkedStream:
+        raise NotImplementedError
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> tts.SynthesizeStream:
+        return _TaggedAlignedStream(tts=self, conn_options=conn_options)
+
+
+class _TaggedAlignedStream(tts.SynthesizeStream):
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        output_emitter.initialize(
+            request_id="tagged",
+            sample_rate=SAMPLE_RATE,
+            num_channels=1,
+            mime_type="audio/pcm",
+            stream=True,
+        )
+        text = ""
+        async for data in self._input_ch:
+            if isinstance(data, str):
+                text += data
+                continue
+            if not text.strip():
+                continue
+
+            self._mark_started()
+            output_emitter.start_segment(segment_id="tagged")
+            output_emitter.push(b"\x00\x00" * SAMPLE_RATE)  # 1s
+            words = text.split()
+            output_emitter.push_timed_transcript(
+                [
+                    TimedString(
+                        f"{word} ", start_time=i / len(words), end_time=(i + 1) / len(words)
+                    )
+                    for i, word in enumerate(words)
+                ]
+            )
+            output_emitter.flush()
+            text = ""
+
+
+async def test_aligned_transcript_keeps_native_tags_out_of_chat_history() -> None:
+    """The provider aligns the converted text, so its native tags must not reach history."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "What number do I call?", stt_delay=0.1)
+    actions.add_llm('<emotion value="calm"/> Dial <spell>911</spell> now.', ttft=0.1, duration=0.2)
+
+    session = create_session(actions, extra_kwargs={"use_tts_aligned_transcript": True})
+    conversation: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", conversation.append)
+
+    agent = Agent(instructions="test", tts=_TaggedAlignedTTS())
+    await asyncio.wait_for(run_session(session, agent), timeout=30)
+
+    agent_texts = [
+        ev.item.text_content
+        for ev in conversation
+        if ev.item.type == "message" and ev.item.role == "assistant"
+    ]
+    assert agent_texts == ["Dial 911 now. "]
+
+
 class _FailingAlignedTTS(tts.TTS):
     """An aligned TTS that sends no word timings and fails with a non-retryable error."""
 

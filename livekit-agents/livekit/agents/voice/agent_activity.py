@@ -45,6 +45,7 @@ from ..telemetry import (
     utils as trace_utils,
 )
 from ..tokenize.basic import split_words
+from ..tts._provider_format import strip_native_markup
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
@@ -3625,6 +3626,7 @@ class AgentActivity(RecognitionHooks):
 
         text_source: AsyncIterable[str] | None = None
         audio_source: AsyncIterable[str] | None = None
+        read_transcript_from_tts = False
 
         tee: utils.aio.itertools.Tee[str] | None = None
         if isinstance(text, AsyncIterable):
@@ -3696,6 +3698,7 @@ class AgentActivity(RecognitionHooks):
                         text_source,
                         synthesis_failed=_tts_failed(tts_gen_data),
                     )
+                    read_transcript_from_tts = True
 
                 forward_audio_task, audio_out = perform_audio_forwarding(
                     audio_output=audio_output,
@@ -3782,6 +3785,8 @@ class AgentActivity(RecognitionHooks):
                     forwarded_text = playback_ev.synchronized_transcript
             else:
                 forwarded_text = ""
+        if read_transcript_from_tts:
+            forwarded_text = strip_native_markup(forwarded_text)
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
         assistant_metrics: llm.MetricsReport = {}
@@ -4354,6 +4359,8 @@ class AgentActivity(RecognitionHooks):
             )
 
         forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
+        if read_transcript_from_tts:
+            forwarded_text = strip_native_markup(forwarded_text)
         if speech_handle.interrupted:
             # forward_generation already cleared the buffer and waited for playout
             await utils.aio.cancel_and_wait(*tasks)
@@ -4368,7 +4375,9 @@ class AgentActivity(RecognitionHooks):
         if forwarded_text:
             # forwarded_text carries the raw LLM output including any expressive markup
             # (the transcript forwarder strips it only for the room transcript), so the
-            # markup lives directly on the stored assistant message.
+            # markup lives directly on the stored assistant message. A TTS-aligned
+            # transcript is the provider's converted text instead, whose native tags the
+            # LLM never wrote; those were stripped above.
             extra_kwargs: dict = {}
             if llm_gen_data.generated_extra:
                 extra_kwargs["extra"] = llm_gen_data.generated_extra
@@ -5208,6 +5217,8 @@ class AgentActivity(RecognitionHooks):
 
             msg_interrupted = entry.out.played == "partial"
             forwarded_text = entry.out.forwarded_text
+            if read_transcript_from_tts:
+                forwarded_text = strip_native_markup(forwarded_text)
 
             if msg_interrupted and self.llm.capabilities.message_truncation:
                 msg_modalities = await entry.msg.modalities
