@@ -215,6 +215,7 @@ async def test_manual_commit_flushes_supported_stt(
         assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
         if recent_final:
             recognition._last_final_transcript_time = time.time()
+            recognition._last_stt_final_time = recognition._last_final_transcript_time
         commit = recognition._commit_user_turn(
             audio_detached=audio_detached,
             transcript_timeout=0.02,

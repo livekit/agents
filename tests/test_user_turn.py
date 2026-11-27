@@ -406,6 +406,49 @@ async def test_queued_commit_waits_for_its_own_final_transcript(
     assert _user_transcripts(agent) == [_TRANSCRIPT, "next final"]
 
 
+async def test_commit_right_after_a_preflight_waits_for_the_final(
+    running_session: tuple[AgentSession, Agent],
+) -> None:
+    """A preflight's words may not be the caller's final ones (an STT's early end of turn, or a
+    plugin's guess of how the turn ends). A commit within 0.5 s of one must wait for the final
+    transcript, not commit the preflight's words as what the caller said."""
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(
+        SpeechEvent(
+            type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            alternatives=[
+                SpeechData(text="I'd like to check my balance", language=LanguageCode("en"))
+            ],
+        )
+    )
+    commit = session.commit_user_turn(skip_reply=True, transcript_timeout=1.0)
+    await asyncio.sleep(0.1)
+    assert not commit.done()
+    await recognition._on_stt_event(_final_transcript("I'd like to check my savings"))
+    assert await commit == "I'd like to check my savings"
+    await _await_delivery(session)
+    assert _user_transcripts(agent) == ["I'd like to check my savings"]
+
+
+async def test_commit_right_after_a_final_does_not_wait(
+    running_session: tuple[AgentSession, Agent],
+) -> None:
+    """A commit within 0.5 s of a final transcript still commits at once."""
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
+    commit = session.commit_user_turn(skip_reply=True, transcript_timeout=1.0)
+    await asyncio.sleep(0)
+    assert await asyncio.wait_for(commit, timeout=0.2) == _TRANSCRIPT
+    await _await_delivery(session)
+    assert _user_transcripts(agent) == [_TRANSCRIPT]
+
+
 async def test_empty_commit_does_not_request_reply_or_block_later_transcripts(
     running_session: tuple[AgentSession, Agent], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -461,6 +504,7 @@ async def test_clear_before_snapshot_discards_live_transcript(
     assert recognition is not None
     await recognition._on_stt_event(_final_transcript(_TRANSCRIPT))
     recognition._last_final_transcript_time = time.time() - 1.0
+    recognition._last_stt_final_time = recognition._last_final_transcript_time
     commit = session.commit_user_turn(skip_reply=True)
     if phase == "waiting_for_stt":
         await asyncio.sleep(0)

@@ -341,6 +341,9 @@ class AudioRecognition:
         self._user_silence_ev.set()
 
         self._last_final_transcript_time: float | None = None
+        # when the speech-to-text last sent a final transcript; unlike _last_final_transcript_time a
+        # preflight does not set it, so a commit right after a preflight still waits for the final
+        self._last_stt_final_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
 
@@ -1096,6 +1099,7 @@ class AudioRecognition:
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._last_final_transcript_time = None
+        self._last_stt_final_time = None
         self._speech_start_time = None
         self._last_speaking_time = None
         self._vad_speech_started = False
@@ -1149,9 +1153,10 @@ class AudioRecognition:
             can_flush = self._stt_pipeline is not None and self._stt_pipeline.manual_flush
             if self._stt and (
                 can_flush
-                or self._last_final_transcript_time is None
-                # the last final arrived more than 0.5s before the commit request
-                or (requested_at - self._last_final_transcript_time > 0.5)
+                or self._last_stt_final_time is None
+                # the last final arrived more than 0.5s before the commit request; a preflight
+                # does not count: its words may not be the final ones
+                or (requested_at - self._last_stt_final_time > 0.5)
             ):
                 self._final_transcript_received.clear()
 
@@ -1342,6 +1347,7 @@ class AudioRecognition:
             logger.debug("received user transcript", extra=extra)
 
             self._last_final_transcript_time = time.time()
+            self._last_stt_final_time = self._last_final_transcript_time
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
             self._final_transcript_confidence.append(confidence)
@@ -1986,6 +1992,7 @@ class AudioRecognition:
                         self._user_turn_resumes -= manual_turn_snapshot.resumes
                         if not self._audio_transcript:
                             self._last_final_transcript_time = None
+                            self._last_stt_final_time = None
                         if self._last_speaking_time == last_speaking_time:
                             self._speech_start_time = None
                             self._vad_speech_started = False
@@ -2010,6 +2017,7 @@ class AudioRecognition:
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
+                self._last_stt_final_time = None
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
