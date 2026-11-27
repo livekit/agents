@@ -451,6 +451,38 @@ async def test_wrong_or_slow_guess_not_used(
 
 
 @pytest.mark.usefixtures("four_early_starts")
+async def test_a_final_after_the_end_of_speech_ends_the_turn() -> None:
+    # OpenAI's realtime models with local VAD end speech first and send the final after it
+    script = [
+        ev(0.00, T.START_OF_SPEECH),
+        ev(0.05, T.INTERIM_TRANSCRIPT, "I'd like", 0.95),
+        ev(0.30, T.INTERIM_TRANSCRIPT, "I'd like to check", 0.95),
+        ev(0.55, T.INTERIM_TRANSCRIPT, "I'd like to check my", 0.95),
+        ev(0.80, T.END_OF_SPEECH),
+        ev(0.95, T.FINAL_TRANSCRIPT, "I'd like to check my balance."),
+    ]
+    out, _, summary, ends = await wrapped_run(script, FakeAPI(answers=AT_CHECK))
+    assert out == [
+        (T.START_OF_SPEECH, None),
+        (T.INTERIM_TRANSCRIPT, "I'd like"),
+        (T.INTERIM_TRANSCRIPT, "I'd like to check"),
+        (T.PREFLIGHT_TRANSCRIPT, "I'd like to check my balance."),
+        (T.END_OF_SPEECH, None),
+        (T.FINAL_TRANSCRIPT, "I'd like to check my balance."),
+    ]
+    # one turn, its final words, and Bell's guess kept
+    assert ends == [
+        {
+            "type": "end_of_turn",
+            "text": "I'd like to check my balance.",
+            "guess": "kept",
+            "head_start_ms": 630,
+        }
+    ]
+    assert summary["turns"] == 1 and summary["kept"] == 1
+
+
+@pytest.mark.usefixtures("four_early_starts")
 async def test_a_turn_of_finals_only_reaches_bell() -> None:
     # a speech-to-text that sends no interims (Gnani): no heard, but the turn's end with its words
     script = [

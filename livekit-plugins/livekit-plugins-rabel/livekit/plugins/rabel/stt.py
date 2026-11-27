@@ -501,6 +501,9 @@ class _Turn:
     final_kept: bool = False
     head_start_ms: int | None = None
     kept_committed: bool = False
+    # the speech-to-text ended speech with words shown but not finalized: its final comes after
+    # its end of speech (OpenAI's realtime models with local VAD), and the turn ends at that final
+    speech_ended: bool = False
 
 
 class SpeechStream(stt.RecognizeStream):
@@ -669,7 +672,10 @@ class SpeechStream(stt.RecognizeStream):
             self._turn = self._new_turn(ev.speech_start_time or time.time())
             return [ev]
         if ev.type == T.END_OF_SPEECH:
-            self._end_turn()
+            if self._turn is not None and self._turn.shown:
+                self._turn.speech_ended = True
+            else:
+                self._end_turn()
             return [ev]
         if ev.type not in (T.INTERIM_TRANSCRIPT, T.PREFLIGHT_TRANSCRIPT, T.FINAL_TRANSCRIPT):
             return [ev]
@@ -751,6 +757,8 @@ class SpeechStream(stt.RecognizeStream):
                 # final, or the running early start (Bell's guess, or the speech-to-text's own)
                 # whose words this final equals, which LiveKit keeps
                 self._lk_waiting = True
+            if t.speech_ended:
+                self._end_turn()  # the final that came after the end of speech
             return out
 
         w = words_of(" ".join([*t.committed, text]))
@@ -1054,7 +1062,7 @@ class SpeechStream(stt.RecognizeStream):
             )
             return None
         t = self._turn
-        if t is None or self._broken or not self._turn_open(t):
+        if t is None or t.speech_ended or self._broken or not self._turn_open(t):
             self._count("guess_no_turn")  # the turn it answers is over
             return None
         lim = _host_limits()
