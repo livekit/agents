@@ -917,7 +917,9 @@ class SpeechStream(stt.RecognizeStream):
             # in the form and at the level of LiveKit's own "using preemptive generation" line
             # (LiveKit's agent_activity)
             logger.debug("Bell's guess kept", extra={"head_start_ms": head_start_ms})
-        if t.sent_heard and self._bell is not None and self._turn_open(t):
+        # a turn with only finals (a speech-to-text that sends no interims) is sent too: the API
+        # takes an end_of_turn with no heard before it, and learns from the final words
+        if (t.sent_heard or t.committed) and self._bell is not None and self._turn_open(t):
             text = " ".join(t.committed) if t.committed else " ".join(t.words)
             if self._rstt._report:
                 self._bell.end_of_turn(

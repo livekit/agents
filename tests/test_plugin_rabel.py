@@ -451,6 +451,21 @@ async def test_wrong_or_slow_guess_not_used(
 
 
 @pytest.mark.usefixtures("four_early_starts")
+async def test_a_turn_of_finals_only_reaches_bell() -> None:
+    # a speech-to-text that sends no interims (Gnani): no heard, but the turn's end with its words
+    script = [
+        ev(0.00, T.START_OF_SPEECH),
+        ev(0.40, T.FINAL_TRANSCRIPT, "Please check my balance."),
+        ev(0.40, T.END_OF_SPEECH),
+    ]
+    api = FakeAPI()
+    out, _, _, ends = await wrapped_run(script, api)
+    assert out == [(typ, text) for _, typ, text, _ in script]
+    assert [m["type"] for m in api.received] == ["end_of_turn"]
+    assert ends == [{"type": "end_of_turn", "text": "Please check my balance.", "guess": "none"}]
+
+
+@pytest.mark.usefixtures("four_early_starts")
 async def test_contradicting_interim_passes_and_eager_replaces() -> None:
     script = [
         ev(0.00, T.START_OF_SPEECH),
