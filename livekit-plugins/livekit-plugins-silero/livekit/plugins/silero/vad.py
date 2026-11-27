@@ -159,6 +159,60 @@ class VAD(agents.vad.VAD):
     def provider(self) -> str:
         return "ONNX"
 
+    def with_options(
+        self,
+        *,
+        min_speech_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_silence_duration: NotGivenOr[float] = NOT_GIVEN,
+        prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
+        max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
+        activation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
+    ) -> VAD:
+        """
+        Create a new VAD sharing this instance's ONNX inference session, with options
+        derived the same way as `VAD.load` (e.g. `deactivation_threshold` defaults to
+        `max(activation_threshold - 0.15, 0.01)` when not given).
+
+        Building an `onnxruntime.InferenceSession` is expensive and holds the GIL; reusing
+        the session avoids that cost (see issue #7602). The session is safe to share: each
+        `stream()` allocates its own `OnnxModel` state.
+        """  # noqa: E501
+        cur = self._opts
+        eff_activation = (
+            activation_threshold if is_given(activation_threshold) else cur.activation_threshold
+        )
+        eff_deactivation = (
+            deactivation_threshold
+            if is_given(deactivation_threshold)
+            else (
+                max(eff_activation - 0.15, 0.01)
+                if is_given(activation_threshold)
+                else cur.deactivation_threshold
+            )
+        )
+        if eff_deactivation <= 0:
+            # same validation as `load`: a zero/negative exit threshold wedges the stream in SPEECH
+            raise ValueError("deactivation_threshold must be greater than 0")
+        opts = _VADOptions(
+            min_speech_duration=min_speech_duration
+            if is_given(min_speech_duration)
+            else cur.min_speech_duration,
+            min_silence_duration=min_silence_duration
+            if is_given(min_silence_duration)
+            else cur.min_silence_duration,
+            prefix_padding_duration=prefix_padding_duration
+            if is_given(prefix_padding_duration)
+            else cur.prefix_padding_duration,
+            max_buffered_speech=max_buffered_speech
+            if is_given(max_buffered_speech)
+            else cur.max_buffered_speech,
+            activation_threshold=eff_activation,
+            deactivation_threshold=eff_deactivation,
+            sample_rate=cur.sample_rate,
+        )
+        return VAD(session=self._onnx_session, opts=opts)
+
     def stream(self) -> VADStream:
         """
         Create a new VADStream for processing audio data.
@@ -197,6 +251,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Defaults to max(activation_threshold - 0.15, 0.01), re-derived whenever activation_threshold is updated without an explicit deactivation_threshold (matching `VAD.load`).
         """  # noqa: E501
         if is_given(min_speech_duration):
             self._opts.min_speech_duration = min_speech_duration
@@ -208,6 +263,9 @@ class VAD(agents.vad.VAD):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+            if not is_given(deactivation_threshold):
+                # keep the hysteresis pair consistent, same default derivation as `load`
+                self._opts.deactivation_threshold = max(activation_threshold - 0.15, 0.01)
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
 
@@ -260,7 +318,7 @@ class VADStream(agents.vad.VADStream):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
-            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Defaults to max(activation_threshold - 0.15, 0.01), re-derived whenever activation_threshold is updated without an explicit deactivation_threshold (matching `VAD.load`).
         """  # noqa: E501
         old_max_buffered_speech = self._opts.max_buffered_speech
 
@@ -274,6 +332,9 @@ class VADStream(agents.vad.VADStream):
             self._opts.max_buffered_speech = max_buffered_speech
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
+            if not is_given(deactivation_threshold):
+                # keep the hysteresis pair consistent, same default derivation as `load`
+                self._opts.deactivation_threshold = max(activation_threshold - 0.15, 0.01)
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
 
