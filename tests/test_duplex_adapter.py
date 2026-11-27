@@ -16,6 +16,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import llm
+from livekit.agents.llm.delegation import _DelegatedResponse
 from livekit.agents.llm.duplex_adapter import (
     AdaptiveNoiseGate,
     FixedGate,
@@ -79,6 +80,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.config_batches: list[tuple[object, object, object]] = []
         self.appended: list[llm.ChatItem] = []
         self.replies_requested: list[object] = []
+        self.interrupted_relays: list[_DelegatedResponse] = []
         self.fail_instructions = False
 
     @property
@@ -123,6 +125,9 @@ class _FakeDuplexSession(llm.DuplexSession):
             super()._generate_reply(instructions=instructions, tool_choice=tool_choice, tools=tools)
         self.replies_requested.append(instructions)
 
+    def _relay_interrupted(self, response: _DelegatedResponse) -> None:
+        self.interrupted_relays.append(response)
+
     async def _update_session(
         self,
         *,
@@ -148,6 +153,15 @@ class _FakeDuplexSession(llm.DuplexSession):
             "transcript_delta",
             llm.DuplexOutputTranscriptDelta(text=text, start_ms=start_ms, end_ms=end_ms),
         )
+
+    def respond(self, text: str) -> _DelegatedResponse:
+        """The backend's final response to a delegation."""
+        response = _DelegatedResponse(
+            delegation_id="d1", provider="fake", model="fake", started_at=0, ended_at=0, text=text
+        )
+        response.final = True
+        self.emit("_delegated_response", response)
+        return response
 
     def heard(self, item_id: str, text: str) -> None:
         """The plugin's account of one finished user turn."""
@@ -805,6 +819,65 @@ async def test_the_callers_events_pass_through_and_leave_the_burst_alone(duplex)
     ]
     assert len(generations) == 1
     assert session._burst is not None
+
+
+# delegated responses
+
+
+async def test_a_relay_the_user_cuts_off_is_reported(duplex) -> None:
+    """The model stops when the user takes the floor, so their turn is open when its burst ends."""
+    fake, _session, _generations = duplex
+    fake.push(0.001, count=20)
+    response = fake.respond("The cancellation failed.")
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.emit("input_speech_started", llm.InputSpeechStartedEvent())
+    fake.push(0.001, count=8)
+    await _settle()
+
+    assert fake.interrupted_relays == [response]
+
+
+async def test_a_relay_that_plays_out_is_not_reported(duplex) -> None:
+    fake, _session, _generations = duplex
+    fake.push(0.001, count=20)
+    fake.respond("The cancellation failed.")
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+    fake.emit("input_speech_started", llm.InputSpeechStartedEvent())
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+
+    assert fake.interrupted_relays == []
+
+
+async def test_the_user_taking_the_floor_before_the_relay_is_reported(duplex) -> None:
+    fake, _session, _generations = duplex
+    fake.push(0.001, count=20)
+    await _settle()
+    response = fake.respond("The cancellation failed.")
+    fake.emit("input_speech_started", llm.InputSpeechStartedEvent())
+
+    assert fake.interrupted_relays == [response]
+
+
+async def test_the_burst_playing_when_the_response_arrives_is_not_its_relay(duplex) -> None:
+    """Speech already under way may not carry the response, so its ending says nothing yet."""
+    fake, _session, _generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    response = fake.respond("The cancellation failed.")
+    fake.push(0.001, count=8)
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.emit("input_speech_started", llm.InputSpeechStartedEvent())
+    fake.push(0.001, count=8)
+    await _settle()
+
+    assert fake.interrupted_relays == [response]
 
 
 # the chat context

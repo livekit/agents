@@ -15,7 +15,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
 from .chat_context import ChatContext, ChatMessage, FunctionCall
-from .delegation import DelegationDetectionOptions
+from .delegation import DelegationDetectionOptions, _DelegatedResponse
 from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
@@ -25,6 +25,8 @@ from .duplex import (
 )
 from .realtime import (
     GenerationCreatedEvent,
+    InputSpeechStartedEvent,
+    InputSpeechStoppedEvent,
     InputTranscriptionCompleted,
     MessageGeneration,
     RealtimeCapabilities,
@@ -322,6 +324,13 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._duplex = duplex
         self._gate = gate
         self._burst: _Burst | None = None
+        # the latest final delegated response, until the model's relay of it plays out or is cut
+        # off, and whether that relay started: a burst opened since it arrived, as one already
+        # playing then may not carry it
+        self._pending_delegated_response: _DelegatedResponse | None = None
+        self._relay_started = False
+        # the user's turn, open from their first word until the model answers it
+        self._user_speaking = False
         # the last burst to place words on its sound: its anchor tells text for audio it already
         # played from the words of the next utterance
         self._last_burst: _Burst | None = None
@@ -344,11 +353,11 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("function_call", self._on_function_call)
         duplex.on("session_reconnected", self._on_session_reconnected)
         duplex.on("input_audio_transcription_completed", self._on_input_transcription)
-        duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
-        duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
+        duplex.on("input_speech_started", self._on_input_speech_started)
+        duplex.on("input_speech_stopped", self._on_input_speech_stopped)
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
         duplex.on("delegation_created", lambda ev: self.emit("delegation_created", ev))
-        duplex.on("_delegated_response", lambda ev: self.emit("_delegated_response", ev))
+        duplex.on("_delegated_response", self._on_delegated_response)
         duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(
@@ -457,6 +466,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             ev.user_initiated = True
             self._pending_reply.set_result(ev)
         self.emit("generation_created", ev)
+        if kind == "speech":
+            self._relay_started = True
         if kind != "tool":
             modalities: asyncio.Future[list[Literal["text", "audio"]]] = asyncio.Future()
             modalities.set_result(["audio", "text"])
@@ -474,6 +485,13 @@ class _DuplexRealtimeSession(RealtimeSession):
         burst, self._burst = self._burst, None
         # the gate never stays open past the burst it opened, so the next one opens on sound again
         self._gate.deactivate()
+        if burst is not None and self._pending_delegated_response is not None:
+            # the model stops by itself when the user takes the floor, and the gate closes only
+            # after a stretch of quiet, so the user's turn is open by then if they cut it off
+            if self._user_speaking:
+                self._report_relay_interrupted()
+            elif self._relay_started:
+                self._pending_delegated_response = None
         if burst is not None:
             # words that arrived after the last frame still describe its sound
             self._attach_fragments(burst)
@@ -534,6 +552,32 @@ class _DuplexRealtimeSession(RealtimeSession):
             )
         self.emit("input_audio_transcription_completed", ev)
 
+    def _on_delegated_response(self, ev: _DelegatedResponse) -> None:
+        if ev.final and ev.error is None and ev.text:
+            self._pending_delegated_response = ev
+            self._relay_started = False
+        self.emit("_delegated_response", ev)
+
+    def _on_input_speech_started(self, ev: InputSpeechStartedEvent) -> None:
+        self._user_speaking = True
+        if (
+            self._burst is None
+            and self._pending_delegated_response is not None
+            and not self._relay_started
+        ):
+            # the user took the floor before the model began its relay
+            self._report_relay_interrupted()
+        self.emit("input_speech_started", ev)
+
+    def _on_input_speech_stopped(self, ev: InputSpeechStoppedEvent) -> None:
+        self._user_speaking = False
+        self.emit("input_speech_stopped", ev)
+
+    def _report_relay_interrupted(self) -> None:
+        response, self._pending_delegated_response = self._pending_delegated_response, None
+        if response is not None:
+            self._duplex._relay_interrupted(response)
+
     def _on_function_call(self, call: FunctionCall) -> None:
         self._chat_ctx.insert(call)
         # a call joins the burst in flight so the tool runs while the model talks; alone, it is a
@@ -555,6 +599,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         # a dropped connection never delivers the rest of a burst, the sound its waiting words
         # describe, or the reply it was asked for
         self._fragments.clear()
+        # the new connection's model starts over, and nothing it says follows from the response
+        self._pending_delegated_response = None
         self._close_burst()
         self._last_burst = None
         self._fail_pending_reply("the session reconnected before the model replied")

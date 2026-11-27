@@ -67,6 +67,11 @@ _SPEAK_NOW = "Do not wait for the caller to speak first. After that, pause and l
 _ASK_INSTRUCTED = f"Immediately follow the instruction below. {_SPEAK_NOW}"
 _ASK_TYPED = f"Reply to the caller now, don't repeat what they said. {_SPEAK_NOW}"
 _ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
+# the ask that resends a delegated response the caller cut off
+_ASK_INTERRUPTED = (
+    "The caller cut in before you told them the result below. Tell them in your own words, "
+    "unless you already have."
+)
 
 # session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
@@ -174,6 +179,7 @@ class _LiveOptions:
     decisions: DecisionsOptions
     triggers: list[DecisionsTrigger] | None
     delegation_recovery: llm.DelegationDetectionOptions | None
+    repeat_interrupted_responses: bool
     service_tier: types.ServiceTier | None
     api_key: str | None
     base_url: str
@@ -196,6 +202,7 @@ class GPTLiveModel(llm.DuplexModel):
         decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
         triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
         delegation_recovery: bool | llm.DelegationDetectionOptions = False,
+        repeat_interrupted_responses: bool = False,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -224,6 +231,11 @@ class GPTLiveModel(llm.DuplexModel):
                 starts the delegation itself. ``True`` uses :class:`~livekit.agents.llm.
                 DelegationDetector` on LiveKit Inference; a dict sets the detector or the grace
                 period. Off by default, since it costs a model call per undelegated turn.
+            repeat_interrupted_responses: Repeat a delegated response the caller cut off. When
+                the caller cuts the model off before it finishes telling them the backend's final
+                response, or takes the floor before it starts, the response goes back to the model
+                once as commentary, and the model says it in its own words unless it already has.
+                Requires ``delegation="responses"``.
             service_tier: Processing tier the session runs under, sent as the
                 ``OpenAI-Service-Tier`` header on the connection, for example ``ultrafast``.
                 Unset leaves the header off, and the account's default applies.
@@ -265,6 +277,8 @@ class GPTLiveModel(llm.DuplexModel):
             raise ValueError("responses_options requires delegation='responses'")
         if delegation_recovery is not False and delegation == "decisions":
             raise ValueError("delegation_recovery requires delegation='responses' or 'client'")
+        if repeat_interrupted_responses and delegation != "responses":
+            raise ValueError("repeat_interrupted_responses requires delegation='responses'")
         is_azure = azure_deployment is not None or entra_token is not None
         if not is_azure:
             api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -324,6 +338,7 @@ class GPTLiveModel(llm.DuplexModel):
             decisions=decisions,
             triggers=triggers if is_given(triggers) else None,
             delegation_recovery=recovery,
+            repeat_interrupted_responses=repeat_interrupted_responses,
             service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
             base_url=resolved_base_url,
@@ -351,6 +366,7 @@ class GPTLiveModel(llm.DuplexModel):
         decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
         triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
         delegation_recovery: bool | llm.DelegationDetectionOptions = False,
+        repeat_interrupted_responses: bool = False,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
@@ -370,6 +386,7 @@ class GPTLiveModel(llm.DuplexModel):
             voice: Output voice, as in :class:`GPTLiveModel`.
             delegation: Where delegated work goes, as in :class:`GPTLiveModel`.
             delegation_recovery: As in :class:`GPTLiveModel`.
+            repeat_interrupted_responses: As in :class:`GPTLiveModel`.
             responses_options: The backend Responses model under ``delegation="responses"``.
                 Its ``model`` is required, and names a deployment in the same resource.
             service_tier: Processing tier, as in :class:`GPTLiveModel`.
@@ -408,6 +425,7 @@ class GPTLiveModel(llm.DuplexModel):
             decisions_options=decisions_options,
             triggers=triggers,
             delegation_recovery=delegation_recovery,
+            repeat_interrupted_responses=repeat_interrupted_responses,
             service_tier=service_tier,
             api_key=api_key,
             base_url=endpoint if endpoint is not None else NOT_GIVEN,
@@ -1628,6 +1646,15 @@ class GPTLiveSession(
         # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
         # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
         # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
+
+    def _relay_interrupted(self, response: _DelegatedResponse) -> None:
+        if not self._opts.repeat_interrupted_responses:
+            return
+        logger.info(
+            "gpt-live repeating a delegated response the caller cut off",
+            extra={"delegation_id": response.delegation_id, "lk.pii.text": response.text},
+        )
+        self.append_commentary(f"{_ASK_INTERRUPTED}\n\n{response.text}")
 
     def _generate_reply(
         self,

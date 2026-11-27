@@ -13,7 +13,7 @@ from livekit import rtc
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem
-from .delegation import DelegationDetectionOptions
+from .delegation import DelegationDetectionOptions, _DelegatedResponse
 from .realtime import RealtimeError
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -221,6 +221,9 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     ) -> None:
         """Ask the model to speak now; its next speech is taken as the reply."""
         raise RealtimeError(f"{type(self).__name__} decides for itself when to speak")
+
+    def _relay_interrupted(self, response: _DelegatedResponse) -> None:
+        """The user cut off the model's relay of a delegated response, or spoke before it began."""
 
     async def _update_session(
         self,

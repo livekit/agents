@@ -83,6 +83,8 @@ class OpenAIDuplexOptions(TypedDict, total=False):
     triggers: list[DecisionsTrigger]
     delegation_recovery: bool | llm.DelegationDetectionOptions
     """Delegate a turn the model should have and did not, as in ``GPTLiveModel``."""
+    repeat_interrupted_responses: bool
+    """Repeat a delegated response the caller cut off, as in ``GPTLiveModel``."""
 
 
 @dataclass
@@ -175,6 +177,7 @@ class DuplexModel(_GPTLiveModel):
             decisions_options=options.get("decisions_options", NOT_GIVEN),
             triggers=options.get("triggers", NOT_GIVEN),
             delegation_recovery=options.get("delegation_recovery", False),
+            repeat_interrupted_responses=options.get("repeat_interrupted_responses", False),
             api_key="livekit-inference",
             base_url=base_url or get_default_inference_url(),
             http_session=http_session,

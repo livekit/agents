@@ -33,6 +33,7 @@ from livekit.agents import (
 )
 from livekit.agents.inference.realtime import gpt_live as inference_gpt_live
 from livekit.agents.llm._realtime import gpt_live as gpt_live_model
+from livekit.agents.llm.delegation import _DelegatedResponse
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.telemetry import pii, set_tracer_provider, trace_types, tracer
 from livekit.plugins.openai.realtime.gpt_live_model import (
@@ -897,6 +898,39 @@ async def test_a_reply_is_asked_for_as_commentary_to_speak_now(
         assert ask["type"] == "session.commentary.append"
         assert ask["delegation_id"] is None
         assert ask["content"] == f"{gpt_live_model._ASK_INSTRUCTED}\n\nGreet the caller."
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_an_interrupted_relay_is_resent_as_commentary_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(
+        api_key="sk-test", delegation="responses", repeat_interrupted_responses=enabled
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        sent = len(ws.sent)
+        session._relay_interrupted(
+            _DelegatedResponse(
+                delegation_id="d1",
+                provider="openai",
+                model="m",
+                started_at=0,
+                ended_at=0,
+                text="The cancellation failed.",
+            )
+        )
+        await asyncio.sleep(0.05)
+        resent = [e["content"] for e in ws.sent[sent:] if e["type"] == "session.commentary.append"]
+        expected = f"{gpt_live_model._ASK_INTERRUPTED}\n\nThe cancellation failed."
+        assert resent == ([expected] if enabled else [])
     finally:
         await session.aclose()
         await model.aclose()
