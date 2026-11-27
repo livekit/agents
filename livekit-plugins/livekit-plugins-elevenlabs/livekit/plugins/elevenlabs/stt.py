@@ -202,6 +202,8 @@ class STT(stt.STT):
             vad (vad.VAD | None): Optional local VAD used to distinguish suspected forced
                 segment commits from turn ends on scribe_v3_live. Only used with automatic
                 commit strategies. It does not replace server-side turn prediction.
+                It also ends a fresh turn opened by a partial transcript when local VAD stays
+                silent and no provider commit arrives within the silence timeout.
                 Without it, turn_prediction can end the user's turn at a forced segment
                 commit after approximately 36 seconds of audio, even during ongoing speech.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
@@ -776,6 +778,8 @@ class SpeechStream(stt.SpeechStream):
 
         while True:
             try:
+                # A replacement socket cannot deliver the previous connection's pending final.
+                self._emit_end_of_speech()
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
                 await self._turn_detection.start()
@@ -932,7 +936,7 @@ class SpeechStream(stt.SpeechStream):
             )
         if message_type == "partial_transcript":
             text_changed = self._turn_detection.on_partial_transcript(
-                data.get("turn_probability"), text=text
+                data.get("turn_probability"), text=text, starts_turn=not self._speaking
             )
             logger.debug("Received message type partial_transcript", extra={"lk.pii.data": data})
 

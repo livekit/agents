@@ -76,6 +76,16 @@ Before reconnecting, the plugin finishes any deferred turn.
 If local VAD fails, the plugin warns and disables the guard for that connection
 while transcription continues.
 
+With a local `vad`, the first partial that emits start of speech enables a
+separate timeout for that fresh turn. If no commit arrives and VAD stays silent
+for the server silence threshold plus 0.5 seconds (2.0 seconds by default), the
+plugin emits end of speech. Further partials do not extend this deadline. VAD
+speech cancels the timer; when speech ends, a fresh silence window starts. A
+provider commit disables this guard for the rest of that turn, including
+continuations after a forced segment commit. The timeout does not promote
+partial text to a final transcript. It is limited to `scribe_v3_live` with an
+automatic commit strategy and is disabled if local VAD fails.
+
 The other commit strategies are `manual` and `vad`. If `commit_strategy` is
 omitted, the plugin uses `vad` when `server_vad` is a dict and `manual` otherwise.
 An explicit strategy takes precedence over `server_vad`.

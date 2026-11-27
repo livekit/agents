@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import io
 import json
+import time
 import wave
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import httpcore2
 import httpx
 import httpx2
 import openai
@@ -17,7 +21,7 @@ from livekit.agents import APIConnectOptions, APIStatusError
 from livekit.agents.llm import CacheBreakpoint, ChatContext
 from livekit.agents.llm.chat_context import Instructions
 from livekit.agents.voice.generation import mark_instructions_cache_boundary, update_instructions
-from livekit.plugins.openai import LLM, TTS, responses
+from livekit.plugins.openai import LLM, STT, TTS, responses
 
 pytestmark = pytest.mark.unit
 
@@ -434,3 +438,83 @@ async def test_tts_a_second_prewarm_does_not_replace_one_still_in_flight() -> No
     finally:
         release.set()
         await asyncio.gather(first, return_exceptions=True)
+
+
+async def _serve_keep_alive(connections: list[asyncio.StreamWriter]) -> asyncio.Server:
+    """An HTTP/1.1 server that keeps each connection open and answers every request with []."""
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connections.append(writer)
+        with contextlib.suppress(asyncio.IncompleteReadError, ConnectionResetError):
+            while await reader.readuntil(b"\r\n\r\n"):
+                body = b'{"object": "list", "data": []}'
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+                    b"content-length: %d\r\n\r\n%s" % (len(body), body)
+                )
+                await writer.drain()
+        writer.close()
+
+    return await asyncio.start_server(handle, "127.0.0.1", 0)
+
+
+def _sdk_default_azure_client(**kwargs: Any) -> openai.AsyncAzureOpenAI:
+    return openai.AsyncAzureOpenAI(**kwargs)
+
+
+# Patches httpcore2's module clock, which every test on a shared --concurrent loop would see.
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize(
+    ("make_client", "expected_connections"),
+    [
+        (lambda **kw: LLM.with_azure(**kw)._client, 1),
+        (lambda **kw: TTS.with_azure(**kw)._client, 1),
+        (lambda **kw: STT.with_azure(**kw)._client, 1),
+        # Control: the SDK's default pool must reconnect, or the clock patch below no longer
+        # reaches the pool and the cases above would pass without the fix.
+        (_sdk_default_azure_client, 2),
+    ],
+    ids=["llm", "tts", "stt", "sdk-default-control"],
+)
+async def test_with_azure_keeps_its_connection_between_turns(
+    make_client: Any, expected_connections: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connections: list[asyncio.StreamWriter] = []
+    server = await _serve_keep_alive(connections)
+    port = server.sockets[0].getsockname()[1]
+    client = make_client(
+        api_key="k", azure_endpoint=f"http://127.0.0.1:{port}", api_version="2025-04-01-preview"
+    )
+
+    try:
+        await client.models.list()
+        # A pause between two turns, as the connection pool measures it.
+        monkeypatch.setattr(
+            httpcore2._async.http11,
+            "time",
+            SimpleNamespace(monotonic=lambda: time.monotonic() + 10),
+        )
+        await client.models.list()
+    finally:
+        await client.close()
+        server.close()
+        await server.wait_closed()
+
+    assert len(connections) == expected_connections
+
+
+@pytest.mark.parametrize(
+    ("make_stt", "owns_client"),
+    [
+        (lambda: STT(api_key="k"), True),
+        (lambda: STT.with_azure(api_key="k", **AZURE), True),
+        (lambda: STT(client=openai.AsyncOpenAI(api_key="k")), False),
+    ],
+    ids=["default", "azure", "caller-client"],
+)
+async def test_stt_aclose_closes_only_the_client_it_owns(make_stt: Any, owns_client: bool) -> None:
+    stt = make_stt()
+
+    await stt.aclose()
+
+    assert stt._client.is_closed() is owns_client

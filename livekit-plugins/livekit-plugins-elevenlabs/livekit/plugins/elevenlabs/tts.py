@@ -1434,6 +1434,10 @@ def _build_synthesize_body(opts: _TTSOptions, input_text: str) -> dict[str, Any]
         body["language_code"] = opts.language.language
     if is_given(opts.apply_language_text_normalization):
         body["apply_language_text_normalization"] = opts.apply_language_text_normalization
+    if is_given(opts.pronunciation_dictionary_locators):
+        body["pronunciation_dictionary_locators"] = _pronunciation_dictionary_locators_payload(
+            opts.pronunciation_dictionary_locators
+        )
     return body
 
 

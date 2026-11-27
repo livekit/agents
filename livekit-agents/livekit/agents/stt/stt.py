@@ -52,7 +52,9 @@ class SpeechEventType(str, Enum):
     RECOGNITION_USAGE = "recognition_usage"
     """usage event, emitted periodically to indicate usage metrics"""
     END_OF_SPEECH = "end_of_speech"
-    """indicate the end of speech, emitted when the user stops speaking"""
+    """indicate the end of speech, emitted when the user stops speaking.
+    alternatives are optional and provider-specific; they may contain only the latest segment.
+    build the complete transcript from FINAL_TRANSCRIPT events"""
 
 
 @dataclass
@@ -655,6 +657,15 @@ class RecognizeStream(ABC):
                 self._input_ch.send_nowait(frame)
         else:
             self._input_ch.send_nowait(frame)
+
+    @property
+    def manual_flush(self) -> bool:
+        """Whether this stream finalizes a turn only when flushed.
+
+        Defaults to the STT's current capability. A stream whose need is fixed when it is
+        created overrides this, so a later STT option change does not stop its flushes.
+        """
+        return self._stt.capabilities.manual_flush
 
     def flush(self) -> None:
         """Mark the end of the current segment"""

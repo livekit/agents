@@ -102,6 +102,7 @@ class DecisionModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         names = list(decisions)
         try:
@@ -112,6 +113,7 @@ class DecisionModel(llm.DecisionModel):
                 safety_identifier=self._safety_identifier
                 if is_given(self._safety_identifier)
                 else openai.omit,
+                extra_headers=extra_headers,
                 timeout=conn_options.timeout,
             )
         except openai.APITimeoutError:

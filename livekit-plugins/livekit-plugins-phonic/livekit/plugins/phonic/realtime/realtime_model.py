@@ -265,6 +265,7 @@ class RealtimeModel(llm.RealtimeModel):
         external_id: NotGivenOr[str] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -333,15 +334,19 @@ class RealtimeModel(llm.RealtimeModel):
                 ``forbid_speech_after_tool_call`` per tool instead. When set, each listed tool is
                 merged into ``configs_for_tools`` as ``forbid_speech_after_tool_call=True`` (an
                 explicit ``configs_for_tools`` entry for the same tool takes precedence).
+            modalities: ``["text", "audio"]`` (the default) for a voice conversation, or
+                ``["text"]`` for a text conversation: user turns arrive as typed text and the
+                agent replies in text only, with no audio in either direction.
             conn_options: Retry/backoff and connection settings.
         """
+        modalities = modalities if is_given(modalities) else ["text", "audio"]
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
                 turn_detection=True,
-                user_transcription=True,
+                user_transcription="audio" in modalities,
                 auto_tool_reply_generation=True,
-                audio_output=True,
+                audio_output="audio" in modalities,
                 manual_function_calls=False,
                 mutable_chat_context=True,
                 mutable_instructions=True,
@@ -901,6 +906,9 @@ class RealtimeSession(llm.RealtimeSession):
             "additional_params": self._opts.additional_params,
             "external_id": self._opts.external_id,
         }
+        modality = "speech" if self._realtime_model.capabilities.audio_output else "text"
+        options["input_modality"] = modality
+        options["output_modality"] = modality
         # Filter out NOT_GIVEN values
         return {k: v for k, v in options.items() if v is not NOT_GIVEN}
 
@@ -1051,7 +1059,8 @@ class RealtimeSession(llm.RealtimeSession):
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if (
-            self._session_should_close.is_set()
+            not self._realtime_model.capabilities.audio_output
+            or self._session_should_close.is_set()
             or not self._ready_to_start.is_set()
             or not self._socket
         ):
@@ -1174,7 +1183,11 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         system_message = payload.system_message
-        if self._pending_user_text:
+        user_message = None
+        if self._pending_user_text and not self._realtime_model.capabilities.audio_output:
+            user_message = self._pending_user_text
+            self._pending_user_text = None
+        elif self._pending_user_text:
             user_text_instruction = (
                 f'The user sent the following text message: "{self._pending_user_text}". '
                 "Please respond to their message."
@@ -1188,7 +1201,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         if self._socket:
             await self._socket.send_generate_reply(
-                GenerateReplyPayload(system_message=system_message)
+                GenerateReplyPayload(system_message=system_message, user_message=user_message)
             )
 
     def commit_audio(self) -> None:
@@ -1369,9 +1382,13 @@ class RealtimeSession(llm.RealtimeSession):
             response_id=response_id,
             input_id=utils.shortuuid("PI_"),
         )
+        if not self._realtime_model.capabilities.audio_output:
+            self._current_generation.audio_ch.close()
 
         msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
-        msg_modalities.set_result(["audio", "text"])
+        msg_modalities.set_result(
+            ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
+        )
 
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
@@ -1468,6 +1485,9 @@ class RealtimeSession(llm.RealtimeSession):
             gen.audio_cursor_sec += audio_duration_sec
 
     def _handle_input_text(self, message: InputTextPayload) -> None:
+        if not self._realtime_model.capabilities.audio_output:
+            # A text conversation's only input text echoes a typed message already in the chat context.
+            return
         item_id = utils.shortuuid("PI_")
         transcript = message.text
 

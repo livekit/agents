@@ -19,7 +19,10 @@ from openai.types.shared_params import Reasoning
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
-from livekit.agents.llm.delegation import _resolve_delegation_detection_options
+from livekit.agents.llm.delegation import (
+    _DelegatedResponse,
+    _resolve_delegation_detection_options,
+)
 from livekit.agents.log import logger
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
@@ -240,6 +243,8 @@ class GPTLiveModel(llm.DuplexModel):
                 user_transcription=True,
                 # the model continues on its own once every tool result reaches the backend
                 auto_tool_reply_generation=True,
+                # the backend takes each result as it comes and continues once every call has one
+                eager_tool_outputs=True,
                 mutable_chat_context=False,
                 mutable_instructions=False,
                 # tools live on the backend model, and a client delegation has none
@@ -524,6 +529,9 @@ class GPTLiveSession(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
 
+        # delegation_id -> the backend response in flight, reported to the framework when it ends
+        self._backend_responses: dict[str | None, _DelegatedResponse] = {}
+
         self._main_atask = asyncio.create_task(self._main_task(), name="GPTLiveSession._main")
 
     # outbound
@@ -713,6 +721,9 @@ class GPTLiveSession(
         self._backend_open_calls.clear()
         self._backend_response_pending = False
         self._continuation_request_id = None
+        # the new session continues nothing the dropped one ran, so each response is its last
+        for d_id in list(self._backend_responses):
+            self._end_backend_response(d_id, error="session_reconnected")
         self._delegate_request_id = None
         self._usage_total = types.Usage()
         self._session_id = None
@@ -1127,10 +1138,29 @@ class GPTLiveSession(
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
             self._continuation_request_id = None
+            self._end_backend_response(d_id, error="superseded")
+            self._backend_responses[d_id] = _DelegatedResponse(
+                delegation_id=d_id,
+                provider=self._live_model.provider,
+                model=self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
+                instructions=self._opts.responses.get("instructions"),
+                started_at=time.time(),
+                ended_at=0.0,
+            )
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
             item = event.item
+            if (
+                item is not None
+                and item.type == "message"
+                and item.status == "completed"
+                and (backend := self._backend_responses.get(d_id)) is not None
+            ):
+                for part in item.content or []:
+                    # parsed without validation, so a part the service reshapes is skipped
+                    if isinstance(part, types.OutputContentPart):
+                        backend.text += part.text or part.refusal or ""
             if item is None or item.type != "function_call":
                 return
             if item.status != "completed":
@@ -1172,38 +1202,42 @@ class GPTLiveSession(
                 self._delegation = None
                 self._end_speech("user")
             self._history.insert(fnc_call)
+            if (backend := self._backend_responses.get(d_id)) is not None:
+                backend.function_calls.append(fnc_call)
             self.emit("function_call", fnc_call)
 
         elif event.type == "response.completed":
+            backend = self._backend_responses.get(d_id)
+            metrics: LLMMetrics | None = None
             if response is not None and (usage := response.usage) is not None:
                 # the voice model is billed by duration; these tokens are the backend's and are
                 # reported under its name
-                self.emit(
-                    "metrics_collected",
-                    LLMMetrics(
-                        label=self._live_model.label,
-                        request_id=response.id or "",
-                        timestamp=time.time(),
-                        duration=0,
-                        ttft=-1,
-                        cancelled=False,
-                        prompt_tokens=usage.input_tokens,
-                        prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
-                        cache_creation_tokens=usage.input_tokens_details.cache_write_tokens,
-                        completion_tokens=usage.output_tokens,
-                        reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
-                        total_tokens=usage.total_tokens,
-                        tokens_per_second=0,
-                        metadata=Metadata(
-                            model_name=response.model
-                            or self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
-                            model_provider=self._live_model.provider,
-                        ),
+                metrics = LLMMetrics(
+                    label=self._live_model.label,
+                    request_id=response.id or "",
+                    timestamp=time.time(),
+                    duration=time.time() - backend.started_at if backend else 0,
+                    ttft=-1,
+                    cancelled=False,
+                    prompt_tokens=usage.input_tokens,
+                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
+                    cache_creation_tokens=usage.input_tokens_details.cache_write_tokens,
+                    completion_tokens=usage.output_tokens,
+                    reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
+                    total_tokens=usage.total_tokens,
+                    tokens_per_second=0,
+                    metadata=Metadata(
+                        model_name=response.model
+                        or self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
+                        model_provider=self._live_model.provider,
                     ),
                 )
+                self.emit("metrics_collected", metrics)
+            # a response that called a tool is continued once every result is in
             if (calls := self._backend_running_responses.pop(d_id, None)) is not None:
                 self._backend_open_calls |= calls
             self._maybe_continue_response()
+            self._end_backend_response(d_id, response=response, metrics=metrics)
 
         elif event.type in ("response.failed", "response.incomplete"):
             logger.warning(
@@ -1215,10 +1249,45 @@ class GPTLiveSession(
                     "lk.pii.incomplete_details": response.incomplete_details if response else None,
                 },
             )
+            # a code, never the message: it is free-form and may carry user data
+            error = (response.error if response else None) or {}
+            incomplete = (response.incomplete_details if response else None) or {}
             # the service discards a failed response's calls: an output for one is refused, so
             # it goes to the voice model as context instead
             self._backend_running_responses.pop(d_id, None)
+            # an output sent while the response ran still continues the chain
             self._maybe_continue_response()
+            self._end_backend_response(
+                d_id,
+                response=response,
+                error=error.get("code") or incomplete.get("reason") or event.type,
+            )
+
+    def _end_backend_response(
+        self,
+        d_id: str | None,
+        *,
+        response: types.ResponseSnapshot | None = None,
+        metrics: LLMMetrics | None = None,
+        error: str | None = None,
+    ) -> None:
+        if (backend := self._backend_responses.pop(d_id, None)) is None:
+            return
+        backend.ended_at = time.time()
+        backend.metrics = metrics
+        backend.error = error
+        # the backend continues a delegation only when asked: this response is its last unless
+        # another of its responses runs, a call waits for its output, or a continuation is pending
+        backend.final = not (
+            d_id in self._backend_running_responses
+            or self._backend_open_calls
+            or self._backend_response_pending
+            or self._continuation_request_id
+        )
+        if response is not None:
+            backend.response_id = response.id
+            backend.response_model = response.model
+        self.emit("_delegated_response", backend)
 
     def _maybe_continue_response(self) -> None:
         # one response.create continues the chain, and only once nothing is still asking and every
@@ -1470,6 +1539,8 @@ class GPTLiveSession(
 
     async def _release_and_close(self) -> asyncio.Future[None]:
         await super().aclose()
+        for d_id in list(self._backend_responses):
+            self._end_backend_response(d_id, error="session_closed")
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()

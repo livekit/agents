@@ -390,6 +390,8 @@ class STT(stt.STT):
             return v2_stream
 
         config = dataclasses.replace(self._opts)
+        if is_given(language):
+            config.language = LanguageCode(language)
         stream = SpeechStream(
             stt=self,
             conn_options=conn_options,
