@@ -7,6 +7,8 @@ The agent is an over-eager airline support rep, so each hook has something to ca
     - "you're useless, I'll find where you live"   -> on_user_turn blocks the reply
     - "what's a good pasta recipe?"                 -> on_user_turn steers back to travel
     - "this is the third time I've called!"         -> on_user_turn asks for an apology
+    - "I've had enough, get me a manager now!"      -> on_user_turn runs the escalation tool
+                                                       before the agent replies
     - "my flight was cancelled, can I get my money back?"
                                                     -> on_agent_sentence cuts the sentence
                                                        promising a refund
@@ -16,7 +18,15 @@ import logging
 
 from dotenv import load_dotenv
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli, inference
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    cli,
+    function_tool,
+    inference,
+)
 from livekit.agents.beta import Block, DecisionEvaluated, DecisionGuardrail, Steer
 from livekit.agents.llm import Choice, Decision, Probability, Score
 
@@ -70,6 +80,12 @@ class SupportAgent(Agent):
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions="greet the caller and ask how you can help")
 
+    @function_tool
+    async def request_callback(self) -> str:
+        """Ask a supervisor to call the customer back."""
+        logger.info("supervisor callback requested")
+        return "A supervisor will call the customer back within the hour."
+
 
 def _log(ev: DecisionEvaluated) -> None:
     # only the values: input_text is the conversation and may hold customer information
@@ -105,6 +121,12 @@ async def entrypoint(ctx: JobContext) -> None:
             return Steer(
                 "The user went off topic. Say briefly that you can only help with "
                 "Northwind travel, then ask how you can help with their trip."
+            )
+        if ev.get("frustration", 0.0) >= 2.5:
+            # the tool runs before the LLM is asked, and the LLM then answers its result
+            return Steer(
+                "The user is furious. Apologize and tell them what happens next.",
+                tool_calls="request_callback",
             )
         if ev.get("frustration", 0.0) >= 2:
             return Steer("The user is frustrated. Apologize first and keep the reply short.")
