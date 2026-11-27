@@ -524,6 +524,16 @@ class STT(stt.STT):
         endpointing_sensitivity: NotGivenOr[EndpointingSensitivity] = NOT_GIVEN,
         custom_prompt_config: NotGivenOr[cloud_speech_v2.CustomPromptConfig] = NOT_GIVEN,
     ) -> None:
+        # validate first: a rejected adaptation must leave every option unchanged
+        new_version = (
+            (2 if model in get_args(SpeechModelsV2) else 1)
+            if is_given(model)
+            else self._config.version
+        )
+        effective_adaptation = adaptation if is_given(adaptation) else self._config.adaptation
+        if is_given(effective_adaptation) and (is_given(adaptation) or is_given(model)):
+            self._validate_adaptation(effective_adaptation, new_version)
+
         if is_given(languages):
             if isinstance(languages, str):
                 self._config.languages = [LanguageCode(languages)]
@@ -539,14 +549,6 @@ class STT(stt.STT):
             self._config.spoken_punctuation = spoken_punctuation
         if is_given(profanity_filter):
             self._config.profanity_filter = profanity_filter
-        new_version = (
-            (2 if model in get_args(SpeechModelsV2) else 1)
-            if is_given(model)
-            else self._config.version
-        )
-        effective_adaptation = adaptation if is_given(adaptation) else self._config.adaptation
-        if is_given(effective_adaptation) and (is_given(adaptation) or is_given(model)):
-            self._validate_adaptation(effective_adaptation, new_version)
 
         if is_given(model):
             old_version = self._config.version
