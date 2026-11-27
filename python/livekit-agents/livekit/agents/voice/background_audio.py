@@ -97,7 +97,6 @@ class BackgroundAudioPlayer:
             self.publication = room.local_participant.track_publications.get(sid)
         if agent_session:
             self._agent_session = agent_session
-            agent_session._native._core_background_audio()
             agent_session.on("agent_state_changed", self._agent_state_changed)
 
     async def aclose(self) -> None:

@@ -191,10 +191,6 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// restore is refused (`SessionClosing`); there is nothing left to restore.
     #[host(call)]
     fn release_override(&self, layer: u64) -> Result<(), OptionsRefused>;
-    /// A background audio player started for this session: its product statistics count the
-    /// feature once.
-    #[host(call, name = "_core_background_audio")]
-    fn background_audio(&self);
     #[host(call)]
     fn resolved_options(
         &self,

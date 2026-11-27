@@ -340,19 +340,18 @@ fn a_language_switch_is_counted_once_when_the_stt_reports_another_language() {
     assert_eq!(ended_features(&mut session), [("language_switch".to_owned(), vec![])]);
 }
 
-// Catches: a feature the session's executor saw (an options call, a background audio player, an
-// MCP toolset it activated) missing from the session's one summary, counted more than once for
+// Catches: a feature the session's executor saw (an options call, an MCP toolset it activated) missing from the session's one summary, counted more than once for
 // a feature used twice, or counted before the session ends.
 #[test]
 fn features_the_executor_reports_are_counted_once_when_the_session_ends() {
     let mut session = driver();
     taken(&mut session);
-    let seen = [Feature::Mcp, Feature::OverrideOptions, Feature::Mcp, Feature::BackgroundAudio];
+    let seen = [Feature::Mcp, Feature::OverrideOptions, Feature::Mcp];
     for feature in seen.into_iter().chain([Feature::UpdateOptions, Feature::UpdateOptions]) {
         session.on_api(Ts::ZERO, crate::agent_session::Command::FeatureUsed(feature));
     }
     assert_eq!(features(&taken(&mut session)), []);
     let counted = ended_features(&mut session);
     let names: Vec<&str> = counted.iter().map(|(feature, _)| feature.as_str()).collect();
-    assert_eq!(names, ["mcp", "update_options", "override_options", "background_audio"]);
+    assert_eq!(names, ["mcp", "update_options", "override_options"]);
 }

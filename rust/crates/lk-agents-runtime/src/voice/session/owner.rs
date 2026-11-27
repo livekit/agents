@@ -761,10 +761,6 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         Ok(layer)
     }
 
-    fn background_audio(&self) {
-        self.0.feature_used(Feature::BackgroundAudio);
-    }
-
     fn release_override(&self, layer: u64) -> Result<(), OptionsRefused> {
         match self.0.session.get() {
             Some(session) => session.release_override(layer),

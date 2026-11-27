@@ -5580,7 +5580,7 @@
     },
     {
       "name": "lk.product.agents.feature.background_audio",
-      "brief": "Sessions that played background audio.",
+      "brief": "Background audio players started, with or without a session: the one feature counted per use and not per session.",
       "kind": "counter",
       "unit": "{session}",
       "registry": "agents",

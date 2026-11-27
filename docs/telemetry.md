@@ -279,17 +279,17 @@ configuration it starts with.
 
 **Features**
 
-One counter per feature, each counting the sessions that used it. A session adds 1 to a
-counter the first time it uses that feature, and never more than 1. The counters are
-independent: a session that used MCP and `override_options` adds 1 to each of those two,
-and nothing to the others.
+One counter per feature. Each counts the sessions that used it, except
+`feature.background_audio`, which counts players. A session adds 1 to a counter the first
+time it uses that feature, and never more than 1. The counters are independent: a session
+that used MCP and `override_options` adds 1 to each of those two, and nothing to the others.
 
 | Metric | Counts the sessions that |
 | --- | --- |
 | `feature.mcp` | ran an agent that has an MCP toolset |
 | `feature.update_options` | called `session.update_options(...)` |
 | `feature.override_options` | entered `session.override_options(...)` |
-| `feature.background_audio` | played background audio |
+| `feature.background_audio` | counts background audio players started, with or without a session |
 | `feature.language_switch` | heard the person change language: the STT reported a different language than earlier in the session |
 | `feature.model_switch` | changed a model while running: a different STT, TTS, LLM or realtime model than the one they started with |
 

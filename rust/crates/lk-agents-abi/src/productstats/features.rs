@@ -34,7 +34,8 @@ pub struct FeatureUpdateOptions;
 #[derive(Attrs)]
 pub struct FeatureOverrideOptions;
 
-/// Sessions that played background audio.
+/// Background audio players started, with or without a session: the one feature counted per use
+/// and not per session.
 #[metric(
     name = "lk.product.agents.feature.background_audio",
     kind = Counter,
@@ -95,7 +96,6 @@ pub enum Feature {
     Mcp,
     UpdateOptions,
     OverrideOptions,
-    BackgroundAudio,
     LanguageSwitch,
     ModelSwitch(SwitchedModel),
 }

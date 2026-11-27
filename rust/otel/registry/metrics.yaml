@@ -670,7 +670,7 @@
       "instrument": "counter",
       "unit": "{session}",
       "stability": "development",
-      "brief": "Sessions that played background audio.",
+      "brief": "Background audio players started, with or without a session: the one feature counted per use and not per session.",
       "attributes": []
     },
     {

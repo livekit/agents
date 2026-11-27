@@ -450,14 +450,17 @@ impl Run {
         // `BackgroundAudioPlayer().start(room=, agent_session=)` with an ambient sound.
         if setup.background_audio {
             let player = super::background::Background {
-                audio: BackgroundAudio(Arc::new(BackgroundAudioPlayer::new(
-                    fakes::SAMPLE_RATE,
-                    1,
-                    2_400,
-                    200,
-                    run.time.clock(),
-                    run.registry.world.clone(),
-                ))),
+                audio: BackgroundAudio(
+                    Arc::new(BackgroundAudioPlayer::new(
+                        fakes::SAMPLE_RATE,
+                        1,
+                        2_400,
+                        200,
+                        run.time.clock(),
+                        run.registry.world.clone(),
+                    )),
+                    lk_agents_abi::telemetry::Cx::NONE,
+                ),
             };
             let room = Arc::new(FixedRoom::new(Some(run.room.clone()), run.time.clone(), None));
             let ambient = lk_agents_abi::voice::background_audio::Sounds::Choice(vec![

@@ -1,6 +1,6 @@
 use super::features::{
-    Feature, FeatureBackgroundAudio, FeatureLanguageSwitch, FeatureMcp, FeatureModelSwitch,
-    FeatureOverrideOptions, FeatureUpdateOptions,
+    Feature, FeatureLanguageSwitch, FeatureMcp, FeatureModelSwitch, FeatureOverrideOptions,
+    FeatureUpdateOptions,
 };
 use crate::agent::FunctionToolInfo;
 use crate::telemetry::decl::{Attrs, Measure, SpanValue, metric};
@@ -107,7 +107,6 @@ impl SessionStats {
                 Feature::Mcp => into.measure(&FeatureMcp, once),
                 Feature::UpdateOptions => into.measure(&FeatureUpdateOptions, once),
                 Feature::OverrideOptions => into.measure(&FeatureOverrideOptions, once),
-                Feature::BackgroundAudio => into.measure(&FeatureBackgroundAudio, once),
                 Feature::LanguageSwitch => into.measure(&FeatureLanguageSwitch, once),
                 Feature::ModelSwitch(kind) => into.measure(&FeatureModelSwitch { kind }, once),
             }

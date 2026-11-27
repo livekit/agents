@@ -628,7 +628,7 @@ async fn the_report_belongs_to_the_starting_job_and_a_redacted_one_keeps_no_cont
     assert!(owner.accepts_event("error".into()) && owner.accepts_event("close".into()));
 }
 
-// Catches: `update_options`, `override_options` or a background audio player not noted for
+// Catches: `update_options` or `override_options` not noted for
 // their session's summary, which a session that starts later is handed.
 #[tokio::test]
 async fn a_session_notes_each_options_feature_used_on_it() {
@@ -640,7 +640,6 @@ async fn a_session_notes_each_options_feature_used_on_it() {
     assert_eq!(*owner.0.features.lock(), BTreeSet::from([Feature::UpdateOptions]));
     let layer = owner.override_options(N, Maybe::Given(None), N, N, N).unwrap();
     owner.release_override(layer).unwrap();
-    owner.background_audio();
-    let used = [Feature::UpdateOptions, Feature::OverrideOptions, Feature::BackgroundAudio];
+    let used = [Feature::UpdateOptions, Feature::OverrideOptions];
     assert_eq!(*owner.0.features.lock(), BTreeSet::from(used));
 }

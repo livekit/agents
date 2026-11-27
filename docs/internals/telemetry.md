@@ -229,9 +229,11 @@ LiveKit's own statistics, never customer data; the list is
 - Sessions and features: one `SessionStats` per session holds what its agents did (a handoff
   landed, a tool body started for a local agent or a `RemoteAgent`) and each feature it used,
   once. A voice session's machine fills it, told by its executor of what only the executor sees
-  (`Command::FeatureUsed`: an options call, a background audio player, an MCP toolset
-  activated), and emits it when its spans close. A text request's runs report theirs to their
+  (`Command::FeatureUsed`: an options call, an MCP toolset activated), and emits it when its spans close. A text request's runs report theirs to their
   turn (`HandlerPort::session_stats`), which emits it when the request ends.
+- Background audio is the one feature not counted per session: each player started counts
+  once, when it starts, under the process tracer's root context
+  (`runtime/src/voice/background_audio.rs`), with or without a session.
 - MCP: an `MCPToolset`'s lifecycle marks its toolset's lifetime port when it sets it up; a
   toolset group knows after its start whether one of its toolsets, or one nested in them, is
   marked.
