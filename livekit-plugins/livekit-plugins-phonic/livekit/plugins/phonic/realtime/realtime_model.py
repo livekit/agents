@@ -1058,11 +1058,13 @@ class RealtimeSession(llm.RealtimeSession):
         await self._send_mid_session_reset()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        # Audio pushed before the config is sent waits in _send_ch, which _send_task drains right
+        # after the config. Phonic queues audio that arrives after the config until the conversation
+        # is ready, so nothing the caller says at startup is lost.
         if (
             not self._realtime_model.capabilities.audio_output
             or self._session_should_close.is_set()
-            or not self._ready_to_start.is_set()
-            or not self._socket
+            or self._main_atask.done()
         ):
             return
 
