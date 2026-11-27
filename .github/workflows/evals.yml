@@ -66,6 +66,7 @@ jobs:
         shell: bash
         env:
           LIVEKIT_EVALS_VERBOSE: 1
+          DRIVE_THRU_LLM_MODEL: openai/gpt-4.1
           PLUGIN: ${{ matrix.example }}
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
