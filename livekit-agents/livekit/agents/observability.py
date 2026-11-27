@@ -77,17 +77,16 @@ class Tagger:
     def add(self, tag: str, *, metadata: dict[str, Any] | None = None) -> None:
         """Add a tag to the session with optional structured metadata.
 
-        Adding `lk.success` or `lk.fail` replaces the current outcome and its reason.
+        Switching between `lk.success` and `lk.fail` clears the previous reason.
 
         Args:
             tag: The tag string in "key:value" format (e.g., "voicemail:true", "language:es").
             metadata: Optional dict of structured metadata associated with this tag.
         """
         if tag in _OUTCOME_TAGS:
-            # keep the outcome tags mutually exclusive, like success()/fail() do
             for outcome_tag in _OUTCOME_TAGS:
-                self._tags.pop(outcome_tag, None)
-            self._outcome_reason = None
+                if outcome_tag != tag and self._tags.pop(outcome_tag, None) is not None:
+                    self._outcome_reason = None
         self._tags[tag] = _TagEntry(metadata=metadata)
 
     def remove(self, tag: str) -> None:
