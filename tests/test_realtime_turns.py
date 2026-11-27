@@ -486,7 +486,220 @@ async def test_tool_result_reply_required_reaches_realtime_session(
     assert model.active_session.generate_reply_calls == 1
 
 
+@pytest.mark.parametrize("eager", [True, False])
+async def test_an_eager_tool_output_is_sent_before_the_speech_plays_out(eager: bool) -> None:
+    """A model that wants tool outputs eagerly gets each as its tool returns, not after playout."""
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def lookup(self) -> str:
+            """Look something up."""
+            self.tool_executed.set()
+            return "ok"
+
+    agent = ToolAgent()
+    sent_at: list[float] = []
+    _, model = await run_realtime_tool_turn(
+        agent,
+        tool_executed=agent.tool_executed,
+        capabilities=fake_capabilities(eager_tool_outputs=eager),
+        on_session=lambda s: s.on("function_tools_executed", lambda _: sent_at.append(time.time())),
+    )
+
+    assert len(sent_at) == 1
+    synced = [i for i in model.active_session.chat_ctx.items if i.type == "function_call_output"]
+    assert [o.call_id for o in synced] == ["1"]
+    # the turn plays a second of audio after the tool returns
+    played_out_at = time.time()
+    assert (played_out_at - sent_at[0] > 0.5) is eager
+
+
+async def test_an_early_tool_result_leaves_the_agent_listening() -> None:
+    """A result the model answers on its own does not keep the agent thinking after its turn."""
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def lookup(self) -> str:
+            """Look something up."""
+            self.tool_executed.set()
+            return "ok"
+
+    agent = ToolAgent()
+    states: list[str] = []
+    await run_realtime_tool_turn(
+        agent,
+        tool_executed=agent.tool_executed,
+        capabilities=fake_capabilities(eager_tool_outputs=True),
+        on_session=lambda s: s.on("agent_state_changed", lambda ev: states.append(ev.new_state)),
+    )
+
+    # the model's continuation played inside the turn, so no later generation resets the state
+    assert states[-1] == "listening"
+
+
+@pytest.mark.parametrize("delays", [(0.0,), (2.0,), (0.0, 5.5)], ids=["eager", "batch", "mixed"])
+async def test_the_model_reply_to_a_tool_result_is_part_of_the_run(
+    delays: tuple[float, ...],
+) -> None:
+    """The run waits for the reply whether a result is sent during the speech or after it."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(eager_tool_outputs=True))
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup(self, delay: float) -> str:
+            """Look something up."""
+            await asyncio.sleep(delay)
+            return "found"
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(ToolAgent())
+
+        run = asyncio.ensure_future(session.run(user_input="look it up"))
+        rt_session = model.active_session
+        calls = [
+            llm.FunctionCall(call_id=str(i), name="lookup", arguments=f'{{"delay": {d}}}')
+            for i, d in enumerate(delays)
+        ]
+        (await _reply_future(rt_session)).set_result(
+            _generation("let me check", audio=1.0, calls=calls)
+        )
+        # the model replies in a new speech, a moment after the last result reaches it
+        while sum(i.type == "function_call_output" for i in rt_session.chat_ctx.items) < len(calls):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(1.5)
+        reply = _generation("found it", audio=0.5, response_id="reply")
+        reply.user_initiated = False
+        rt_session.emit("generation_created", reply)
+
+        result = await asyncio.wait_for(run, timeout=15)
+
+    assert [e.item.text_content for e in result.events if e.type == "message"] == [
+        "let me check",
+        "found it",
+    ]
+
+
 # --- chat context sync ---------------------------------------------------------
+
+
+@asynccontextmanager
+async def _realtime_turns() -> AsyncIterator[
+    tuple[AgentSession, FakeRealtimeModel, Agent, list[llm.ChatMessage]]
+]:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        added: list[llm.ChatMessage] = []
+        session.on(
+            "conversation_item_added",
+            lambda ev: (
+                added.append(ev.item)
+                if isinstance(ev.item, llm.ChatMessage) and ev.item.role == "user"
+                else None
+            ),
+        )
+        agent = Agent(instructions="test")
+        await session.start(agent)
+        yield session, model, agent, added
+
+
+async def _send(
+    session: AgentSession, model: FakeRealtimeModel, user_input: str | llm.ChatMessage, index: int
+) -> None:
+    reply = session.generate_reply(user_input=user_input)
+    (await _reply_future(model.active_session, index)).set_result(_generation("Hi"))
+    await reply
+    assert reply.exception() is None
+
+
+async def _added_user_message(
+    user_input: str | llm.ChatMessage,
+) -> tuple[llm.ChatMessage, FakeRealtimeSession, Agent]:
+    async with _realtime_turns() as (session, model, agent, added):
+        await _send(session, model, user_input, 0)
+        assert len(added) == 1
+        return added[0], model.active_session, agent
+
+
+async def test_generate_reply_keeps_the_chat_message_extra() -> None:
+    sent = llm.ChatMessage(role="user", content=["hello"], extra={"flag": "from-app"})
+
+    added, rt_session, agent = await _added_user_message(sent)
+
+    assert added.extra == {"flag": "from-app"}
+    assert added.content == ["hello"]
+    local = agent.chat_ctx.get_by_id(added.id)
+    assert isinstance(local, llm.ChatMessage) and local.extra == {"flag": "from-app"}
+    assert rt_session.chat_ctx.get_by_id(added.id) is not None
+
+
+async def test_generate_reply_text_input_is_unchanged() -> None:
+    added, rt_session, _ = await _added_user_message("hello")
+
+    assert added.content == ["hello"]
+    assert added.extra == {}
+    assert rt_session.chat_ctx.get_by_id(added.id) is not None
+
+
+async def test_generate_reply_turn_differs_from_a_text_turn_only_by_extra() -> None:
+    sent = llm.ChatMessage(
+        role="assistant",
+        content=["first", "second"],
+        interrupted=True,
+        transcript_confidence=0.4,
+        metrics=llm.MetricsReport(end_of_turn_delay=1.5),
+        extra={"flag": "from-app"},
+    )
+    text_turn, _, _ = await _added_user_message(sent.raw_text_content or "")
+
+    added, rt_session, _ = await _added_user_message(sent)
+
+    fields = {"id", "extra", "created_at"}
+    assert added.model_dump(exclude=fields) == text_turn.model_dump(exclude=fields)
+    remote = rt_session.chat_ctx.get_by_id(added.id)
+    assert isinstance(remote, llm.ChatMessage)
+    assert remote.model_dump(exclude=fields) == text_turn.model_dump(exclude=fields)
+    assert added.id != sent.id
+    assert added.extra == {"flag": "from-app"}
+
+
+async def test_generate_reply_uses_the_message_as_it_was_when_called() -> None:
+    sent = llm.ChatMessage(role="user", content=["hello"], extra={"flag": "first"})
+
+    async with _realtime_turns() as (session, model, _, added):
+        reply = session.generate_reply(user_input=sent)
+        sent.content[0] = "edited"
+        sent.extra["flag"] = "edited"
+        (await _reply_future(model.active_session)).set_result(_generation("Hi"))
+        await reply
+
+        assert reply.exception() is None
+        assert [(m.content, m.extra) for m in added] == [(["hello"], {"flag": "first"})]
+
+
+async def test_generate_reply_retagged_resend_keeps_the_first_turn_tag() -> None:
+    sent = llm.ChatMessage(role="user", content=["hello"], extra={"source": "web"})
+
+    async with _realtime_turns() as (session, model, _, added):
+        await _send(session, model, sent, 0)
+        sent.extra["source"] = "sms"
+        await _send(session, model, sent, 1)
+
+        assert [m.extra for m in added] == [{"source": "web"}, {"source": "sms"}]
+        assert added[0].id != added[1].id
+        first = session.history.get_by_id(added[0].id)
+        assert isinstance(first, llm.ChatMessage) and first.extra == {"source": "web"}
 
 
 class _AckedSession(FakeRealtimeSession):
@@ -625,6 +838,7 @@ class _ReplyTaskActivity(SimpleNamespace):
             _rt_session=rt_session,
             _rt_chat_ctx_lock=asyncio.Lock(),
             _authorization_allowed=authorization_allowed,
+            _wait_authorization_allowed=lambda speech_handle: authorization_allowed.wait(),
             _user_silence_event=user_silence,
             _rt_overlapping_speech_enabled=False,
             tools=[],

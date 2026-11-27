@@ -2258,6 +2258,7 @@ def _make_reply_session(speech: Any) -> Any:
     activity.scheduling_paused = False
     session.wait_for_idle = AsyncMock(return_value=activity)
     session.generate_reply = MagicMock(return_value=speech)
+    session.amd = None
     return session
 
 
@@ -2506,6 +2507,34 @@ class TestToolCallEvents:
         assert isinstance(completed, ToolReplyUpdated)
         assert completed.status == "completed"
         assert completed.update_ids == ["c5_update_1", "c5_final"]
+
+    @pytest.mark.asyncio
+    async def test_deferred_reply_is_dropped_while_amd_runs(self):
+        from livekit.agents.voice.events import RunContext, ToolReplyUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("step one")
+            return "all done"
+
+        import asyncio as _asyncio
+
+        session = _make_reply_session(_make_fake_speech())
+        # AMD rejects direct replies; its next reply sees the updates in the chat context
+        session.amd = object()
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c9", name="progress_tool")
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        session.generate_reply.assert_not_called()
+        assert not executor._pending_updates
+        assert not any(isinstance(i, ToolReplyUpdated) for i in _emitted_items(session))
 
     @pytest.mark.parametrize("reply_flags", [(False,), (True,), (False, True), (True, False)])
     @pytest.mark.parametrize(

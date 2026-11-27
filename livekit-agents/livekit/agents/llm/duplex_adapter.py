@@ -272,6 +272,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
                 turn_detection=True,
                 user_transcription=caps.user_transcription,
                 auto_tool_reply_generation=caps.auto_tool_reply_generation,
+                eager_tool_outputs=caps.eager_tool_outputs,
                 audio_output=True,
                 manual_function_calls=False,
                 supports_overlapping_speech=True,
@@ -347,6 +348,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
         duplex.on("delegation_created", lambda ev: self.emit("delegation_created", ev))
+        duplex.on("_delegated_response", lambda ev: self.emit("_delegated_response", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(

@@ -80,6 +80,10 @@ class RealtimeCapabilities:
     """Whether the model and the caller may speak at once, the model deciding when to yield. The
     framework then never holds the model's speech back for silence, nor cuts it when the caller
     starts, so its output reaches the caller as it is generated"""
+    eager_tool_outputs: bool = False
+    """Whether the model wants each tool output as soon as its tool returns, rather than after the
+    speech that carried the call, and decides itself when to reply. Applies with
+    ``auto_tool_reply_generation`` only"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -169,6 +173,7 @@ EventTypes = Literal[
     "metrics_collected",
     "remote_item_added",
     "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
+    "_delegated_response",  # a _DelegatedResponse, each response of a delegated model
     "error",
 ]
 

@@ -48,6 +48,9 @@ class DuplexCapabilities:
     """Whether the model transcribes the user's speech"""
     auto_tool_reply_generation: bool
     """Whether the model automatically continues speaking after receiving tool results"""
+    eager_tool_outputs: bool = False
+    """Whether the model wants each tool output as soon as its tool returns, and decides itself
+    when to continue"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -63,6 +66,7 @@ DuplexEventTypes = Literal[
     "input_speech_stopped",
     "input_audio_transcription_completed",
     "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
+    "_delegated_response",  # a _DelegatedResponse, each response of a delegated model
     "session_reconnected",
     "metrics_collected",
     "error",
