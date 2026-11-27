@@ -35,7 +35,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 
 from .models import TTSLanguages, TTSSpeechEngine, TTSTextType
-from .utils import _resolve_session, _strip_nones
+from .utils import _resolve_region, _resolve_session, _strip_nones
 
 if TYPE_CHECKING:
     import aioboto3  # type: ignore
@@ -50,7 +50,7 @@ class _TTSOptions:
     # https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
     voice: str
     speech_engine: TTSSpeechEngine
-    region: str | None
+    region: str
     sample_rate: int
     language: LanguageCode | None
     text_type: TTSTextType
@@ -84,7 +84,7 @@ class TTS(tts.TTS):
             speech_engine(TTSSpeechEngine, optional): The engine to use for the synthesis. Defaults to "generative".
             text_type(TTSTextType, optional): Type of text to synthesize. Use "ssml" for SSML-enhanced text. Defaults to "text".
             sample_rate(int, optional): The audio frequency specified in Hz. Defaults to 16000.
-            region(str, optional): The region to use for the synthesis. Defaults to "us-east-1".
+            region(str, optional): The region to use for the synthesis. Defaults to the session's default client config region, then ``AWS_REGION``, then the region configured for the session (e.g. ``AWS_DEFAULT_REGION``), or "us-east-1" if none is set.
             api_key(str, optional): AWS access key id.
             api_secret(str, optional): AWS secret access key.
             session(AioSession, optional): Optional aiobotocore session to use. Passing a legacy
@@ -101,14 +101,13 @@ class TTS(tts.TTS):
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
                 self._session.set_credentials(api_key, api_secret)
-            if is_given(region) and region:
-                self._session.set_config_variable("region", region)
 
         self._opts = _TTSOptions(
             voice=voice,
             speech_engine=speech_engine,
             text_type=text_type,
-            region=region or None,
+            # passed to every client, so it also applies to a session given by the caller
+            region=_resolve_region(self._session, region),
             language=LanguageCode(language) if is_given(language) and language else None,
             sample_rate=sample_rate,
         )
@@ -159,7 +158,9 @@ class ChunkedStream(tts.ChunkedStream):
                 read_timeout=10,
                 retries={"mode": "standard", "total_max_attempts": 1},
             )
-            async with self._tts._session.create_client("polly", config=config) as client:  # type: ignore
+            async with self._tts._session.create_client(  # type: ignore
+                "polly", region_name=self._opts.region, config=config
+            ) as client:
                 response = await client.synthesize_speech(
                     **_strip_nones(
                         {

@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
+
 import pytest
+from aiobotocore.config import AioConfig
+from aiobotocore.session import get_session
+from aiobotocore.stub import AioStubber
 from botocore.exceptions import ClientError
 
 from livekit.agents import APIConnectOptions, APIError, APIStatusError
@@ -202,3 +209,91 @@ async def test_bedrock_400_fails_fast_throttling_and_5xx_retried(
     if attempts == 1:
         assert isinstance(exc_info.value, APIStatusError)
         assert exc_info.value.status_code == 400
+
+
+@pytest.fixture
+def _no_aws_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    for name in ("AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "credentials"))
+    # dummy credentials, so creating a client never looks anywhere else for them
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+async def _request_region(monkeypatch: pytest.MonkeyPatch, instance: BedrockLLM) -> str:
+    """Run one turn with a real Bedrock client whose call is stubbed, and return its region."""
+    regions: list[str] = []
+    session = instance._session
+    create_client = session.create_client
+
+    @asynccontextmanager
+    async def _create_client(service_name: str, **kwargs: Any) -> AsyncIterator[Any]:
+        assert service_name == "bedrock-runtime"
+        async with create_client(service_name, **kwargs) as client:
+            # the region botocore resolved, so the SDK's own precedence is what is tested
+            regions.append(client.meta.region_name)
+            with AioStubber(client) as stubber:
+                stubber.add_client_error("converse_stream", http_status_code=400)
+                yield client
+
+    monkeypatch.setattr(session, "create_client", _create_client)
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = instance.chat(chat_ctx=chat_ctx, conn_options=APIConnectOptions(max_retry=0))
+    with pytest.raises(APIStatusError):
+        await stream.collect()
+
+    assert len(regions) == 1
+    return regions[0]
+
+
+@pytest.mark.usefixtures("_no_aws_config")
+@pytest.mark.parametrize(
+    ("region", "env", "expected"),
+    [
+        (None, {}, "us-east-1"),
+        ("eu-west-1", {}, "eu-west-1"),
+        (None, {"AWS_DEFAULT_REGION": "ap-southeast-2"}, "ap-southeast-2"),
+        # as the STT reads it; botocore itself only reads AWS_DEFAULT_REGION
+        (None, {"AWS_REGION": "ap-south-1"}, "ap-south-1"),
+    ],
+)
+@pytest.mark.parametrize("pass_session", [False, True])
+async def test_region_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    region: str | None,
+    env: dict[str, str],
+    expected: str,
+    pass_session: bool,
+) -> None:
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    kwargs: dict[str, Any] = {"model": "us.anthropic.claude-sonnet-4-6"}
+    if region:
+        kwargs["region"] = region
+    if pass_session:
+        kwargs["session"] = get_session()
+
+    instance = BedrockLLM(**kwargs)
+    assert await _request_region(monkeypatch, instance) == expected
+
+
+@pytest.mark.usefixtures("_no_aws_config")
+@pytest.mark.parametrize(
+    ("region", "expected"), [(None, "eu-central-1"), ("eu-west-1", "eu-west-1")]
+)
+async def test_session_default_client_config_region(
+    monkeypatch: pytest.MonkeyPatch, region: str | None, expected: str
+) -> None:
+    # the session's default client config wins over the environment, the region argument over both
+    monkeypatch.setenv("AWS_REGION", "ap-south-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "ap-southeast-2")
+    session = get_session()
+    session.set_default_client_config(AioConfig(region_name="eu-central-1"))
+    kwargs: dict[str, Any] = {"region": region} if region else {}
+
+    instance = BedrockLLM(model="us.anthropic.claude-sonnet-4-6", session=session, **kwargs)
+    assert await _request_region(monkeypatch, instance) == expected
