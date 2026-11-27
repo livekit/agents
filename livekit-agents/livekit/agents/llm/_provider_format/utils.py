@@ -160,12 +160,12 @@ def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
     for item in chat_ctx.items:
         if (item.type == "message" and item.role == "assistant") or item.type == "function_call":
             # only assistant messages and function calls can be grouped
-            # For function calls, use group_id if available (for parallel function calls),
-            # otherwise fall back to id-based grouping for backwards compatibility
-            if item.type == "function_call" and item.group_id:
-                group_id = item.group_id
+            # A generated call appends /fnc_N to its assistant message's full ID.
+            # Keep any slashes already present in that ID; they do not join messages.
+            if item.type == "function_call":
+                group_id = item.group_id or item.id.rsplit("/", 1)[0]
             else:
-                group_id = item.id.split("/")[0]
+                group_id = item.id
             if group_id not in item_groups:
                 item_groups[group_id] = _ChatItemGroup().add(item)
             else:

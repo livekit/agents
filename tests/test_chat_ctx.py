@@ -290,6 +290,80 @@ def test_mistralai_format_can_skip_trailing_user_message_injection():
     assert messages == [{"type": "message.output", "role": "assistant", "content": "Hi there"}]
 
 
+@pytest.mark.parametrize(
+    "fmt", ["openai", "openai.responses", "anthropic", "google", "aws", "mistralai"]
+)
+def test_provider_format_preserves_distinct_assistant_ids_with_slashes(fmt: str) -> None:
+    ctx = ChatContext()
+    ctx.add_message(role="user", content="First question")
+    ctx.add_message(role="assistant", content="First answer", id="conversation/reply/1")
+    ctx.add_message(role="user", content="Second question")
+    ctx.add_message(role="assistant", content="Second answer", id="conversation/reply/2")
+
+    messages, _ = ctx.to_provider_format(fmt, inject_dummy_user_message=False)
+
+    texts = []
+    for message in messages:
+        content = message["parts"] if fmt == "google" else message["content"]
+        texts.append(content if isinstance(content, str) else "\n".join(p["text"] for p in content))
+    assistant_role = "model" if fmt == "google" else "assistant"
+    assert [message["role"] for message in messages] == [
+        "user",
+        assistant_role,
+        "user",
+        assistant_role,
+    ]
+    assert texts == ["First question", "First answer", "Second question", "Second answer"]
+
+
+@pytest.mark.parametrize("response_id", ["reply", "conversation/reply/1"])
+@pytest.mark.parametrize("explicit_group", [False, True])
+def test_provider_format_groups_calls_with_the_full_assistant_id(
+    response_id: str, explicit_group: bool
+) -> None:
+    ctx = ChatContext()
+    ctx.add_message(role="user", content="Look up both orders")
+    ctx.add_message(role="assistant", content="Checking both orders", id=response_id)
+    for i in range(2):
+        ctx.items.append(
+            FunctionCall(
+                id=f"unrelated_{i}" if explicit_group else f"{response_id}/fnc_{i}",
+                group_id=response_id if explicit_group else None,
+                call_id=f"call_{i}",
+                name="lookup_order",
+                arguments=f'{{"order": {i}}}',
+            )
+        )
+    for i in reversed(range(2)):
+        ctx.items.append(
+            FunctionCallOutput(call_id=f"call_{i}", output=f"Order {i} shipped", is_error=False)
+        )
+
+    messages, _ = ctx.to_provider_format("openai")
+
+    assert messages == [
+        {"role": "user", "content": "Look up both orders"},
+        {
+            "role": "assistant",
+            "content": "Checking both orders",
+            "tool_calls": [
+                {
+                    "id": "call_0",
+                    "type": "function",
+                    "function": {"name": "lookup_order", "arguments": '{"order": 0}'},
+                },
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup_order", "arguments": '{"order": 1}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Order 1 shipped"},
+        {"role": "tool", "tool_call_id": "call_0", "content": "Order 0 shipped"},
+    ]
+
+
 class _FixedSummaryLLM(FakeLLM):
     """FakeLLM that returns a fixed summary string for any input."""
 
