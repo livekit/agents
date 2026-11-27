@@ -36,6 +36,13 @@ class IVRActivity:
         self._session.on("agent_state_changed", self._on_agent_state_changed)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
 
+        # the state events only fire on a change: when detection starts with the session
+        # already idle (e.g. right after AMD classifies an IVR), no event would ever arm
+        # the silence check, so start from the current states
+        self._current_user_state = self._session.user_state
+        self._current_agent_state = self._session.agent_state
+        self._schedule_silence_check()
+
     @property
     def tools(self) -> list[llm.FunctionTool | llm.RawFunctionTool]:
         from ...beta.tools.send_dtmf import send_dtmf_events
