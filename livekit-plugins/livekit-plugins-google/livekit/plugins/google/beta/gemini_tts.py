@@ -382,7 +382,8 @@ class ChunkedStream(tts.ChunkedStream):
             if _styles_per_part(opts.model):
                 extra_body["generationConfig"] = {"response_format": _RESPONSE_FORMAT}
             if (styled_parts := self._styled_parts()) is not None:
-                extra_body["contents"] = [{"parts": styled_parts}]
+                # a raw Content has no default role, and Vertex rejects one without it
+                extra_body["contents"] = [{"role": "user", "parts": styled_parts}]
             if extra_body:
                 config.http_options = types.HttpOptions(extra_body=extra_body)
 
