@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import defaultdict
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
 from livekit.agents.types import TOPIC_CHAT
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
+    _audio_stream_from_track,
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
 )
@@ -1218,6 +1220,105 @@ async def test_warns_on_double_noise_cancellation(
     assert ("enhanced noise cancellation" in caplog.text) is warns
 
     await stream.aclose()
+
+
+@pytest.mark.real_time
+@pytest.mark.asyncio
+async def test_noise_cancellation_open_does_not_block_the_loop() -> None:
+    """BVC's native session is built inside AudioStream.from_track. That open has to leave the
+    job loop free to run other work (issue #8189)."""
+    room = _FakeRoom()
+    nc_options = rtc.NoiseCancellationOptions(module_id="bvc", options={"modelPath": "m.kef"})
+    audio_input = _make_audio_input_stream(room, noise_cancellation=nc_options)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+    loop_thread = threading.current_thread()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_from_track(**kwargs: object) -> _MockAudioStream:
+        assert threading.current_thread() is not loop_thread
+        assert kwargs["noise_cancellation"] is nc_options
+        assert kwargs["loop"] is not None
+        entered.set()
+        if not release.wait(timeout=2):
+            raise TimeoutError("event loop did not resume while the filter session was opening")
+        return rtc_stream
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=blocking_from_track):
+        assert audio_input._on_track_available(track, publication, participant)
+        # returned while from_track is still blocked, so the loop itself is not inside it
+        await asyncio.wait_for(asyncio.to_thread(entered.wait, 2), timeout=2)
+        ran = False
+
+        async def _other_work() -> None:
+            nonlocal ran
+            ran = True
+
+        await _other_work()
+        assert ran
+        release.set()
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=2)
+
+    assert audio_input._stream is rtc_stream
+    await audio_input.aclose()
+
+
+@pytest.mark.real_time
+@pytest.mark.asyncio
+async def test_aclose_discards_noise_cancellation_stream_still_opening() -> None:
+    room = _FakeRoom()
+    nc_options = rtc.NoiseCancellationOptions(module_id="bvct", options={})
+    audio_input = _make_audio_input_stream(room, noise_cancellation=nc_options)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_from_track(**kwargs: object) -> _MockAudioStream:
+        entered.set()
+        if not release.wait(timeout=2):
+            raise TimeoutError("audio stream open was abandoned without being released")
+        return rtc_stream
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=blocking_from_track):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(asyncio.to_thread(entered.wait, 2), timeout=2)
+        closing = asyncio.create_task(audio_input.aclose())
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.wait_for(closing, timeout=2)
+
+    assert rtc_stream.ended.is_set()
+    assert not rtc_stream.started.is_set()
+    assert audio_input._stream is None
+
+
+@pytest.mark.real_time
+@pytest.mark.asyncio
+async def test_off_loop_audio_stream_task_runs_on_the_caller_loop() -> None:
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.current_thread()
+    ran = asyncio.Event()
+
+    async def _mark() -> None:
+        assert threading.current_thread() is loop_thread
+        ran.set()
+
+    def fake_from_track(**kwargs: object) -> asyncio.Task[None]:
+        assert threading.current_thread() is not loop_thread
+        stream_loop = kwargs["loop"]
+        assert not isinstance(stream_loop, asyncio.AbstractEventLoop)
+        return stream_loop.create_task(_mark())  # type: ignore[union-attr]
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=fake_from_track):
+        task = await asyncio.to_thread(_audio_stream_from_track, loop, track=None)
+
+    await asyncio.wait_for(ran.wait(), timeout=2)
+    assert task.get_loop() is loop
+    task.cancel()
 
 
 # -- audio output tests -------------------------------------------------------
