@@ -995,6 +995,32 @@ async def test_error_frame_raises_api_error(code: int, retryable: bool):
         await stream.aclose()
 
 
+@pytest.mark.parametrize(
+    ("message", "retryable"),
+    [
+        ("Invalid or expired API key", False),
+        ("Insufficient credits to continue session. Your organization has run out", False),
+        ("No active subscription", False),
+        ("Concurrency limit exceeded", True),
+    ],
+)
+async def test_account_failures_are_not_retried(message: str, retryable: bool):
+    """1008 covers both account failures (permanent) and the concurrency cap (transient)."""
+    footer = "\nNeed more support? Feel free to reach out by email at support@gradium.ai"
+    error = {"type": "error", "message": message + footer, "code": 1008}
+    stt, _, _ = _make_stt([READY, error, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError) as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.status_code == 1008
+        assert excinfo.value.retryable is retryable
+    finally:
+        await stream.aclose()
+
+
 async def test_non_object_frame_is_skipped():
     """Valid JSON that is not an object is logged and skipped, not fatal."""
     stt, _, _ = _make_stt([READY, ["unexpected"], _text("hello", 0.1)])
