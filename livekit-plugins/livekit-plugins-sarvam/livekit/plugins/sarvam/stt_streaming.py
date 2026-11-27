@@ -21,6 +21,7 @@ import os
 import platform
 import time
 import weakref
+from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any, Literal, cast, get_args
 from urllib.parse import urlencode
@@ -86,14 +87,26 @@ class _CaptureTimedInputChan(stt.RecognizeStream._InputChan):
 
     def __init__(self) -> None:
         super().__init__()
-        # wall-clock capture start of the last frame read, or None before the first
+        # wall-clock capture start of the last frame read; None before the first frame and
+        # for audio drained from the resampler, which continues the audio before it
         self.last_capture_start: float | None = None
+        # set while flush() drains the resampler: that audio was captured before the push
+        # that ended the input, however long ago the flush comes
+        self.draining_resampler = False
+        self._drained: deque[bool] = deque()
+
+    def send_nowait(self, value: rtc.AudioFrame | stt.RecognizeStream._FlushSentinel) -> None:
+        super().send_nowait(value)
+        if isinstance(value, rtc.AudioFrame):
+            self._drained.append(self.draining_resampler)
 
     def recv_nowait(self) -> rtc.AudioFrame | stt.RecognizeStream._FlushSentinel:
         pushed_at = self._pushed_at[0] if self._pushed_at else None
         last_pushed_at, queued_duration = self._last_pushed_at, self._queued_duration
         value = super().recv_nowait()
-        if isinstance(value, rtc.AudioFrame) and pushed_at is not None:
+        if isinstance(value, rtc.AudioFrame) and self._drained.popleft():
+            self.last_capture_start = None
+        elif isinstance(value, rtc.AudioFrame) and pushed_at is not None:
             # Same bound the base queue anchors the first frame on: a frame starts at most
             # its own duration before its push (exact across a pause in the input), and at
             # most all queued audio before the latest push (exact for a burst).
@@ -1115,6 +1128,21 @@ class RealtimeSpeechStream(stt.SpeechStream):
         self._audio_position += duration
         self._input_clock.append_padding(duration)
         await self._safe_send_bytes(ws, _encode_pcm_for_wire(self._opts.encoding, chunk))
+
+    def flush(self) -> None:
+        """Mark the end of the current segment.
+
+        The resampler's tail goes out with the flush, so it is marked as continuing the
+        audio before it rather than dated to the flush.
+        """
+        chan = self._input_ch
+        if isinstance(chan, _CaptureTimedInputChan):
+            chan.draining_resampler = True
+        try:
+            super().flush()
+        finally:
+            if isinstance(chan, _CaptureTimedInputChan):
+                chan.draining_resampler = False
 
     def _input_start_of_last_read(self) -> float | None:
         """Capture start of the frame just read, in seconds since the first frame's capture.

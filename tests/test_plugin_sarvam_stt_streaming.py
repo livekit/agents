@@ -2503,3 +2503,34 @@ def test_input_clock_ignores_delivery_jitter() -> None:
     clock.append_input(0.02, 0.03)  # 10 ms late: jitter, not a pause
     clock.append_input(0.02, 0.04)
     assert clock.input_time(0.06) == pytest.approx(0.06)
+
+
+@pytest.mark.virtual_time
+async def test_a_late_manual_flush_keeps_the_resampler_tail_with_the_speech() -> None:
+    """Audio the resampler held until flush() was captured with the speech, not at the flush."""
+    session = _ClockSession()
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test", model="saaras:v4", language="hi-IN", endpointing="manual"
+    )
+    stt._session = session  # type: ignore[assignment]
+    async with _clock_stream(session, stt=stt) as (stream, events):
+        for _ in range(50):  # 1 s of 24 kHz room audio, resampled to 16 kHz
+            await asyncio.sleep(0.02)
+            stream.push_frame(
+                stt_streaming.rtc.AudioFrame(
+                    data=np.full(480, 1000, dtype=np.int16).tobytes(),
+                    sample_rate=24000,
+                    num_channels=1,
+                    samples_per_channel=480,
+                )
+            )
+        await asyncio.sleep(4.0)  # the caller stops sending, then the turn is committed
+        stream.flush()
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 1.0 - 0.03)
+        await asyncio.sleep(0.1)
+
+        ws.emit(event="transcript.final", utterance_idx=0, text="हाँ")  # no Sarvam times
+        speech = await _final_speech(events)
+
+        assert speech.end_time == pytest.approx(1.0, abs=0.03)
