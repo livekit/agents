@@ -1,5 +1,5 @@
 use super::models::ModelKind;
-use crate::telemetry::decl::{Attrs, SpanValue, metric};
+use crate::telemetry::decl::{Attrs, metric};
 
 // One counter per feature, each counting the sessions that used it: a session's summary holds
 // each feature it used once, and adds 1 for it when the session ends.
@@ -55,39 +55,22 @@ pub struct FeatureBackgroundAudio;
 #[derive(Attrs)]
 pub struct FeatureLanguageSwitch;
 
-/// The kind of model a session changed while running.
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SwitchedModel {
-    Stt,
-    Tts,
-    Llm,
-    Realtime,
-}
-
-impl SwitchedModel {
-    /// The model kind its statistics are labelled with.
-    pub fn kind(self) -> ModelKind {
-        match self {
-            SwitchedModel::Stt => ModelKind::Stt,
-            SwitchedModel::Tts => ModelKind::Tts,
-            SwitchedModel::Llm => ModelKind::Llm,
-            SwitchedModel::Realtime => ModelKind::Realtime,
-        }
-    }
-}
-
-/// Sessions that changed a model while running, once for each kind they changed.
+/// Sessions that replaced a model with another while running, once for each distinct pair of
+/// kinds.
 #[metric(
     name = "lk.product.agents.feature.model_switch",
     kind = Counter,
     unit = "{session}",
     audience = ProductStats
 )]
-#[derive(Attrs)]
+#[derive(Attrs, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FeatureModelSwitch {
-    /// The kind of model that changed.
-    #[attr("lk.product.agents.feature.model_switch.kind")]
-    pub kind: SwitchedModel,
+    /// The kind of the model installed just before the switch.
+    #[attr("lk.product.agents.feature.model_switch.from.kind")]
+    pub from: ModelKind,
+    /// The kind of the model the switch installed.
+    #[attr("lk.product.agents.feature.model_switch.to.kind")]
+    pub to: ModelKind,
 }
 
 /// A feature a session can use.
@@ -97,5 +80,5 @@ pub enum Feature {
     UpdateOptions,
     OverrideOptions,
     LanguageSwitch,
-    ModelSwitch(SwitchedModel),
+    ModelSwitch(FeatureModelSwitch),
 }

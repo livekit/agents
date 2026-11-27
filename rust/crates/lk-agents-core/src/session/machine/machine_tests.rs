@@ -182,7 +182,11 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> SessionConfig {
             output,
             retries: Retries::default(),
         },
-        llm: Some(LlmRef { id: ResourceId(1), provider: ProviderId::of_label("fake") }),
+        llm: Some(LlmRef {
+            adapter: false,
+            id: ResourceId(1),
+            provider: ProviderId::of_label("fake"),
+        }),
         output_type_explicit: true,
         agent_tools: BTreeMap::new(),
     };

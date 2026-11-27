@@ -2,14 +2,14 @@ use crate::agent_session::VoiceDriver;
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::productstats::features::{Feature, SwitchedModel};
+use lk_agents_abi::productstats::features::{Feature, FeatureModelSwitch};
 use lk_agents_abi::productstats::models::{
     ModelKind, ModelLabels, ModelRequests, ModelTranscriptionDelay, ModelTtft, ModelUsage,
 };
 use lk_agents_abi::productstats::sessions::{
     Entrypoint, FalseInterruption, Interruption, Pipeline, TurnDetection, VoiceSessions,
 };
-use lk_agents_abi::resources::{LlmRef, SttRef, TtsRef};
+use lk_agents_abi::resources::{LlmRef, RealtimeRef, SttRef, TtsRef};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::{Maybe, ProviderId, RecognitionUsage};
 use std::collections::BTreeMap;
@@ -17,52 +17,75 @@ use std::collections::BTreeMap;
 // The product statistics a voice session measures itself: its own count, and what only it knows
 // of its models. They leave with the session's telemetry records; the session never records them.
 
-/// The model of each kind the session started with, which a switch is told against; `None`
-/// when it had none.
-#[derive(Default)]
-pub(crate) struct StartedWith(BTreeMap<SwitchedModel, Option<ProviderId>>);
+/// A model installed in one of the session's slots: its kind, whether it is an adapter over
+/// other models (a fallback chain, one model whatever member serves), and its identity.
+type InstalledModel = (ModelKind, bool, ProviderId);
 
-impl StartedWith {
+/// The model installed now in each slot (STT, TTS, LLM, realtime), which the next one is
+/// switched from; `None` when the session has none there.
+#[derive(Default)]
+pub(crate) struct Installed(BTreeMap<ModelKind, Option<InstalledModel>>);
+
+impl Installed {
     pub(crate) fn models(stt: &Option<SttRef>, tts: &Option<TtsRef>, llm: &Option<LlmRef>) -> Self {
-        StartedWith(BTreeMap::from([
-            (SwitchedModel::Stt, stt.as_ref().map(|stt| stt.provider.clone())),
-            (SwitchedModel::Tts, tts.as_ref().map(|tts| tts.provider.clone())),
-            (SwitchedModel::Llm, llm.as_ref().map(|llm| llm.provider.clone())),
+        let model = |kind, adapter, id: &ProviderId| (kind, adapter, id.clone());
+        Installed(BTreeMap::from([
+            (ModelKind::Stt, stt.as_ref().map(|m| model(ModelKind::Stt, m.adapter, &m.provider))),
+            (ModelKind::Tts, tts.as_ref().map(|m| model(ModelKind::Tts, m.adapter, &m.provider))),
+            (ModelKind::Llm, llm.as_ref().map(|m| model(ModelKind::Llm, m.adapter, &m.provider))),
         ]))
     }
 
-    /// The session opened on this realtime model.
-    pub(crate) fn realtime(&mut self, model: Option<ProviderId>) {
-        self.0.insert(SwitchedModel::Realtime, model);
+    /// The session opened on this realtime or duplex model.
+    pub(crate) fn realtime(&mut self, model: Option<&RealtimeRef>) {
+        self.0.insert(ModelKind::Realtime, model.map(realtime_model));
     }
 }
 
+/// A realtime session's model: a duplex one says so by speaking over the caller.
+pub(crate) fn realtime_model(session: &RealtimeRef) -> InstalledModel {
+    let kind = match session.capabilities.supports_overlapping_speech {
+        true => ModelKind::Duplex,
+        false => ModelKind::Realtime,
+    };
+    (kind, false, session.provider.clone())
+}
+
 impl VoiceDriver {
-    /// A model of `kind` is installed, however it came (`update_options`, `override_options`, an
-    /// agent that brings its own): a switch when it is another than the one the session started
-    /// with.
-    pub(crate) fn count_model_installed(&mut self, kind: SwitchedModel, model: &ProviderId) {
-        let started = self.session.started_with.0.get(&kind).cloned().flatten();
-        if started.as_ref() != Some(model) {
-            self.session.stats.used(Feature::ModelSwitch(kind));
+    /// A model is installed in `slot`, however it came (`update_options`, `override_options`,
+    /// an agent that brings its own), or removed (`None`): a switch when it is another than the
+    /// one installed there just before. Installing where there was none switches from nothing; a
+    /// model of the same identity installed again is the same model; and an adapter installed
+    /// over an adapter is the same model, whichever member each reports.
+    pub(crate) fn count_model_installed(&mut self, slot: ModelKind, model: Option<InstalledModel>) {
+        let before = self.session.installed.0.insert(slot, model.clone()).flatten();
+        let (Some((from, was_adapter, old)), Some((to, adapter, new))) = (before, model) else {
+            return;
+        };
+        if !(was_adapter && adapter) && (from, &old) != (to, &new) {
+            self.session.stats.used(Feature::ModelSwitch(FeatureModelSwitch { from, to }));
         }
     }
 
-    /// The models a frame installs, each told against the one the session started with.
+    /// The models a frame installs or removes.
     pub(crate) fn count_models_installed(
         &mut self,
         stt: &Maybe<Option<SttRef>>,
         tts: &Maybe<Option<TtsRef>>,
         llm: &Maybe<Option<LlmRef>>,
     ) {
-        if let Maybe::Given(Some(stt)) = stt {
-            self.count_model_installed(SwitchedModel::Stt, &stt.provider.clone());
+        let model = |kind, adapter, id: &ProviderId| (kind, adapter, id.clone());
+        if let Maybe::Given(stt) = stt {
+            let stt = stt.as_ref().map(|m| model(ModelKind::Stt, m.adapter, &m.provider));
+            self.count_model_installed(ModelKind::Stt, stt);
         }
-        if let Maybe::Given(Some(tts)) = tts {
-            self.count_model_installed(SwitchedModel::Tts, &tts.provider.clone());
+        if let Maybe::Given(tts) = tts {
+            let tts = tts.as_ref().map(|m| model(ModelKind::Tts, m.adapter, &m.provider));
+            self.count_model_installed(ModelKind::Tts, tts);
         }
-        if let Maybe::Given(Some(llm)) = llm {
-            self.count_model_installed(SwitchedModel::Llm, &llm.provider.clone());
+        if let Maybe::Given(llm) = llm {
+            let llm = llm.as_ref().map(|m| model(ModelKind::Llm, m.adapter, &m.provider));
+            self.count_model_installed(ModelKind::Llm, llm);
         }
     }
 

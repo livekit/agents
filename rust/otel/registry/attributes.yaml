@@ -93,7 +93,7 @@
       "brief": "Attributes declared in `lk_agents_abi::productstats::features`.",
       "attributes": [
         {
-          "id": "lk.product.agents.feature.model_switch.kind",
+          "id": "lk.product.agents.feature.model_switch.from.kind",
           "type": {
             "members": [
               {
@@ -119,11 +119,56 @@
                 "value": "realtime",
                 "brief": "realtime",
                 "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
               }
             ]
           },
           "stability": "development",
-          "brief": "The kind of model that changed."
+          "brief": "The kind of the model installed just before the switch."
+        },
+        {
+          "id": "lk.product.agents.feature.model_switch.to.kind",
+          "type": {
+            "members": [
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "tts",
+                "value": "tts",
+                "brief": "tts",
+                "stability": "development"
+              },
+              {
+                "id": "llm",
+                "value": "llm",
+                "brief": "llm",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The kind of the model the switch installed."
         }
       ]
     },

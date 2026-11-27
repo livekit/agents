@@ -6,7 +6,7 @@ use crate::telemetry::instruments::DURATION_BOUNDS;
 // declares; no table maps a name, and a plugin records nothing.
 
 /// The kind of model a statistic is about.
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ModelKind {
     Stt,
     Tts,

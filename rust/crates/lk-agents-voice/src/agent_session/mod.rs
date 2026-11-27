@@ -111,8 +111,8 @@ pub(crate) struct VoiceSessionState {
     /// What the session's agents did and the features it used, which its product statistics
     /// report when it ends.
     pub(crate) stats: lk_agents_abi::productstats::sessions::SessionStats,
-    /// The models the session started with, which a model switch is told against.
-    pub(crate) started_with: product_stats::StartedWith,
+    /// The model of each kind installed now, which the next one is a migration from.
+    pub(crate) installed: product_stats::Installed,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -162,7 +162,7 @@ impl VoiceSessionState {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
         let cfg = config.effective();
-        let started_with = product_stats::StartedWith::models(&stt, &tts, &llm);
+        let installed = product_stats::Installed::models(&stt, &tts, &llm);
         VoiceSessionState {
             usage: Default::default(),
             requests: Default::default(),
@@ -204,7 +204,7 @@ impl VoiceSessionState {
             local_inputs: Default::default(),
             user_turns: Default::default(),
             stats: Default::default(),
-            started_with,
+            installed,
         }
     }
 

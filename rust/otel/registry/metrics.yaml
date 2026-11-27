@@ -700,10 +700,14 @@
       "instrument": "counter",
       "unit": "{session}",
       "stability": "development",
-      "brief": "Sessions that changed a model while running, once for each kind they changed.",
+      "brief": "Sessions that replaced a model with another while running, once for each distinct pair of kinds.",
       "attributes": [
         {
-          "ref": "lk.product.agents.feature.model_switch.kind",
+          "ref": "lk.product.agents.feature.model_switch.from.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.feature.model_switch.to.kind",
           "requirement_level": "required"
         }
       ]

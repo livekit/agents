@@ -44,6 +44,7 @@ fn exact_realtime_output_with_a_registered_tts_leg_uses_the_pipeline() {
     let mut driver = crate::agent_session::tests::realtime_driver();
     let tts = ResourceId(41);
     driver.session.tts = Some(TtsRef {
+        adapter: false,
         id: tts,
         provider: Default::default(),
         capabilities: Default::default(),

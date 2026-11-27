@@ -892,8 +892,7 @@ impl VoiceDriver {
         let mut session =
             VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
         session.expressive = initial.expressive;
-        let realtime = activity.realtime().map(|realtime| realtime.provider.clone());
-        session.started_with.realtime(realtime);
+        session.installed.realtime(activity.realtime());
         let input = crate::agent_session::machine::activity::io::AgentInput::new(
             initial.sinks,
             initial.video_instance,

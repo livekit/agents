@@ -147,7 +147,7 @@ impl Runner {
             history: request.history,
             delegated: request.delegated,
             mode: Mode::Text,
-            llm: Some(LlmRef { id: ResourceId(0), provider: self.llm.id() }),
+            llm: Some(LlmRef { adapter: false, id: ResourceId(0), provider: self.llm.id() }),
             wall: WallAnchor::of(&*self.clock),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };

@@ -13,6 +13,8 @@ pub struct ResourceId(pub u64);
 pub struct SttRef {
     pub id: ResourceId,
     pub provider: ProviderId,
+    /// An adapter over other models (a fallback chain): `provider` is its active member's.
+    pub adapter: bool,
     pub capabilities: SttCapabilities,
     /// The object registered: the same recogniser handed back under a new id is not reopened.
     pub instance: usize,
@@ -29,6 +31,8 @@ pub struct VadRef {
 pub struct LlmRef {
     pub id: ResourceId,
     pub provider: ProviderId,
+    /// An adapter over other models (a fallback chain): `provider` is its active member's.
+    pub adapter: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +40,8 @@ pub struct TtsRef {
     pub id: ResourceId,
     /// The model registered, which a model switch is told by.
     pub provider: ProviderId,
+    /// An adapter over other models (a fallback chain): `provider` is its active member's.
+    pub adapter: bool,
     pub capabilities: TtsCapabilities,
     pub num_channels: u16,
 }

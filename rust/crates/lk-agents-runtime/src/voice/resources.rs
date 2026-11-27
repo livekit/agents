@@ -135,7 +135,8 @@ impl Resources {
     pub fn register_stt(&self, stt: Arc<dyn Stt>) -> SttRef {
         let (provider, capabilities) = (stt.id(), stt.capabilities());
         let instance = Arc::as_ptr(&stt).cast::<()>() as usize;
-        SttRef { id: self.insert(Resource::Stt(stt)), provider, capabilities, instance }
+        let adapter = stt.label() != provider.label;
+        SttRef { id: self.insert(Resource::Stt(stt)), provider, adapter, capabilities, instance }
     }
 
     pub fn register_vad(&self, vad: Arc<dyn Vad>) -> VadRef {
@@ -145,13 +146,16 @@ impl Resources {
 
     pub fn register_llm(&self, llm: Arc<dyn Llm>) -> LlmRef {
         let provider = llm.id();
-        LlmRef { id: self.insert(Resource::Llm(llm)), provider }
+        let adapter = llm.label() != provider.label;
+        LlmRef { id: self.insert(Resource::Llm(llm)), provider, adapter }
     }
 
     pub fn register_tts(&self, tts: Arc<dyn Tts>) -> TtsRef {
         let (capabilities, num_channels) = (tts.capabilities(), tts.num_channels());
         let provider = tts.id();
-        TtsRef { id: self.insert(Resource::Tts(tts)), provider, capabilities, num_channels }
+        let adapter = tts.label() != provider.label;
+        let id = self.insert(Resource::Tts(tts));
+        TtsRef { id, provider, adapter, capabilities, num_channels }
     }
 
     pub fn register_realtime(

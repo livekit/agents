@@ -13,7 +13,7 @@ use lk_agents_abi::metrics::base::{AgentMetrics, RealtimeModelMetrics};
 use lk_agents_abi::productstats::features::Feature;
 use lk_agents_abi::productstats::models::EndpointedBy;
 use lk_agents_abi::productstats::testkit::{Stat, stat};
-use lk_agents_abi::resources::{LlmRef, ResourceId, SttRef, TtsRef};
+use lk_agents_abi::resources::{LlmRef, RealtimeRef, ResourceId, SttRef, TtsRef};
 use lk_agents_abi::stt::events::SpeechData;
 use lk_agents_abi::telemetry::record::Record;
 use lk_agents_abi::usage::TokenUsage;
@@ -86,6 +86,7 @@ fn driver_on(legs: lk_agents_abi::voice::session_options::SessionLegs) -> VoiceD
 /// A session whose STT is LiveKit Inference's `deepgram/nova-3:en`.
 fn inference_stt_session() -> VoiceDriver {
     let stt = SttRef {
+        adapter: false,
         id: ResourceId(7),
         provider: ProviderId {
             label: "livekit.agents.inference.stt.STT".into(),
@@ -259,6 +260,7 @@ fn given<T>(model: T) -> Maybe<Option<T>> {
 
 fn tts(id: u64, name: &str) -> TtsRef {
     TtsRef {
+        adapter: false,
         id: ResourceId(id),
         provider: model("livekit.plugins.acme.tts.TTS", name),
         capabilities: Default::default(),
@@ -267,7 +269,11 @@ fn tts(id: u64, name: &str) -> TtsRef {
 }
 
 fn llm(id: u64, name: &str) -> LlmRef {
-    LlmRef { id: ResourceId(id), provider: model("livekit.plugins.acme.llm.LLM", name) }
+    LlmRef {
+        adapter: false,
+        id: ResourceId(id),
+        provider: model("livekit.plugins.acme.llm.LLM", name),
+    }
 }
 
 /// The features the session counts when it ends.
@@ -287,35 +293,68 @@ fn features(stats: &[Stat]) -> Vec<(String, Vec<String>)> {
 }
 
 // Catches: a model re-installed unchanged (every handoff names the agent's models) counted as a
-// switch, a kind switched twice counted twice, a switch of one kind hiding another's, or the
-// switch counted under the wrong kind.
+// switch, a second swap of the same kind counted again, a model installed where the session had
+// none counted (there is nothing to switch from), a fallback adapter re-installed after its
+// active member changed counted, or the switch reported under the wrong kinds.
 #[test]
-fn a_model_switch_is_counted_once_for_each_kind_changed() {
+fn a_model_switch_is_counted_once_for_each_pair_of_kinds() {
     let parts = SessionParts {
         agent: "agent".into(),
         tts: Some(tts(1, "sonic-2")),
-        llm: Some(llm(2, "gpt-4o-mini")),
+        llm: Some(LlmRef { adapter: true, ..llm(2, "gpt-4o-mini") }),
         ..Default::default()
     };
     let mut session = driver_with(parts, None, Now { at: Ts::ZERO, wall: std::time::UNIX_EPOCH });
     taken(&mut session);
-    // The same models, registered again under new ids.
+    // The same TTS registered again under a new id, the fallback adapter installed again while
+    // another member serves, and an STT where the session had none.
+    let fallen_back = LlmRef { adapter: true, ..llm(4, "claude-haiku") };
+    let first_stt = SttRef {
+        adapter: false,
+        id: ResourceId(9),
+        provider: model("livekit.plugins.acme.stt.STT", "nova-3"),
+        capabilities: Default::default(),
+        instance: 0,
+    };
     session.update_models(
+        given(first_stt),
         Maybe::NotGiven,
-        Maybe::NotGiven,
-        given(llm(4, "gpt-4o-mini")),
+        given(fallen_back),
         given(tts(3, "sonic-2")),
     );
-    assert!(session.session.stats.features.is_empty());
+    assert!(session.session.stats.features.is_empty(), "{:?}", session.session.stats.features);
+    // TTS A -> B -> C, and an agent that brings a plain LLM in place of the adapter.
     session.update_models(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, given(tts(5, "v3")));
     session.update_models(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, given(tts(6, "v4")));
-    // An agent that brings its own LLM.
     let mut update = agent_update("billing", None);
     update.llm = given(llm(7, "gpt-4.1"));
     session.handoff_step(HandoffEvent::Asked { update: Box::new(update), run: None });
     session.settle_step();
-    let switched = |kind: &str| ("model_switch".to_owned(), vec![kind.to_owned()]);
-    assert_eq!(ended_features(&mut session), [switched("tts"), switched("llm")]);
+    let switched =
+        |from: &str, to: &str| ("model_switch".to_owned(), vec![from.to_owned(), to.to_owned()]);
+    assert_eq!(ended_features(&mut session), [switched("tts", "tts"), switched("llm", "llm")]);
+}
+
+// Catches: a realtime session moving onto a duplex model (or back) reported as a same-kind
+// switch, or a realtime model replaced by the same model counted.
+#[test]
+fn a_realtime_model_swap_names_the_kinds_it_moved_between() {
+    use lk_agents_abi::productstats::models::ModelKind;
+    let mut session = realtime_driver();
+    let realtime = session.activity.realtime().expect("a realtime session").clone();
+    let installed = |session: &RealtimeRef| super::realtime_model(session);
+    session.count_model_installed(ModelKind::Realtime, Some(installed(&realtime)));
+    assert!(session.session.stats.features.is_empty(), "the same model is no switch");
+    let mut duplex = realtime.clone();
+    duplex.capabilities.supports_overlapping_speech = true;
+    session.count_model_installed(ModelKind::Realtime, Some(installed(&duplex)));
+    session.count_model_installed(ModelKind::Realtime, Some(installed(&realtime)));
+    let switched =
+        |from: &str, to: &str| ("model_switch".to_owned(), vec![from.to_owned(), to.to_owned()]);
+    assert_eq!(
+        ended_features(&mut session),
+        [switched("realtime", "duplex"), switched("duplex", "realtime")]
+    );
 }
 
 // Catches: the person's first language counted as a switch, a region or an unspecific code

@@ -5604,20 +5604,34 @@
     },
     {
       "name": "lk.product.agents.feature.model_switch",
-      "brief": "Sessions that changed a model while running, once for each kind they changed.",
+      "brief": "Sessions that replaced a model with another while running, once for each distinct pair of kinds.",
       "kind": "counter",
       "unit": "{session}",
       "registry": "agents",
       "labels": [
         {
-          "key": "lk.product.agents.feature.model_switch.kind",
+          "key": "lk.product.agents.feature.model_switch.from.kind",
           "type": "string",
           "required": true,
           "members": [
             "stt",
             "tts",
             "llm",
-            "realtime"
+            "realtime",
+            "duplex"
+          ],
+          "label": true
+        },
+        {
+          "key": "lk.product.agents.feature.model_switch.to.kind",
+          "type": "string",
+          "required": true,
+          "members": [
+            "stt",
+            "tts",
+            "llm",
+            "realtime",
+            "duplex"
           ],
           "label": true
         }

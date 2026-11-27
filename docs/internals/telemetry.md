@@ -234,6 +234,11 @@ LiveKit's own statistics, never customer data; the list is
 - Background audio is the one feature not counted per session: each player started counts
   once, when it starts, under the process tracer's root context
   (`runtime/src/voice/background_audio.rs`), with or without a session.
+- Model switch: the voice machine keeps the model installed in each slot (STT, TTS, LLM,
+  realtime) and, when another is installed there, adds `FeatureModelSwitch { from, to }` (two
+  `ModelKind`s) to the session's summary. An empty slot, the same identity, or an adapter over
+  an adapter (`adapter` on the model's ref: its own label differs from its identity's) is no
+  switch.
 - MCP: an `MCPToolset`'s lifecycle marks its toolset's lifetime port when it sets it up; a
   toolset group knows after its start whether one of its toolsets, or one nested in them, is
   marked.

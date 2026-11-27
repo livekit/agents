@@ -275,7 +275,7 @@ impl TextSessionRunner for Runner {
             root_agent,
             agents.iter().map(|agent| SessionAgent {
                 definition: agent.definition.clone(),
-                llm: Some(LlmRef { id: ResourceId(0), provider: agent.llm.id() }),
+                llm: Some(LlmRef { adapter: false, id: ResourceId(0), provider: agent.llm.id() }),
                 output_type_explicit: agent.output_type_explicit,
                 agent_tools: agent.agent_tools.clone(),
             }),

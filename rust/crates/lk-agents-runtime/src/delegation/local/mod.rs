@@ -303,7 +303,7 @@ impl Delegate {
             history,
             delegated: true,
             mode: Mode::Text,
-            llm: Some(LlmRef { id: ResourceId(0), provider: self.child.llm.id() }),
+            llm: Some(LlmRef { adapter: false, id: ResourceId(0), provider: self.child.llm.id() }),
             wall: WallAnchor::of(&*self.clock),
             cleanup_timeout: HOST_TEARDOWN_TIMEOUT,
         };

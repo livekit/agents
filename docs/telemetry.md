@@ -291,13 +291,21 @@ that used MCP and `override_options` adds 1 to each of those two, and nothing to
 | `feature.override_options` | entered `session.override_options(...)` |
 | `feature.background_audio` | counts background audio players started, with or without a session |
 | `feature.language_switch` | heard the person change language: the STT reported a different language than earlier in the session |
-| `feature.model_switch` | changed a model while running: a different STT, TTS, LLM or realtime model than the one they started with |
+| `feature.model_switch` | replaced a model with another while running |
 
-A feature that needs more than a count gets labels on its own counter. One does so far:
-`feature.model_switch.kind` is the kind of model that changed, `stt`, `tts`, `llm` or
-`realtime`. A session adds 1 for each kind it changed, however the switch is made
-(`update_options`, `override_options`, or an agent that brings its own model): one that
-swapped its TTS twice and its LLM once adds 1 under `tts` and 1 under `llm`.
+A feature that needs more than a count gets labels on its own counter. One does so far.
+`feature.model_switch` says which kind of model was replaced by which, in two labels:
+`feature.model_switch.from.kind` and `feature.model_switch.to.kind`, each `stt`, `tts`, `llm`,
+`realtime` or `duplex`. No provider and no model name is recorded.
+
+- A different TTS in place of the TTS is `tts -> tts`. A session that moves from a realtime
+  model to a duplex one is `realtime -> duplex`.
+- "From" is the model installed just before, however the switch is made (`update_options`,
+  `override_options`, or an agent that brings its own model). A model installed where the
+  session had none is not a switch, and neither is the same model installed again or a
+  fallback adapter moving to another of its members.
+- A session adds 1 for each distinct pair it made: one that swapped its TTS three times and
+  its LLM once adds 1 under `tts -> tts` and 1 under `llm -> llm`.
 
 **Never collected**
 
