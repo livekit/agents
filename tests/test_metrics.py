@@ -25,6 +25,7 @@ from livekit.agents.metrics import (
     ModelUsageCollector,
     STTMetrics,
     STTModelUsage,
+    VADMetrics,
 )
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.tts import FallbackAdapter as TTSFallbackAdapter, StreamAdapter
@@ -285,6 +286,33 @@ def test_collector_aggregates_streaming_stt_token_usage() -> None:
     assert usage.input_audio_tokens == 90
     assert usage.output_tokens == 30
     assert usage.audio_duration == 2.0
+
+
+def test_collector_reports_whether_the_totals_changed() -> None:
+    collector = ModelUsageCollector()
+    assert collector.collect(_llm_metrics()) is True
+    assert collector.collect(_stt_metrics()) is True
+    before = collector.flatten()
+
+    # a VAD stream reports its inference time once a second; there is no usage in it
+    vad_metrics = VADMetrics(
+        label="test.VAD",
+        timestamp=0.0,
+        idle_time=1.0,
+        inference_duration_total=0.01,
+        inference_count=32,
+    )
+    assert collector.collect(vad_metrics) is False
+
+    # a streaming STT reports each connection as a metric with zero usage
+    connection = _stt_metrics(audio_duration=0.0, acquire_time=0.2)
+    assert collector.collect(connection) is False
+    assert collector.flatten() == before
+
+    # the same report for a model not seen before adds its entry to the totals
+    other_model = Metadata(model_provider="deepgram", model_name="nova-3")
+    assert collector.collect(_stt_metrics(audio_duration=0.0, metadata=other_model)) is True
+    assert len(collector.flatten()) == len(before) + 1
 
 
 # -- adapter metrics consumer --
