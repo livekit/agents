@@ -37,6 +37,9 @@ pub enum CliArgs {
         dev: bool,
         cli_addr: Option<String>,
         simulation: bool,
+        /// The command as product statistics name it: `simulation` for a simulation, else `dev`
+        /// with `--dev`, else `start`. The parser derives it; nothing else does.
+        runner_cmd: crate::productstats::runner::RunnerCmd,
         /// The server options the command line gives (`--url`, `--api-key`, `--api-secret`,
         /// `--shutdown-timeout`, `--drain-timeout`), over the `AgentServer`'s own.
         options: Box<crate::worker::types::ServerOptions>,

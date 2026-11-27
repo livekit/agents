@@ -155,8 +155,6 @@ class AgentServer(AgentHandler):
         self._load_fnc = _load_fnc
         self._on_started: list[Callable[[], Any]] = []
         self._rtc: RtcSession | None = None
-        # The `lk agent` command that started the process, which the CLI names.
-        self._runner_cmd = _core.RunnerCmd.NoCommand
         self._http = AgentRoutes()
         self._a2a_endpoints: dict[str, A2AEndpoint] = {}
         self._runtime: _core.ServerRuntime | None = None
@@ -204,9 +202,15 @@ class AgentServer(AgentHandler):
             self._a2a_endpoints[door.name] = door
         return doors
 
-    async def _run(self, *, devmode: bool = False, unregistered: bool = False) -> None:
+    async def _run(
+        self,
+        *,
+        devmode: bool = False,
+        unregistered: bool = False,
+        runner_cmd: _core.RunnerCmd = _core.RunnerCmd.NoCommand,
+    ) -> None:
         _core.init(_core.Role.Worker)
-        telemetry._install(self._runner_cmd)
+        telemetry._install(runner_cmd)
         from .a2a import _referenced
 
         if unserved := sorted({e.name for e in _referenced if e._config is None}):

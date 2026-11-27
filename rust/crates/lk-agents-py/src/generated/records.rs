@@ -5289,6 +5289,9 @@ pub mod cli {
                 simulation: crate::py_values::attr_with(obj, "CliArgsStart", "simulation", |v| {
                     v.extract::<bool>()
                 })?,
+                runner_cmd: crate::py_values::attr_with(obj, "CliArgsStart", "runner_cmd", |v| {
+                    crate::generated::native_enums::runner_cmd_from_py(v)
+                })?,
                 options: crate::py_values::attr_with(obj, "CliArgsStart", "options", |v| {
                     (crate::generated::records::worker_options::server_options_from_py(v))
                         .map(::std::boxed::Box::new)
@@ -5329,6 +5332,7 @@ pub mod cli {
                 dev,
                 cli_addr,
                 simulation,
+                runner_cmd,
                 options,
                 process,
             } => {
@@ -5348,6 +5352,10 @@ pub mod cli {
                 kwargs.set_item(
                     "simulation",
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(simulation, py)?,
+                )?;
+                kwargs.set_item(
+                    "runner_cmd",
+                    crate::generated::native_enums::runner_cmd_to_py(py, runner_cmd)?,
                 )?;
                 kwargs.set_item("options", {
                     let value = *options;
