@@ -111,7 +111,9 @@ class TTSv2(tts.TTS):
 
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            # Only linear16 can be streamed. With any other encoding, callers that check
+            # this flag (the voice agent does) wrap synthesize() in a StreamAdapter instead.
+            capabilities=tts.TTSCapabilities(streaming=encoding == "linear16"),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -234,6 +236,7 @@ class TTSv2(tts.TTS):
             connection_params_changed = True
         if is_given(encoding):
             self._opts.encoding = encoding
+            self._capabilities.streaming = encoding == "linear16"
             connection_params_changed = True
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate

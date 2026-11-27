@@ -539,3 +539,24 @@ async def test_aura_stream_run_rejects_non_linear16_encoding():
 
     with pytest.raises(ValueError, match="linear16"):
         await stream._run(_FakeEmitter())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("flux", [False, True])
+async def test_streaming_capability_follows_the_encoding(flux: bool):
+    # The voice agent reads this flag to choose between stream() and a StreamAdapter
+    # around synthesize(), so a compressed encoding must not advertise streaming.
+    from livekit.plugins.deepgram import TTS
+    from livekit.plugins.deepgram.tts_v2 import TTSv2
+
+    cls = TTSv2 if flux else TTS
+
+    assert cls(api_key="test-key").capabilities.streaming is True
+
+    tts = cls(api_key="test-key", encoding="mp3")
+    assert tts.capabilities.streaming is False
+
+    tts.update_options(encoding="linear16")
+    assert tts.capabilities.streaming is True
+
+    tts.update_options(encoding="opus")
+    assert tts.capabilities.streaming is False
