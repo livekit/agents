@@ -1,10 +1,4 @@
-"""Startup, shutdown, and dispatch telemetry.
-
-Covers the dispatch timeline carried from the worker to the job process (``StartJobRequest``
-round trip and the ``job_entrypoint`` events/latencies), the ``room_connect`` span around
-``JobContext.connect``, and the session-level spans and events a full fake session produces:
-``session_start`` grouping the startup work, ``session_close`` grouping teardown, and state-change
-events on ``agent_session``."""
+"""Dispatch timeline, room connect, and session startup/shutdown telemetry."""
 
 from __future__ import annotations
 
@@ -35,7 +29,7 @@ from livekit.protocol import agent as agent_proto
 from .fake_session import FakeActions, create_session, run_session
 from .trace_schema import assert_trace_well_formed
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.virtual_time]
 
 
 @pytest.fixture
@@ -168,9 +162,7 @@ def test_unknown_dispatch_stages_are_skipped(span_exporter: InMemorySpanExporter
 
 
 def test_preload_module_does_the_lazy_one_time_work(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The openai SDK imports its resources tree on first client use; inside a job that was a
-    300 ms stall at session start. The warm-up module does it before any job exists, once per
-    process image: importing it again is a no-op."""
+    """The warm-up module imports what the first client use would, before any job exists."""
     import importlib
     import sys
 
@@ -199,11 +191,34 @@ def test_framework_callbacks_are_not_user_callbacks() -> None:
     assert _is_framework_callback(AgentSession.aclose)
 
 
+@pytest.mark.parametrize("simulation", [False, True])
+def test_startup_redaction_ignores_project_setting_for_simulations(
+    monkeypatch: pytest.MonkeyPatch, simulation: bool
+) -> None:
+    from livekit.agents.telemetry.utils import redaction_enabled
+    from livekit.agents.types import ATTRIBUTE_SIMULATOR_DISPATCH
+
+    info = _info()
+    info.job.enable_redaction = True
+    if simulation:
+        info.job.attributes[ATTRIBUTE_SIMULATOR_DISPATCH] = '{"simulationRunId":"run_abc"}'
+    ctx = JobContext(
+        proc=MagicMock(),
+        info=info,
+        room=_mock_room(),
+        on_connect=lambda: None,
+        on_shutdown=lambda reason: None,
+        inference_executor=MagicMock(),
+    )
+    monkeypatch.setattr("livekit.agents.job.get_job_context", lambda **_: ctx)
+
+    assert redaction_enabled() is (not simulation)
+
+
 def test_job_span_is_back_dated_and_carries_the_join_keys(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    """The job's root span starts at the availability request and is ended by the job
-    runner after shutdown; here only its creation is checked."""
+    """The job's root span starts at the availability request."""
     from livekit.agents.ipc.job_proc_lazy_main import _start_job_span
 
     t0 = 1_700_000_000.0
@@ -439,8 +454,7 @@ async def test_detached_span_records_the_exception(span_exporter: InMemorySpanEx
 async def test_room_connect_during_start_nests_under_session_start_without_leaking(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    """The room's event tasks are created inside room.connect(); whatever is current there
-    becomes the parent of every span those tasks emit for the rest of the session."""
+    """room.connect() runs with agent_session current, so its event tasks never inherit startup."""
     with tracer.start_as_current_span("agent_session") as root:
         start = tracer.start_span("session_start")
         job = _live_session_job(root, start)

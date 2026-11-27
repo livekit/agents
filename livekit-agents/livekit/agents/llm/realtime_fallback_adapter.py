@@ -27,6 +27,7 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
+    from .delegation import DelegationDetectionOptions
 
 
 @dataclass
@@ -48,6 +49,7 @@ _SOFT_CAPABILITIES = (
     "user_transcription",
     "manual_function_calls",
     "auto_tool_reply_generation",
+    "eager_tool_outputs",
     "mutable_chat_context",
     "mutable_instructions",
     "mutable_tools",
@@ -387,11 +389,13 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             # a swap is a reconnect from the caller's perspective
             self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
 
-            # re-issue the interrupted reply on the new session
+            # re-issue the interrupted reply on the new session; AMD rejects direct replies,
+            # so its next turn decides the reply instead
             if (
                 was_speaking
                 and self._adapter._regenerate_on_swap
                 and self._agent_session is not None
+                and self._agent_session.amd is None
             ):
                 self._agent_session.generate_reply()
 
@@ -407,6 +411,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     @property
     def tools(self) -> ToolContext:
         return self._active.tools
+
+    @property
+    def background_work_running(self) -> bool:
+        return self._active.background_work_running
 
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
@@ -462,6 +470,13 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
         return self._active.say(text)
+
+    def delegate(self, instructions: str | None = None) -> None:
+        self._active.delegate(instructions)
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        return self._active._delegation_detection
 
     def truncate(
         self,

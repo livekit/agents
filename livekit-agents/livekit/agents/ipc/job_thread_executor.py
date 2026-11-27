@@ -129,11 +129,11 @@ class ThreadJobExecutor:
                 pch = await duplex_unix._AsyncDuplex.open(mp_pch)
                 self._pch = pch
 
-                self._join_fut = asyncio.Future[None]()
+                self._join_fut = asyncio.Future[int]()
 
-                def _on_join() -> None:
+                def _on_join(exitcode: int) -> None:
                     with contextlib.suppress(RuntimeError):
-                        self._loop.call_soon_threadsafe(self._join_fut.set_result, None)
+                        self._loop.call_soon_threadsafe(self._join_fut.set_result, exitcode)
 
                 targs = job_proc_lazy_main.ThreadStartArgs(
                     mp_cch=mp_cch,
@@ -291,7 +291,7 @@ class ThreadJobExecutor:
         ping_task = asyncio.create_task(self._ping_task())
         monitor_task = asyncio.create_task(self._monitor_task())
 
-        await self._join_fut
+        exitcode = await self._join_fut
 
         # the thread closes its end of the duplex before signaling the join, so the monitor
         # task ends on its own once it has read what the thread sent last (ShutdownRequestAck
@@ -307,7 +307,7 @@ class ThreadJobExecutor:
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
 
-        self._job_status = JobStatus.SUCCESS
+        self._job_status = JobStatus.SUCCESS if exitcode == 0 else JobStatus.FAILED
 
     @utils.log_exceptions(logger=logger)
     async def _monitor_task(self) -> None:

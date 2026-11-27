@@ -259,7 +259,11 @@ class DelegationInfo(BaseModel):
 
 class SessionDelegationCreatedEvent(BaseModel):
     type: Literal["session.delegation.created"] = "session.delegation.created"
+    offset_ms: int | None = None
+    """Where on the session's audio clock the model delegated."""
     delegation: DelegationInfo = DelegationInfo()
+    client_event_id: str | None = None
+    """The ``response.create`` that started it, when the application did."""
 
 
 class ResponseUsage(BaseModel):
@@ -287,8 +291,16 @@ class ResponseSnapshot(BaseModel):
     incomplete_details: dict[str, Any] | None = None
 
 
+class OutputContentPart(BaseModel):
+    """One part of a backend message: its text, or the refusal in its place."""
+
+    type: str = ""
+    text: str | None = None
+    refusal: str | None = None
+
+
 class OutputItem(BaseModel):
-    """Fields needed to dispatch a completed backend function call."""
+    """Fields needed to dispatch a completed backend function call, or to trace a message."""
 
     id: str | None = None
     type: str | None = None
@@ -296,6 +308,7 @@ class OutputItem(BaseModel):
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
+    content: Optional[list[OutputContentPart]] = None  # noqa: UP045
 
 
 class ResponsesEvent(BaseModel):
