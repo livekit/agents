@@ -61,6 +61,12 @@ _LONG_CONVERSATION_S = 60.0
 # One timeout from opening the connection until the API's ready; past it the attempt counts as a
 # timeout and is retried.
 _OPEN_TIMEOUT_S = 2.0
+# Bell sends nothing while it has no guess, so a quiet line is normal. The connection is watched
+# with LiveKit's WebSocketMonitor: after a third of this with nothing received it pings, and if no
+# pong or message comes back within this time the connection counts as dead (a half-open socket)
+# and the conversation is reopened on the back-off. The Rabel API answers pings in its WebSocket
+# server, not in the conversation's code, so a healthy quiet call always answers in time.
+_LIVENESS_TIMEOUT_S = 15.0
 
 
 def _backoff(attempt: int) -> float:
@@ -313,12 +319,16 @@ class BellConnection:
                 ws_url,
                 timeout=aiohttp.ClientWSTimeout(ws_close=2.0),
                 heartbeat=None,
+                autoping=False,
                 max_msg_size=1 << 20,
                 autoclose=True,
             ),
             _OPEN_TIMEOUT_S,
         )
         self._ws = ws
+        # Every read goes through the monitor: it answers the API's pings, pings a quiet line and
+        # raises APIConnectionError when the line stays dead, which `_run` handles as "down".
+        monitor = utils.aio.WebSocketMonitor(ws, liveness_timeout=_LIVENESS_TIMEOUT_S)
         sender: asyncio.Task[None] | None = None
         opened_at: float | None = None
         refusal: dict[str, Any] | None = None
@@ -330,10 +340,10 @@ class BellConnection:
                     # until ready, the open timeout runs; a timeout ends this attempt
                     # (retried on the back-off)
                     msg = await asyncio.wait_for(
-                        ws.receive(), max(deadline - time.perf_counter(), 0.0)
+                        monitor.receive(), max(deadline - time.perf_counter(), 0.0)
                     )
                 else:
-                    msg = await ws.receive()
+                    msg = await monitor.receive()
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     break
                 try:

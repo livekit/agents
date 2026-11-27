@@ -146,14 +146,27 @@ class FakeWS:
         self.closed = False
         self.close_code: int | None = None
         self.got_hello = False
+        # half-open: the line died without a close; sends and pings vanish and nothing comes back
+        self.half_open = False
 
     async def send_str(self, data: str) -> None:
         if self.closed:
             raise ConnectionResetError("closed")
-        self._api.on_message(self, json.loads(data))
+        if not self.half_open:
+            self._api.on_message(self, json.loads(data))
 
     async def receive(self) -> aiohttp.WSMessage:
         return await self._in.get()
+
+    async def ping(self, message: bytes = b"") -> None:
+        if self.closed:
+            raise ConnectionResetError("closed")
+        if not self.half_open:  # the API's WebSocket server answers a ping at once
+            self._in.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, message, None))
+
+    async def pong(self, message: bytes = b"") -> None:
+        if self.closed:
+            raise ConnectionResetError("closed")
 
     async def close(self) -> bool:
         self._end()
@@ -190,8 +203,9 @@ class FakeAPI:
     """v: 3 answers as the API serves today (`ready` with `"v": 3`); 2 as an API that answers an
     older version (`ready` with `"v": 2`). min_chance: the `ready`'s, else the hello's. mode: "ok"
     (guess `answers[heard words]` after `delay` s), "refuse" (an error message, then close),
-    "garbage" (broken JSON, a guess for words never sent and a 400). `plan` gives a mode for each
-    conversation in turn, the last repeating."""
+    "garbage" (broken JSON, a guess for words never sent and a 400), "half-open" (`ready`, then
+    the connection goes half-open: nothing sent arrives, pings go unanswered, no close comes).
+    `plan` gives a mode for each conversation in turn, the last repeating."""
 
     def __init__(
         self,
@@ -256,6 +270,8 @@ class FakeAPI:
                 ws._end()
             else:
                 loop.call_later(self.ready_after, ws.push, self._ready())
+                if mode == "half-open":
+                    loop.call_later(self.ready_after, setattr, ws, "half_open", True)
             return
         self.received.append(m)
         if mode == "garbage":
@@ -657,6 +673,33 @@ async def test_reopens_after_503_with_backoff_and_not_after_400() -> None:
     api = FakeAPI(plan=["refuse"], status=400, error="bad_message", retry_after=0)
     await wrapped_run(TWO_TURNS, api)
     assert len(api.connected_at) == 1
+
+
+LATE_TURN = [(at + 20.0, *rest) for at, *rest in TURN]  # a turn after 20 s of a quiet line
+
+
+@pytest.mark.usefixtures("four_early_starts")
+async def test_a_dead_connection_after_ready_is_noticed_and_reopened(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.plugins.rabel")
+    # a healthy line that stays quiet for 20 s answers the pings, stays open and guesses
+    api = FakeAPI(answers=AT_CHECK)
+    late, *_ = await wrapped_run(LATE_TURN, api)
+    assert late != await plain_run(LATE_TURN) and len(api.connected_at) == 1
+    assert not [r for r in caplog.records if r.name == "livekit.plugins.rabel"]
+    # a half-open one: the first turn (committed) passes through unchanged; no pong within the
+    # liveness timeout (15 s after ready) gives one "down" line, and the back-off's first wait
+    # (1 s) later a new conversation guesses the late turn as the healthy line did
+    api = FakeAPI(plan=["half-open", "ok"], answers=AT_CHECK)
+    first = [*TURN, ev(1.20, COMMIT, "I'd like to check my balance.")]
+    out, *_, ends = await wrapped_run([*first, *LATE_TURN], api)
+    at = [t - api.connected_at[0] for t in api.connected_at]
+    assert len(at) == 2 and at[1] == pytest.approx(16.0, abs=0.01), at
+    assert [e["text"] for e in ends] == ["I'd like to check my balance."]
+    assert out == await plain_run(TURN) + late
+    lines = [r.getMessage() for r in caplog.records if r.name == "livekit.plugins.rabel"]
+    assert len(lines) == 1 and "APIConnectionError" in lines[0], lines
 
 
 # -------------------------------------------------- the report and the two log lines
