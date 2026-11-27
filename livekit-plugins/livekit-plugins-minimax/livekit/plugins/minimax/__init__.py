@@ -17,14 +17,14 @@
 See [Plugin Docs URL - when available] for more information.
 """
 
-# 1. Import the core TTS class from our tts.py module.
+# 1. Import the core STT and TTS classes from their modules.
 # 2. Import the version number.
+from .stt import STT
 from .tts import TTS
 from .version import __version__
 
 # 3. Define the public API of the package.
-#    Since we only implement TTS, we only expose the TTS class and the version.
-__all__ = ["TTS", "__version__"]
+__all__ = ["STT", "TTS", "__version__"]
 
 from livekit.agents import Plugin
 
