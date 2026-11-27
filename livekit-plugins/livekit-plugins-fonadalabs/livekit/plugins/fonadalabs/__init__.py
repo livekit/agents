@@ -1,6 +1,6 @@
 """FonadaLabs plugin for LiveKit Agents
 
-Text-to-Speech (Klone V2 Flash / Pro) and Speech-to-Text (Kapture V3 / V2)
+Text-to-Speech (Klone V2 Flash / Pro) and Speech-to-Text (Kapture V3)
 for Indian languages via the FonadaLabs API.
 See https://fonadalabs.ai/docs for more information.
 """

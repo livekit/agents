@@ -59,6 +59,8 @@ _MAX_TEXT_CHARS = 5000
 # so long batches are split to keep each request well inside its timeout and to
 # start playback sooner. Requests near the 5000-char limit also failed upstream.
 _PRO_MAX_CHUNK_CHARS = 1000
+# Minimum per-request timeout for Pro; see SynthesizeStream._pro_timeout.
+_PRO_MIN_TIMEOUT_SECS = 60.0
 
 # The server closes idle WebSockets after 5 minutes.
 _WS_MAX_IDLE_SECS = 240.0
@@ -196,6 +198,7 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=True,
         )
         self._streams: set[SynthesizeStream] = set()
+        self._pro_timeout_warned = False
 
     @property
     def model(self) -> str:
@@ -227,6 +230,8 @@ class TTS(tts.TTS):
             self._opts.instruct = _validate_instruct(instruct)
         if utils.is_given(num_step):
             self._opts.num_step = _validate_num_step(num_step)
+            if self._opts.model == "klone_v2_pro" and num_step is not None:
+                logger.warning("num_step is only supported by klone_v2_flash; it will be ignored")
         if utils.is_given(speed):
             self._opts.speed = _validate_speed(speed)
 
@@ -480,6 +485,23 @@ class SynthesizeStream(tts.SynthesizeStream):
             elif msg.type == aiohttp.WSMsgType.ERROR:
                 raise APIConnectionError(f"FonadaLabs TTS WebSocket error: {ws.exception()}")
 
+    def _pro_timeout(self) -> float:
+        # Pro is non-streaming: the whole clip is generated before the response
+        # starts (~2.4s per 100 chars measured, up to ~24s for a 1000-char chunk),
+        # so the default 10s timeout would fail most replies. Raise it to
+        # _PRO_MIN_TIMEOUT_SECS and say so once; set tts_conn_options to avoid this.
+        timeout = self._conn_options.timeout
+        if timeout >= _PRO_MIN_TIMEOUT_SECS:
+            return timeout
+        if not self._tts._pro_timeout_warned:
+            self._tts._pro_timeout_warned = True
+            logger.warning(
+                f"klone_v2_pro needs a longer timeout than {timeout}s; using "
+                f"{_PRO_MIN_TIMEOUT_SECS}s. Set a higher tts_conn_options timeout in "
+                "SessionConnectOptions to control this."
+            )
+        return _PRO_MIN_TIMEOUT_SECS
+
     async def _run_http(self, text: str, output_emitter: tts.AudioEmitter) -> None:
         form: dict[str, str] = {
             "model": self._opts.model,
@@ -502,11 +524,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._tts._chunks_url,
                 data=data,
                 headers={"Authorization": f"Bearer {self._tts._api_key}"},
-                # Pro is non-streaming: the whole clip is generated before the
-                # response starts, and generation time grows with text length
-                # (~2.4s per 100 chars measured). The default 10s conn timeout
-                # would fail most replies over ~400 chars, so allow at least 60s.
-                timeout=aiohttp.ClientTimeout(total=max(self._conn_options.timeout, 60.0)),
+                timeout=aiohttp.ClientTimeout(total=self._pro_timeout()),
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()

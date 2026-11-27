@@ -65,7 +65,21 @@ agent = Agent(
 
 Find a voice in Voice Arena and copy its `share_id`. An unknown `share_id` fails with `404 voice_not_found`.
 
-Each agent reply is sent as **one** request (up to 5,000 characters; longer text is split at sentence boundaries). The server splits it by sentence and streams audio as it is generated. This keeps usage within the default rate limit of 10 requests per minute.
+Streamed text is split into sentences: the first sentence is sent on its own so audio starts early, and the rest are batched into a few larger requests (Pro requests are capped at 1,000 characters).
+
+### Klone V2 Pro timeout
+
+Pro is not streaming: each request returns audio only after the whole clip is generated (about 2.4 s per 100 characters), so the default 10 s TTS timeout is too short. The plugin raises it to 60 s and logs a warning. To set it yourself:
+
+```python
+from livekit.agents import AgentSession, APIConnectOptions, SessionConnectOptions
+
+session = AgentSession(
+    tts=fonadalabs.TTS(model="klone_v2_pro", share_id="UFNPsnEd"),
+    conn_options=SessionConnectOptions(tts_conn_options=APIConnectOptions(timeout=60.0)),
+    # ...
+)
+```
 
 ### Klone V2 Flash languages
 

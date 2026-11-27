@@ -121,10 +121,6 @@ KAPTURE_LANGUAGES: dict[str, str] = {
     "te": "Telugu",
 }
 
-STT_LANGUAGES: dict[str, dict[str, str]] = {
-    "v3": KAPTURE_LANGUAGES,
-}
-
 STTLanguages = Literal["en", "bn", "gu", "hi", "kn", "ml", "mr", "or", "pa", "ta", "te"]
 """Language codes accepted by Kapture V3."""
 

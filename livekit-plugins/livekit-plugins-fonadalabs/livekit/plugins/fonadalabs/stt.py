@@ -32,7 +32,7 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from ._utils import parse_error
 from .log import logger
-from .models import STT_LANGUAGES, STTLanguages, STTModels, resolve_language
+from .models import KAPTURE_LANGUAGES, STTLanguages, STTModels, resolve_language
 
 FONADALABS_API_BASE_URL = "https://api.fonada.ai"
 
@@ -75,10 +75,8 @@ class STT(stt.STT):
                 "Pass it directly or set the FONADALABS_API_KEY environment variable."
             )
 
-        if model not in STT_LANGUAGES:
-            raise ValueError(
-                f"Unsupported STT model {model!r}. Supported: {', '.join(STT_LANGUAGES)}"
-            )
+        if model != "v3":
+            raise ValueError(f"Unsupported STT model {model!r}. Supported: v3")
         self._model = model
         self._language = self._resolve_language(language)
         self._url = f"{base_url.rstrip('/')}/{model}/asr/transcribe"
@@ -93,7 +91,7 @@ class STT(stt.STT):
         return "FonadaLabs"
 
     def _resolve_language(self, language: str) -> str:
-        supported = STT_LANGUAGES[self._model]
+        supported = KAPTURE_LANGUAGES
         code = resolve_language(language, supported)
         if code is None:
             raise ValueError(
@@ -101,6 +99,11 @@ class STT(stt.STT):
                 f"Supported: {', '.join(f'{c} ({n})' for c, n in supported.items())}"
             )
         return code
+
+    def update_options(self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN) -> None:
+        """Change the default recognition language for later utterances."""
+        if utils.is_given(language):
+            self._language = self._resolve_language(language)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None:
