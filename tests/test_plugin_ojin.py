@@ -1,0 +1,711 @@
+"""End-to-end over the real QueueAudioOutput, without a room.
+
+The claim this plugin exists to make is that multi-turn conversations complete:
+Ojin never emits a segment marker of its own, and the agent session blocks on
+``wait_for_playout()`` after every utterance, so a missing marker wedges the
+conversation permanently. Everything else is detail.
+
+``AvatarRunner`` needs an ``rtc.Room`` only to publish tracks; the part that
+matters here is its ~15-line marker branch, reproduced faithfully below so the
+claim is covered by a regression test rather than by a manual check.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+from ojin.stv import FrameType, STVAudioFrame, STVEvent, STVVideoFrame
+
+from livekit import rtc
+from livekit.agents.voice.avatar import AudioReceiver, AudioSegmentEnd, QueueAudioOutput
+from livekit.agents.voice.io import AgentOutput, AudioOutput, AudioOutputCapabilities
+from livekit.plugins.ojin.avatar import (
+    AvatarSession,
+    OjinVideoGenerator,
+    _FrameSink,
+    _RunnerOutput,
+)
+
+_BYTES_PER_SAMPLE = 2
+
+
+def make_video_frame(
+    width: int = 1024,
+    height: int = 1024,
+    *,
+    frame_type: int = FrameType.SPEECH,
+    fresh: bool = True,
+    rgb: bytes | None = b"",
+    pts: int = 0,
+) -> STVVideoFrame:
+    """A video frame. ``fresh=False`` marks a held/synthesized tick (no server frame)."""
+    pixels = rgb if rgb != b"" else bytes(width * height * 3)
+    return STVVideoFrame(
+        rgb=pixels,
+        source_bytes=b"\xff\xd8jpeg" if fresh else b"",
+        width=width,
+        height=height,
+        frame_type=frame_type,
+        pts=pts,
+    )
+
+
+def make_audio_frame(
+    ms: int = 40,
+    sample_rate: int = 24000,
+    *,
+    num_channels: int = 1,
+    silent: bool = False,
+    pts: int = 0,
+) -> STVAudioFrame:
+    """An audio tick. ``silent=True`` is the SDK's synthesized zero fill."""
+    samples = int(sample_rate * ms / 1000) * num_channels
+    pcm = bytes(samples * _BYTES_PER_SAMPLE) if silent else b"\x11\x22" * samples
+    return STVAudioFrame(pcm=pcm, sample_rate=sample_rate, num_channels=num_channels, pts=pts)
+
+
+class FakeSTVClient:
+    """Records the plugin's calls; its sink is driven by hand from tests."""
+
+    def __init__(self, output: Any = None, **kwargs: Any) -> None:
+        self.output = output
+        self.kwargs = kwargs
+        self.started = False
+        self.close_calls = 0
+        self.turns = 0
+        self.interrupts = 0
+        self.sent: list[tuple[bytes, int, int]] = []
+
+        # scriptable behaviour
+        self.interrupt_result = True
+        self.interrupt_raises: Exception | None = None
+        self.start_turn_raises: Exception | None = None
+        self.start_turn_gate: asyncio.Event | None = None
+        self.close_gate: asyncio.Event | None = None
+
+        self._listeners: dict[STVEvent, list[Callable[..., Any]]] = {}
+        self.handler_errors: list[TypeError] = []
+
+    # --- the surface the plugin uses ---
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def close(self) -> None:
+        if self.close_gate is not None:
+            await self.close_gate.wait()
+        self.close_calls += 1
+
+    async def start_turn(self) -> None:
+        if self.start_turn_gate is not None:
+            await self.start_turn_gate.wait()
+        if self.start_turn_raises is not None:
+            raise self.start_turn_raises
+        self.turns += 1
+
+    async def send_tts_audio(self, pcm: bytes, sample_rate: int, num_channels: int) -> None:
+        self.sent.append((pcm, sample_rate, num_channels))
+
+    async def interrupt(self) -> bool:
+        self.interrupts += 1
+        if self.interrupt_raises is not None:
+            raise self.interrupt_raises
+        return self.interrupt_result
+
+    def add_listener(self, event: STVEvent, cb: Callable[..., Any]) -> None:
+        self._listeners.setdefault(event, []).append(cb)
+
+    # --- test drivers ---
+
+    async def emit(self, event: STVEvent, **kwargs: Any) -> None:
+        """Dispatch like the real emitter: pass kwargs, swallow (but record) TypeError."""
+        for cb in list(self._listeners.get(event, [])):
+            try:
+                result = cb(**kwargs)
+                if asyncio.iscoroutine(result):
+                    await result
+            except TypeError as e:
+                self.handler_errors.append(e)
+
+    async def emit_session_ready(self) -> None:
+        await self.emit(STVEvent.SESSION_READY, session_data={"trace_id": "t"})
+
+    async def emit_connect_error(self, message: str = "connect failed") -> None:
+        """Connect-exhaustion shape: message + fatal, no code."""
+        await self.emit(STVEvent.ERROR, message=message, fatal=True)
+
+    async def emit_server_fatal(
+        self, message: str = "server error", code: str = "BACKEND_UNAVAILABLE"
+    ) -> None:
+        """Server-fatal shape: message + code + fatal. Production's fatal path."""
+        await self.emit(STVEvent.ERROR, message=message, code=code, fatal=True)
+
+    async def emit_closed(self) -> None:
+        await self.emit(STVEvent.CLOSED)
+
+    async def emit_stopped_speaking(self) -> None:
+        await self.emit(STVEvent.BOT_STOPPED_SPEAKING)
+
+    async def push_video(self, frame: STVVideoFrame) -> None:
+        await self.output.write_video(frame)
+
+    async def push_audio(self, frame: STVAudioFrame) -> None:
+        await self.output.write_audio(frame)
+
+    async def push_tick(
+        self, *, silent: bool = False, fresh: bool = True, frame_type: int = FrameType.SPEECH
+    ) -> None:
+        """One tick in the SDK's order: video first, then audio."""
+        await self.push_video(make_video_frame(frame_type=frame_type, fresh=fresh))
+        await self.push_audio(make_audio_frame(silent=silent))
+
+    async def play_turn(self, *, idle_ticks: int = 2, speech_ticks: int = 3) -> None:
+        """Idle fill, then real speech, then the drain edge."""
+        for _ in range(idle_ticks):
+            await self.push_tick(silent=True, frame_type=FrameType.IDLE)
+        for i in range(speech_ticks):
+            await self.push_tick(
+                frame_type=FrameType.START_OF_SPEECH if i == 0 else FrameType.SPEECH
+            )
+        await self.emit_stopped_speaking()
+
+    async def play_underrun(self, *, before: int = 2, after: int = 2) -> None:
+        """Speech, a mid-turn drain (TTS too slow), a refill, then the real end."""
+        for _ in range(before):
+            await self.push_tick()
+        await self.emit_stopped_speaking()  # spurious: the turn is not over
+        for _ in range(after):
+            await self.push_tick()
+        await self.emit_stopped_speaking()
+
+
+# Hermetic: driven by a fake Ojin client, no network and no credentials.
+pytestmark = pytest.mark.unit
+
+
+class RunnerHarness:
+    """Mirrors AvatarRunner's two loops and its playback-finished protocol."""
+
+    def __init__(self) -> None:
+        self.sink = _FrameSink()
+        self.client = FakeSTVClient(output=self.sink)
+        self.generator = OjinVideoGenerator(self.client, self.sink)
+        self.audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+
+        # The same wiring AvatarSession installs: the stop edge is what closes an
+        # output segment.
+        self.client.add_listener(STVEvent.BOT_STOPPED_SPEAKING, self.sink.on_bot_stopped_speaking)
+
+        receiver: AudioReceiver = self.audio_output
+        receiver.on("clear_buffer", self._on_clear_buffer)
+
+        self._playback_position = 0.0
+        self._audio_playing = False
+        self._tasks: list[asyncio.Task[None]] = []
+        self.markers_seen = 0  # segment completions the plugin handed the runner
+
+    async def start(self) -> None:
+        self._tasks = [
+            asyncio.create_task(self._read_audio()),
+            asyncio.create_task(self._forward()),
+        ]
+
+    async def aclose(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    async def _read_audio(self) -> None:
+        # AvatarRunner._read_audio
+        async for frame in self.audio_output:
+            if isinstance(frame, rtc.AudioFrame):
+                self._audio_playing = True
+            await self.generator.push_audio(frame)
+
+    async def _forward(self) -> None:
+        # AvatarRunner._forward_video, minus the track publishing
+        async for frame in self.generator:
+            if isinstance(frame, AudioSegmentEnd):
+                self.markers_seen += 1
+                if self._audio_playing:
+                    self.audio_output.notify_playback_finished(
+                        playback_position=self._playback_position, interrupted=False
+                    )
+                    self._audio_playing = False
+                    self._playback_position = 0.0
+                continue
+
+            if isinstance(frame, rtc.AudioFrame):
+                if self._playback_position == 0.0 and frame.duration > 0.0:
+                    self.audio_output.notify_playback_started()
+                self._playback_position += frame.duration
+
+    def _on_clear_buffer(self) -> None:
+        # AvatarRunner._on_clear_buffer
+        self.sink.note_clear_pending()
+        audio_playing = self._audio_playing
+        self._audio_playing = False
+
+        async def handle() -> None:
+            await self.generator.clear_buffer()
+            if audio_playing:
+                self.audio_output.notify_playback_finished(
+                    playback_position=self._playback_position, interrupted=True
+                )
+                self._playback_position = 0.0
+
+        self._tasks.append(asyncio.create_task(handle()))
+
+
+async def until(predicate, timeout: float = 3.0, what: str = "condition") -> None:
+    """Wait for an observable condition instead of guessing at a delay.
+
+    The harness runs its read and forward loops as independent tasks, so a fixed
+    sleep is a bet on scheduling that a loaded machine will eventually lose.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        await asyncio.sleep(0.005)
+
+
+def tts_chunk(ms: int = 200) -> rtc.AudioFrame:
+    samples = int(24000 * ms / 1000)
+    return rtc.AudioFrame(
+        data=b"\x11\x22" * samples,
+        sample_rate=24000,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+@pytest.fixture
+async def harness():
+    h = RunnerHarness()
+    await h.start()
+    yield h
+    await h.aclose()
+
+
+async def speak(h: RunnerHarness, *, chunks: int = 3) -> None:
+    """One agent utterance: TTS in, then the server's echo back."""
+    for _ in range(chunks):
+        await h.audio_output.capture_frame(tts_chunk())
+    h.audio_output.flush()
+    await until(
+        lambda: len(h.client.sent) >= chunks and h.sink._segments.input_closed,
+        what="the read loop to forward the utterance and close the input",
+    )
+
+    # A turn's first server frame is START_OF_SPEECH; that is what lifts the mute
+    # after a barge-in, so the echo has to carry it.
+    for i in range(chunks):
+        await h.client.push_tick(
+            frame_type=FrameType.START_OF_SPEECH if i == 0 else FrameType.SPEECH
+        )
+    await until(lambda: h.sink._segments.output_open, what="the echo to open an output segment")
+    await h.client.emit_stopped_speaking()
+
+
+async def test_one_turn_completes(harness: RunnerHarness) -> None:
+    """Without the synthesized marker this call never returns."""
+    await speak(harness)
+
+    ev = await asyncio.wait_for(harness.audio_output.wait_for_playout(), 2)
+
+    assert ev.interrupted is False
+    assert ev.playback_position > 0.0
+
+
+async def test_three_consecutive_turns_complete(harness: RunnerHarness) -> None:
+    for _ in range(3):
+        await speak(harness)
+        ev = await asyncio.wait_for(harness.audio_output.wait_for_playout(), 2)
+        assert ev.interrupted is False
+
+
+async def test_overlapping_utterances_each_get_a_marker(harness: RunnerHarness) -> None:
+    """Two segments captured before the first renders must not collapse into one.
+
+    The session waits for a completion report before capturing the next segment,
+    so this should not arise - but QueueAudioOutput accepts consecutive flushed
+    segments regardless of playback, and the tracker used to reset the first
+    segment's pending state when the second opened. That lost the first marker
+    entirely.
+
+    Asserted on the markers the plugin hands the runner, not on wait_for_playout:
+    AvatarRunner reports a marker only while its ``_audio_playing`` bool is set,
+    and it clears that on the first report, so two markers with no input audio
+    between them still produce one report. That accounting is identical for every
+    avatar plugin; what this plugin owns is emitting a marker per captured
+    segment.
+    """
+    h = harness
+
+    await h.audio_output.capture_frame(tts_chunk())
+    h.audio_output.flush()
+    await h.audio_output.capture_frame(tts_chunk())
+    h.audio_output.flush()
+    assert h.audio_output.captured_playout_segments == 2
+
+    await until(lambda: len(h.client.sent) >= 2, what="both utterances to reach the client")
+
+    await h.client.push_tick(frame_type=FrameType.START_OF_SPEECH)
+    await h.client.push_tick(frame_type=FrameType.SPEECH)
+    await until(lambda: h.sink._segments.output_open, what="the echo to open an output segment")
+    await h.client.emit_stopped_speaking()
+
+    await until(lambda: h.markers_seen >= 2, what="a marker for each captured segment")
+
+
+async def test_underrun_does_not_end_the_turn_early(harness: RunnerHarness) -> None:
+    """Slow TTS drains the buffer mid-utterance; the session must not proceed."""
+    await harness.audio_output.capture_frame(tts_chunk())
+    await until(lambda: bool(harness.client.sent), what="the chunk to reach the client")
+    await harness.client.push_tick()
+    await harness.client.emit_stopped_speaking()  # spurious drain edge
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(harness.audio_output.wait_for_playout(), 0.2)
+
+    # the rest of the utterance arrives and really ends
+    await harness.audio_output.capture_frame(tts_chunk())
+    harness.audio_output.flush()
+    await until(lambda: harness.sink._segments.input_closed, what="the input segment to close")
+    await harness.client.push_tick()
+    await harness.client.emit_stopped_speaking()
+
+    ev = await asyncio.wait_for(harness.audio_output.wait_for_playout(), 2)
+    assert ev.interrupted is False
+
+
+async def test_barge_in_recovers_into_a_following_turn(harness: RunnerHarness) -> None:
+    """The turn after a barge-in must still produce its completion marker.
+
+    Asserted on the marker the plugin hands the runner, not on wait_for_playout:
+    that accounting is identical for every avatar plugin; what this plugin owns
+    is emitting the completion marker at all.
+    """
+    events: list[bool] = []
+    harness.audio_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+
+    await harness.audio_output.capture_frame(tts_chunk())
+    await until(lambda: bool(harness.client.sent), what="the chunk to reach the client")
+    await harness.client.push_tick()
+    await until(lambda: harness.sink._segments.output_open, what="the echo to start playing")
+
+    harness.audio_output.clear_buffer()
+    await until(lambda: events == [True], what="the interrupted report")
+    # Core always flushes after a clear; the framework flags that end as interrupted.
+    harness.audio_output.flush()
+    await asyncio.sleep(0.05)
+    assert harness.markers_seen == 0, "an interrupted turn must not also emit a marker"
+
+    await speak(harness)
+    await until(lambda: harness.markers_seen == 1, what="the following turn to complete")
+
+
+async def test_silent_utterance_still_completes(harness: RunnerHarness) -> None:
+    """An all-zero utterance never echoes back, so nothing would close it."""
+    silent = rtc.AudioFrame(
+        data=bytes(9600), sample_rate=24000, num_channels=1, samples_per_channel=4800
+    )
+    await harness.audio_output.capture_frame(silent)
+    harness.audio_output.flush()
+
+    ev = await asyncio.wait_for(harness.audio_output.wait_for_playout(), 2)
+
+    assert ev.interrupted is False
+
+
+async def test_idle_ticks_do_not_complete_a_captured_segment(harness: RunnerHarness) -> None:
+    """Ojin streams silence forever between turns; none of it is a segment."""
+    await harness.audio_output.capture_frame(tts_chunk())
+    harness.audio_output.flush()
+    await until(lambda: harness.sink._segments.input_closed, what="the input segment to close")
+
+    for _ in range(10):
+        await harness.client.push_tick(silent=True, frame_type=FrameType.IDLE)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(harness.audio_output.wait_for_playout(), 0.2)
+
+
+async def test_interrupted_segment_end_is_not_owed_again(harness: RunnerHarness) -> None:
+    """A clear already reported the segment; its interrupted end must not count twice."""
+    await harness.audio_output.capture_frame(tts_chunk())
+    await until(lambda: bool(harness.client.sent), what="the chunk to reach the client")
+
+    harness.audio_output.clear_buffer()
+    await until(lambda: not harness.sink.clear_pending, what="the clear to finish")
+    harness.audio_output.flush()  # delivers AudioSegmentEnd(interrupted=True)
+
+    await asyncio.sleep(0.05)
+    assert not harness.sink.owes_segment_end
+    assert harness.markers_seen == 0
+
+
+class _FakeAgentOutput:
+    def __init__(self) -> None:
+        self.tails: list[QueueAudioOutput] = []
+
+    def replace_audio_tail(self, tail: QueueAudioOutput) -> None:
+        self.tails.append(tail)
+
+
+class _FakeAgentSession:
+    def __init__(self) -> None:
+        self.output = _FakeAgentOutput()
+
+    def off(self, *_: Any) -> None:
+        pass
+
+
+def _avatar_session(monkeypatch: pytest.MonkeyPatch) -> AvatarSession:
+    monkeypatch.setenv("OJIN_API_KEY", "k")
+    monkeypatch.setenv("OJIN_CONFIG_ID", "c")
+    return AvatarSession()
+
+
+async def test_degrade_gives_the_drain_its_own_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """aclose() drops the base class's session reference; the drain must still get its own tail."""
+    session = _avatar_session(monkeypatch)
+    previous = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._audio_output = previous
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        assert len(fake_session.output.tails) == 1
+        assert fake_session.output.tails[0] is not previous
+    finally:
+        await session.aclose()
+
+
+async def test_degrade_does_not_clear_the_closed_runners_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The closed runner's clear handler must not fire when the agent's tail is swapped."""
+    session = _avatar_session(monkeypatch)
+    runner_output = _RunnerOutput(sample_rate=24000, wait_playback_start=True)
+    clears: list[int] = []
+    runner_output.on("clear_buffer", lambda: clears.append(1))
+    session._audio_output = runner_output
+    session._agent_session = _FakeAgentSession()  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        runner_output.clear_buffer()  # what swapping the tail does to the old output
+        assert clears == []
+    finally:
+        await session.aclose()
+
+
+async def test_degraded_drain_reports_an_interrupted_segment_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core clears more than once per interruption, then flushes an interrupted end."""
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        drain_output = fake_session.output.tails[0]
+        events: list[bool] = []
+        drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+
+        await drain_output.capture_frame(tts_chunk())
+        await asyncio.sleep(0.05)  # let the drain start the segment
+        drain_output.clear_buffer()
+        drain_output.clear_buffer()
+        drain_output.flush()
+        await asyncio.sleep(0.05)
+
+        assert events == [True]
+    finally:
+        await session.aclose()
+
+
+async def test_degraded_drain_reports_a_segment_cleared_before_it_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A captured segment cleared unread still counts; without a report playout never ends."""
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        drain_output = fake_session.output.tails[0]
+        events: list[bool] = []
+        drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+
+        await drain_output.capture_frame(tts_chunk())
+        drain_output.clear_buffer()  # before the drain task has run
+        drain_output.flush()
+        ev = await asyncio.wait_for(drain_output.wait_for_playout(), 2)
+
+        assert ev.interrupted is True
+        assert events == [True]
+    finally:
+        await session.aclose()
+
+
+async def test_clear_buffer_drops_samples_held_by_the_resampler(harness: RunnerHarness) -> None:
+    """Samples a resampler still holds from a cancelled reply must not lead the next turn."""
+    samples = 1600
+    off_rate = rtc.AudioFrame(
+        data=b"\x11\x22" * samples,
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+    await harness.generator.push_audio(off_rate)
+    assert harness.generator._resampler is not None
+
+    await harness.generator.clear_buffer()
+
+    assert harness.generator._resampler is None
+
+
+async def test_degraded_drain_reports_a_flushed_segment_cleared_before_it_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clear after flush() discards the end marker too; the drain must still end the segment."""
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+
+    await session._degrade()
+    try:
+        drain_output = fake_session.output.tails[0]
+        events: list[bool] = []
+        drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+
+        await drain_output.capture_frame(tts_chunk())
+        drain_output.flush()
+        drain_output.clear_buffer()  # same tick: the queued end marker is discarded
+        ev = await asyncio.wait_for(drain_output.wait_for_playout(), 2)
+
+        assert ev.interrupted is True
+        assert events == [True]
+    finally:
+        await session.aclose()
+
+
+async def _degraded_drain(monkeypatch: pytest.MonkeyPatch):
+    session = _avatar_session(monkeypatch)
+    session._audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    fake_session = _FakeAgentSession()
+    session._agent_session = fake_session  # type: ignore[assignment]
+    await session._degrade()
+    drain_output = fake_session.output.tails[0]
+    events: list[bool] = []
+    drain_output.on("playback_finished", lambda ev: events.append(ev.interrupted))
+    return session, drain_output, events
+
+
+async def test_degraded_drain_reports_a_segment_once_across_repeated_clears(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Core can clear twice for one interruption, even around the flush."""
+    session, drain_output, events = await _degraded_drain(monkeypatch)
+    try:
+        await drain_output.capture_frame(tts_chunk())
+        await asyncio.sleep(0.05)  # the drain has started the segment
+        drain_output.clear_buffer()
+        drain_output.clear_buffer()
+        drain_output.flush()
+        await asyncio.wait_for(drain_output.wait_for_playout(), 2)
+        drain_output.clear_buffer()  # a clear after the flush discards the interrupted end
+        await asyncio.sleep(0.05)
+        assert events == [True]
+        # A second report for the same segment is rejected with this warning.
+        assert not [r for r in caplog.records if "more times" in r.message]
+    finally:
+        await session.aclose()
+
+
+async def test_degrade_mid_segment_does_not_finish_the_segment_early(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The agent is still writing when the fatal lands: the new tail, not the old, reports it."""
+
+    class _Wrap(AudioOutput):
+        def __init__(self, next_in_chain: AudioOutput) -> None:
+            super().__init__(
+                label="wrap",
+                capabilities=AudioOutputCapabilities(pause=True),
+                next_in_chain=next_in_chain,
+            )
+
+        async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+            await super().capture_frame(frame)
+            await self.next_in_chain.capture_frame(frame)  # type: ignore[union-attr]
+
+        def flush(self) -> None:
+            super().flush()
+            self.next_in_chain.flush()  # type: ignore[union-attr]
+
+        def clear_buffer(self) -> None:
+            self.next_in_chain.clear_buffer()  # type: ignore[union-attr]
+
+    class _OwingSink:
+        owes_segment_end = True
+
+    class _Session:
+        def __init__(self, output: AgentOutput) -> None:
+            self.output = output
+
+        def off(self, *_: Any) -> None:
+            pass
+
+    session = _avatar_session(monkeypatch)
+    runner_output = _RunnerOutput(sample_rate=24000, wait_playback_start=True)
+    agent_output = AgentOutput(lambda: None, lambda: None, lambda: None)
+    top = _Wrap(runner_output)
+    agent_output.audio = top
+    session._audio_output = runner_output
+    session._agent_session = _Session(agent_output)  # type: ignore[assignment]
+    session._sink = _OwingSink()  # type: ignore[assignment]
+    finished: list[bool] = []
+    top.on("playback_finished", lambda ev: finished.append(ev.interrupted))
+
+    await top.capture_frame(tts_chunk())  # the agent is mid-segment
+    await session._degrade()
+    try:
+        waiter = asyncio.create_task(top.wait_for_playout())
+        await asyncio.sleep(0.05)
+        assert not waiter.done(), "the segment is still being written"
+
+        await top.capture_frame(tts_chunk())  # the rest goes to the new tail
+        top.flush()
+        await asyncio.wait_for(waiter, 2)
+        assert finished == [False]
+        assert not [r for r in caplog.records if "more times" in r.message]
+    finally:
+        await session.aclose()
+
+
+async def test_degrade_without_an_agent_session_starts_no_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Degrading before start() attached the session must not drain the old output."""
+    session = _avatar_session(monkeypatch)
+    previous = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    session._audio_output = previous
+
+    await session._degrade()
+
+    assert session._null_drain_task is None
+    assert session._audio_output is previous
