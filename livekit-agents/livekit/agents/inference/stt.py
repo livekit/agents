@@ -1510,6 +1510,32 @@ class SpeechStream(stt.SpeechStream):
                 ) from exc
 
         async def recv_task(connection: _STTConnection) -> None:
+            try:
+                await _recv_loop(connection)
+            except Exception as e:
+                # SpeechStream's retry loop reports failures it retries at WARNING.
+                # Keep handled gateway rejects out of ERROR-level alerts, but still report
+                # the attempt that exhausts the retry budget (or cannot be retried) once.
+                handled_by_handoff = (
+                    connection.handoff is not None or connection is not self._connection
+                )
+                will_retry = (
+                    isinstance(e, APIError)
+                    and e.retryable
+                    and self._conn_options.max_retry > 0
+                    and self._num_retries < self._conn_options.max_retry
+                )
+                retryable_failure = (
+                    isinstance(e, APIError) and e.retryable and (handled_by_handoff or will_retry)
+                )
+                if retryable_failure:
+                    logger.debug("retryable error in recv_task: %s", e, exc_info=e)
+                else:
+                    logger.error("Error in recv_task", exc_info=e)
+                raise
+
+        async def _recv_loop(connection: _STTConnection) -> None:
+            nonlocal session_closed
             ws = connection.ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
@@ -1600,12 +1626,10 @@ class SpeechStream(stt.SpeechStream):
                         )
                     return
                 elif kind == "error":
-                    logger.error(
-                        "received error from LiveKit Inference STT", extra={"lk.pii.event": data}
-                    )
+                    code = data.get("code", -1)
                     raise APIError(
                         "LiveKit Inference STT returned an error",
-                        body={"code": data.get("code", -1)},
+                        body={"code": code},
                         retryable=not input_ended.is_set(),
                     )
                 if kind in (
