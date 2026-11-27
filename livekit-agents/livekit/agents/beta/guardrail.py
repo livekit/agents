@@ -620,12 +620,16 @@ class DecisionGuardrail:
                     pending += chunk
                     sentences = tokenizer.tokenize(pending)
                     # every sentence but the last is complete; the last may still grow. A
-                    # boundary is only final once the next sentence has a second word: "Okay. U"
-                    # splits, but "Okay. U.S. refunds" is one sentence
+                    # boundary after a "." is only final once the next sentence has a second
+                    # word: "Okay. U" splits, but "Okay. U.S. refunds" is one sentence. Other
+                    # boundaries ("!", "?", "。") are final, which keeps unspaced text flowing
                     if (
                         len(sentences) > 1
                         and "".join(sentences) == pending
-                        and len(sentences[-1].split()) > 1
+                        and (
+                            not sentences[-2].rstrip().endswith(".")
+                            or len(sentences[-1].split()) > 1
+                        )
                     ):
                         for sentence in sentences[:-1]:
                             _submit(sentence)

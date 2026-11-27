@@ -703,3 +703,40 @@ async def test_sentence_gate_splits_streamed_abbreviations_like_the_whole_text()
         await guardrail.aclose()
     # "Okay. U" must not release "Okay." alone before "U.S." is known not to end it
     assert seen[0] == seen[1]
+
+
+async def test_sentence_gate_releases_unspaced_sentences_while_streaming() -> None:
+    session = StubSession()
+    model = ScriptedModel(lambda _: 0.0)
+    guardrail = DecisionGuardrail(session, model=model)  # type: ignore[arg-type]
+
+    @guardrail.on_agent_sentence(decisions=OFF_POLICY)
+    def during_reply(ev: DecisionEvaluated) -> None:
+        return None
+
+    more = asyncio.Event()
+
+    async def text() -> AsyncIterator[str | FlushSentinel]:
+        for chunk in ["你好！", "LiveKit是", "一个平台。", "今天"]:
+            yield chunk
+        await more.wait()  # the LLM is still generating
+        yield "很好。"
+
+    out: list[str] = []
+
+    async def consume() -> None:
+        async for c in guardrail._gate_agent_sentences(
+            text(), chat_ctx=ChatContext(), speech_id="s", on_block=_no_block
+        ):
+            if isinstance(c, str):
+                out.append(c)
+
+    task = asyncio.create_task(consume())
+    for _ in range(20):
+        await asyncio.sleep(0)
+    # Chinese has no spaces between words: complete sentences don't wait for the stream
+    assert "".join(out) == "你好！LiveKit是一个平台。"
+    more.set()
+    await task
+    assert "".join(out) == "你好！LiveKit是一个平台。今天很好。"
+    await guardrail.aclose()
