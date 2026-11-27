@@ -1410,6 +1410,9 @@ class AudioRecognition:
 
             # still need to increment it as it's used for turn detection,
             self._last_final_transcript_time = time.time()
+            # the words after the last final are unconfirmed until their own final, so a commit
+            # now must wait for it
+            self._last_stt_final_time = None
             # preflight transcript includes all pre-committed transcripts (including final transcript from the previous STT run)
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript

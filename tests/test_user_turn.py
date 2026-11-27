@@ -433,6 +433,32 @@ async def test_commit_right_after_a_preflight_waits_for_the_final(
     assert _user_transcripts(agent) == ["I'd like to check my savings"]
 
 
+async def test_commit_after_a_final_then_a_preflight_waits_for_the_next_final(
+    running_session: tuple[AgentSession, Agent],
+) -> None:
+    """A final for the first part of the turn, then a preflight for the rest: a commit within
+    0.5 s of that final still waits, because the preflight's words are not confirmed."""
+    session, agent = running_session
+    assert session._activity is not None
+    recognition = session._activity._audio_recognition
+    assert recognition is not None
+    await recognition._on_stt_event(_final_transcript("I'd like to"))
+    await asyncio.sleep(0.2)
+    await recognition._on_stt_event(
+        SpeechEvent(
+            type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            alternatives=[SpeechData(text="check my balance", language=LanguageCode("en"))],
+        )
+    )
+    commit = session.commit_user_turn(skip_reply=True, transcript_timeout=1.0)
+    await asyncio.sleep(0.1)
+    assert not commit.done()
+    await recognition._on_stt_event(_final_transcript("check my savings"))
+    assert await commit == "I'd like to check my savings"
+    await _await_delivery(session)
+    assert _user_transcripts(agent) == ["I'd like to check my savings"]
+
+
 async def test_commit_right_after_a_final_does_not_wait(
     running_session: tuple[AgentSession, Agent],
 ) -> None:
