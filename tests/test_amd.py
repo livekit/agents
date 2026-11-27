@@ -5037,9 +5037,16 @@ async def test_amd_restores_interruption_settings(
 class ChoiceModel(llm.DecisionModel):
     """A decision model that answers each request with the next queued category."""
 
-    def __init__(self, *kinds: llm.DecisionKind) -> None:
+    def __init__(
+        self,
+        *kinds: llm.DecisionKind,
+        input_modalities: list[Literal["text", "audio"]] | None = None,
+    ) -> None:
         super().__init__(
-            capabilities=llm.DecisionCapabilities(decision_kinds=list(kinds or ("choice",)))
+            capabilities=llm.DecisionCapabilities(
+                decision_kinds=list(kinds or ("choice",)),
+                input_modalities=input_modalities or ["text"],
+            )
         )
         self.requests: asyncio.Queue[tuple[str, Mapping[str, llm.Decision]]] = asyncio.Queue()
         self.answers: asyncio.Queue[str | None] = asyncio.Queue()
@@ -5111,6 +5118,20 @@ async def test_decision_model_without_choice_is_rejected() -> None:
     try:
         with pytest.raises(ValueError, match="choice decisions"):
             await AMD(session, llm=ChoiceModel("probability"), stt=None).__aenter__()
+        assert session.amd is None
+        assert session._turn_hooks is None
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_only_decision_model_is_rejected() -> None:
+    session = AgentSession(turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment."))
+    try:
+        model = ChoiceModel(input_modalities=["audio"])
+        with pytest.raises(ValueError, match="takes text input"):
+            await AMD(session, llm=model, stt=None).__aenter__()
         assert session.amd is None
         assert session._turn_hooks is None
     finally:

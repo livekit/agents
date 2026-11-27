@@ -7,6 +7,7 @@ from typing import Literal
 import pytest
 from pydantic import ValidationError
 
+from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.llm import (
     AgentConfigUpdate,
@@ -313,6 +314,92 @@ def test_probabilities_must_be_finite_and_bounded(value: float) -> None:
         decisions.ProbabilityResult(value=value)
 
 
+class AudioModel(StaticModel):
+    """Records the audio requests it receives."""
+
+    def __init__(self, *outcomes: DecisionResponse | Exception) -> None:
+        super().__init__(*outcomes)
+        self._capabilities = decisions.DecisionCapabilities(
+            decision_kinds=["probability", "choice", "score"], input_modalities=["text", "audio"]
+        )
+        self.audio_requests: list[tuple[str, rtc.AudioFrame]] = []
+
+    async def _evaluate_audio_impl(
+        self,
+        *,
+        input: str,
+        audio: rtc.AudioFrame,
+        decisions: Mapping[str, decisions.Decision],
+        conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
+    ) -> DecisionResponse:
+        self.audio_requests.append((input, audio))
+        return await self._evaluate_impl(
+            input=input,
+            decisions=decisions,
+            conn_options=conn_options,
+            extra_headers=extra_headers,
+        )
+
+
+def audio_frames(count: int) -> list[rtc.AudioFrame]:
+    return [
+        rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=1600)
+        for _ in range(count)
+    ]
+
+
+def test_input_modalities_default_to_text() -> None:
+    capabilities = decisions.DecisionCapabilities(decision_kinds=["probability"])
+    assert capabilities.input_modalities == ["text"]
+
+
+async def test_audio_only_model_requires_audio() -> None:
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    model._capabilities = decisions.DecisionCapabilities(
+        decision_kinds=["probability", "choice", "score"], input_modalities=["audio"]
+    )
+    with pytest.raises(ValueError, match="requires audio"):
+        await evaluate(model)
+    assert model.requests == []
+
+
+async def test_audio_fails_before_provider_request_without_audio_input() -> None:
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    with pytest.raises(ValueError, match="does not support audio"):
+        await evaluate(model, audio=audio_frames(1))
+    assert model.requests == []
+
+
+async def test_audio_is_combined_and_routed_to_the_audio_hook() -> None:
+    model = AudioModel(DecisionResponse(results=valid_results()))
+    response = await evaluate(model, input="A support call.", audio=audio_frames(3))
+    [(sent, audio)] = model.audio_requests
+    assert sent == "A support call."
+    assert audio.samples_per_channel == 4800
+    assert response.results.keys() == QUESTIONS.keys()
+
+
+async def test_audio_model_without_audio_uses_the_text_hook() -> None:
+    model = AudioModel(DecisionResponse(results=valid_results()))
+    await evaluate(model)
+    assert model.audio_requests == []
+    assert [sent for sent, _ in model.requests] == ["The caller asked for a table."]
+
+
+async def test_empty_audio_is_rejected() -> None:
+    model = AudioModel()
+    with pytest.raises(ValueError, match="at least one frame"):
+        await evaluate(model, audio=[])
+
+
+async def test_input_is_required_without_audio() -> None:
+    model = StaticModel(DecisionResponse(results=valid_results()))
+    with pytest.raises(ValueError, match="input is required"):
+        await model.evaluate(decisions=QUESTIONS)
+    assert model.requests == []
+
+
 async def test_string_input_is_sent_as_is() -> None:
     model = StaticModel(DecisionResponse(results=valid_results()))
     await evaluate(model, input="  Caller: I want a refund.\n")
@@ -567,3 +654,9 @@ def test_fallback_requires_models_with_a_shared_kind() -> None:
         DecisionModelFallbackAdapter(
             [SwitchModel("a", kinds=["choice"]), SwitchModel("b", kinds=["score"])]
         )
+    audio_only = SwitchModel("b", kinds=["choice"])
+    audio_only._capabilities = decisions.DecisionCapabilities(
+        decision_kinds=["choice"], input_modalities=["audio"]
+    )
+    with pytest.raises(ValueError, match="take text input"):
+        DecisionModelFallbackAdapter([SwitchModel("a", kinds=["choice"]), audio_only])

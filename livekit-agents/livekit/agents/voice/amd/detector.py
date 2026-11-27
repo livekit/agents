@@ -189,7 +189,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             always use the current Agent's LLM, for example to keep AMD within
             the quota of the session's models. A string selects a LiveKit
             Inference model. AMD logs the selected models when it starts.
-            A DecisionModel that supports choice decisions classifies, but AMD
+            A DecisionModel that supports choice decisions and text input
+            classifies, but AMD
             then skips menu extraction. Calls use
             ``session.conn_options.llm_conn_options``. Supplied models stay
             open when AMD completes.
@@ -437,6 +438,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             and "choice" not in model.capabilities.decision_kinds
         ):
             raise ValueError("amd requires a decision model that supports choice decisions")
+        if (
+            isinstance(model, llm.DecisionModel)
+            and "text" not in model.capabilities.input_modalities
+        ):
+            raise ValueError("amd requires a decision model that takes text input")
         if (
             self._opening_text is not None
             and activity.tts is None

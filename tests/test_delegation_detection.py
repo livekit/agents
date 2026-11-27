@@ -76,6 +76,15 @@ async def test_a_decision_model_delegates_at_even_odds_or_more() -> None:
     assert await DelegationDetector(_Decided(0.4)).detect(_check()) is False
 
 
+def test_an_audio_only_decision_model_is_rejected() -> None:
+    model = _Decided(0.5)
+    model._capabilities = llm.DecisionCapabilities(
+        decision_kinds=["probability"], input_modalities=["audio"]
+    )
+    with pytest.raises(ValueError, match="takes text input"):
+        DelegationDetector(model)
+
+
 async def test_a_turn_said_over_the_agent_is_marked_and_the_backend_told() -> None:
     check = _check()
     # the caller started while the agent's reply was still playing

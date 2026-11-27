@@ -130,6 +130,8 @@ class DelegationDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             from ..inference import LLM as InferenceLLM
 
             model = self._owned_model = InferenceLLM(model)
+        if isinstance(model, DecisionModel) and "text" not in model.capabilities.input_modalities:
+            raise ValueError("delegation detection requires a decision model that takes text input")
         self._model = model
         self._model.on("metrics_collected", self._forward_metrics)
         self._prompt = prompt
