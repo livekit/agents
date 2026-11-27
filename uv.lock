@@ -56,6 +56,7 @@ members = [
     "livekit-plugins-fireworksai",
     "livekit-plugins-fishaudio",
     "livekit-plugins-gladia",
+    "livekit-plugins-gmicloud",
     "livekit-plugins-gnani",
     "livekit-plugins-google",
     "livekit-plugins-gradium",
@@ -3226,6 +3227,20 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+]
+
+[[package]]
+name = "livekit-plugins-gmicloud"
+source = { editable = "livekit-plugins/livekit-plugins-gmicloud" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
 ]
 
