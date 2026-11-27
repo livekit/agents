@@ -147,6 +147,8 @@ ATTR_TTS_LABEL = "lk.tts.label"
 ATTR_RESPONSE_TTFB = "lk.response.ttfb"
 
 # eou detection
+ATTR_EOU_MODEL = "lk.eou.model"
+ATTR_EOU_PROVIDER = "lk.eou.provider"
 ATTR_EOU_PROBABILITY = "lk.eou.probability"
 ATTR_EOU_UNLIKELY_THRESHOLD = "lk.eou.unlikely_threshold"
 ATTR_EOU_DELAY = "lk.eou.endpointing_delay"
@@ -184,6 +186,8 @@ ATTR_SPEECH_QUEUE_WAIT = "lk.speech.queue_wait"
 ATTR_LLM_METRICS = "lk.llm_metrics"
 ATTR_TTS_METRICS = "lk.tts_metrics"
 ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
+ATTR_SESSION_USAGE = "lk.session_usage"
+ATTR_DELEGATION_ID = "lk.delegation_id"
 
 # latency span attributes
 ATTR_E2E_LATENCY = "lk.e2e_latency"

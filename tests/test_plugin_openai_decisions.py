@@ -23,7 +23,7 @@ QUESTIONS = {
 
 def response_body() -> dict[str, Any]:
     return {
-        "model": "gpt-6-luna-decisions-2026-10-01",
+        "model": "gpt-6-luna-2026-10-01",
         "answers": [
             {"type": "predicate", "name": "human", "probability": 0.9},
             {
@@ -87,7 +87,7 @@ async def test_batch_is_sent_as_named_questions_in_order() -> None:
     await model.evaluate(input=context, decisions=QUESTIONS)
 
     body = requests[0]
-    assert body["model"] == "gpt-6-luna-decisions"
+    assert body["model"] == "gpt-6-luna"
     assert body["input"] == "user: Please book a table."
     assert body["questions"] == [
         {"type": "predicate", "name": "human", "instructions": "The caller wants a human."},
@@ -116,6 +116,23 @@ async def test_safety_identifier_is_forwarded_when_given() -> None:
     assert requests[0]["safety_identifier"] == "caller-7"
 
 
+async def test_extra_headers_are_sent() -> None:
+    headers: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        headers.append(request.headers)
+        return httpx.Response(200, json=response_body())
+
+    client = openai.AsyncClient(
+        api_key="test-key",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    model = DecisionModel(client=client)
+    await model.evaluate(input="", decisions=QUESTIONS, extra_headers={"X-Feature": "test"})
+    assert headers[0]["X-Feature"] == "test"
+
+
 async def test_every_kind_is_decoded_with_distributions_and_usage() -> None:
     model, requests = model_for(response_body())
     metrics = []
@@ -134,7 +151,7 @@ async def test_every_kind_is_decoded_with_distributions_and_usage() -> None:
     assert (score.value, score.probabilities) == (1.4, {0: 0.1, 1: 0.4, 2: 0.5})
     assert score.levels == ["Calm", "Annoyed", "Angry"]
     assert response.errors == {}
-    assert (response.model, response.provider) == ("gpt-6-luna-decisions-2026-10-01", "openai")
+    assert (response.model, response.provider) == ("gpt-6-luna-2026-10-01", "openai")
     assert response.request_id == "request-1"
     assert (response.input_tokens, response.output_tokens) == (50, 5)
     assert metrics[0].input_tokens == 50

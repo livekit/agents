@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents import stt, vad
+from livekit.agents import APIConnectOptions, stt, vad
 from livekit.plugins.mistralai import STT, stt as mistral_stt
 
 pytestmark = pytest.mark.plugin("mistralai")
@@ -185,6 +185,16 @@ async def test_recognize_language_override_applies_to_one_call() -> None:
     assert overridden.alternatives[0].language == "fr"
     assert default.alternatives[0].language == "en"
     assert batch_stt._opts.language == "en"
+
+
+async def test_recognize_uses_conn_options_timeout() -> None:
+    # without timeout_ms the SDK waits up to 5 minutes for a batch transcription
+    transcriptions = _FakeTranscriptions()
+    batch_stt = _stt(transcriptions)
+
+    await batch_stt.recognize([_frame()], conn_options=APIConnectOptions(timeout=1.5))
+
+    assert transcriptions.requests[0]["timeout_ms"] == 1500
 
 
 async def test_recognize_language_override_keeps_auto_detection() -> None:

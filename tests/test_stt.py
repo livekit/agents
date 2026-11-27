@@ -22,6 +22,7 @@ from livekit.plugins import (
     elevenlabs,
     fal,
     fireworksai,
+    fishaudio,
     gladia,
     google,
     gradium,
@@ -116,6 +117,7 @@ STTs: list[Callable[[], stt.STT]] = [
 STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
     parameter_factory(xai),
     parameter_factory(inworld),
+    parameter_factory(fishaudio),
 ] + [
     pytest.param(
         lambda: rtzr.STT(sample_rate=16000),

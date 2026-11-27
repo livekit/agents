@@ -20,7 +20,6 @@ You'll need an API key from Gladia. It can be set as an environment variable: `G
 - Multi-language support
 - Code-switching between languages
 - Interim results (partial transcriptions)
-- Voice activity detection with energy filtering
 - Optional real-time translation
 - Customizable audio parameters (sample rate, bit depth, channels, encoding)
 
@@ -45,7 +44,6 @@ stt = GladiaSTT(
     channels=1,                                 # Number of audio channels
     region="eu-west"                            # Specify Region to use for the Gladia API
     encoding="wav/pcm",                         # Audio encoding format
-    energy_filter=True,                         # Enable voice activity detection
     translation_enabled=True,
     translation_target_languages=["en"],
     translation_model="base",

@@ -27,7 +27,7 @@ class Gradium(Protocol):
             peer.close()
         elif kind == "flush":
             await peer.finalize()
-            peer.send({"type": "flushed"}, final=True)
+            peer.send({"type": "flushed", "flush_id": event["flush_id"]}, final=True)
         else:
             raise AssertionError(f"unknown Gradium message: {event}")
 
@@ -84,6 +84,5 @@ PROVIDERS = (
         required_env=("GRADIUM_API_KEY",),
         live_options={},
         live_options_from_env={},
-        completion_on_close=False,
     ),
 )

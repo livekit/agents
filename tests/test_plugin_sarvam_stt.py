@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import gc
+import json
 import weakref
+from collections.abc import Callable
 from types import SimpleNamespace
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
+import aiohttp
 import numpy as np
 import pytest
 
@@ -13,535 +19,1705 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
+    stt,
 )
 from livekit.agents.utils.aio.websocket import WebSocketCloseError
-from livekit.plugins.sarvam import stt as sarvam_stt
+from livekit.plugins import sarvam
+from livekit.plugins.sarvam import _utils, stt as sarvam_stt
 
 pytestmark = pytest.mark.unit
 
 
-class _ErrorResponse:
-    def __init__(self, *, status: int, error_text: str) -> None:
-        self.status = status
-        self._error_text = error_text
-
-    async def __aenter__(self) -> _ErrorResponse:
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        return None
-
-    async def text(self) -> str:
-        return self._error_text
-
-
-class _ErrorSession:
-    def __init__(self, *, status: int, error_text: str) -> None:
-        self._status = status
-        self._error_text = error_text
-
-    def post(self, *_: object, **__: object) -> _ErrorResponse:
-        return _ErrorResponse(status=self._status, error_text=self._error_text)
-
-
-class _FakeWS:
-    def __init__(
-        self,
-        messages: list[SimpleNamespace],
-        *,
-        close_code: int | None = None,
-        exception: BaseException | None = None,
-    ) -> None:
-        self._messages = iter(messages)
-        self.close_code = close_code
-        self._exception = exception
-        self.closed = False
-
-    def __aiter__(self) -> _FakeWS:
-        return self
-
-    async def __anext__(self) -> SimpleNamespace:
-        try:
-            return next(self._messages)
-        except StopIteration:
-            raise StopAsyncIteration from None
-
-    async def receive(self) -> SimpleNamespace:
-        try:
-            return next(self._messages)
-        except StopIteration:
-            return SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSED,
-                data=self.close_code,
-                extra=None,
-            )
-
-    def exception(self) -> BaseException | None:
-        return self._exception
-
-
-def _make_audio_buffer(
-    *, num_samples: int = 1600, sample_rate: int = 16000
-) -> list[rtc.AudioFrame]:
-    data = np.zeros(num_samples, dtype=np.int16).tobytes()
-    return [
-        rtc.AudioFrame(
-            data=data,
-            sample_rate=sample_rate,
-            num_channels=1,
-            samples_per_channel=num_samples,
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_recognize_preserves_native_status_error() -> None:
-    stt = sarvam_stt.STT(api_key="sk_test")
-    stt._session = _ErrorSession(  # type: ignore[assignment]
-        status=422, error_text='{"error":"bad request"}'
-    )
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stt._recognize_impl(
-            _make_audio_buffer(),
-            conn_options=APIConnectOptions(
-                max_retry=0,
-                retry_interval=0.0,
-                timeout=1.0,
-            ),
-        )
-
-    assert excinfo.value.status_code == 422
-    assert excinfo.value.body == '{"error":"bad request"}'
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_run_preserves_native_api_status_error() -> None:
+def _bare_stream(**conn: Any) -> sarvam_stt.SpeechStream:
+    """A SpeechStream with what `_run` and the message handlers read, and no running task."""
     stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions(
-        max_retry=0,
-        retry_interval=0.0,
-        timeout=1.0,
-    )
+    stream._conn_options = APIConnectOptions(retry_interval=0.0, timeout=1.0, **conn)
     stream._connection_lock = asyncio.Lock()
     stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
     stream._logger = sarvam_stt.logger.getChild("SpeechStream")
     stream._client_request_id = None
     stream._server_request_id = None
-
-    async def _raise_native_status_error() -> None:
-        raise APIStatusError(
-            "native provider error",
-            status_code=429,
-            body={"error": "rate_limit"},
-            retryable=False,
-        )
-
-    stream._run_connection = (  # type: ignore[method-assign]
-        _raise_native_status_error
-    )
     stream._build_log_context = lambda: {}  # type: ignore[method-assign]
+    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
+    stream._opts = SimpleNamespace(sample_rate=16000)  # type: ignore[assignment]
+    stream._recent_audio = bytearray()
+    stream._audio_buffer = []
+    stream._sent_samples = 0
+    stream._end_speech_sample = None
+    stream._release_at_end_speech = False
+    stream._connection_offset = None
+    return stream
+
+
+def _audio(num_samples: int = 1600) -> list[rtc.AudioFrame]:
+    return [rtc.AudioFrame(np.zeros(num_samples, dtype=np.int16).tobytes(), 16000, 1, num_samples)]
+
+
+async def test_recognize_preserves_native_status_error() -> None:
+    class _Response:
+        status = 422
+
+        async def __aenter__(self) -> _Response:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def text(self) -> str:
+            return '{"error":"bad request"}'
+
+    stt = sarvam_stt.STT(api_key="sk_test")
+    stt._session = SimpleNamespace(post=lambda *a, **k: _Response())  # type: ignore[assignment]
 
     with pytest.raises(APIStatusError) as excinfo:
-        await stream._run()
+        await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
 
-    assert excinfo.value.status_code == 429
-    assert excinfo.value.body == {"error": "rate_limit"}
+    assert (excinfo.value.status_code, excinfo.value.body) == (422, '{"error":"bad request"}')
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_run_does_not_retry_on_timeout() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions(
-        max_retry=5,
-        retry_interval=0.0,
-        timeout=1.0,
-    )
-    stream._connection_lock = asyncio.Lock()
-    stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._client_request_id = None
-    stream._server_request_id = None
+_NATIVE = APIStatusError("native", status_code=429, body={"error": "rate_limit"}, retryable=False)
 
+
+@pytest.mark.parametrize(
+    ("error", "expected", "match"),
+    [
+        (_NATIVE, APIStatusError, "native"),
+        (asyncio.TimeoutError("simulated"), APIConnectionError, "Failed to connect to STT"),
+        (RuntimeError("unexpected failure"), APIStatusError, "session failed: unexpected failure"),
+    ],
+)
+async def test_run_fails_once_without_internal_retries(
+    error: BaseException, expected: type[Exception], match: str
+) -> None:
+    stream = _bare_stream(max_retry=5)
     attempts = 0
 
-    async def _raise_timeout() -> None:
+    async def run_connection() -> None:
         nonlocal attempts
         attempts += 1
-        raise asyncio.TimeoutError("simulated timeout")
+        raise error
 
-    stream._run_connection = _raise_timeout  # type: ignore[method-assign]
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-
-    with pytest.raises(APIConnectionError, match="Failed to connect to STT WebSocket"):
+    stream._run_connection = run_connection  # type: ignore[method-assign]
+    with pytest.raises(expected, match=match):
         await stream._run()
 
     assert attempts == 1
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_run_wraps_unexpected_as_status_error() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions(
-        max_retry=0,
-        retry_interval=0.0,
-        timeout=1.0,
-    )
-    stream._connection_lock = asyncio.Lock()
-    stream._connection_state = sarvam_stt.ConnectionState.DISCONNECTED
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._client_request_id = None
-    stream._server_request_id = None
-
-    async def _raise_unexpected() -> None:
-        raise RuntimeError("unexpected failure")
-
-    stream._run_connection = _raise_unexpected  # type: ignore[method-assign]
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-
-    with pytest.raises(APIStatusError, match="STT WebSocket session failed: unexpected failure"):
-        await stream._run()
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_stream_error_message_preserves_raw_payload() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    payload = {
-        "type": "error",
-        "data": {"message": "invalid model", "code": "400", "details": "model not found"},
-    }
-
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"type": "error", "data": {"message": "invalid model", "code": "400", "details": "x"}},
+        {
+            "type": "event",
+            "data": {"event_type": "error", "message": "invalid model", "code": "400"},
+        },
+        {"type": "status", "error": "invalid model", "code": "400"},
+    ],
+    ids=["error", "event-error", "unknown-shape"],
+)
+async def test_error_payloads_raise_with_raw_body(payload: dict[str, Any]) -> None:
     with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_error_message(payload)
+        await _bare_stream()._handle_message(payload)
 
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.body == payload
-    assert '"message":"invalid model"' in excinfo.value.message
+    assert (excinfo.value.status_code, excinfo.value.body) == (400, payload)
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_non_json_error_text() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
+class _FakeWS:
+    def __init__(self, messages: list[SimpleNamespace], *, close_code: int | None = None) -> None:
+        self._messages = iter(messages)
+        self.close_code = close_code
+        self.closed = False
 
-    ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.TEXT,
-                data="invalid model: saarass:v3",
-                extra=None,
-            )
-        ]
-    )
+    async def receive(self) -> SimpleNamespace:
+        return next(
+            self._messages,
+            SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=self.close_code, extra=None),
+        )
 
+    def exception(self) -> BaseException | None:
+        return None
+
+
+async def test_non_json_text_raises() -> None:
+    ws = _FakeWS([SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data="invalid model", extra=None)])
     with pytest.raises(APIStatusError, match="Sarvam STT non-JSON error message"):
-        await stream._process_messages(ws)
+        await _bare_stream()._process_messages(ws)
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_error_close_reason() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSED,
-                data=None,
-                extra="invalid model: saarass:v3",
-            )
-        ],
-        close_code=1000,
-    )
-
+@pytest.mark.parametrize(
+    ("messages", "close_code", "expected_code", "reason"),
+    [
+        # a 1000 close with an error reason is still a failure
+        (
+            [SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None, extra="invalid model")],
+            1000,
+            1000,
+            "invalid model",
+        ),
+        (
+            [SimpleNamespace(type=aiohttp.WSMsgType.CLOSE, data=4000, extra="invalid model")],
+            None,
+            4000,
+            "invalid model",
+        ),
+        # the socket iterator ending on a non-graceful close code
+        ([], 4000, 4000, None),
+    ],
+    ids=["error-reason", "non-graceful", "after-loop"],
+)
+async def test_unexpected_close_raises(
+    messages: list[SimpleNamespace],
+    close_code: int | None,
+    expected_code: int,
+    reason: str | None,
+) -> None:
     with pytest.raises(WebSocketCloseError) as excinfo:
-        await stream._process_messages(ws)
+        await _bare_stream()._process_messages(_FakeWS(messages, close_code=close_code))
 
-    assert excinfo.value.body == "invalid model: saarass:v3"
+    assert excinfo.value.close_code == expected_code
+    assert excinfo.value.body == reason
     assert "closed unexpectedly" in excinfo.value.message
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_non_graceful_close() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
+async def test_recognize_forces_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, APIConnectOptions] = {}
 
-    ws = _FakeWS(
-        [
-            SimpleNamespace(
-                type=sarvam_stt.aiohttp.WSMsgType.CLOSE,
-                data=4000,
-                extra="Invalid model 'saarass:v3'.",
-            )
-        ],
-        close_code=None,
-    )
-
-    with pytest.raises(WebSocketCloseError) as excinfo:
-        await stream._process_messages(ws)
-
-    assert excinfo.value.close_code == 4000
-    assert excinfo.value.body == "Invalid model 'saarass:v3'."
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_process_messages_raises_on_post_loop_non_graceful_close() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._conn_options = APIConnectOptions()
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    ws = _FakeWS([], close_code=4000)
-
-    with pytest.raises(WebSocketCloseError) as excinfo:
-        await stream._process_messages(ws)
-
-    assert excinfo.value.close_code == 4000
-    assert excinfo.value.body is None
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_handle_message_treats_event_error_payload_as_error() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    payload = {
-        "type": "event",
-        "data": {"event_type": "error", "message": "invalid model", "code": "400"},
-    }
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_message(payload)
-
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.body == payload
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_handle_message_treats_unknown_error_shape_as_error() -> None:
-    stream = object.__new__(sarvam_stt.SpeechStream)
-    stream._logger = sarvam_stt.logger.getChild("SpeechStream")
-    stream._build_log_context = lambda: {}  # type: ignore[method-assign]
-    stream._maybe_set_server_request_id = lambda data: None  # type: ignore[method-assign]
-
-    payload = {
-        "type": "status",
-        "error": "invalid model",
-        "code": "400",
-    }
-
-    with pytest.raises(APIStatusError) as excinfo:
-        await stream._handle_message(payload)
-
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.body == payload
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
-async def test_sarvam_stt_recognize_forces_single_attempt_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
-    liveness_timeout: float,
-) -> None:
-    captured = {}
-
-    async def _fake_base_recognize(
-        self: object,
-        buffer: object,
-        *,
-        language: object = sarvam_stt.NOT_GIVEN,
-        conn_options: APIConnectOptions = (sarvam_stt.DEFAULT_API_CONNECT_OPTIONS),
-    ) -> sarvam_stt.stt.SpeechEvent:
-        del self, buffer, language
-        captured["conn_options"] = conn_options
+    async def base_recognize(self: object, buffer: object, **kwargs: Any) -> object:
+        captured["conn_options"] = kwargs["conn_options"]
         return sarvam_stt.stt.SpeechEvent(type=sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT)
 
-    monkeypatch.setattr(sarvam_stt.stt.STT, "recognize", _fake_base_recognize)
+    monkeypatch.setattr(sarvam_stt.stt.STT, "recognize", base_recognize)
+    conn = APIConnectOptions(max_retry=9, retry_interval=1.5, timeout=7.0, liveness_timeout=3.0)
+    await sarvam_stt.STT(api_key="sk_test").recognize(_audio(), conn_options=conn)
 
-    stt = sarvam_stt.STT(api_key="sk_test")
-    await stt.recognize(
-        _make_audio_buffer(),
-        conn_options=APIConnectOptions(
-            max_retry=9,
-            retry_interval=1.5,
-            timeout=7.0,
-            liveness_timeout=liveness_timeout,
-        ),
+    assert captured["conn_options"] == APIConnectOptions(
+        max_retry=0, retry_interval=1.5, timeout=7.0, liveness_timeout=3.0
     )
 
-    conn_options = captured["conn_options"]
-    assert conn_options.max_retry == 0
-    assert conn_options.retry_interval == 1.5
-    assert conn_options.timeout == 7.0
-    assert conn_options.liveness_timeout == liveness_timeout
 
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("liveness_timeout", [3.0, 30.0])
-async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
-    monkeypatch: pytest.MonkeyPatch,
-    liveness_timeout: float,
-) -> None:
-    captured = {}
+async def test_stream_forces_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
 
     class _DummyStream:
-        def __init__(
-            self,
-            *,
-            stt: object,
-            opts: object,
-            conn_options: APIConnectOptions,
-            api_key: str,
-            http_session: object,
-        ) -> None:
-            del stt, opts, api_key
-            captured["conn_options"] = conn_options
-            captured["http_session"] = http_session
+        def __init__(self, *, conn_options: APIConnectOptions, http_session: Any, **_: Any) -> None:
+            captured.update(conn_options=conn_options, http_session=http_session)
 
     monkeypatch.setattr(sarvam_stt, "SpeechStream", _DummyStream)
+    conn = APIConnectOptions(max_retry=8, retry_interval=0.2, timeout=4.0, liveness_timeout=3.0)
+    sarvam_stt.STT(api_key="sk_test").stream(conn_options=conn)
+    await captured["http_session"].close()
 
-    stt = sarvam_stt.STT(api_key="sk_test")
-    _ = stt.stream(
-        conn_options=APIConnectOptions(
-            max_retry=8,
-            retry_interval=0.2,
-            timeout=4.0,
-            liveness_timeout=liveness_timeout,
-        )
+    assert captured["conn_options"] == APIConnectOptions(
+        max_retry=0, retry_interval=0.2, timeout=4.0, liveness_timeout=3.0
     )
 
-    try:
-        conn_options = captured["conn_options"]
-        assert conn_options.max_retry == 0
-        assert conn_options.retry_interval == 0.2
-        assert conn_options.timeout == 4.0
-        assert conn_options.liveness_timeout == liveness_timeout
-    finally:
-        await captured["http_session"].close()
 
+async def test_aclose_closes_every_stream_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def idle_run(self: object) -> None:
+        await asyncio.Event().wait()
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_aclose_closes_tracked_stream_sessions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
+    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", idle_run)
     stt = sarvam_stt.STT(api_key="sk_test")
-    stream_a = stt.stream()
-    stream_b = stt.stream(language="hi-IN")
-    sessions = [stream_a._session, stream_b._session]
+    closed_first = stt.stream()
+    streams = [closed_first, stt.stream(language="hi-IN")]
+    sessions = [s._session for s in streams]
+    assert not any(s.closed for s in sessions)
 
-    assert all(isinstance(s, sarvam_stt.aiohttp.ClientSession) for s in sessions)
-    assert all(not s.closed for s in sessions)
-    assert len(stt._streams) == 2
-
+    # aclose tolerates a stream the caller already closed
+    await closed_first.aclose()
     await stt.aclose()
 
-    assert all(s.closed for s in sessions), (
-        "STT.aclose() must close every per-stream aiohttp session"
-    )
+    assert all(s.closed for s in sessions)
     assert len(stt._streams) == 0
 
 
-@pytest.mark.asyncio
-async def test_sarvam_stt_async_context_closes_stream_sessions(
+async def test_aclose_closes_session_of_a_dropped_finished_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
+    async def immediate_run(self: object) -> None:
+        return None
 
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
-    async with sarvam_stt.STT(api_key="sk_test") as stt:
-        stream = stt.stream()
-        session = stream._session
-        assert not session.closed
-
-    assert session.closed, "exiting `async with` must close per-stream sessions"
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_aclose_tolerates_already_closed_streams(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _idle_run(self: object) -> None:
-        del self
-        await asyncio.Event().wait()  # cancelled by aclose()
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _idle_run)
-
-    stt = sarvam_stt.STT(api_key="sk_test")
-    stream = stt.stream()
-    session = stream._session
-
-    await stream.aclose()
-    await stt.aclose()  # must not raise on an already-closed stream
-
-    assert session.closed
-
-
-@pytest.mark.asyncio
-async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A finished stream the caller dropped must not take its session to the GC.
-
-    Regression test for the WeakSet hole in the original fix: with weak
-    tracking, a completed ``SpeechStream`` can be collected before
-    ``STT.aclose()`` snapshots the set, leaving its per-stream
-    ``aiohttp.ClientSession`` unreachable and unclosed. Strong ownership keeps
-    the stream (and its session) reachable until ``aclose`` closes it.
-    """
-
-    async def _immediate_run(self: object) -> None:
-        del self  # return immediately: the stream task finishes on its own
-
-    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", _immediate_run)
-
+    monkeypatch.setattr(sarvam_stt.SpeechStream, "_run", immediate_run)
     stt = sarvam_stt.STT(api_key="sk_test")
     stream = stt.stream()
     session = stream._session
     stream_ref = weakref.ref(stream)
-    del stream  # drop the caller's reference; only the STT's tracking remains
-
-    # Let the stream task and the base metrics task finish so the stream is at
-    # the mercy of the collector (its done-callback cycle needs gc.collect()).
+    del stream
     for _ in range(50):
-        if stream_ref() is None:
-            break
         await asyncio.sleep(0)
     gc.collect()
 
-    if stream_ref() is None:
-        # Weak tracking: the stream really was collected -- the leak scenario.
-        assert len(stt._streams) == 0
-    else:
-        # Strong ownership: the STT retains the finished stream on purpose.
-        assert len(stt._streams) == 1
+    # the STT owns finished streams strongly, so a collected stream cannot strand its session
+    assert stream_ref() is not None
+    assert not session.closed
+    await stt.aclose()
+    assert session.closed
 
-    assert not session.closed, "session must still be open and owned by the STT"
 
+class _WebSocket:
+    """Like Sarvam's endpoint, it never closes the socket on its own."""
+
+    close_code = 1000
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.sent: asyncio.Queue[dict] = asyncio.Queue()
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        self.sent.put_nowait(json.loads(data))
+
+    async def receive(self) -> aiohttp.WSMessage:
+        await self._closed.wait()
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, 1000, "")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+    async def next_message(self) -> dict:
+        return await asyncio.wait_for(self.sent.get(), timeout=2)
+
+
+class _Session:
+    def __init__(self) -> None:
+        self.closed = False
+        self.ws = _WebSocket()
+        self.connections = 0
+
+    async def ws_connect(self, *args: object, **kwargs: object) -> _WebSocket:
+        self.connections += 1
+        return self.ws
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def session(monkeypatch: pytest.MonkeyPatch) -> _Session:
+    monkeypatch.setattr(sarvam_stt, "END_OF_INPUT_GRACE", 0.01)
+    session = _Session()
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda *args, **kwargs: session)
+    return session
+
+
+def _frame(ms: int, value: int, sample_rate: int) -> rtc.AudioFrame:
+    samples = sample_rate * ms // 1000
+    return rtc.AudioFrame(bytes([value, 0]) * samples, sample_rate, 1, samples)
+
+
+async def _expect_audio(ws: _WebSocket, frame: rtc.AudioFrame) -> None:
+    received = b""
+    while len(received) < len(frame.data.tobytes()):
+        message = await ws.next_message()
+        assert "type" not in message
+        assert message["audio"]["sample_rate"] == frame.sample_rate
+        assert message["audio"]["encoding"] == "pcm_s16le"
+        chunk = base64.b64decode(message["audio"]["data"])
+        assert chunk
+        received += chunk
+    assert received == frame.data.tobytes()
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+@pytest.mark.parametrize(("first_ms", "sample_rate"), [(30, 8000), (75, 16000)])
+async def test_flush_preserves_audio_and_accepts_next_segment(
+    session: _Session, flush_signal: bool | None, first_ms: int, sample_rate: int
+) -> None:
+    async with sarvam.STT(
+        api_key="test-key",
+        flush_signal=flush_signal,
+        sample_rate=sample_rate,
+        input_audio_codec="pcm_s16le",
+    ) as model:
+        stream = model.stream()
+        for value, ms in enumerate([first_ms, 50, 10], start=1):
+            frame = _frame(ms, value, sample_rate)
+            stream.push_frame(frame)
+            stream.flush()
+            await _expect_audio(session.ws, frame)
+            if flush_signal:
+                assert await session.ws.next_message() == {"type": "flush"}
+            assert not session.ws.closed
+
+        stream.end_input()
+        # one flush closes the input: the framework's (flush_signal) or the stream's own
+        assert await session.ws.next_message() == {"type": "flush"}
+        assert [event async for event in stream] == []
+        assert session.ws.sent.empty()
+        assert session.ws.closed
+        assert session.connections == 1
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("tail_ms", [0, 10])
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+async def test_end_input_drains_audio_before_terminating(
+    session: _Session, tail_ms: int, flush_signal: bool | None
+) -> None:
+    async with sarvam.STT(
+        api_key="test-key", flush_signal=flush_signal, input_audio_codec="pcm_s16le"
+    ) as model:
+        stream = model.stream()
+        tail = _frame(tail_ms, 3, 16000)
+        if tail_ms:
+            stream.push_frame(tail)
+        stream.end_input()
+        if tail_ms:
+            await _expect_audio(session.ws, tail)
+        assert await session.ws.next_message() == {"type": "flush"}
+        assert [event async for event in stream] == []
+        assert session.ws.sent.empty()
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_waits_for_the_open_utterance(session: _Session) -> None:
+    """Speech still open at end of input gets its final transcript before the close."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await asyncio.sleep(0.05)
+        assert not session.ws.closed  # still waiting on the utterance
+
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}}
+        )
+        events = [event.type async for event in stream]
+
+        assert events == [
+            stt.SpeechEventType.START_OF_SPEECH,
+            stt.SpeechEventType.RECOGNITION_USAGE,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+            stt.SpeechEventType.END_OF_SPEECH,
+        ]
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_waits_past_the_eos_fallback_for_the_transcript(
+    session: _Session,
+) -> None:
+    """The END_OF_SPEECH fallback firing first doesn't close the socket on a slow final."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)  # the fallback fires
+        assert not session.ws.closed  # the final transcript hasn't arrived yet
+
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}}
+        )
+        events = [event.type async for event in stream]
+
+        assert stt.SpeechEventType.FINAL_TRANSCRIPT in events
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_waits_for_the_final_after_an_earlier_one(session: _Session) -> None:
+    """A final from earlier in the utterance doesn't settle it; the flush's final does."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        first = _frame(50, 1, 16000)
+        stream.push_frame(first)
+        await _expect_audio(session.ws, first)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "पहला", "language_code": "hi-IN"}}
+        )
+
+        more = _frame(50, 2, 16000)  # speech goes on after that final
+        stream.push_frame(more)
+        await _expect_audio(session.ws, more)
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await asyncio.sleep(0.7)
+        assert not session.ws.closed  # waiting on the final for the flushed audio
+
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "दूसरा", "language_code": "hi-IN"}}
+        )
+        events = [event async for event in stream]
+
+        texts = [e.alternatives[0].text for e in events if e.alternatives]
+        assert texts == ["पहला", "दूसरा"]
+        assert stt.SpeechEventType.END_OF_SPEECH in [e.type for e in events]
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_final_before_end_speech_closes_the_turn(session: _Session) -> None:
+    """A final that lands before END_SPEECH still gets its END_OF_SPEECH before the close."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}}
+        )  # no END_SPEECH before the socket closes
+        events = [event.type async for event in stream]
+
+        assert events[0] == stt.SpeechEventType.START_OF_SPEECH
+        assert stt.SpeechEventType.FINAL_TRANSCRIPT in events
+        assert events[-1] == stt.SpeechEventType.END_OF_SPEECH
+        assert events.count(stt.SpeechEventType.END_OF_SPEECH) == 1
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_empty_final_after_end_speech_closes_the_turn(session: _Session) -> None:
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await stream._handle_transcript_data({"data": {"transcript": "", "language_code": "hi-IN"}})
+        events = [event.type async for event in stream]
+
+        assert events == [stt.SpeechEventType.START_OF_SPEECH, stt.SpeechEventType.END_OF_SPEECH]
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_settles_on_an_empty_transcript(session: _Session) -> None:
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_transcript_data({"data": {"transcript": "", "language_code": "hi-IN"}})
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        events = [event.type async for event in stream]
+
+        assert stt.SpeechEventType.FINAL_TRANSCRIPT not in events
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_stops_waiting_when_the_utterance_never_finishes(session: _Session) -> None:
+    """The drain is best effort: final_response_timeout ends it cleanly and closes the turn."""
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream(
+            conn_options=APIConnectOptions(max_retry=0, final_response_timeout=0.2)
+        )
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        stream.end_input()
+
+        events = [event.type async for event in stream]
+
+        assert events == [stt.SpeechEventType.START_OF_SPEECH, stt.SpeechEventType.END_OF_SPEECH]
+        assert session.ws.closed
+
+
+@pytest.mark.virtual_time
+async def test_end_input_grace_does_not_count_against_timeout(
+    session: _Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout shorter than the grace still lets a clean stream end."""
+    monkeypatch.setattr(sarvam_stt, "END_OF_INPUT_GRACE", 0.1)
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.02))
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        stream.end_input()
+        assert await session.ws.next_message() == {"type": "flush"}
+        assert [event async for event in stream] == []
+        assert session.ws.closed
+
+
+async def test_aclose_does_not_flush(session: _Session) -> None:
+    async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
+        stream = model.stream()
+        frame = _frame(50, 1, 16000)
+        stream.push_frame(frame)
+        await _expect_audio(session.ws, frame)
+        await stream.aclose()
+        assert session.ws.sent.empty()
+        assert session.ws.closed
+
+
+@pytest.mark.parametrize("flush_signal", [True, False, None])
+@pytest.mark.parametrize("client_flushed", [True, False])
+async def test_server_end_speech_does_not_flush_next_utterance(
+    session: _Session, flush_signal: bool | None, client_flushed: bool
+) -> None:
+    async with sarvam.STT(
+        api_key="test-key", flush_signal=flush_signal, input_audio_codec="pcm_s16le"
+    ) as model:
+        stream = model.stream()
+        first = _frame(50, 1, 16000)
+        stream.push_frame(first)
+        await _expect_audio(session.ws, first)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        if client_flushed:
+            stream.flush()
+            if flush_signal:
+                assert await session.ws.next_message() == {"type": "flush"}
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+        for ms in [50, 10]:
+            frame = _frame(ms, 2, 16000)
+            stream.push_frame(frame)
+            if ms == 10:
+                stream.flush()
+            await _expect_audio(session.ws, frame)
+        if flush_signal:
+            assert await session.ws.next_message() == {"type": "flush"}
+        assert session.ws.sent.empty()
+        assert not session.ws.closed
+
+
+class _ReconnectWS:
+    """Like Sarvam's endpoint, it never closes the socket on its own."""
+
+    close_code = 1000
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.closed = False
+        self._closed = asyncio.Event()
+        self.sent: list[dict] = []
+
+    async def send_str(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    def audio(self) -> bytes:
+        return b"".join(base64.b64decode(m["audio"]["data"]) for m in self.sent if "audio" in m)
+
+    async def receive(self) -> sarvam_stt.aiohttp.WSMessage:
+        await self._closed.wait()
+        return sarvam_stt.aiohttp.WSMessage(sarvam_stt.aiohttp.WSMsgType.CLOSED, 1000, "")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+
+class _ReconnectSession:
+    def __init__(self) -> None:
+        self.closed = False
+        self.sockets: list[_ReconnectWS] = []
+
+    async def ws_connect(self, url: str, **_: object) -> _ReconnectWS:
+        ws = _ReconnectWS(url)
+        self.sockets.append(ws)
+        return ws
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.virtual_time
+async def test_stream_update_options_reconnects_instead_of_ending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _ReconnectSession()
+    monkeypatch.setattr(sarvam_stt.aiohttp, "ClientSession", lambda *a, **k: session)
+    stt = sarvam_stt.STT(api_key="sk_test")
+    stream = stt.stream()
+
+    async def _wait_for_connections(count: int) -> None:
+        while len(session.sockets) < count:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_wait_for_connections(1), timeout=2)
+    stream.update_options(language="hi-IN", model="saaras:v4")
+
+    await asyncio.wait_for(_wait_for_connections(2), timeout=2)
+    assert session.sockets[0].closed
+    assert "language-code=hi-IN" in session.sockets[1].url
+    assert not session.sockets[1].closed
+
+    await stream.aclose()
     await stt.aclose()
 
-    assert session.closed, "STT.aclose() must close the session of a stream the caller dropped"
+
+def _reconnect_stt(monkeypatch: pytest.MonkeyPatch) -> tuple[_ReconnectSession, sarvam_stt.STT]:
+    session = _ReconnectSession()
+    monkeypatch.setattr(sarvam_stt.aiohttp, "ClientSession", lambda *a, **k: session)
+    return session, sarvam_stt.STT(
+        api_key="sk_test", sample_rate=16000, input_audio_codec="pcm_s16le"
+    )
+
+
+async def _wait_until(predicate: Callable[[], bool]) -> None:
+    async def _poll() -> None:
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_poll(), timeout=2)
+
+
+async def _next_events(stream: sarvam_stt.SpeechStream, count: int) -> list:
+    return [await asyncio.wait_for(stream.__anext__(), timeout=2) for _ in range(count)]
+
+
+def _pcm_frame(ms: int, value: int) -> rtc.AudioFrame:
+    samples = 16000 * ms // 1000
+    return rtc.AudioFrame(bytes([value, 0]) * samples, 16000, 1, samples)
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_closes_the_open_utterance_on_the_old_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    frame = _pcm_frame(30, 1)  # short of a 50 ms chunk, so it sits in the buffer
+    stream.push_frame(frame)
+    await _wait_until(lambda: len(stream._audio_buffer) > 0)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    assert old.audio() == frame.data.tobytes()
+    await stream._handle_transcript_data({"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    assert old.closed
+    events = [event.type for event in await _next_events(stream, 4)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert not stream._speaking
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_waits_for_the_flushed_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transcript from earlier in the utterance doesn't end the wait for the flush."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_transcript_data({"data": {"transcript": "पहला", "language_code": "hi-IN"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await asyncio.sleep(0.05)
+    assert not old.closed  # still waiting on the flushed audio's transcript
+    await stream._handle_transcript_data({"data": {"transcript": "दूसरा", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = await _next_events(stream, 6)
+    texts = [e.alternatives[0].text for e in events if e.alternatives]
+    assert texts == ["पहला", "दूसरा"]
+    assert events[-1].type == sarvam_stt.stt.SpeechEventType.END_OF_SPEECH
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_after_end_speech_waits_for_the_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reconnect between END_SPEECH and the final keeps the final and closes the turn."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)
+    assert not old.closed  # waiting on the final, not the fallback timer
+    await stream._handle_transcript_data({"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = [event.type for event in await _next_events(stream, 4)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_waits_past_end_speech_for_the_flushed_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """END_SPEECH answering the flush, after an earlier final, doesn't end the wait."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_transcript_data({"data": {"transcript": "पहला", "language_code": "hi-IN"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await asyncio.sleep(0.05)
+    assert not old.closed  # the flushed final is still to come
+    await stream._handle_transcript_data({"data": {"transcript": "दूसरा", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = await _next_events(stream, 6)
+    assert [e.type for e in events] == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    texts = [e.alternatives[0].text for e in events if e.alternatives]
+    assert texts == ["पहला", "दूसरा"]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_without_an_earlier_final_waits_past_the_eos_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """END_SPEECH answering the flush doesn't start a fallback that beats a slow final."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)
+    await stream._handle_transcript_data({"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = [e.type for e in await _next_events(stream, 4)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_after_the_eos_fallback_waits_for_the_late_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reconnect between the fallback's END_OF_SPEECH and a late final keeps the final."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await asyncio.sleep(sarvam_stt.EOS_FALLBACK_TIMEOUT + 0.1)  # the fallback fires
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    assert not old.closed  # waiting on the late final
+    await stream._handle_transcript_data({"data": {"transcript": "नमस्ते", "language_code": "hi-IN"}})
+
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = [e.type for e in await _next_events(stream, 4)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.RECOGNITION_USAGE,
+        sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+
+    # the utterance is settled, so another reconnect doesn't flush it again
+    stream.update_options(language="en-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 3)
+    assert {"type": "flush"} not in session.sockets[1].sent
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_update_options_after_end_input_does_not_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    stream.end_input()
+    await asyncio.sleep(0.05)
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await asyncio.sleep(0.05)
+    assert len(session.sockets) == 1
+    assert not session.sockets[0].closed  # still finishing on the old connection
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_settles_on_an_empty_final(monkeypatch: pytest.MonkeyPatch) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    old = session.sockets[0]
+    await _wait_until(lambda: {"type": "flush"} in old.sent)
+    await stream._handle_transcript_data({"data": {"transcript": "", "language_code": "hi-IN"}})
+
+    # settles at once rather than after RECONNECT_SETTLE_TIMEOUT
+    await asyncio.wait_for(_wait_until(lambda: len(session.sockets) == 2), timeout=0.5)
+    events = [event.type for event in await _next_events(stream, 2)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_ends_the_turn_when_no_transcript_arrives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sarvam_stt, "RECONNECT_SETTLE_TIMEOUT", 0.05)
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    events = [event.type for event in await _next_events(stream, 2)]
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_end_input_after_an_unanswered_reconnect_closes_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The utterance a reconnect gave up on doesn't hold end of input on the next socket."""
+    monkeypatch.setattr(sarvam_stt, "RECONNECT_SETTLE_TIMEOUT", 0.05)
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    stream.end_input()
+    events = [event.type async for event in stream]  # raises if end of input times out
+
+    assert events == [
+        sarvam_stt.stt.SpeechEventType.START_OF_SPEECH,
+        sarvam_stt.stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert len(session.sockets) == 2
+    assert session.sockets[1].closed
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_carries_buffered_audio_over(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    first = _pcm_frame(30, 1)  # short of a 50 ms chunk, so it sits in the buffer
+    stream.push_frame(first)
+    await _wait_until(lambda: len(stream._audio_buffer) > 0)
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    assert session.sockets[0].audio() == b""  # speech starting here isn't cut off
+
+    second = _pcm_frame(30, 2)
+    stream.push_frame(second)
+    new = session.sockets[1]
+    await _wait_until(lambda: len(new.audio()) > 0)
+    # one 50 ms chunk: all of the first frame, then the start of the second
+    assert new.audio() == (first.data.tobytes() + second.data.tobytes())[: 800 * 2]
+
+    # the carried frame was the stream's first audio, so the new clock starts at 0
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "नमस्ते", "language_code": "hi-IN", "speech_end": 1.0}}
+    )
+    _, final = await _next_events(stream, 2)
+    assert final.alternatives[0].end_time == pytest.approx(1.0)
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_replays_audio_sent_since_the_last_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Speech Sarvam's VAD hadn't reported yet reaches the new connection, on time."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    onset = _pcm_frame(100, 1)  # two full chunks, sent before any START_SPEECH
+    stream.push_frame(onset)
+    old = session.sockets[0]
+    await _wait_until(lambda: len(old.audio()) == len(onset.data.tobytes()))
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    new = session.sockets[1]
+    await _wait_until(lambda: len(new.audio()) == len(onset.data.tobytes()))
+    assert new.audio() == onset.data.tobytes()
+
+    # a transcript of the replay, before any new frame is read, lands where the audio was
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.08}}
+    )
+    _, final = await _next_events(stream, 2)
+    assert final.alternatives[0].end_time == pytest.approx(0.08)
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_replays_at_most_half_a_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    audio = _pcm_frame(1000, 1)
+    stream.push_frame(audio)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(audio.data.tobytes()))
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    new = session.sockets[1]
+    await _wait_until(lambda: len(new.audio()) > 0)
+    assert new.audio() == audio.data.tobytes()[-8000 * 2 :]
+    assert stream._connection_offset == pytest.approx(0.5)  # the replay starts 0.5 s in
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+def test_each_connection_recomputes_where_it_starts() -> None:
+    """A connection that carries nothing over drops the previous connection's anchor."""
+    stream = _bare_stream()
+    stream._connection_offset = 0.5
+    stream._carry_audio_into_next_connection()
+    assert stream._connection_offset is None
+
+    stream._connection_offset = 0.0  # the previous connection started the stream
+    stream._sent_samples = 1600
+    stream._recent_audio += np.full(800, 1, dtype=np.int16).tobytes()
+    stream._audio_buffer.extend([2] * 160)
+    stream._carry_audio_into_next_connection()
+    assert stream._audio_buffer == [1] * 800 + [2] * 160  # replay goes out first
+    assert stream._connection_offset == pytest.approx(0.05)  # 800 of 1600 samples in
+    assert stream._sent_samples == 0
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_does_not_replay_a_finished_utterance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    speech = _pcm_frame(100, 1)
+    stream.push_frame(speech)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(speech.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.1}}
+    )
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    await asyncio.sleep(0.05)
+    assert session.sockets[1].audio() == b""  # already transcribed on the old connection
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_keeps_the_next_utterance_onset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audio after the finished utterance's end is replayed, even if sent before its events."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    audio = _pcm_frame(100, 1)  # utterance A ends at 60 ms, B starts in the last 40 ms
+    stream.push_frame(audio)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(audio.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.06}}
+    )
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    more = _pcm_frame(10, 2)
+    stream.push_frame(more)
+    new = session.sockets[1]
+    await _wait_until(lambda: len(new.audio()) > 0)
+    assert new.audio() == audio.data.tobytes()[-640 * 2 :] + more.data.tobytes()
+    assert stream._connection_offset == pytest.approx(0.06)
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.parametrize("speech_end", [None, 0.0])
+@pytest.mark.virtual_time
+async def test_reconnect_keeps_the_onset_when_the_transcript_has_no_speech_end(
+    monkeypatch: pytest.MonkeyPatch, speech_end: float | None
+) -> None:
+    """Without a speech_end, only audio sent by the time of END_SPEECH counts as covered."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    first = _pcm_frame(100, 1)
+    stream.push_frame(first)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(first.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+    onset = _pcm_frame(50, 2)  # the next turn starts before the transcript arrives
+    stream.push_frame(onset)
+    sent = len(first.data.tobytes()) + len(onset.data.tobytes())
+    await _wait_until(lambda: len(session.sockets[0].audio()) == sent)
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": speech_end}}
+    )
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    new = session.sockets[1]
+    await _wait_until(lambda: len(new.audio()) > 0)
+    # the finished utterance isn't replayed, only the next turn's onset
+    assert new.audio() == onset.data.tobytes()
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_keeps_the_onset_when_the_transcript_comes_before_end_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transcript with no speech_end and no END_SPEECH yet doesn't claim later audio."""
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    first = _pcm_frame(100, 1)
+    stream.push_frame(first)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(first.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    onset = _pcm_frame(50, 2)
+    stream.push_frame(onset)
+    sent = len(first.data.tobytes()) + len(onset.data.tobytes())
+    await _wait_until(lambda: len(session.sockets[0].audio()) == sent)
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.0}}
+    )
+    assert len(stream._recent_audio) == sent  # nothing proves any of it was covered
+
+    # once END_SPEECH arrives, what was sent by then counts as covered
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+    assert len(stream._recent_audio) == 0
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_a_later_speech_end_cancels_the_wait_for_end_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+
+    first = _pcm_frame(100, 1)
+    stream.push_frame(first)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(first.data.tobytes()))
+    await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.0}}
+    )
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "जी", "language_code": "hi-IN", "speech_end": 0.1}}
+    )
+    onset = _pcm_frame(50, 2)  # the next turn starts before END_SPEECH arrives
+    stream.push_frame(onset)
+    sent = len(first.data.tobytes()) + len(onset.data.tobytes())
+    await _wait_until(lambda: len(session.sockets[0].audio()) == sent)
+    await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+
+    assert bytes(stream._recent_audio) == onset.data.tobytes()
+
+    await stream.aclose()
+    await stt.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_reconnect_keeps_transcript_times_on_the_stream_timeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, stt = _reconnect_stt(monkeypatch)
+    stream = stt.stream()
+    await _wait_until(lambda: len(session.sockets) == 1)
+    first = _pcm_frame(100, 1)
+    stream.push_frame(first)
+    await _wait_until(lambda: len(session.sockets[0].audio()) == len(first.data.tobytes()))
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "हाँ", "language_code": "hi-IN", "speech_end": 0.1}}
+    )
+    await _next_events(stream, 2)
+    await asyncio.sleep(0.2)
+
+    stream.update_options(language="hi-IN", model="saaras:v4")
+    await _wait_until(lambda: len(session.sockets) == 2)
+    # nothing carried over, so the new connection's clock starts with the next frame
+    stream.push_frame(_pcm_frame(60, 2))
+    await _wait_until(lambda: len(session.sockets[1].audio()) > 0)
+    # capture times: 0.1 s of audio, a 0.2 s pause, then this frame's 60 ms
+    assert stream.start_time_offset == pytest.approx(0.24, abs=0.02)
+
+    await stream._handle_transcript_data(
+        {"data": {"transcript": "नमस्ते", "language_code": "hi-IN", "speech_end": 1.7}}
+    )
+    _, final = await _next_events(stream, 2)
+    assert final.type == sarvam_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
+    assert final.alternatives[0].end_time == pytest.approx(stream.start_time_offset + 1.7)
+    await stream.aclose()
+    await stt.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Keyterms (saaras:v4)
+# ---------------------------------------------------------------------------
+
+
+TERMS = ["Sarvam", "New Delhi", "Vistaar"]
+# 64 Devanagari characters, the longest term Sarvam accepts
+DEVANAGARI_64 = ("अआइईउऊएऐओऔकखगघङचछजझञटठडढणतथदधनपफबभमयरलवशषसह" * 2)[:64]
+
+
+def _query(url: str) -> dict[str, str]:
+    return {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+
+
+def _buffer() -> list[rtc.AudioFrame]:
+    return [
+        rtc.AudioFrame(
+            data=np.zeros(1600, dtype=np.int16).tobytes(),
+            sample_rate=16000,
+            num_channels=1,
+            samples_per_channel=1600,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Validation and merging
+# ---------------------------------------------------------------------------
+
+
+def test_validate_keyterms_dedupes_and_keeps_order() -> None:
+    assert _utils.validate_keyterms(["a", "b", "a"], "saaras:v4") == ["a", "b"]
+    assert _utils.validate_keyterms([], "saaras:v4") is None
+    assert _utils.validate_keyterms(None, "saaras:v3") is None
+
+
+@pytest.mark.parametrize(
+    ("terms", "model", "match"),
+    [
+        ([f"t{i}" for i in range(51)], "saaras:v4", "at most 50 keyterms"),
+        (["x" * 65], "saaras:v4", "at most 64 characters"),
+        (["  "], "saaras:v4", "non-empty strings"),
+        (TERMS, "saaras:v3", "only supported by saaras:v4"),
+        (TERMS, "saaras:v3-realtime", "only supported by saaras:v4"),
+        ([f"{i:02d}" + DEVANAGARI_64[2:] for i in range(16)], "saaras:v4", "URL-encoded"),
+    ],
+)
+def test_validate_keyterms_rejects_what_sarvam_rejects(
+    terms: list[str], model: str, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        _utils.validate_keyterms(terms, model)
+
+
+def test_merge_keyterms_puts_user_terms_first_and_caps_session_terms() -> None:
+    user = [f"u{i}" for i in range(48)]
+    session = ["u0", "s1", "x" * 65, "s2", "s3"]
+    assert _utils.merge_keyterms(user, session, "saaras:v4") == [*user, "s1", "s2"]
+
+
+def test_merge_keyterms_keeps_the_url_under_the_size_limit() -> None:
+    user = [f"{i:02d}" + DEVANAGARI_64[2:] for i in range(15)]
+    session = ["a" + DEVANAGARI_64[1:], "b" + DEVANAGARI_64[1:], "Sarvam"]
+    merged = _utils.merge_keyterms(user, session, "saaras:v4")
+    assert merged == [*user, "Sarvam"]
+    assert _utils.keyterms_encoded_size(merged) <= _utils.MAX_KEYTERMS_ENCODED_BYTES
+
+
+def test_fifteen_full_devanagari_terms_fit() -> None:
+    terms = [f"{i:02d}" + DEVANAGARI_64[2:] for i in range(15)]
+    assert _utils.validate_keyterms(terms, "saaras:v4") == terms
+
+
+def test_merge_keyterms_ignores_session_terms_for_other_models() -> None:
+    assert _utils.merge_keyterms(None, ["s1"], "saaras:v3-realtime") is None
+
+
+# ---------------------------------------------------------------------------
+# sarvam.STT (WebSocket + REST)
+# ---------------------------------------------------------------------------
+
+
+def test_stt_websocket_url_carries_keyterms() -> None:
+    opts = sarvam_stt.SarvamSTTOptions(
+        language="hi-IN", api_key="sk_test", model="saaras:v4", keyterms=TERMS
+    )
+    url = sarvam_stt._build_websocket_url(opts.streaming_url or "", opts)
+    assert json.loads(_query(url)["keyterms"]) == TERMS
+
+
+def test_stt_rejects_keyterms_on_v3() -> None:
+    with pytest.raises(ValueError, match="only supported by saaras:v4"):
+        sarvam_stt.STT(api_key="sk_test", model="saaras:v3", keyterms=TERMS)
+
+
+async def test_stt_stream_merges_session_keyterms(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class _DummyStream:
+        def __init__(self, *, opts: Any, http_session: Any, **_: Any) -> None:
+            captured["opts"] = opts
+            captured["http_session"] = http_session
+
+    monkeypatch.setattr(sarvam_stt, "SpeechStream", _DummyStream)
+    stt = sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"])
+    assert stt.capabilities.keyterms
+    stt._update_session_keyterms(["Vistaar"])
+
+    stt.stream()
+    try:
+        assert captured["opts"].keyterms == ["Sarvam", "Vistaar"]
+    finally:
+        await captured["http_session"].close()
+
+
+class _OkResponse:
+    status = 200
+
+    async def __aenter__(self) -> _OkResponse:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def json(self) -> dict[str, Any]:
+        return {
+            "request_id": "r1",
+            "transcript": "Sarvam",
+            "language_code": "hi-IN",
+            "timestamps": {"start_time_seconds": [0.1], "end_time_seconds": [0.4]},
+        }
+
+
+class _RecordingSession:
+    def __init__(self) -> None:
+        self.fields: dict[str, Any] = {}
+
+    def post(self, *, data: Any, **_: Any) -> _OkResponse:
+        for type_options, _headers, value in data._fields:
+            self.fields[type_options["name"]] = value
+        return _OkResponse()
+
+
+async def test_stt_rest_sends_keyterms() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"])
+    stt._update_session_keyterms(["Vistaar"])
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    event = await stt._recognize_impl(_buffer(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert json.loads(session.fields["keyterms"]) == ["Sarvam", "Vistaar"]
+    assert event.alternatives[0].text == "Sarvam"
+
+
+async def test_stt_rest_omits_keyterms_by_default() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test")
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    await stt._recognize_impl(_buffer(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert "keyterms" not in session.fields
+
+
+def test_stt_stream_drops_keyterms_for_a_non_v4_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _DummyStream:
+        def __init__(self, *, opts: Any, **_: Any) -> None:
+            captured["opts"] = opts
+
+    monkeypatch.setattr(sarvam_stt, "SpeechStream", _DummyStream)
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **k: None)
+    stt = sarvam_stt.STT(api_key="sk_test", keyterms=TERMS)
+    stt._update_session_keyterms(["Vistaar"])
+
+    stt.stream(model="saaras:v3")
+
+    assert captured["opts"].keyterms is None
+
+
+async def test_stt_rest_drops_keyterms_for_a_non_v4_model_override() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", keyterms=TERMS)
+    session = _RecordingSession()
+    stt._session = session  # type: ignore[assignment]
+
+    await stt._recognize_impl(
+        _buffer(), model="saaras:v3", conn_options=APIConnectOptions(max_retry=0)
+    )
+
+    assert "keyterms" not in session.fields
+
+
+# ---------------------------------------------------------------------------
+# STT streams pick up session keyterms by reconnecting between utterances
+# ---------------------------------------------------------------------------
+
+
+class _KeytermWS:
+    """Like Sarvam's endpoint, it never closes the socket on its own."""
+
+    close_code = 1000
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.closed = False
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def receive(self) -> aiohttp.WSMessage:
+        await self._closed.wait()
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, 1000, "")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+
+class _KeytermSession:
+    def __init__(self) -> None:
+        self.closed = False
+        self.sockets: list[_KeytermWS] = []
+        self.connected = asyncio.Event()
+
+    async def ws_connect(self, url: str, **_: object) -> _KeytermWS:
+        ws = _KeytermWS(url)
+        self.sockets.append(ws)
+        self.connected.set()
+        return ws
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def wait_for_connections(self, count: int) -> None:
+        async def _wait() -> None:
+            while len(self.sockets) < count:
+                self.connected.clear()
+                await self.connected.wait()
+
+        await asyncio.wait_for(_wait(), timeout=2)
+
+    def keyterms(self, index: int) -> list[str] | None:
+        value = _query(self.sockets[index].url).get("keyterms")
+        return json.loads(value) if value is not None else None
+
+
+@pytest.fixture
+def ws_session(monkeypatch: pytest.MonkeyPatch) -> _KeytermSession:
+    monkeypatch.setattr(sarvam_stt, "END_OF_INPUT_GRACE", 0.01)
+    session = _KeytermSession()
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda *args, **kwargs: session)
+    return session
+
+
+@pytest.mark.virtual_time
+async def test_stt_stream_reconnects_with_new_session_keyterms(ws_session: _KeytermSession) -> None:
+    async with sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"]) as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        assert ws_session.keyterms(0) == ["Sarvam"]
+
+        stt._update_session_keyterms(["Vistaar"])
+
+        await ws_session.wait_for_connections(2)
+        assert ws_session.sockets[0].closed
+        assert ws_session.keyterms(1) == ["Sarvam", "Vistaar"]
+
+        # the same terms again change nothing
+        stt._update_session_keyterms(["Vistaar"])
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 2
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_stt_stream_waits_for_the_utterance_to_end(ws_session: _KeytermSession) -> None:
+    async with sarvam_stt.STT(api_key="sk_test") as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stt._update_session_keyterms(["Vistaar"])
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 1  # never cut an utterance off
+
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "Vistaar", "language_code": "hi-IN"}}
+        )
+
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) == ["Vistaar"]
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_stt_stream_keeps_keyterms_that_arrive_while_a_reconnect_settles(
+    ws_session: _KeytermSession,
+) -> None:
+    """The settle step cancels the audio task; a keyterm update then still applies."""
+    async with sarvam_stt.STT(api_key="sk_test") as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+
+        stream.update_options(language="en-IN", model="saaras:v4")
+        await _wait_until(lambda: stream._settling_for_reconnect)
+        assert stream._audio_task is not None
+        await _wait_until(stream._audio_task.done)
+        stt._update_session_keyterms(["Vistaar"])
+
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "Vistaar", "language_code": "hi-IN"}}
+        )
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) == ["Vistaar"]
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 2  # picked up by the reconnect already under way
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_stt_stream_waits_past_a_final_that_arrives_mid_utterance(
+    ws_session: _KeytermSession,
+) -> None:
+    """A final while the user is still speaking doesn't let a keyterm reconnect through."""
+    async with sarvam_stt.STT(api_key="sk_test") as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
+        await stream._handle_transcript_data(
+            {"data": {"transcript": "Vistaar", "language_code": "hi-IN"}}
+        )
+
+        stt._update_session_keyterms(["Vistaar"])
+        assert stream._pending_keyterms == ["Vistaar"]  # held until the utterance ends
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 1
+
+        await stream._handle_events({"data": {"signal_type": "END_SPEECH"}})
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) == ["Vistaar"]
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_stt_stream_drops_removed_session_keyterms(ws_session: _KeytermSession) -> None:
+    """With no user terms, session terms the framework removes don't stick around."""
+    async with sarvam_stt.STT(api_key="sk_test") as stt:
+        stt._update_session_keyterms(["Alice"])
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        assert ws_session.keyterms(0) == ["Alice"]
+
+        stt._update_session_keyterms([])
+
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) is None
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_stt_stream_restores_keyterms_when_switching_back_to_v4(
+    ws_session: _KeytermSession,
+) -> None:
+    async with sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"]) as stt:
+        stt._update_session_keyterms(["Vistaar"])
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+
+        stream.update_options(language="en-IN", model="saaras:v3")
+        await ws_session.wait_for_connections(2)
+        assert ws_session.keyterms(1) is None
+
+        stream.update_options(language="en-IN", model="saaras:v4")
+        await ws_session.wait_for_connections(3)
+        assert ws_session.keyterms(2) == ["Sarvam", "Vistaar"]
+        await stream.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_stt_stream_on_v3_ignores_session_keyterms(ws_session: _KeytermSession) -> None:
+    async with sarvam_stt.STT(api_key="sk_test", keyterms=["Sarvam"]) as stt:
+        stream = stt.stream()
+        await ws_session.wait_for_connections(1)
+        stream.update_options(language="en-IN", model="saaras:v3")
+        await ws_session.wait_for_connections(2)
+
+        stt._update_session_keyterms(["Vistaar"])
+        await asyncio.sleep(0.05)
+        assert len(ws_session.sockets) == 2  # nothing to send on v3, so no reconnect
+        await stream.aclose()
+
+
+def test_stt_on_v3_warns_that_session_keyterms_are_unsupported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", model="saaras:v3")
+    with caplog.at_level("WARNING"):
+        stt._update_session_keyterms(["Vistaar"])
+    assert "keyterms are not supported by this STT" in caplog.text
+    assert stt._session_keyterms == []
+
+
+def test_keyterms_capability_follows_the_model() -> None:
+    assert sarvam_stt.STT(api_key="sk_test").capabilities.keyterms
+    assert not sarvam_stt.STT(api_key="sk_test", model="saaras:v3").capabilities.keyterms
+
+
+class _TimestampResponse:
+    status = 200
+
+    async def __aenter__(self) -> _TimestampResponse:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def json(self) -> dict[str, object]:
+        return {
+            "request_id": "r1",
+            "transcript": "Sarvam",
+            "language_code": "hi-IN",
+            "timestamps": {"start_time_seconds": [0.1], "end_time_seconds": [0.4]},
+        }
+
+
+class _TimestampSession:
+    def __init__(self) -> None:
+        self.fields: dict[str, object] = {}
+
+    def post(self, *, data: object, **_: object) -> _TimestampResponse:
+        for type_options, _headers, value in data._fields:  # type: ignore[attr-defined]
+            self.fields[type_options["name"]] = value
+        return _TimestampResponse()
+
+
+async def test_recognize_requests_timestamps() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test", with_timestamps=True)
+    session = _TimestampSession()
+    stt._session = session  # type: ignore[assignment]
+
+    event = await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert session.fields["with_timestamps"] == "true"
+    assert event.alternatives[0].start_time == 0.1
+    assert event.alternatives[0].end_time == 0.4
+
+
+async def test_recognize_omits_timestamps_by_default() -> None:
+    stt = sarvam_stt.STT(api_key="sk_test")
+    session = _TimestampSession()
+    stt._session = session  # type: ignore[assignment]
+
+    await stt._recognize_impl(_audio(), conn_options=APIConnectOptions(max_retry=0))
+
+    assert "with_timestamps" not in session.fields

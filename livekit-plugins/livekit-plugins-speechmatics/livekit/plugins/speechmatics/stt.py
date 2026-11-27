@@ -41,6 +41,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 from speechmatics.agent_stt import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_MODEL,
+    SUPPORTED_SAMPLE_RATES,
     AdditionalVocabEntry,
     AgentSttAsyncClient,
     AudioEncoding,
@@ -72,10 +73,10 @@ DEFAULT_BASE_URL = "wss://eu2.rt.speechmatics.com/v2/agent"
 BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
 AGENT_URL_PATH = "/v2/agent"
 
-# Audio format we can actually send. The service fixes the sample rate at 16 kHz, and
-# LiveKit frames are 16-bit PCM which we forward unconverted, so declaring any other
-# encoding would describe the bytes wrongly rather than change them.
-SUPPORTED_SAMPLE_RATE = 16000
+# Audio format we can actually send. The sample rates the service accepts come from the
+# SDK's `SUPPORTED_SAMPLE_RATES` (8 kHz and 16 kHz). LiveKit frames are 16-bit PCM which
+# we forward unconverted, so declaring any other encoding would describe the bytes wrongly
+# rather than change them.
 SUPPORTED_AUDIO_ENCODINGS = (AudioEncoding.PCM_S16LE,)
 
 # Why each part of the pre-Agent-STT surface is inert, reported wherever a caller still
@@ -93,9 +94,9 @@ class TurnDetectionMode(str, Enum):
 
     `VAD`: the STT service runs its own VAD and closes turns itself.
 
-    `EXTERNAL`: turn boundaries are controlled by the caller — the service does not
-    endpoint on its own, and the caller drives turns by calling `finalize()` (for
-    example from an external VAD).
+    `EXTERNAL`: the plugin's local VAD can close turns. Pass `vad=None` to `STT`
+    to let `AgentSession` flush the stream using its own VAD and turn detector.
+    Callers can also close turns with `stream.flush()` or `STT.finalize()`.
 
     The member names and values mirror the Agent STT SDK's own turn-detection modes so
     the two never drift.
@@ -153,6 +154,7 @@ class STTOptions:
     # The resolved model name (operating point). See `_resolve_model`.
     model: str = DEFAULT_MODEL.value
     include_partials: bool | None = None
+    emit_sentences: bool | None = None
 
     # Diarization
     enable_diarization: bool | None = None
@@ -174,6 +176,7 @@ class STT(stt.STT):
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
         include_partials: NotGivenOr[bool] = NOT_GIVEN,
+        emit_sentences: NotGivenOr[bool] = NOT_GIVEN,
         enable_diarization: NotGivenOr[bool] = NOT_GIVEN,
         additional_vocab: NotGivenOr[list[AdditionalVocabEntry]] = NOT_GIVEN,
         speaker_sensitivity: NotGivenOr[float] = NOT_GIVEN,
@@ -200,15 +203,12 @@ class STT(stt.STT):
                 set.
 
             turn_detection_mode: How end-of-speech turns are detected. `EXTERNAL` (the
-                default) hands turn control to the caller, who drives it via `finalize()`
-                — in practice from the `vad` passed below, since LiveKit does not call
-                `finalize()` itself. With no `vad` and none loadable, `EXTERNAL` never
-                closes a turn, so nothing is finalized. `VAD` instead lets the service
-                and close turns itself; pair it with `turn_detection="stt"` on the
-                `AgentSession`, which otherwise ignores the end-of-speech events this
-                plugin emits. The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes
-                all resolve to the default mode with a warning. Defaults to
-                `DEFAULT_TURN_DETECTION_MODE`.
+                default) uses the plugin's local VAD when configured. Set `vad=None` to
+                let `AgentSession` flush using its own VAD and turn detector, or to flush
+                the stream directly. `VAD` lets Speechmatics close turns. To use those
+                boundaries, set `turn_handling={"turn_detection": "stt"}` on `AgentSession`.
+                The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes all resolve to
+                the default mode with a warning. Defaults to `DEFAULT_TURN_DETECTION_MODE`.
 
             model: The transcription model to use, e.g. `"linden-1"`. A name agent-STT
                 does not accept falls back to the default model with a warning. Defaults
@@ -226,6 +226,10 @@ class STT(stt.STT):
 
             include_partials: Whether the service sends partial segments, emitted as
                 interim transcripts. Defaults to True.
+
+            emit_sentences: Whether the service closes a segment at every end of sentence
+                rather than only at the end of the turn, so each sentence is emitted as its
+                own final transcript. Defaults to False.
 
             enable_diarization: Attribute words to distinct speakers. Defaults to True.
 
@@ -248,19 +252,19 @@ class STT(stt.STT):
             known_speakers: Known speaker identifiers, used to attribute words to the
                 same speakers across sessions. Defaults to [].
 
-            sample_rate: Audio sample rate in Hz. The service accepts 16000 only, so any
-                other value raises a `ValueError`. Defaults to 16000.
+            sample_rate: Audio sample rate in Hz. The service accepts 8000 and 16000, so
+                any other value raises a `ValueError`. Defaults to 16000.
 
             audio_encoding: Audio encoding format. LiveKit frames are 16-bit PCM and are
                 forwarded unconverted, so `AudioEncoding.PCM_S16LE` is the only value that
                 describes what is actually sent; anything else raises a `ValueError`.
                 Defaults to `AudioEncoding.PCM_S16LE`.
 
-            vad: External Voice Activity Detector, used only in `EXTERNAL` turn-detection
-                mode where its end-of-speech drives `finalize()`. Ignored in `VAD` mode.
-                When omitted in `EXTERNAL` mode, `livekit-plugins-silero` is loaded if it
-                is installed, so a bare `STT()` still closes turns. Pass `vad=None` to opt
-                out and drive `finalize()` yourself. Defaults to NOT_GIVEN.
+            vad: The plugin's local VAD for `EXTERNAL` mode. If omitted, the plugin
+                loads Silero from `livekit-plugins-silero` when installed. To let
+                `AgentSession` flush using its VAD and turn detector, pass `vad=None`
+                here. If you omit `vad` on `AgentSession`, it uses its bundled VAD.
+                Direct callers can pass `vad=None` and call `stream.flush()`.
 
             **kwargs: Catches deprecated parameters. A warning is logged for every name,
                 whether it is a recognised deprecation or not.
@@ -269,27 +273,17 @@ class STT(stt.STT):
         # Normalize the deprecated modes away before anything reads the mode.
         turn_detection_mode = _resolve_turn_detection_mode(turn_detection_mode)
 
-        # `EXTERNAL` is the default and the service does not endpoint in it, so a bare
-        # `STT()` has nothing to close a turn with. Load a local VAD to drive `finalize()`,
-        # as the plugin did before Agent STT, so zero-config still transcribes. An explicit
-        # `vad=None` opts out: that caller drives `finalize()` themselves.
+        # Load the plugin's local VAD by default so standalone streams can close turns.
         if turn_detection_mode == TurnDetectionMode.EXTERNAL and not is_given(vad):
             vad = _load_default_vad()
+            if vad is None:
+                logger.debug(
+                    "Speechmatics STT could not load the optional Silero VAD in EXTERNAL mode. "
+                    "Use AgentSession turn handling, stream.flush(), or STT.finalize() "
+                    "to close turns."
+                )
 
         self._vad = vad if is_given(vad) else None
-
-        # EXTERNAL mode needs something to close turns. The service does not endpoint on its own,
-        # and LiveKit never calls STT.finalize() itself, so with no `vad` turns close only if the
-        # caller drives finalize() by hand — otherwise nothing is ever finalized. Warn loudly
-        # instead of silently producing no transcripts.
-        if turn_detection_mode == TurnDetectionMode.EXTERNAL and self._vad is None:
-            logger.warning(
-                "Speechmatics STT is in EXTERNAL turn-detection mode with no `vad`: the service "
-                "will not endpoint on its own and LiveKit does not call finalize() for you, so "
-                "turns close only if you call STT.finalize() yourself. Pass a `vad` to drive "
-                "finalize() from end-of-speech, or use turn_detection_mode=VAD for service-side "
-                "endpointing."
-            )
 
         # Set STT options
         def _set(value: Any) -> Any:
@@ -306,6 +300,7 @@ class STT(stt.STT):
             additional_vocab=_normalize_additional_vocab(_set(additional_vocab) or []),
             model=_resolve_model(model, operating_point),
             include_partials=_set(include_partials),
+            emit_sentences=_set(emit_sentences),
             enable_diarization=enable_diarization if is_given(enable_diarization) else True,
             speaker_sensitivity=_set(speaker_sensitivity),
             max_speakers=_set(max_speakers),
@@ -325,6 +320,7 @@ class STT(stt.STT):
                 diarization=opts.enable_diarization is not False,
                 aligned_transcript="chunk",
                 offline_recognize=False,
+                manual_flush=_supports_stream_flush(turn_detection_mode, self._vad),
             ),
         )
 
@@ -349,8 +345,9 @@ class STT(stt.STT):
 
         # Set audio parameters. Neither is a free choice: an unsupported rate is rejected
         # by the service, and an encoding we do not actually send would mislabel the audio.
-        if sample_rate != SUPPORTED_SAMPLE_RATE:
-            raise ValueError(f"sample_rate must be {SUPPORTED_SAMPLE_RATE}")
+        if sample_rate not in SUPPORTED_SAMPLE_RATES:
+            supported = ", ".join(str(rate) for rate in SUPPORTED_SAMPLE_RATES)
+            raise ValueError(f"sample_rate must be one of: {supported}")
         if audio_encoding not in SUPPORTED_AUDIO_ENCODINGS:
             supported = ", ".join(e.value for e in SUPPORTED_AUDIO_ENCODINGS)
             raise ValueError(f"audio_encoding must be one of: {supported}")
@@ -384,7 +381,12 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.RecognizeStream:
-        """Create a new SpeechStream."""
+        """Create a new SpeechStream.
+
+        With `STT(vad=None)` in `EXTERNAL` mode, `stream.flush()` sends buffered
+        audio before asking Speechmatics to finalize the turn. `AgentSession`
+        can request this flush through its turn handling.
+        """
 
         # Create the stream
         stream = SpeechStream(
@@ -447,13 +449,15 @@ class STT(stt.STT):
             output_locale=opts.output_locale,
             domain=opts.domain,
             enable_partials=opts.include_partials,
+            emit_sentences=opts.emit_sentences,
         )
 
     def finalize(self) -> None:
-        """Force the current turn to end, flushing buffered words as final segments.
+        """Request final segments for each connected stream in `EXTERNAL` mode.
 
-        Only takes effect in `EXTERNAL` turn-detection mode; in `VAD` mode the
-        service endpoints on its own and this is a no-op.
+        With `STT(vad=None)`, use `stream.flush()` to send queued audio before
+        finalizing a single stream. `AgentSession` can request that flush using
+        its own VAD and turn detector.
         """
 
         # Iterate over the streams
@@ -710,12 +714,19 @@ class SpeechStream(stt.RecognizeStream):
         )
 
     async def _process_audio(self) -> None:
-        """Process audio from the input channel."""
+        """Send queued audio and apply flushes in audio order.
+
+        In `EXTERNAL` mode without a plugin-local VAD, a session or caller
+        flush asks Speechmatics to finalize the turn after sending buffered audio.
+        """
         # Input audio stream
         audio_bstream = utils.audio.AudioByteStream(
             sample_rate=self._stt._sample_rate,
             num_channels=1,
         )
+        # Custom STT nodes can disable framework flushes and still call stream.flush().
+        can_finalize = _supports_stream_flush(self._turn_detection_mode, self._vad)
+        audio_since_flush = False
 
         # Process input audio
         async for data in self._input_ch:
@@ -745,13 +756,24 @@ class SpeechStream(stt.RecognizeStream):
 
                     # Only audio the service accepted counts towards usage.
                     self._speech_duration += frame.duration
+                    audio_since_flush = True
+
+                if (
+                    isinstance(data, self._FlushSentinel)
+                    and can_finalize
+                    and audio_since_flush
+                    and self._client.is_ready_for_audio
+                ):
+                    # The SDK stamps the request with the position of the last audio sent.
+                    await self._client.force_end_of_utterance()
+                    audio_since_flush = False
 
         # No more input — let the VAD flush any pending event
         if self._vad_stream is not None:
             self._vad_stream.end_input()
 
     async def _process_vad(self, vad_stream: vad.VADStream) -> None:
-        """Call `client.finalize()` whenever the external VAD reports end of speech."""
+        """Call `client.finalize()` when the plugin's local VAD detects end of speech."""
         try:
             async for ev in vad_stream:
                 if ev.type == vad.VADEventType.END_OF_SPEECH:
@@ -937,17 +959,21 @@ _DEPRECATED_TURN_DETECTION_MODES = frozenset(
 )
 
 
+def _supports_stream_flush(
+    turn_detection_mode: TurnDetectionMode, local_vad: vad.VAD | None
+) -> bool:
+    return turn_detection_mode == TurnDetectionMode.EXTERNAL and local_vad is None
+
+
 def _load_default_vad() -> vad.VAD | None:
     """Load a local VAD to drive `finalize()` in `EXTERNAL` mode, or `None` if unavailable.
 
-    The pre-Agent-STT plugin loaded Silero here and raised `ImportError` when it was
-    missing, which made the plugin unusable wherever the optional package was not
-    installed. Returning `None` instead lets construction succeed and leaves the caller
-    with the `EXTERNAL`-without-a-`vad` warning, which says what to do about it.
+    The pre-Agent-STT plugin raised `ImportError` without the optional Silero plugin.
+    Returning `None` lets `AgentSession` use its bundled VAD and turn detector to flush
+    the stream. Standalone callers can flush the stream directly.
 
-    Deliberately not `livekit.agents.inference.VAD`: that one is bundled, so it would load
-    for everybody and run a second VAD over the same audio as the one `AgentSession` fills
-    in for itself, with independent thresholds.
+    Loading the bundled `inference.VAD` here would add a second VAD with independent
+    thresholds when `AgentSession` already supplies one.
     """
     try:
         from livekit.plugins.silero import VAD as SileroVAD
@@ -1031,7 +1057,7 @@ def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMo
     """Map the plugin's turn detection mode onto the session driver's.
 
     - `VAD`      -> the service runs its own VAD and closes turns.
-    - `EXTERNAL` -> the caller closes turns by calling `finalize()`.
+    - `EXTERNAL` -> the plugin, `AgentSession`, or the caller signals when a turn ends.
 
     The plugin's enum values are the SDK's values, so this is a direct lookup — but it
     is still required: `TurnConfig.to_dict()` reads the enum member's value, so the

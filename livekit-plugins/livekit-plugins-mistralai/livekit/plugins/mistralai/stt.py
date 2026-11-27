@@ -396,6 +396,7 @@ class STT(stt.STT):
                 context_bias=self._opts.context_bias if self._opts.context_bias else None,
                 diarize=self._opts.diarize,
                 timestamp_granularities=["segment"],
+                timeout_ms=int(conn_options.timeout * 1000),
             )
 
             return stt.SpeechEvent(

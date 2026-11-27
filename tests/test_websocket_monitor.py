@@ -15,7 +15,7 @@ from livekit.agents import APIConnectionError
 from livekit.agents.utils.aio import WebSocketMonitor
 from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 @pytest.mark.parametrize("cause_source", ["socket", "message", "absent"])
@@ -57,6 +57,7 @@ async def test_error_frame_cleanup_is_bounded_and_preserves_cause() -> None:
 
 
 @pytest.mark.virtual_time
+@pytest.mark.no_concurrent
 @pytest.mark.parametrize("liveness_timeout", [None, 3.0])
 async def test_liveness_timeout_controls_probe_and_failure(liveness_timeout: float | None) -> None:
     loop = asyncio.get_running_loop()
@@ -209,6 +210,8 @@ async def test_data_after_ping_resets_pending_failure() -> None:
             await asyncio.wait_for(monitor.receive(), 2)
 
 
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
 async def test_cancelled_receive_does_not_reset_silence_deadline() -> None:
     ws = AsyncMock()
     ws.receive.side_effect = asyncio.Event().wait
@@ -221,6 +224,8 @@ async def test_cancelled_receive_does_not_reset_silence_deadline() -> None:
     assert ws.ping.await_count == 1
 
 
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
 async def test_blocked_ping_write_cannot_delay_failure() -> None:
     ws = AsyncMock()
     ws.receive.side_effect = asyncio.Event().wait

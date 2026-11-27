@@ -23,6 +23,7 @@ import logging
 import multiprocessing as mp
 import os
 import tempfile
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum, unique
@@ -36,6 +37,7 @@ from livekit import api, rtc
 from livekit.api.access_token import Claims
 from livekit.protocol import agent, models
 
+from ._hosted_logs import JobOutput, logs_handed_off
 from .log import logger
 from .observability import Tagger
 from .telemetry import (
@@ -87,6 +89,7 @@ if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .simulation import SimulationContext
     from .voice.agent_session import AgentSession, RecordingOptions
+    from .voice.remote_session import SessionHost
     from .voice.report import SessionReport
 
 
@@ -164,6 +167,14 @@ class RunningJobInfo:
     """The server's assignment (room token) arrived."""
     launched_at: float = 0.0
     """A process was acquired from the pool and handed the job."""
+    # the same instants on the host's monotonic clock, for durations a wall clock step
+    # cannot skew; time.monotonic() is system-wide, so comparable across job processes
+    received_mono: float = 0.0
+    accepted_mono: float = 0.0
+    assigned_mono: float = 0.0
+    launched_mono: float = 0.0
+    launched_warm: bool = False
+    """An idle warmed process took the job; False when one had to be spawned."""
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -200,6 +211,9 @@ class _ContextLogFieldsFilter(logging.Filter):
 
 
 class JobContext:
+    _hosted_output: JobOutput | None = None
+    _rejected_recording: tuple[bool, bool] | None = None
+
     _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
         ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
     ]
@@ -239,6 +253,9 @@ class JobContext:
         self._handlers_with_filter: list[logging.Handler] = []
 
         self._primary_agent_session: AgentSession | None = None
+        # owned by the job rather than the session, so on_simulation_end can still be
+        # asked for after the agent ends the call
+        self._session_host: SessionHost | None = None
 
         # Lazily built from the job's simulation attributes; None when not under a
         # simulation. _simulation_resolved guards the one-time parse.
@@ -258,10 +275,14 @@ class JobContext:
             self._session_directory = Path(self._tempdir.name)
 
         self._connected = False
+        # monotonic, the first connect() call: the end of the entrypoint's own work before it
+        self._connect_called_mono = 0.0
+        # monotonic, connect() returned: the SDK returns once the primary transport connected
+        self._connected_mono = 0.0
         self._lock = asyncio.Lock()
         self._tagger = Tagger()
         self._recording_initialized = False
-        self._redaction_enabled = info.job.enable_redaction
+        self._redaction_enabled = info.job.enable_redaction and self.simulation_context() is None
         self._early_log_handler: _BufferingHandler | None = None
         # this job's cloud-telemetry registration, set by init_recording():
         # span/log/metric attribution and upload gating resolve from it (the
@@ -280,6 +301,8 @@ class JobContext:
         if self._info.fake_job or not self._info.job.enable_recording:
             return
         if not _observability_url(self._info.url):
+            return
+        if logs_handed_off():
             return
 
         self._early_log_handler = _BufferingHandler()
@@ -384,6 +407,14 @@ class JobContext:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 
     async def _on_cleanup(self) -> None:
+        if self._hosted_output is not None and not self._recording_initialized:
+            # no session decided: export, and LiveKit Cloud applies the project setting
+            logs, redaction = self._rejected_recording or (
+                True,
+                self.job.enable_redaction,
+            )
+            self._hosted_output.decide(logs=logs, redaction=redaction)
+
         # if session.start() was never reached and server wanted recording,
         # set up OTLP now and flush buffered crash logs
         if self._early_log_handler is not None and not self._recording_initialized:
@@ -696,6 +727,7 @@ class JobContext:
         async with self._lock:
             if self._connected:
                 return
+            self._connect_called_mono = self._connect_called_mono or time.monotonic()
 
             encryption = encryption or e2ee
             room_options = rtc.RoomOptions(
@@ -716,6 +748,7 @@ class JobContext:
                 job_ctx=self,
             ) as connect_span:
                 await self._room.connect(self._info.url, self._info.token, options=room_options)
+                self._connected_mono = time.monotonic()
                 connect_span.set_attributes(
                     {
                         trace_types.ATTR_PARTICIPANT_ID: self._room.local_participant.sid,
@@ -894,9 +927,27 @@ class JobContext:
         self._participant_entrypoints.append((entrypoint_fnc, kind))
 
     def init_recording(self, options: RecordingOptions) -> None:
-        redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
+        self._init_recording(options)
+
+    def _init_recording(
+        self, options: RecordingOptions, *, export_job_log_file: bool | None = None
+    ) -> None:
+        """Set up recording for the job.
+
+        Args:
+            options: What this SDK uploads to LiveKit Cloud.
+            export_job_log_file: Whether the job's hosted log file is exported. ``None``
+                follows ``options["logs"]``.
+        """
+        redaction_enabled = options.get("redaction", False) or (
+            self.job.enable_redaction and self.simulation_context() is None
+        )
+        logs = options.get("logs", True) if export_job_log_file is None else export_job_log_file
         if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
+            self._rejected_recording = (logs, redaction_enabled)
             raise ValueError("audio upload requires transcript upload when redaction is enabled")
+        if self._hosted_output is not None and not self._recording_initialized:
+            self._hosted_output.decide(logs=logs, redaction=redaction_enabled)
 
         if self._recording_initialized:
             self._stop_log_buffering()

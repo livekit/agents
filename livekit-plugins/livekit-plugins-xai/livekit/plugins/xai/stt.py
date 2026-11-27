@@ -132,6 +132,10 @@ class STT(stt.STT):
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
 
+    @property
+    def provider(self) -> str:
+        return "xAI"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

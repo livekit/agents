@@ -124,7 +124,8 @@ PROVIDERS = (
                     "data": {"transcript": "words", "language_code": "en-IN", "request_id": "test"},
                 },
             ),
-            stop_message={"type": "end_of_stream"},
+            # #8381: legacy Sarvam has no end-of-stream message; a final flush ends input
+            stop_message={"type": "flush"},
         ),
         live_constructor="livekit.plugins.sarvam.stt:STT",
         required_env=("SARVAM_API_KEY",),

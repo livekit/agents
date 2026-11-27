@@ -555,3 +555,61 @@ async def test_attempt_timeout_preserves_the_final_response_budget(monkeypatch):
     finally:
         await adapter.aclose()
         await primary.aclose()
+
+
+async def test_stream_reports_the_live_childs_manual_flush() -> None:
+    class _FixedFlushStream(FakeRecognizeStream):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self._manual_flush = self._stt.capabilities.manual_flush
+
+        @property
+        def manual_flush(self) -> bool:
+            return self._manual_flush
+
+    class _FixedFlushSTT(FakeSTT):
+        def stream(self, **kwargs: Any) -> FakeRecognizeStream:
+            stream = _FixedFlushStream(
+                stt=self, conn_options=kwargs.get("conn_options", DEFAULT_API_CONNECT_OPTIONS)
+            )
+            self._stream_ch.send_nowait(stream)
+            return stream
+
+    instances = [_FixedFlushSTT(), _FixedFlushSTT()]
+    for instance in instances:
+        instance.capabilities.manual_flush = True
+    adapter = FallbackAdapter(instances)
+    try:
+        async with adapter.stream() as stream:
+            await asyncio.wait_for(instances[0].stream_ch.recv(), timeout=1)
+            # a model switch on the primary turns its capability off; the live child keeps it
+            instances[0].capabilities.manual_flush = False
+            assert not adapter.capabilities.manual_flush
+            assert stream.manual_flush
+            stream.end_input()
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.parametrize("primary_streams", [True, False])
+async def test_prewarm_reaches_only_the_primary(primary_streams: bool) -> None:
+    """A non-streaming primary is wrapped in a StreamAdapter, which must forward prewarm too."""
+
+    class _PrewarmableSTT(FakeSTT):
+        def __init__(self, *, streaming: bool) -> None:
+            super().__init__()
+            self._capabilities = STTCapabilities(streaming=streaming, interim_results=False)
+            self.prewarm_count = 0
+
+        def prewarm(self) -> None:
+            self.prewarm_count += 1
+
+    primary = _PrewarmableSTT(streaming=primary_streams)
+    secondary = _PrewarmableSTT(streaming=True)
+    fallback_adapter = FallbackAdapter([primary, secondary], vad=FakeVAD())
+    try:
+        fallback_adapter.prewarm()
+    finally:
+        await fallback_adapter.aclose()
+
+    assert (primary.prewarm_count, secondary.prewarm_count) == (1, 0)

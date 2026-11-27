@@ -32,7 +32,7 @@ from .microsoft_ai_fakes import (
     no_network as no_network,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 OPTIONS = APIConnectOptions(max_retry=0, timeout=0.5)
 STT_URL = "wss://stt.example.invalid/v1/realtime?intent=transcription&deployment=dummy"
@@ -327,6 +327,8 @@ async def test_vad_end_input_preserves_incomplete_inference_window() -> None:
     assert socket.commits == [frame.data.tobytes()]
 
 
+# the bundled VAD runs inference off the loop, which virtual time cannot follow
+@pytest.mark.real_time
 async def test_bundled_vad_silence_does_not_create_an_empty_turn() -> None:
     socket = FakeSocket()
     instance, _ = provider(socket, detector=inference.VAD(model="silero"))
@@ -340,6 +342,7 @@ async def test_bundled_vad_silence_does_not_create_an_empty_turn() -> None:
     assert all(event["type"] == "session.update" for event in socket.sent)
 
 
+@pytest.mark.real_time
 async def test_bundled_vad_start_frames_preserve_delayed_onset_and_tail() -> None:
     # A public zero activation threshold makes synthetic PCM deterministically
     # count as speech. This checks the VAD frame contract, not model accuracy.

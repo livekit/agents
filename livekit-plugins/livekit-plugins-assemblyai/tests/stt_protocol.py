@@ -20,7 +20,17 @@ class Universal(Protocol):
     async def receive(self, message):
         peer = self.connection
         if message.type == aiohttp.WSMsgType.BINARY:
-            await peer.accept_audio(message.data)
+            data = message.data
+            expected = peer.server.expected_audio
+            if expected is not None:
+                # AssemblyAI rejects chunks under 50 ms, so the plugin pads the final tail
+                # with silence; only that trailing silence may extend the input
+                remaining = max(len(expected) - len(peer.server.received_audio), 0)
+                assert not any(data[remaining:]), "audio extends the input with non-silence"
+                data = data[:remaining]
+                if not data:
+                    return
+            await peer.accept_audio(data)
             return
         event = json_message(message)
         if event["type"] == "Terminate":

@@ -153,3 +153,77 @@ async def test_stream_retry_after_connection_error_does_not_raise_chanclosed() -
 
     assert calls == 2, f"expected 2 connect attempts, got {calls}"
     assert duration > 0, "expected audio output from successful retry"
+
+
+def _tts_with_fake_ws(ws: _FakeWS) -> TTS:
+    tts = TTS(api_key="test-key", sample_rate=SR)
+
+    async def connect(timeout):
+        return ws
+
+    tts._pool._connect_cb = connect
+    return tts
+
+
+@pytest.mark.asyncio
+async def test_stream_speaks_a_sentence_released_after_the_previous_one_finished() -> None:
+    """The sentence tokenizer holds the last sentence until more text or the end of
+    input arrives, so the server can finish every sentence sent so far while the next
+    one is still being written. The segment must not end at that point: the next
+    sentence is still sent, and its audio has to be read and played rather than left
+    on the pooled socket.
+    """
+    ws = _FakeWS()
+    tts = _tts_with_fake_ws(ws)
+    stream = tts.stream()
+
+    duration = 0.0
+    try:
+        stream.push_text("Hello there, this is the first sentence. And here")
+        ev = await asyncio.wait_for(stream.__anext__(), 1.0)
+        duration += ev.frame.duration
+        # the first sentence's audio and stop have both been read
+        while not ws.q.empty():
+            await asyncio.sleep(0)
+
+        stream.push_text(" is the second sentence.")
+        stream.end_input()
+
+        async def _drain() -> None:
+            nonlocal duration
+            async for ev in stream:
+                duration += ev.frame.duration
+
+        await asyncio.wait_for(_drain(), 1.0)
+    finally:
+        await stream.aclose()
+        await tts.aclose()
+
+    assert len(ws.sent) == 2
+    assert duration == pytest.approx(0.2, abs=0.01), "the second sentence was not played"
+    assert ws.q.empty(), "audio was left unread on the pooled connection"
+
+
+@pytest.mark.asyncio
+async def test_stream_ends_a_segment_that_has_no_sentence() -> None:
+    """Whitespace-only input opens a segment but sends no sentence, so no stop will
+    ever arrive; the segment has to end instead of waiting on the socket.
+    """
+    ws = _FakeWS()
+    tts = _tts_with_fake_ws(ws)
+    stream = tts.stream()
+
+    try:
+        stream.push_text("  ")
+        stream.end_input()
+
+        async def _drain() -> None:
+            async for _ in stream:
+                pass
+
+        await asyncio.wait_for(_drain(), 1.0)
+    finally:
+        await stream.aclose()
+        await tts.aclose()
+
+    assert ws.sent == []

@@ -6,6 +6,7 @@ The public SDK documents disconnect, but no acknowledged final-audio request.
 import aiohttp
 
 from tests.stt_harness.protocol import Protocol, Provider, RequestError
+from tests.stt_harness.server import json_message
 
 
 class Vachana(Protocol):
@@ -14,6 +15,13 @@ class Vachana(Protocol):
         self.connection.send({"type": "connected", "sample_rate": 16000, "chunk_size": 1024})
 
     async def receive(self, message):
+        if message.type == aiohttp.WSMsgType.TEXT:
+            event = json_message(message)
+            if event["type"] == "commit":
+                await self.connection.finalize()
+                return
+            assert event["type"] == "update_settings", f"unknown Vachana message: {event}"
+            return
         assert message.type == aiohttp.WSMsgType.BINARY
         assert 0 < len(message.data) <= 1024
         await self.connection.accept_audio(message.data)

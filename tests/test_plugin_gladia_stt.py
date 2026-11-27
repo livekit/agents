@@ -10,7 +10,7 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, stt
+from livekit.agents import APIConnectOptions, stt, utils
 from livekit.plugins.gladia import stt as gladia_stt
 
 from .stt_harness.discovery import provider_by_name
@@ -26,6 +26,63 @@ async def test_update_options_stores_region_for_new_streams():
     stt.update_options(region="us-west")
 
     assert stt._opts.region == "us-west"
+
+
+@pytest.mark.parametrize("translate", [False, True])
+@pytest.mark.parametrize("end_time", [0.4, 0.0])
+def test_endpoint_preserves_source_timing(translate, end_time):
+    stream = object.__new__(gladia_stt.SpeechStream)
+    stream._opts = gladia_stt.STT(api_key="test-key")._opts
+    stream._opts.translation_config.enabled = translate
+    stream._speaking = False
+    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
+    stream._request_id = "test"
+    events = []
+    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    utterance = {"text": "hello", "language": "en", "start": 0.1, "end": end_time}
+    stream._process_gladia_message(
+        {"type": "transcript", "data": {"is_final": True, "utterance": utterance}}
+    )
+    if translate:
+        stream._process_gladia_message(
+            {
+                "type": "translation",
+                "data": {
+                    "utterance": utterance,
+                    "translated_utterance": {"text": "bonjour", "language": "fr", "end": 9.0},
+                },
+            }
+        )
+    endpoint = events[-1]
+    assert endpoint.type == stt.SpeechEventType.END_OF_SPEECH
+    if end_time:
+        assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+    else:
+        assert endpoint.alternatives == []
+
+
+@pytest.mark.no_concurrent
+async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.gladia.stt import STT, SpeechStream
+
+    from .stt_reconnect import ReconnectClock
+
+    clock = ReconnectClock(monkeypatch)
+    monkeypatch.setattr(
+        SpeechStream,
+        "_init_live_session",
+        AsyncMock(return_value={"url": "wss://test.invalid", "id": "test"}),
+    )
+    provider = STT(api_key="test-key", http_session=clock)
+    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await clock.check(stream, lambda: stream.update_options(languages=["fr"]))
+    finally:
+        await stream.aclose()
+        await provider.aclose()
 
 
 async def test_update_options_rejects_translation_without_target_languages():
@@ -111,11 +168,8 @@ async def test_stop_recording_write_failure_is_reported(monkeypatch):
 
 @pytest.mark.virtual_time
 @pytest.mark.no_concurrent
-@pytest.mark.parametrize("stop", ["flush", "silence"])
 @pytest.mark.parametrize("first_samples", [320, 1600])
-async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, first_samples):
-    from livekit.plugins.gladia.stt import AudioEnergyFilter
-
+async def test_segment_completion_preserves_queued_audio(monkeypatch, first_samples):
     fixture = replace(
         provider_by_name("gladia").transport_fixture,
         completion_messages=(
@@ -133,9 +187,6 @@ async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, firs
             },
             {"type": "end_session"},
         ),
-        options={
-            "energy_filter": AudioEnergyFilter(min_silence=0) if stop == "silence" else False,
-        },
     )
     _, provider, transport = create_transport_fixture(fixture, monkeypatch)
     transport.auto_reply = True
@@ -151,10 +202,7 @@ async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, firs
     ]
     try:
         stream.push_frame(frames[0])
-        if stop == "flush":
-            stream.flush()
-        else:
-            stream.push_frame(rtc.AudioFrame.create(16000, 1, 320))
+        stream.flush()
         stream.push_frame(frames[1])
         # Close input before either connection runs. Its remaining queue must drain.
         stream.end_input()
@@ -169,9 +217,8 @@ async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, firs
             for event in events
             if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
         ]
-        # Each session is anchored on its first frame's capture time, so filtered
-        # silence still separates the two sessions on the caller's timeline.
-        gap = frames[0].duration + (0.02 if stop == "silence" else 0.0)
+        # Each session is anchored on its first frame's capture time.
+        gap = frames[0].duration
         assert finals[1].start_time - finals[0].start_time == pytest.approx(gap, abs=1e-6)
         assert finals[1].words[0].start_time - finals[0].words[0].start_time == pytest.approx(
             gap, abs=1e-6
@@ -190,58 +237,52 @@ async def test_segment_completion_preserves_queued_audio(monkeypatch, stop, firs
         await provider.aclose()
 
 
-@pytest.mark.parametrize("translate", [False, True])
-@pytest.mark.parametrize("end_time", [0.4, 0.0])
-def test_endpoint_preserves_source_timing(translate, end_time):
-    stream = object.__new__(gladia_stt.SpeechStream)
-    stream._opts = gladia_stt.STT(api_key="test-key")._opts
-    stream._opts.translation_config.enabled = translate
-    stream._speaking = False
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
-    stream._request_id = "test"
-    events = []
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
-    utterance = {"text": "hello", "language": "en", "start": 0.1, "end": end_time}
-    stream._process_gladia_message(
-        {"type": "transcript", "data": {"is_final": True, "utterance": utterance}}
-    )
-    if translate:
-        stream._process_gladia_message(
-            {
-                "type": "translation",
-                "data": {
-                    "utterance": utterance,
-                    "translated_utterance": {"text": "bonjour", "language": "fr", "end": 9.0},
-                },
-            }
+async def test_send_audio_forwards_silence_and_flushes_partial_chunk():
+    sample_rate = 16000
+
+    def _frame(sample: int, duration_ms: int) -> rtc.AudioFrame:
+        num_samples = sample_rate * duration_ms // 1000
+        return rtc.AudioFrame(
+            data=sample.to_bytes(2, "little", signed=True) * num_samples,
+            sample_rate=sample_rate,
+            num_channels=1,
+            samples_per_channel=num_samples,
         )
-    endpoint = events[-1]
-    assert endpoint.type == stt.SpeechEventType.END_OF_SPEECH
-    if end_time:
-        assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
-    else:
-        assert endpoint.alternatives == []
 
+    messages: list[dict] = []
 
-@pytest.mark.no_concurrent
-async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
-    from unittest.mock import AsyncMock
+    async def _send_str(payload: str) -> None:
+        messages.append(json.loads(payload))
 
-    from livekit.agents import APIConnectOptions
-    from livekit.plugins.gladia.stt import STT, SpeechStream
-
-    from .stt_reconnect import ReconnectClock
-
-    clock = ReconnectClock(monkeypatch)
-    monkeypatch.setattr(
-        SpeechStream,
-        "_init_live_session",
-        AsyncMock(return_value={"url": "wss://test.invalid", "id": "test"}),
+    usage: list[float] = []
+    stream = object.__new__(gladia_stt.SpeechStream)
+    stream._opts = gladia_stt.STT(api_key="test-key", sample_rate=sample_rate)._opts
+    stream._ws = SimpleNamespace(send_str=_send_str)
+    stream._session = SimpleNamespace(closed=False)
+    stream._input_ch = utils.aio.Chan()
+    stream._drain_started = asyncio.Event()
+    stream._audio_duration_collector = gladia_stt.PeriodicCollector(
+        callback=usage.append, duration=5.0
     )
-    provider = STT(api_key="test-key", http_session=clock)
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
-    try:
-        await clock.check(stream, lambda: stream.update_options(languages=["fr"]))
-    finally:
-        await stream.aclose()
-        await provider.aclose()
+
+    # speech and silence share 100 ms chunks, and 30 ms of trailing silence stays buffered
+    pushed = [_frame(1000, 50), _frame(0, 100), _frame(1000, 50), _frame(0, 30)]
+    for frame in pushed:
+        stream._input_ch.send_nowait(frame)
+    stream._input_ch.send_nowait(gladia_stt.SpeechStream._FlushSentinel())
+    stream._input_ch.close()
+
+    await stream._send_audio_task()
+
+    # a flush ends the provider session; the next segment gets its own connection
+    assert [m["type"] for m in messages] == [
+        "audio_chunk",
+        "audio_chunk",
+        "audio_chunk",
+        "stop_recording",
+    ]
+    assert stream._drain_started.is_set()
+    chunks = [base64.b64decode(m["data"]["chunk"]) for m in messages[:3]]
+    assert [len(chunk) for chunk in chunks] == [3200, 3200, 960]
+    assert b"".join(chunks) == b"".join(frame.data.tobytes() for frame in pushed)
+    assert sum(usage) == pytest.approx(0.23)

@@ -9,8 +9,10 @@ import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents import vad
+from livekit.agents import Agent, AgentSession, vad
 from livekit.agents.inference import vad as inference_vad
+from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
     from livekit.plugins.silero import vad as silero_vad
@@ -112,3 +114,101 @@ async def test_resize_buffer_during_speech(
             assert 10 in event.frames[0].data
     finally:
         await stream.aclose()
+
+
+@pytest.mark.parametrize("resize", ["shrink", "grow"])
+async def test_resize_buffer_while_referenced(
+    vad_impl: inference_vad.VAD | silero_vad.VAD, resize: str
+) -> None:
+    # ndarray.resize() refuses to resize a buffer that anything else references, and on
+    # Python 3.14 it also refuses one only held by the stream, so resizing must copy.
+    stream = vad_impl.stream()
+    try:
+        for value in range(1, 4):
+            await _push_window(stream, value)
+
+        held = stream._speech_buffer
+        samples = np.repeat(np.arange(1, 4, dtype=np.int16), _WINDOW_SAMPLES)
+        if resize == "shrink":
+            vad_impl.update_options(max_buffered_speech=0.016)
+            samples = samples[: int(0.080 * _SAMPLE_RATE)]
+        else:
+            vad_impl.update_options(max_buffered_speech=0.512)
+            samples = np.concatenate([samples, np.zeros(_WINDOW_SAMPLES, dtype=np.int16)])
+        assert stream._speech_buffer is not held
+
+        await _push_window(stream, 0)
+        event = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
+        assert event.type == vad.VADEventType.END_OF_SPEECH
+        np.testing.assert_array_equal(event.frames[0].data, samples)
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    ("windows", "speech_duration", "interrupt_at"),
+    [
+        pytest.param([1] * 4, 0.128, None, id="short-speech"),
+        pytest.param([1] * 15, 0.480, None, id="first-silent-window"),
+        pytest.param([1] * 16, 0.512, 16, id="continuous-speech"),
+        pytest.param([1] * 8 + [0] * 4 + [1] * 4, 0.512, 16, id="internal-pause"),
+    ],
+)
+async def test_vad_interruption_excludes_trailing_silence(
+    vad_impl: inference_vad.VAD | silero_vad.VAD,
+    windows: list[int],
+    speech_duration: float,
+    interrupt_at: int | None,
+) -> None:
+    vad_impl.update_options(
+        min_speech_duration=0.05, min_silence_duration=0.55, max_buffered_speech=2.0
+    )
+    session = AgentSession(
+        vad=vad_impl,
+        turn_handling={
+            "turn_detection": "vad",
+            "interruption": {
+                "mode": "vad",
+                "min_duration": 0.5,
+                "resume_false_interruption": False,
+            },
+        },
+        aec_warmup_duration=None,
+    )
+    activity = AgentActivity(Agent(instructions="test"), session)
+    handle = SpeechHandle.create(allow_interruptions=True)
+    activity._current_speech = handle
+
+    stream = vad_impl.stream()
+    try:
+        for value in windows + [0] * 18:
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=np.full(_WINDOW_SAMPLES, value, dtype=np.int16).tobytes(),
+                    sample_rate=_SAMPLE_RATE,
+                    num_channels=1,
+                    samples_per_channel=_WINDOW_SAMPLES,
+                )
+            )
+        stream.end_input()
+
+        transitions = []
+        first_interruption = None
+        async for event in stream:
+            if event.type == vad.VADEventType.INFERENCE_DONE:
+                activity.on_vad_inference_done(event)
+                if handle.interrupted and first_interruption is None:
+                    first_interruption = event.samples_index // _WINDOW_SAMPLES
+            else:
+                transitions.append(event)
+
+        assert [event.type for event in transitions] == [
+            vad.VADEventType.START_OF_SPEECH,
+            vad.VADEventType.END_OF_SPEECH,
+        ]
+        assert transitions[0].speech_duration == pytest.approx(0.064)
+        assert transitions[1].speech_duration == pytest.approx(speech_duration)
+        assert first_interruption == interrupt_at
+    finally:
+        await stream.aclose()
+        await session.aclose()
