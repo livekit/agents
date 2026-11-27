@@ -320,8 +320,9 @@ async def test_realtime_e2e_uses_latest_turn_before_playback(
     assert "e2e_latency" not in second.metrics
 
 
+@pytest.mark.parametrize("return_handle", [False, True])
 async def test_realtime_manual_commit_preserves_speech_timing(
-    realtime: tuple[AgentSession, FakeRealtimeModel],
+    realtime: tuple[AgentSession, FakeRealtimeModel], return_handle: bool
 ) -> None:
     session, model = realtime
     now = time.time()
@@ -329,17 +330,34 @@ async def test_realtime_manual_commit_preserves_speech_timing(
     await _vad(session, vad.VADEventType.END_OF_SPEECH, at=now)
     speeches: list[SpeechCreatedEvent] = []
     session.on("speech_created", speeches.append)
-    await session.commit_user_turn()
+    result = await session.commit_user_turn(return_handle=return_handle)
     for _ in range(100):
         if model.active_session._reply_futs:
             break
         await asyncio.sleep(0)
     assert model.active_session._reply_futs
     assert len(speeches) == 1
+    assert result == (("", speeches[0].speech_handle) if return_handle else "")
     reply = await _finish_reply(
         session, *_start_reply(session, model, requested=speeches[0].speech_handle)
     )
     assert reply.metrics["e2e_latency"] == pytest.approx(reply.metrics["started_speaking_at"] - now)
+
+
+@pytest.mark.parametrize("return_handle", [False, True])
+async def test_realtime_manual_commit_raises_when_reply_cannot_be_scheduled(
+    realtime: tuple[AgentSession, FakeRealtimeModel],
+    monkeypatch: pytest.MonkeyPatch,
+    return_handle: bool,
+) -> None:
+    session, _ = realtime
+
+    def reject_reply(**kwargs: object) -> SpeechHandle:
+        raise RuntimeError("could not schedule speech")
+
+    monkeypatch.setattr(session, "generate_reply", reject_reply)
+    with pytest.raises(RuntimeError, match="could not schedule speech"):
+        session.commit_user_turn(return_handle=return_handle)
 
 
 @pytest.mark.parametrize("phase", ["pending_delivery", "delivered"])
@@ -649,6 +667,7 @@ async def test_realtime_audio_redaction_warns_only_for_redacted_audio_recording(
     job_ctx = MagicMock()
     job_ctx.job.enable_recording = True
     job_ctx.job.enable_redaction = project_redaction
+    job_ctx._redaction_enabled = project_redaction or session_redaction
     job_ctx.job.id = "test-job-id"
     job_ctx.job.room.sid = "test-room-sid"
     job_ctx.job.agent_name = "test-agent"

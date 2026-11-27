@@ -42,7 +42,7 @@ members = [
     "livekit-plugins-bey",
     "livekit-plugins-bithuman",
     "livekit-plugins-bland",
-    "livekit-plugins-boson",
+    "livekit-plugins-boson-ai",
     "livekit-plugins-boson-avatar",
     "livekit-plugins-browser",
     "livekit-plugins-cambai",
@@ -94,9 +94,9 @@ members = [
     "livekit-plugins-runway",
     "livekit-plugins-sarvam",
     "livekit-plugins-silero",
+    "livekit-plugins-silma",
     "livekit-plugins-simli",
     "livekit-plugins-simplismart",
-    "livekit-plugins-slng",
     "livekit-plugins-smallestai",
     "livekit-plugins-soniox",
     "livekit-plugins-spatius",
@@ -113,6 +113,7 @@ members = [
     "livekit-plugins-ultravox",
     "livekit-plugins-upliftai",
     "livekit-plugins-vakyam",
+    "livekit-plugins-vlmrun",
     "livekit-plugins-xai",
     "livekit-plugins-zoom-ai",
 ]
@@ -2193,8 +2194,8 @@ bithuman = [
 bland = [
     { name = "livekit-plugins-bland" },
 ]
-boson = [
-    { name = "livekit-plugins-boson" },
+boson-ai = [
+    { name = "livekit-plugins-boson-ai" },
 ]
 boson-avatar = [
     { name = "livekit-plugins-boson-avatar" },
@@ -2352,14 +2353,14 @@ sarvam = [
 silero = [
     { name = "livekit-plugins-silero" },
 ]
+silma = [
+    { name = "livekit-plugins-silma" },
+]
 simli = [
     { name = "livekit-plugins-simli" },
 ]
 simplismart = [
     { name = "livekit-plugins-simplismart" },
-]
-slng = [
-    { name = "livekit-plugins-slng" },
 ]
 smallestai = [
     { name = "livekit-plugins-smallestai" },
@@ -2406,6 +2407,9 @@ upliftai = [
 vakyam = [
     { name = "livekit-plugins-vakyam" },
 ]
+vlmrun = [
+    { name = "livekit-plugins-vlmrun" },
+]
 xai = [
     { name = "livekit-plugins-xai" },
 ]
@@ -2417,6 +2421,7 @@ zoom-ai = [
 requires-dist = [
     { name = "aiofiles", specifier = ">=24" },
     { name = "aiohttp", specifier = "~=3.10" },
+    { name = "async-timeout", marker = "python_full_version < '3.11'", specifier = ">=4.0" },
     { name = "av", specifier = ">=14.0.0" },
     { name = "certifi", specifier = ">=2025.6.15" },
     { name = "click", specifier = "~=8.1" },
@@ -2442,7 +2447,7 @@ requires-dist = [
     { name = "livekit-plugins-bey", marker = "extra == 'bey'", editable = "livekit-plugins/livekit-plugins-bey" },
     { name = "livekit-plugins-bithuman", marker = "extra == 'bithuman'", editable = "livekit-plugins/livekit-plugins-bithuman" },
     { name = "livekit-plugins-bland", marker = "extra == 'bland'", editable = "livekit-plugins/livekit-plugins-bland" },
-    { name = "livekit-plugins-boson", marker = "extra == 'boson'", editable = "livekit-plugins/livekit-plugins-boson" },
+    { name = "livekit-plugins-boson-ai", marker = "extra == 'boson-ai'", editable = "livekit-plugins/livekit-plugins-boson-ai" },
     { name = "livekit-plugins-boson-avatar", marker = "extra == 'boson-avatar'", editable = "livekit-plugins/livekit-plugins-boson-avatar" },
     { name = "livekit-plugins-browser", marker = "extra == 'browser'", editable = "livekit-plugins/livekit-plugins-browser" },
     { name = "livekit-plugins-cambai", marker = "extra == 'cambai'", editable = "livekit-plugins/livekit-plugins-cambai" },
@@ -2492,9 +2497,9 @@ requires-dist = [
     { name = "livekit-plugins-runway", marker = "extra == 'runway'", editable = "livekit-plugins/livekit-plugins-runway" },
     { name = "livekit-plugins-sarvam", marker = "extra == 'sarvam'", editable = "livekit-plugins/livekit-plugins-sarvam" },
     { name = "livekit-plugins-silero", marker = "extra == 'silero'", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-silma", marker = "extra == 'silma'", editable = "livekit-plugins/livekit-plugins-silma" },
     { name = "livekit-plugins-simli", marker = "extra == 'simli'", editable = "livekit-plugins/livekit-plugins-simli" },
     { name = "livekit-plugins-simplismart", marker = "extra == 'simplismart'", editable = "livekit-plugins/livekit-plugins-simplismart" },
-    { name = "livekit-plugins-slng", marker = "extra == 'slng'", editable = "livekit-plugins/livekit-plugins-slng" },
     { name = "livekit-plugins-smallestai", marker = "extra == 'smallestai'", editable = "livekit-plugins/livekit-plugins-smallestai" },
     { name = "livekit-plugins-soniox", marker = "extra == 'soniox'", editable = "livekit-plugins/livekit-plugins-soniox" },
     { name = "livekit-plugins-spatius", marker = "extra == 'spatius'", editable = "livekit-plugins/livekit-plugins-spatius" },
@@ -2510,9 +2515,10 @@ requires-dist = [
     { name = "livekit-plugins-ultravox", marker = "extra == 'ultravox'", editable = "livekit-plugins/livekit-plugins-ultravox" },
     { name = "livekit-plugins-upliftai", marker = "extra == 'upliftai'", editable = "livekit-plugins/livekit-plugins-upliftai" },
     { name = "livekit-plugins-vakyam", marker = "extra == 'vakyam'", editable = "livekit-plugins/livekit-plugins-vakyam" },
+    { name = "livekit-plugins-vlmrun", marker = "extra == 'vlmrun'", editable = "livekit-plugins/livekit-plugins-vlmrun" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
     { name = "livekit-plugins-zoom-ai", marker = "extra == 'zoom-ai'", editable = "livekit-plugins/livekit-plugins-zoom-ai" },
-    { name = "livekit-protocol", specifier = ">=1.1.31,<2" },
+    { name = "livekit-protocol", specifier = "==1.1.32" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.2,<3" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -2535,7 +2541,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "silma", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -2719,7 +2725,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "livekit-plugins-ai-coustics", specifier = "~=0.3" },
+    { name = "livekit-plugins-ai-coustics", specifier = "~=0.3.5" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
@@ -2829,19 +2835,19 @@ wheels = [
 
 [[package]]
 name = "livekit-plugins-ai-coustics"
-version = "0.3.0"
+version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "livekit" },
     { name = "livekit-agents" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/80/feed50c8495f2293db95a35d72aacef4ce1f2cd21113e093ac910ffa4395/livekit_plugins_ai_coustics-0.3.0.tar.gz", hash = "sha256:7019c9035aad8e015f58da6818381bbbc5f2c083ce44ab0303aee4911a866a82", size = 19089, upload-time = "2026-06-15T20:53:31.878Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/d7/c8db6ed1052160b43bd0c08750f13cbe8d0c20d8d181a7a54a1b33c40650/livekit_plugins_ai_coustics-0.3.5.tar.gz", hash = "sha256:75c023ce0eb632fea484bbed4fae830bd69954509f836a13bf831bacca1c1323", size = 19433, upload-time = "2026-10-19T23:09:21.252Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/41/651d29485a2ba9e844b55d48959d97e309214942038c2042bcfa700e538d/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:4ac73a46722b59232bbb1d1db86d342bfa77fc74395d5b01d665d2aa6bb4980e", size = 70523160, upload-time = "2026-06-15T20:53:15.066Z" },
-    { url = "https://files.pythonhosted.org/packages/4a/cd/ddd92898aa0f269b21b0aaf18f77ece9d8a8b00bcb2af47fd44eedf690bf/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:4e50f2d03734d500cfe41a9fa11b74a94a5894b6869c41a7cef679c5b4b24efa", size = 70699868, upload-time = "2026-06-15T20:53:18.76Z" },
-    { url = "https://files.pythonhosted.org/packages/43/15/eb48d2e662a08667f4526d3181097f900b9088e78028d9742114d8b4d729/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0d78a4e48d80c09b0a9e192115f850891813589cde8090d36b745bd4e3312bf3", size = 70398515, upload-time = "2026-06-15T20:53:22.37Z" },
-    { url = "https://files.pythonhosted.org/packages/ed/c0/9ddfd240baccca55021a0cb2622968ae0b7041a570aed1b4ce792a6b0f29/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4e70be41a4988d9344516fb5f3f64d9cab369a93bd94135226f0c903863da150", size = 70742569, upload-time = "2026-06-15T20:53:25.877Z" },
-    { url = "https://files.pythonhosted.org/packages/13/da/12b27e79ac14f29e4f732b7c3a665604bf0e34830802d9658fa679ca04a5/livekit_plugins_ai_coustics-0.3.0-cp310-abi3-win_amd64.whl", hash = "sha256:3940b252fb8a278ea7455144629cbb8283f8927b99125327492efe6cde74c8fd", size = 70087927, upload-time = "2026-06-15T20:53:29.37Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/b2/5fbd479f75116b990972b30622cafc2f43dab8b83470c71f8a9b01b9df85/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:e564991733e706217aaa27881519b484c43f9eadd5fdced51af0573247033d62", size = 70499448, upload-time = "2026-10-19T23:08:58.15Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/65/baf17fad9ce51b52094d0a234329dc89e4e74d968fccb85828e923884ae0/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b5d292a65c67b7b1da788ac1d5f5a52a82b5a4e1281e5fd5906504ef563a4044", size = 70642406, upload-time = "2026-10-19T23:09:03.332Z" },
+    { url = "https://files.pythonhosted.org/packages/75/7b/2a741357dc617c453252a3ae727333bbb81ae0655b16b8471604325690ee/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:173548c9fcf4fd874cfaabd274e9c762a90ccc768b9ac1f4619ba2825913b6f6", size = 70358207, upload-time = "2026-10-19T23:09:08.765Z" },
+    { url = "https://files.pythonhosted.org/packages/25/94/1825e84acfd721263c551aa49fd4738d94ab13953e1b68b9982b3e9fb99e/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1ce1564f1c23770273783e224c99c9080f142ceec47a6e3b31f4d97612057b59", size = 70735781, upload-time = "2026-10-19T23:09:13.479Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/7a/e90d6f1dc988b4fd7de331b4d818564577ec5ac8a563c34a51e873e95bd3/livekit_plugins_ai_coustics-0.3.5-cp310-abi3-win_amd64.whl", hash = "sha256:93752673639300dc83f3bcf72d00cb8a8d29682fcb569dab88b8da1039d03be9", size = 70312999, upload-time = "2026-10-19T23:09:18.536Z" },
 ]
 
 [[package]]
@@ -2947,7 +2953,7 @@ requires-dist = [
     { name = "aiobotocore", specifier = ">=3.0.0" },
     { name = "aws-sdk-bedrock-runtime", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.2.0" },
     { name = "aws-sdk-signers", marker = "python_full_version >= '3.12' and extra == 'realtime'", specifier = ">=0.0.3" },
-    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.11.0" },
+    { name = "aws-sdk-transcribe-streaming", marker = "python_full_version >= '3.12'", specifier = ">=0.11.0,<0.13.0" },
     { name = "boto3", marker = "extra == 'realtime'", specifier = ">1.35.10" },
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "smithy-http", extras = ["awscrt"], marker = "python_full_version >= '3.12'" },
@@ -3037,8 +3043,8 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
-name = "livekit-plugins-boson"
-source = { editable = "livekit-plugins/livekit-plugins-boson" }
+name = "livekit-plugins-boson-ai"
+source = { editable = "livekit-plugins/livekit-plugins-boson-ai" }
 dependencies = [
     { name = "livekit-agents", extra = ["openai"] },
 ]
@@ -3215,14 +3221,12 @@ source = { editable = "livekit-plugins/livekit-plugins-gladia" }
 dependencies = [
     { name = "aiohttp" },
     { name = "livekit-agents", extra = ["codecs"] },
-    { name = "numpy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "numpy", specifier = ">=1.26" },
 ]
 
 [[package]]
@@ -3647,7 +3651,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "phonic", specifier = ">=0.33.4" },
+    { name = "phonic", specifier = ">=0.33.9" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 
@@ -3781,6 +3785,20 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-silma"
+source = { editable = "livekit-plugins/livekit-plugins-silma" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "numpy", specifier = ">=1.26" },
+]
+
+[[package]]
 name = "livekit-plugins-simli"
 source = { editable = "livekit-plugins/livekit-plugins-simli" }
 dependencies = [
@@ -3802,20 +3820,6 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "numpy", specifier = ">=1.26" },
-]
-
-[[package]]
-name = "livekit-plugins-slng"
-source = { editable = "livekit-plugins/livekit-plugins-slng" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "livekit-agents" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.10" },
-    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]
@@ -4034,6 +4038,22 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-vlmrun"
+source = { editable = "livekit-plugins/livekit-plugins-vlmrun" }
+dependencies = [
+    { name = "httpx2" },
+    { name = "livekit-agents", extra = ["images", "openai"] },
+    { name = "openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx2", specifier = ">=2.12,<3" },
+    { name = "livekit-agents", extras = ["images", "openai"], editable = "livekit-agents" },
+    { name = "openai", specifier = ">=3.28,<4" },
+]
+
+[[package]]
 name = "livekit-plugins-xai"
 source = { editable = "livekit-plugins/livekit-plugins-xai" }
 dependencies = [
@@ -4059,15 +4079,15 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-protocol"
-version = "1.1.31"
+version = "1.1.32"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
     { name = "types-protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ab/18/9055bd2b0615cc477559b7d68853ac79ac09a4ee281081dd8eb02c35d47d/livekit_protocol-1.1.31.tar.gz", hash = "sha256:97fb2453b1050e21ec29e3933ef78df23349dcdc1b642857025d4784fd12547b", size = 134972, upload-time = "2026-11-05T00:33:00.107Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/09/3fa7a365894c444773f32e9ef483b0c9e4642891c77b85174d130165a308/livekit_protocol-1.1.32.tar.gz", hash = "sha256:2b2af25d16e65da64b9b16fec8d773a66107bf9c22db58d1ede5f156f42c98a7", size = 135835, upload-time = "2026-11-14T01:13:57.329Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/7f/3bc2fee2d3f5a1d0dc812ab2212fe7dc84c732660138020e2e54a56f6908/livekit_protocol-1.1.31-py3-none-any.whl", hash = "sha256:b37c262515c541008c43227a9424151bbf3b93dbae7fb6b9c8e8521c76f5cc29", size = 162950, upload-time = "2026-11-05T00:32:58.384Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/9c/028db5523b4434f98a96079fe5bef51919e290d5ada830c207aec01db7f9/livekit_protocol-1.1.32-py3-none-any.whl", hash = "sha256:f86e104b7a84e743f7e382892d781df4f103eefdbfb24520359158f9c427e032", size = 163639, upload-time = "2026-11-14T01:13:55.948Z" },
 ]
 
 [[package]]
@@ -5092,7 +5112,7 @@ wheels = [
 
 [[package]]
 name = "phonic"
-version = "0.33.4"
+version = "0.33.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -5101,9 +5121,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/15/2c6697c2469a24df47e20ad3ff128ec1261692f138cdca6133c35ae1cf66/phonic-0.33.4.tar.gz", hash = "sha256:f1763cc14f6eab65986f664058f80c90011b8aecab4dda53322a9ad3726f584b", size = 249379, upload-time = "2026-11-11T00:12:09.918Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/49/7aa861f6a8a430492eb41f4e10f8b6627875e0d8f6ac5d97a16fccf6e15d/phonic-0.33.9.tar.gz", hash = "sha256:c97c6b52ba4e7cc656600525ec0b358c00a4fd48f408175611eab75b40986410", size = 271470, upload-time = "2026-11-19T02:29:22.51Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/e1/af73f7ab45b9d457e99d3ffc7fa0bbd3d4f724cadf388e57331fc64d8f26/phonic-0.33.4-py3-none-any.whl", hash = "sha256:d07d3af2088abf96af025ed2ea681c23df7bc833df3609520d40c695d4e24826", size = 527758, upload-time = "2026-11-11T00:12:08.163Z" },
+    { url = "https://files.pythonhosted.org/packages/59/51/d377b519897f49dd92f1fd2e6510635110c50497e5c97a9114620a0b8371/phonic-0.33.9-py3-none-any.whl", hash = "sha256:0b7d73c9382267c586c8bc9e709840282d711bc0b4e5022aecc240aed3bdcc8c", size = 567764, upload-time = "2026-11-19T02:29:20.775Z" },
 ]
 
 [[package]]

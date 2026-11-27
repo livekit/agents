@@ -28,6 +28,7 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 from livekit.protocol import agent
 
+from .. import _hosted_logs
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
@@ -305,6 +306,20 @@ class _JobProc:
             await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
+        job = msg.running_job.job
+        hosted_fields = {"job_id": job.id, "room": job.room.name, "room_id": job.room.sid}
+        if job.agent_name:
+            hosted_fields["agent_name"] = job.agent_name
+        hosted_output: _hosted_logs.JobOutput | None
+        if self._executor_type == JobExecutorType.THREAD:
+            hosted_output = _hosted_logs.thread_job_output(
+                job.id, hosted_fields, redaction=job.enable_redaction
+            )
+        else:
+            hosted_output = _hosted_logs.redirect_job_output(
+                job.id, hosted_fields, redaction=job.enable_redaction
+            )
+
         if msg.running_job.fake_job:
             from .mock_room import create_mock_room
 
@@ -352,6 +367,7 @@ class _JobProc:
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
+        self._job_ctx._hosted_output = hosted_output
 
         def _exit_proc_cb(t: asyncio.Task[None]) -> None:
             # a crash before the entrypoint task exists never reaches _on_entry_done
@@ -365,6 +381,7 @@ class _JobProc:
     @log_exceptions(logger=logger)
     async def _run_job_task(self) -> None:
         job_ctx_token = _JobContextVar.set(self._job_ctx)
+        hosted_output_token = _hosted_logs.current_job_output.set(self._job_ctx._hosted_output)
         try:
             self._job_ctx._on_setup()
             self._job_ctx._start_log_buffering()
@@ -380,7 +397,7 @@ class _JobProc:
         except BaseException:
             # the setup installs log filters and a log buffer on the root logger, which a
             # thread runner shares with the worker: do not leave them behind
-            await self._cleanup_job(job_ctx_token)
+            await self._cleanup_job(job_ctx_token, hosted_output_token)
             raise
         self._entrypoint_span_context = trace.set_span_in_context(job_span)
 
@@ -461,15 +478,22 @@ class _JobProc:
             # whatever happened above (a cancel while waiting, a close that raised), the job
             # ends: root span, temp dir, per-job telemetry state
             job_span.end()
-            await self._cleanup_job(job_ctx_token)
+            await self._cleanup_job(job_ctx_token, hosted_output_token)
 
-    async def _cleanup_job(self, job_ctx_token: contextvars.Token[JobContext]) -> None:
+    async def _cleanup_job(
+        self,
+        job_ctx_token: contextvars.Token[JobContext],
+        hosted_output_token: contextvars.Token[_hosted_logs.JobOutput | None],
+    ) -> None:
         if tasks := self._job_ctx._pending_tasks:
             await aio.cancel_and_wait(*tasks)
 
         await self._job_ctx._on_cleanup()
         await http_context._close_http_ctx()
+        _hosted_logs.current_job_output.reset(hosted_output_token)
         _JobContextVar.reset(job_ctx_token)
+        if self._executor_type == JobExecutorType.THREAD and self._job_ctx._hosted_output:
+            self._job_ctx._hosted_output.close()
 
     async def _shutdown_job(
         self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo

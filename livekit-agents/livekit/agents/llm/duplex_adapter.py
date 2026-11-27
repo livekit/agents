@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from collections import deque
 from collections.abc import Callable
@@ -273,6 +272,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
                 turn_detection=True,
                 user_transcription=caps.user_transcription,
                 auto_tool_reply_generation=caps.auto_tool_reply_generation,
+                eager_tool_outputs=caps.eager_tool_outputs,
                 audio_output=True,
                 manual_function_calls=False,
                 supports_overlapping_speech=True,
@@ -348,6 +348,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
         duplex.on("delegation_created", lambda ev: self.emit("delegation_created", ev))
+        duplex.on("_delegated_response", lambda ev: self.emit("_delegated_response", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(
@@ -703,8 +704,10 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._pending_reply.set_exception(RealtimeError(reason))
 
     async def aclose(self) -> None:
+        await (await self._release_and_close())
+
+    async def _release_and_close(self) -> asyncio.Future[None]:
         await aio.cancel_and_wait(self._segment_atask)
         self._close_burst()
         self._fail_pending_reply("the session closed before the model replied")
-        with contextlib.suppress(Exception):
-            await self._duplex.aclose()
+        return await self._duplex._release_and_close()

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import os
 import time
 from collections.abc import AsyncIterable, Callable
@@ -18,7 +19,10 @@ from openai.types.shared_params import Reasoning
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
-from livekit.agents.llm.delegation import _resolve_delegation_detection_options
+from livekit.agents.llm.delegation import (
+    _DelegatedResponse,
+    _resolve_delegation_detection_options,
+)
 from livekit.agents.log import logger
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
@@ -50,6 +54,8 @@ _SILENCE_RMS = 0.0006
 # long enough that a pause between sentences does not split an utterance in two
 _MIN_SILENCE_DURATION = 0.8
 _MIN_SILENCE_MS = _MIN_SILENCE_DURATION * 1000
+# a caller turn ends after this much of their quiet audio when no transcript shows the pause
+_FALLBACK_SILENCE_MS = 2000
 # the service rejects an input audio burst over 5 s of audio, whatever its encoding, and audio
 # queued before session.started goes out in one burst when the session starts
 _MAX_QUEUED_INPUT_AUDIO_SAMPLES = 4 * SAMPLE_RATE
@@ -140,6 +146,7 @@ class _Speech:
 
     message_id: str
     text: str = ""
+    start_ms: int | None = None
     end_ms: int | None = None
     started_at: float = field(default_factory=time.time)
     quiet_ms: int = 0
@@ -236,6 +243,8 @@ class GPTLiveModel(llm.DuplexModel):
                 user_transcription=True,
                 # the model continues on its own once every tool result reaches the backend
                 auto_tool_reply_generation=True,
+                # the backend takes each result as it comes and continues once every call has one
+                eager_tool_outputs=True,
                 mutable_chat_context=False,
                 mutable_instructions=False,
                 # tools live on the backend model, and a client delegation has none
@@ -492,6 +501,12 @@ class GPTLiveSession(
         # reconnect; the framework's chat context is the adapter's, not this
         self._history = llm.ChatContext.empty()
         self._speech: dict[Role, _Speech] = {}
+        # model-clock ms where the model began a message or a delegation, infinite when unknown. a
+        # caller turn's reply is the first of these after the turn began; the caller's transcript
+        # runs behind the model's, so a reply can arrive before the turn it belongs to
+        self._reply_times: list[float] = []
+        # the model's current delegation and its reply time; the service runs one at a time
+        self._delegation: tuple[str, float] | None = None
 
         # delegation_id -> call_ids of its response that has not completed yet; on completion the
         # call_ids move to the open set, and stay there until each output is sent to the backend.
@@ -513,6 +528,9 @@ class GPTLiveSession(
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
+
+        # delegation_id -> the backend response in flight, reported to the framework when it ends
+        self._backend_responses: dict[str | None, _DelegatedResponse] = {}
 
         self._main_atask = asyncio.create_task(self._main_task(), name="GPTLiveSession._main")
 
@@ -685,6 +703,7 @@ class GPTLiveSession(
                     raise error from None
                 reconnecting = True
         finally:
+            self._end_speech("user")
             self._audio_ch.close()
 
     def _reset_for_reconnect(self) -> None:
@@ -696,10 +715,15 @@ class GPTLiveSession(
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
         self._speech.clear()
+        self._reply_times.clear()
+        self._delegation = None
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
         self._continuation_request_id = None
+        # the new session continues nothing the dropped one ran, so each response is its last
+        for d_id in list(self._backend_responses):
+            self._end_backend_response(d_id, error="session_reconnected")
         self._delegate_request_id = None
         self._usage_total = types.Usage()
         self._session_id = None
@@ -731,10 +755,19 @@ class GPTLiveSession(
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
+        except aiohttp.ClientResponseError as e:
+            raise self._create_ws_response_error(e) from None
         except (aiohttp.ClientError, asyncio.TimeoutError):
             raise APIConnectionError(
                 f"{self._live_model._provider_label} connection error"
             ) from None
+
+    def _create_ws_response_error(self, error: aiohttp.ClientResponseError) -> APIError:
+        """Map a refused handshake to a generic provider connection error.
+
+        Transports can override this hook to preserve gateway status and diagnostics.
+        """
+        return APIConnectionError(f"{self._live_model._provider_label} connection error")
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
@@ -919,22 +952,56 @@ class GPTLiveSession(
         if not event.delta:
             return
         speech = self._speech.get(role)
-        # a pause on the model's clock ends the message even when its fragments arrived together
-        if (
-            speech is not None
-            and speech.end_ms is not None
-            and event.start_ms is not None
-            and event.start_ms - speech.end_ms > _MIN_SILENCE_MS
-        ):
+        ends = False
+        if role == "user":
+            # the caller's turn is everything they say until the model replies, however long they
+            # pause. a fragment from after the reply starts the next turn if the caller paused
+            # there; if they talked through it, the model was talking over them and did not reply
+            if (
+                speech is not None
+                and (reply_time := self._turn_reply_time(speech)) is not None
+                and (start_time := event.start_ms) is not None
+                and start_time > reply_time
+            ):
+                ends = speech.end_ms is not None and start_time - speech.end_ms > _MIN_SILENCE_MS
+                if not ends:
+                    self._reply_times = [t for t in self._reply_times if t >= start_time]
+        else:
+            # a pause on the model's clock ends its message even when its fragments arrived
+            # together, and so does the caller speaking within a silence of the model's
+            user = self._speech.get("user")
+            ends = (
+                speech is not None
+                and speech.end_ms is not None
+                and event.start_ms is not None
+                and (
+                    event.start_ms - speech.end_ms > _MIN_SILENCE_MS
+                    or (
+                        user is not None
+                        and user.start_ms is not None
+                        and user.end_ms is not None
+                        and speech.end_ms <= user.start_ms
+                        and user.end_ms <= event.start_ms
+                    )
+                )
+            )
+        if ends:
             self._end_speech(role)
             speech = None
         if speech is None:
             speech = self._speech[role] = _Speech(
                 message_id=utils.shortuuid("speech_"),
+                start_ms=event.start_ms,
                 # the service runs one delegation at a time, so work already running covers the
                 # turn: the model starts none for it, and it would queue behind the work anyway
                 delegated=role == "user" and self.background_work_running,
             )
+            if role == "assistant":
+                self._reply_times.append(math.inf if event.start_ms is None else event.start_ms)
+            elif event.start_ms is not None:
+                # a message the model began before this turn did is no reply to it
+                start_ms = event.start_ms
+                self._reply_times = [t for t in self._reply_times if t > start_ms]
             self._history.insert(
                 llm.ChatMessage(
                     id=speech.message_id,
@@ -946,8 +1013,23 @@ class GPTLiveSession(
             )
             if role == "user":
                 self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        if role == "assistant" and (user := self._speech.get("user")) is not None:
+            # the model's transcript reaching past the caller's pause ends their replied turn: it
+            # runs behind the caller's, so their words from before it have arrived already
+            if (
+                user.end_ms is not None
+                and event.start_ms is not None
+                and event.start_ms - user.end_ms > _MIN_SILENCE_MS
+                and self._turn_reply_time(user) is not None
+            ):
+                self._end_speech("user")
         speech.text += event.delta
-        speech.quiet_ms = 0
+        # the next fragment arrives only once its span ends, so the caller's quiet starts here
+        speech.quiet_ms = (
+            event.start_ms - event.end_ms
+            if event.start_ms is not None and event.end_ms is not None
+            else 0
+        )
         if event.end_ms is not None:
             speech.end_ms = max(speech.end_ms or 0, event.end_ms)
         if isinstance(message := self._history.get_by_id(speech.message_id), llm.ChatMessage):
@@ -972,10 +1054,18 @@ class GPTLiveSession(
                 ),
             )
 
+    def _turn_reply_time(self, user: _Speech) -> float | None:
+        """The first reply time after the caller's turn began, or None."""
+        start_ms = user.start_ms
+        return min((t for t in self._reply_times if start_ms is None or t > start_ms), default=None)
+
     def _end_speech(self, role: Role) -> None:
         """Close a speaker's message; for the user this is the end of their turn."""
         if (speech := self._speech.pop(role, None)) is None or role != "user":
             return
+        # the turn's reply is spent, with every earlier or untimed one; later ones await their turn
+        if (reply_time := self._turn_reply_time(speech)) is not None:
+            self._reply_times = [t for t in self._reply_times if reply_time < t < math.inf]
         # the final transcript goes out first, so nothing waits for one after the stop
         self.emit(
             "input_audio_transcription_completed",
@@ -1003,6 +1093,11 @@ class GPTLiveSession(
         manual = (
             event.client_event_id is not None and event.client_event_id == self._delegate_request_id
         )
+        if not manual:
+            # delegating is the model replying to the caller, whether or not it speaks
+            reply_time = math.inf if event.offset_ms is None else event.offset_ms
+            self._reply_times.append(reply_time)
+            self._delegation = (delegation.id, reply_time)
         # Azure never echoes client_event_id, so there any delegation without one ends the wait
         if manual or (self._opts.is_azure and event.client_event_id is None):
             self._delegate_request_id = None
@@ -1043,10 +1138,29 @@ class GPTLiveSession(
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
             self._continuation_request_id = None
+            self._end_backend_response(d_id, error="superseded")
+            self._backend_responses[d_id] = _DelegatedResponse(
+                delegation_id=d_id,
+                provider=self._live_model.provider,
+                model=self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
+                instructions=self._opts.responses.get("instructions"),
+                started_at=time.time(),
+                ended_at=0.0,
+            )
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
             item = event.item
+            if (
+                item is not None
+                and item.type == "message"
+                and item.status == "completed"
+                and (backend := self._backend_responses.get(d_id)) is not None
+            ):
+                for part in item.content or []:
+                    # parsed without validation, so a part the service reshapes is skipped
+                    if isinstance(part, types.OutputContentPart):
+                        backend.text += part.text or part.refusal or ""
             if item is None or item.type != "function_call":
                 return
             if item.status != "completed":
@@ -1077,39 +1191,53 @@ class GPTLiveSession(
                 name=item.name,
                 arguments=item.arguments,
             )
+            # the tool reads the chat context, so the request it serves is committed first, once.
+            # a turn that began after the delegation is not its request
+            if (
+                (user := self._speech.get("user")) is not None
+                and self._delegation is not None
+                and self._delegation[0] == d_id
+                and (user.start_ms or 0) < self._delegation[1]
+            ):
+                self._delegation = None
+                self._end_speech("user")
             self._history.insert(fnc_call)
+            if (backend := self._backend_responses.get(d_id)) is not None:
+                backend.function_calls.append(fnc_call)
             self.emit("function_call", fnc_call)
 
         elif event.type == "response.completed":
+            backend = self._backend_responses.get(d_id)
+            metrics: LLMMetrics | None = None
             if response is not None and (usage := response.usage) is not None:
                 # the voice model is billed by duration; these tokens are the backend's and are
                 # reported under its name
-                self.emit(
-                    "metrics_collected",
-                    LLMMetrics(
-                        label=self._live_model.label,
-                        request_id=response.id or "",
-                        timestamp=time.time(),
-                        duration=0,
-                        ttft=-1,
-                        cancelled=False,
-                        prompt_tokens=usage.input_tokens,
-                        prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
-                        cache_creation_tokens=usage.input_tokens_details.cache_write_tokens,
-                        completion_tokens=usage.output_tokens,
-                        reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
-                        total_tokens=usage.total_tokens,
-                        tokens_per_second=0,
-                        metadata=Metadata(
-                            model_name=response.model
-                            or self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
-                            model_provider=self._live_model.provider,
-                        ),
+                metrics = LLMMetrics(
+                    label=self._live_model.label,
+                    request_id=response.id or "",
+                    timestamp=time.time(),
+                    duration=time.time() - backend.started_at if backend else 0,
+                    ttft=-1,
+                    cancelled=False,
+                    prompt_tokens=usage.input_tokens,
+                    prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
+                    cache_creation_tokens=usage.input_tokens_details.cache_write_tokens,
+                    completion_tokens=usage.output_tokens,
+                    reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
+                    total_tokens=usage.total_tokens,
+                    tokens_per_second=0,
+                    metadata=Metadata(
+                        model_name=response.model
+                        or self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
+                        model_provider=self._live_model.provider,
                     ),
                 )
+                self.emit("metrics_collected", metrics)
+            # a response that called a tool is continued once every result is in
             if (calls := self._backend_running_responses.pop(d_id, None)) is not None:
                 self._backend_open_calls |= calls
             self._maybe_continue_response()
+            self._end_backend_response(d_id, response=response, metrics=metrics)
 
         elif event.type in ("response.failed", "response.incomplete"):
             logger.warning(
@@ -1121,10 +1249,45 @@ class GPTLiveSession(
                     "lk.pii.incomplete_details": response.incomplete_details if response else None,
                 },
             )
+            # a code, never the message: it is free-form and may carry user data
+            error = (response.error if response else None) or {}
+            incomplete = (response.incomplete_details if response else None) or {}
             # the service discards a failed response's calls: an output for one is refused, so
             # it goes to the voice model as context instead
             self._backend_running_responses.pop(d_id, None)
+            # an output sent while the response ran still continues the chain
             self._maybe_continue_response()
+            self._end_backend_response(
+                d_id,
+                response=response,
+                error=error.get("code") or incomplete.get("reason") or event.type,
+            )
+
+    def _end_backend_response(
+        self,
+        d_id: str | None,
+        *,
+        response: types.ResponseSnapshot | None = None,
+        metrics: LLMMetrics | None = None,
+        error: str | None = None,
+    ) -> None:
+        if (backend := self._backend_responses.pop(d_id, None)) is None:
+            return
+        backend.ended_at = time.time()
+        backend.metrics = metrics
+        backend.error = error
+        # the backend continues a delegation only when asked: this response is its last unless
+        # another of its responses runs, a call waits for its output, or a continuation is pending
+        backend.final = not (
+            d_id in self._backend_running_responses
+            or self._backend_open_calls
+            or self._backend_response_pending
+            or self._continuation_request_id
+        )
+        if response is not None:
+            backend.response_id = response.id
+            backend.response_model = response.model
+        self.emit("_delegated_response", backend)
 
     def _maybe_continue_response(self) -> None:
         # one response.create continues the chain, and only once nothing is still asking and every
@@ -1248,10 +1411,11 @@ class GPTLiveSession(
         return self._tools.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # the caller's turn ends on their own audio: this much pushed since their last fragment
+        # without a transcript to show the pause, the caller's turn ends on their own audio
+        # pushed since their last fragment
         if (speech := self._speech.get("user")) is not None:
             speech.quiet_ms += round(frame.duration * 1000)
-            if speech.quiet_ms >= _MIN_SILENCE_MS:
+            if speech.quiet_ms >= _FALLBACK_SILENCE_MS:
                 self._end_speech("user")
 
         if self._input_resampler and frame.sample_rate != self._input_resampler._input_rate:
@@ -1369,12 +1533,19 @@ class GPTLiveSession(
         self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
 
     async def aclose(self) -> None:
+        closed = await self._release_and_close()
+        with contextlib.suppress(asyncio.CancelledError):
+            await closed
+
+    async def _release_and_close(self) -> asyncio.Future[None]:
         await super().aclose()
+        for d_id in list(self._backend_responses):
+            self._end_backend_response(d_id, error="session_closed")
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_atask
+        # the main task sends session.close, then waits for the final usage in session.closed
+        return self._main_atask
 
     # framework hooks
 

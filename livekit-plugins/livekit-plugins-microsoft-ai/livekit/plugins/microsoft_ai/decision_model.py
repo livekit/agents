@@ -99,13 +99,14 @@ class DecisionModel(llm.DecisionModel):
         input: str,
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
+        extra_headers: Mapping[str, str],
     ) -> DecisionResponse:
         questions = {name: systemone.encode_question(d) for name, d in decisions.items()}
         session = self._session or utils.http_context.http_session()
         try:
             async with session.post(
                 self._client.url,
-                headers=self._client.headers,
+                headers={**extra_headers, **self._client.headers},
                 json={"model": self._model, "state": input, "questions": questions},
                 timeout=aiohttp.ClientTimeout(total=conn_options.timeout),
                 allow_redirects=False,

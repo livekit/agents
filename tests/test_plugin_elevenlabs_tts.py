@@ -791,6 +791,35 @@ def test_dialogue_multi_stream_url_omits_regular_tts_only_params() -> None:
     assert "auto_mode" not in url
 
 
+def test_build_synthesize_body_includes_pronunciation_dictionaries() -> None:
+    tts = elevenlabs_tts.TTS(
+        api_key="test-key",
+        model="eleven_turbo_v2_5",
+        pronunciation_dictionary_locators=[
+            elevenlabs_tts.PronunciationDictionaryLocator(
+                pronunciation_dictionary_id="dict-1",
+                version_id="v1",
+            )
+        ],
+    )
+    body = elevenlabs_tts._build_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there"
+    )
+
+    assert body["pronunciation_dictionary_locators"] == [
+        {"pronunciation_dictionary_id": "dict-1", "version_id": "v1"}
+    ]
+
+
+def test_build_synthesize_body_omits_pronunciation_dictionaries_when_not_set() -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_turbo_v2_5")
+    body = elevenlabs_tts._build_synthesize_body(  # pyright: ignore[reportPrivateUsage]
+        tts._opts, "hello there"
+    )
+
+    assert "pronunciation_dictionary_locators" not in body
+
+
 def test_build_dialogue_synthesize_body_single_turn() -> None:
     tts = elevenlabs_tts.TTS(
         api_key="test-key",
