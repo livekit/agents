@@ -13,6 +13,7 @@ import pytest
 from google.auth.credentials import AnonymousCredentials
 from google.auth.exceptions import DefaultCredentialsError
 
+import livekit.plugins.google.stt as google_stt
 from livekit.agents import APIConnectionError
 from livekit.plugins.google import STT, TTS
 
@@ -37,6 +38,7 @@ def _isolate_google_adc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
         raise DefaultCredentialsError("Application Default Credentials disabled in test")
 
     monkeypatch.setattr("google.auth.default", _raise_no_adc)
+    monkeypatch.setattr(google_stt, "gauth_default", _raise_no_adc)
 
 
 class _ProjectCredentials(AnonymousCredentials):
