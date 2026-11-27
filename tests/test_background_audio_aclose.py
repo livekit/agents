@@ -86,3 +86,14 @@ async def test_cancelled_aclose_keeps_thinking_sounds() -> None:
     release.set()
     player._play_tasks.remove(slow)
     await player.aclose()
+
+
+@pytest.mark.asyncio
+async def test_loop_audio_frames_ends_on_undecodable_file(tmp_path) -> None:
+    from livekit.agents.voice.background_audio import _loop_audio_frames
+
+    path = tmp_path / "pointer.mp3"
+    path.write_text("version https://git-lfs.github.com/spec/v1\n")
+
+    frames = [f async for f in _loop_audio_frames(str(path))]
+    assert frames == []
