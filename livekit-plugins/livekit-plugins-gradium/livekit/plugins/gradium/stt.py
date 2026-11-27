@@ -44,6 +44,8 @@ from .models import LogLevel
 from .tts import _close_error
 
 STTEncoding = Literal["pcm_s16le"]
+# the setup's input_format for each supported encoding
+_INPUT_FORMATS: dict[str, str] = {"pcm_s16le": "pcm"}
 
 # Define bytes per frame for different encoding types
 bytes_per_frame = {
@@ -207,6 +209,10 @@ class STT(stt.STT):
         )
 
         if is_given(encoding):
+            if encoding not in _INPUT_FORMATS:
+                raise ValueError(
+                    f"Unsupported encoding {encoding!r}, use one of {list(_INPUT_FORMATS)}"
+                )
             self._opts.encoding = encoding
 
         self._session = http_session
@@ -332,7 +338,10 @@ class SpeechStream(stt.SpeechStream):
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
-            samples_per_buffer = 1920
+            # update_options reconnects, so each connection reads the current size
+            samples_per_buffer = max(
+                1, round(self._opts.sample_rate * self._opts.buffer_size_seconds)
+            )
 
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
@@ -712,7 +721,7 @@ class SpeechStream(stt.SpeechStream):
         setup_msg: dict[str, Any] = {
             "type": "setup",
             "model_name": self._model_name,
-            "input_format": "pcm",
+            "input_format": _INPUT_FORMATS[self._opts.encoding],
         }
         json_config: dict[str, Any] = {"language": self._opts.language.language}
         if self._opts.temperature is not None:
