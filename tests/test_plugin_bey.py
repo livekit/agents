@@ -1,4 +1,4 @@
-"""Tests for the Beyond Presence plugin: retry classification when starting a session.
+"""Tests for the Beyond Presence plugin: the session start request and its retries.
 
 Same behaviour as the Anam fix in #7314: a 4xx fails on the first attempt with the
 provider's status, a 5xx is retried `max_retry` times, and a 5xx that persists is
@@ -41,19 +41,23 @@ class _ScriptedSession:
     def __init__(self, script: list[int | BaseException]) -> None:
         self._script = list(script)
         self.posts = 0
+        self.bodies: list[Any] = []
 
     def post(self, url: str, **kwargs: Any) -> _Response:
         self.posts += 1
+        self.bodies.append(kwargs.get("json"))
         step = self._script.pop(0) if len(self._script) > 1 else self._script[0]
         if isinstance(step, BaseException):
             raise step
         return _Response(step)
 
 
-def _avatar(session: _ScriptedSession):
+def _avatar(session: _ScriptedSession, **kwargs: Any):
     from livekit.plugins.bey import AvatarSession
 
-    avatar = AvatarSession(api_key="test-key", api_url="http://bey.test", conn_options=_OPTS)
+    avatar = AvatarSession(
+        api_key="test-key", api_url="http://bey.test", conn_options=_OPTS, **kwargs
+    )
     avatar._http_session = session  # type: ignore[assignment]
     return avatar
 
@@ -98,3 +102,23 @@ async def test_network_error_is_retried_and_chained():
 
     assert session.posts == _OPTS.max_retry + 1
     assert isinstance(exc_info.value.__cause__, aiohttp.ClientConnectionError)
+
+
+async def test_video_options_are_left_out_unless_set():
+    """The API picks the resolution and bitrate when the request leaves them out."""
+    session = _ScriptedSession([200])
+
+    await _avatar(session)._start_agent("wss://livekit.test", "token")
+
+    assert set(session.bodies[0]) == {"transport", "avatar_id", "url", "token"}
+
+
+async def test_video_options_are_sent_when_set():
+    session = _ScriptedSession([200])
+
+    await _avatar(session, video_resolution="720p", max_video_bitrate_bps=1_500_000)._start_agent(
+        "wss://livekit.test", "token"
+    )
+
+    assert session.bodies[0]["video_resolution"] == "720p"
+    assert session.bodies[0]["max_video_bitrate_bps"] == 1_500_000

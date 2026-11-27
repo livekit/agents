@@ -17,12 +17,13 @@
 See https://docs.livekit.io/agents/integrations/avatar/bey/ for more information.
 """
 
-from .avatar import AvatarSession, BeyException
+from .avatar import AvatarSession, BeyException, VideoResolution
 from .version import __version__
 
 __all__ = [
     "BeyException",
     "AvatarSession",
+    "VideoResolution",
     "__version__",
 ]
 
