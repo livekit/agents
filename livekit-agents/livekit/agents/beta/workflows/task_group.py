@@ -192,7 +192,11 @@ class TaskGroup(AgentTask[TaskGroupResult]):
             ],
         ) -> None:
             for task_id in task_ids:
-                if task_id not in self._registered_factories or task_id not in self._visited_tasks:
+                if (
+                    task_id == active_task_id
+                    or task_id not in self._registered_factories
+                    or task_id not in self._visited_tasks
+                ):
                     raise ToolError(f"unable to regress, invalid task id {task_id}")
 
             if not self._current_task.done():
