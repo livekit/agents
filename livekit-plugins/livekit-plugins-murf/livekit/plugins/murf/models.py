@@ -29,7 +29,7 @@ TTSLocales = Literal[
     "bg-BG",
 ]
 
-TTSModels = Literal["GEN2", "FALCON"]
+TTSModels = Literal["falcon-2.1"]
 
 TTSStyles = Literal[
     "Promo",
@@ -57,5 +57,5 @@ TTSEncoding = Literal[
     "pcm",  # pcm_s16le
 ]
 
-TTSDefaultVoiceId = "en-US-matthew"
-TTSDefaultVoiceStyle = "Conversation"
+TTSDefaultVoiceId = "Gordon"
+TTSDefaultVoiceStyle = "Conversational"

@@ -303,6 +303,7 @@ class STT(stt.STT):
                 " OPENAI_API_KEY environment variable"
             )
 
+        self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,
@@ -373,6 +374,7 @@ class STT(stt.STT):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """  # noqa: E501
 
+        timeout = timeout or httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0)
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
@@ -384,12 +386,19 @@ class STT(stt.STT):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            timeout=timeout,
+            http_client=httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
         )  # type: ignore
 
-        return STT(
+        stt = STT(
             language=language,
             detect_language=detect_language,
             model=model,
@@ -402,6 +411,8 @@ class STT(stt.STT):
             use_realtime=use_realtime,
             vad=vad,
         )
+        stt._owns_client = True
+        return stt
 
     @staticmethod
     def with_ovhcloud(
@@ -602,12 +613,14 @@ class STT(stt.STT):
         await ws.close()
 
     async def aclose(self) -> None:
-        """Close the websocket connection pool this STT owns.
+        """Close the websocket connection pool and the OpenAI client this STT owns.
 
         Without this the pool's ``close_cb`` never runs for pooled sockets, so
         they stay open after the STT is closed.
         """
         await self._pool.aclose()
+        if self._owns_client:
+            await self._client.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

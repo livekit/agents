@@ -3,12 +3,159 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from dataclasses import dataclass
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 import pytest
 
-pytestmark = pytest.mark.plugin("gradium")
+from livekit import rtc
+from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents.stt import SpeechEventType
+
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
+
+# no retries: the tests assert on the behaviour of the single attempt
+CONN_OPTS = APIConnectOptions(max_retry=0, timeout=5)
+SAMPLE_RATE = 24000
+VAD_HORIZONS = (0.5, 1.0, 2.0, 3.0)
+
+READY = {
+    "type": "ready",
+    "request_id": "req",
+    "model_name": "default",
+    "sample_rate": SAMPLE_RATE,
+    "frame_size": 1920,
+    "delay_in_frames": 3,
+}
+EOS = {"type": "end_of_stream"}
+SILENT = (0.99,) * len(VAD_HORIZONS)
+# the reply to the flush of a stream's first VAD trip
+FLUSHED = {"type": "flushed", "flush_id": 1}
+
+
+def _text(text: str, start_s: float = 0.0) -> dict[str, Any]:
+    return {"type": "text", "text": text, "start_s": start_s}
+
+
+def _vad_step(idx: int, probs: tuple[float, ...]) -> dict[str, Any]:
+    return {
+        "type": "step",
+        "step_idx": idx,
+        "step_duration_s": 0.08,
+        "total_duration_s": idx * 0.08,
+        "vad": [
+            {"horizon_s": h, "inactivity_prob": p}
+            for h, p in zip(VAD_HORIZONS, probs, strict=False)
+        ],
+    }
+
+
+@dataclass
+class _Msg:
+    type: Any
+    data: Any = None
+    extra: Any = None
+
+
+class FakeWebSocket:
+    """Scripted server side.
+
+    `frames` are replayed in order (JSON dicts as TEXT, the string "close" as a CLOSE frame
+    with `close_code`). Once exhausted, receive() blocks until the client sends
+    end_of_stream, then replays `after_eos`, by default the server's EOS and a normal close.
+    """
+
+    def __init__(
+        self,
+        frames: list[Any],
+        *,
+        after_eos: list[Any] | None = None,
+        close_code: int = 1000,
+        fail_send_on: str | None = None,
+    ) -> None:
+        self._frames = list(frames)
+        self._after_eos = [EOS, "close"] if after_eos is None else list(after_eos)
+        self.close_code = close_code
+        self._fail_send_on = fail_send_on
+        self.sent: list[dict[str, Any]] = []
+        self._client_eos = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        msg = json.loads(data)
+        if msg.get("type") == self._fail_send_on:
+            self._client_eos.set()
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        self.sent.append(msg)
+        if msg.get("type") == "end_of_stream":
+            self._client_eos.set()
+
+    async def ping(self) -> None:
+        pass
+
+    async def receive(self, timeout: float | None = None) -> _Msg:
+        if not self._frames:
+            await self._client_eos.wait()
+            self._frames, self._after_eos = self._after_eos, []
+            if not self._frames:
+                return _Msg(aiohttp.WSMsgType.CLOSED)
+        frame = self._frames.pop(0)
+        if frame == "close":
+            return _Msg(aiohttp.WSMsgType.CLOSE, self.close_code, "")
+        return _Msg(aiohttp.WSMsgType.TEXT, json.dumps(frame))
+
+    async def close(self) -> bool:
+        return True
+
+
+class FakeSession:
+    def __init__(self, ws: FakeWebSocket) -> None:
+        self.ws = ws
+        self.connects: list[tuple[str, dict[str, Any]]] = []
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+        self.connects.append((url, kwargs))
+        return self.ws
+
+
+def _make_stt(
+    frames: list[Any],
+    *,
+    after_eos: list[Any] | None = None,
+    fail_send_on: str | None = None,
+    **kwargs: Any,
+):
+    from livekit.plugins.gradium import STT
+
+    ws = FakeWebSocket(frames, after_eos=after_eos, fail_send_on=fail_send_on)
+    session = FakeSession(ws)
+    stt = STT(api_key="test-key", http_session=session, **kwargs)  # type: ignore[arg-type]
+    return stt, session, ws
+
+
+def _audio_frame(duration_s: float = 0.08) -> rtc.AudioFrame:
+    return rtc.AudioFrame.create(
+        sample_rate=SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=int(SAMPLE_RATE * duration_s),
+    )
+
+
+async def _collect_until(stream, predicate, timeout: float = 3.0) -> list[Any]:
+    """Drain events until `predicate` matches or the stream ends."""
+    events: list[Any] = []
+
+    async def _drain() -> None:
+        async for ev in stream:
+            events.append(ev)
+            if predicate(ev):
+                return
+
+    await asyncio.wait_for(_drain(), timeout)
+    return events
 
 
 @pytest.mark.parametrize("stop_s", [0.4, 0.0, None])
@@ -30,14 +177,14 @@ async def test_endpoint_uses_end_text_timing(monkeypatch, stop_s):
     send({"type": "text", "text": "hello", "start_s": 0.1})
     if stop_s is not None:
         send({"type": "end_text", "stop_s": stop_s})
-    for _ in range(7):
-        send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
+    send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
+    send({"type": "flushed", "flush_id": 1})
     send({"type": "text", "text": "again", "start_s": 1.0})
-    for _ in range(7):
-        send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
+    send({"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]})
+    send({"type": "flushed", "flush_id": 2})
     ws = SimpleNamespace(receive=messages.get, send_str=AsyncMock(), close=AsyncMock())
     monkeypatch.setattr(gradium_stt.SpeechStream, "_connect_ws", AsyncMock(return_value=ws))
-    provider = gradium_stt.STT(api_key="test-key", http_session=SimpleNamespace(), vad_flush=False)
+    provider = gradium_stt.STT(api_key="test-key", http_session=SimpleNamespace())
     stream = provider.stream()
     stream.start_time_offset = 7.0
     endpoints = 0
@@ -59,6 +206,68 @@ async def test_endpoint_uses_end_text_timing(monkeypatch, stop_s):
         await provider.aclose()
 
 
+async def test_server_log_frames_are_logged_at_their_level(monkeypatch, caplog):
+    import logging
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import aiohttp
+
+    from livekit.agents import stt
+    from livekit.plugins.gradium import stt as gradium_stt
+
+    messages = asyncio.Queue()
+    for data in (
+        {"type": "log", "level": "warning", "message": "delay_in_tokens is deprecated"},
+        {"type": "log", "level": "info", "message": "fyi"},
+        {"type": "log", "level": "unheard-of", "message": "odd"},
+        {"type": "text", "text": "hello", "start_s": 0.1},
+    ):
+        messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(data), ""))
+    ws = SimpleNamespace(receive=messages.get, send_str=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr(gradium_stt.SpeechStream, "_connect_ws", AsyncMock(return_value=ws))
+    provider = gradium_stt.STT(api_key="test-key", http_session=SimpleNamespace())
+    stream = provider.stream()
+    try:
+        with caplog.at_level(logging.DEBUG, logger="livekit.plugins.gradium"):
+            async with asyncio.timeout(2):
+                async for event in stream:
+                    if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
+                        break
+    finally:
+        await stream.aclose()
+        await provider.aclose()
+
+    logged = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert (logging.WARNING, "Gradium warning: delay_in_tokens is deprecated") in logged
+    assert (logging.INFO, "Gradium info: fyi") in logged
+    # a level this plugin does not know is still surfaced, as a warning
+    assert (logging.WARNING, "Gradium warning: odd") in logged
+    assert not any("Unknown message type" in message for _, message in logged)
+
+
+@pytest.mark.parametrize(
+    ("ctor", "expected"),
+    [({}, None), ({"log_level": "warning"}, "warning"), ({"log_level": "error"}, "error")],
+)
+async def test_setup_asks_for_server_logs_only_when_enabled(ctor, expected):
+    from unittest.mock import AsyncMock
+
+    from livekit.plugins.gradium import STT
+
+    ws = AsyncMock()
+    session = MagicMock()
+    session.ws_connect = AsyncMock(return_value=ws)
+    stream = STT(api_key="test-key", http_session=session, **ctor).stream()
+    try:
+        await stream._connect_ws()
+    finally:
+        await stream.aclose()
+
+    setup_msg = json.loads(ws.send_str.call_args_list[0].args[0])
+    assert setup_msg.get("log_level") == expected
+
+
 def test_stt_default_language():
     """STT defaults to English."""
     from livekit.plugins.gradium import STT
@@ -66,95 +275,6 @@ def test_stt_default_language():
     stt = STT(api_key="test-key")
 
     assert stt._opts.language == "en"
-
-
-@pytest.mark.no_concurrent
-@pytest.mark.parametrize("vad_flush", [True, False])
-async def test_synthetic_vad_silence_does_not_shift_later_turns(monkeypatch, vad_flush):
-    import base64
-
-    from livekit.agents import APIConnectOptions, stt
-    from livekit.plugins.gradium import STT
-
-    from .stt_reconnect import ReconnectClock, wait_until
-
-    clock = ReconnectClock(monkeypatch)
-    options = {} if vad_flush else {"vad_flush": False}
-    provider = STT(api_key="test-key", http_session=clock, **options)
-    stream = provider.stream(conn_options=APIConnectOptions(max_retry=0))
-    stream.start_time_offset = 7.0
-
-    def sent_duration(ws):
-        return sum(
-            len(base64.b64decode(data["audio"])) / (24000 * 2)
-            for message in ws.sent
-            if isinstance(message, str) and (data := json.loads(message))["type"] == "audio"
-        )
-
-    async def check_turn(index, *, captured_at, provider_start, expected_end):
-        await clock.push(stream, captured_at=captured_at)
-        stream.flush()
-        ws = clock.sockets[-1]
-        await wait_until(lambda: sent_duration(ws) >= provider_start + 1.0 - 1e-6)
-        ws.respond({"type": "text", "text": "hello", "start_s": provider_start + 0.1})
-        step = {"type": "step", "vad": [{}, {}, {"inactivity_prob": 1.0}]}
-        ws.respond(step)
-        if vad_flush:
-            await wait_until(lambda: sent_duration(ws) >= provider_start + 1.48 - 1e-6)
-        # The boundary precedes the padding, even when its reply arrives after it.
-        ws.respond({"type": "end_text", "stop_s": provider_start + 0.4})
-        for _ in range(6):
-            ws.respond(step)
-        async for event in stream:
-            if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT:
-                assert event.alternatives[0].start_time == pytest.approx(expected_end - 0.3)
-            if event.type == stt.SpeechEventType.END_OF_SPEECH:
-                assert event.alternatives[0].end_time == pytest.approx(expected_end)
-                return
-        pytest.fail(f"missing endpoint for turn {index}")
-
-    try:
-        import asyncio
-
-        async with asyncio.timeout(5):
-            for index in range(3):
-                await check_turn(
-                    index,
-                    captured_at=1000.0 + index,
-                    provider_start=index * (1.48 if vad_flush else 1.0),
-                    expected_end=7.4 + index,
-                )
-            stream.update_options(buffer_size_seconds=0.1)
-            await wait_until(lambda: len(clock.sockets) == 2)
-            await check_turn(3, captured_at=1010.0, provider_start=0.0, expected_end=17.4)
-    finally:
-        await stream.aclose()
-        await provider.aclose()
-
-
-def test_padded_timeline_settles_padding_behind_each_timestamp():
-    from livekit.plugins.gradium.stt import _PaddedTimeline
-
-    sample_rate = 24000
-    timeline = _PaddedTimeline(sample_rate)
-    turns = 1000
-    for turn in range(turns):
-        provider_start = turn * 1.48
-        timeline.add_audio(sample_rate)
-        assert timeline.remove_padding(provider_start + 0.1) == pytest.approx(turn + 0.1)
-        timeline.add_padding(int(0.48 * sample_rate))
-        # the boundary precedes padding that was sent before its reply arrived
-        assert timeline.remove_padding(provider_start + 0.4) == pytest.approx(turn + 0.4)
-        # a timestamp inside the padding stays at the padding's start
-        assert timeline.remove_padding(provider_start + 1.2) == pytest.approx(turn + 1.0)
-        assert len(timeline._pending_padding) <= 1
-
-    assert timeline.remove_padding(turns * 1.48 + 0.1) == pytest.approx(turns + 0.1)
-    assert not timeline._pending_padding
-
-    timeline.reset()
-    timeline.add_audio(sample_rate)
-    assert timeline.remove_padding(0.5) == pytest.approx(0.5)
 
 
 def test_stt_custom_language():
@@ -289,10 +409,21 @@ class _FakeMessage:
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.incoming: asyncio.Queue[dict] = asyncio.Queue()
+        self.sent: list[dict] = []
         self.close_code = None
 
     async def send_str(self, message: str) -> None:
-        pass
+        self.sent.append(json.loads(message))
+
+    def sent_of(self, type_: str) -> list[dict]:
+        return [msg for msg in self.sent if msg["type"] == type_]
+
+    async def wait_sent(self, type_: str, count: int = 1) -> list[dict]:
+        for _ in range(500):
+            if len(self.sent_of(type_)) >= count:
+                return self.sent_of(type_)
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"expected {count} {type_} messages, got {self.sent}")
 
     async def ping(self) -> None:
         pass
@@ -395,9 +526,8 @@ async def test_vad_start_of_speech_without_text_still_ends_the_turn():
     collector = _EventCollector(stream)
     try:
         session.ws.incoming.put_nowait(_step(0.2))
-        # the first positive step starts the countdown, delay_in_tokens (6) more end the turn
-        for _ in range(7):
-            session.ws.incoming.put_nowait(_step(0.95))
+        session.ws.incoming.put_nowait(_step(0.95))
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
         session.ws.incoming.put_nowait(_step(0.2))
 
         events = await collector.wait_for(4)
@@ -457,9 +587,8 @@ async def test_vad_start_of_speech_with_vad_bucket_zero():
             return step
 
         session.ws.incoming.put_nowait(bucket_zero_step(0.2))
-        # the first positive step starts the countdown, delay_in_tokens (6) more end the turn
-        for _ in range(7):
-            session.ws.incoming.put_nowait(bucket_zero_step(0.95))
+        session.ws.incoming.put_nowait(bucket_zero_step(0.95))
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
 
         events = await collector.wait_for(3)
         assert [ev.type for ev in events] == [
@@ -467,6 +596,348 @@ async def test_vad_start_of_speech_with_vad_bucket_zero():
             SpeechEventType.FINAL_TRANSCRIPT,
             SpeechEventType.END_OF_SPEECH,
         ]
+    finally:
+        await stream.aclose()
+
+
+def _final_texts(events: list) -> list[str]:
+    return [ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+
+
+@contextlib.asynccontextmanager
+async def _open_stream(**options: Any):
+    """A stream on a `_FakeWebSocket`, with its events collected in the background."""
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stream = STT(api_key="test-key", http_session=session, **options).stream()
+    try:
+        yield session.ws, stream, _EventCollector(stream)
+    finally:
+        await stream.aclose()
+
+
+async def test_vad_trip_flushes_once_and_only_its_reply_ends_the_turn():
+    """The trip sends one flush and no audio, and the turn stays open until the `flushed`
+    with that id: not when the VAD flickers, not after the model delay, not on another id.
+    Ending it earlier would lose the words the model still holds."""
+    async with _open_stream() as (ws, _, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        # a trip, a flicker, then more steps than any model delay
+        for prob in (0.95, 0.2, *(0.95,) * 20):
+            ws.incoming.put_nowait(_step(prob))
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 99})
+        await collector.drain(ws)
+        # nothing but the setup and one flush: no silence pushes the words out
+        assert ws.sent[1:] == [{"type": "flush", "flush_id": 1}]
+        assert _final_texts(collector.events) == []
+
+        # the word the model held comes out before the reply
+        ws.incoming.put_nowait(_text("world", 0.8))
+        ws.incoming.put_nowait(FLUSHED)
+        events = await collector.wait_for(6)
+        assert [ev.type for ev in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert _final_texts(events) == ["hello world"]
+
+
+async def _keep_alive(ws: _FakeWebSocket, seconds: int, inactivity_prob: float = 0.95) -> None:
+    """Send one step per second, as a live server does and a silent socket would not."""
+    for _ in range(seconds):
+        ws.incoming.put_nowait(_step(inactivity_prob))
+        await asyncio.sleep(1)
+
+
+async def test_vad_flush_without_a_reply_ends_the_turn_at_the_connection_timeout(caplog):
+    """A server that never answers the flush must not hold the turn open: the words the
+    model already produced are finalized once the connection timeout runs out, and the
+    next turn flushes again."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    timeout = DEFAULT_API_CONNECT_OPTIONS.timeout
+    async with _open_stream() as (ws, _, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+
+        await _keep_alive(ws, int(timeout) - 1)
+        assert _final_texts(collector.events) == []
+        await _keep_alive(ws, 2)
+        assert _final_texts(collector.events) == ["hello"]
+        assert "did not answer a flush" in caplog.text
+
+        ws.incoming.put_nowait(_text("again", 5.0))
+        ws.incoming.put_nowait(_step(0.95))
+        assert [m["flush_id"] for m in await ws.wait_sent("flush", 2)] == [1, 2]
+
+
+async def test_vad_confirm_steps_hold_the_turn_until_the_pause_is_confirmed():
+    """With `vad_confirm_steps=2` the flush reply alone does not end the turn: the VAD must
+    also stay tripped for two more steps, so the pause is not a flicker."""
+    async with _open_stream(vad_confirm_steps=2) as (ws, _, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        ws.incoming.put_nowait(FLUSHED)
+        ws.incoming.put_nowait(_step(0.95))
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == []
+
+        ws.incoming.put_nowait(_step(0.95))
+        await collector.wait_for(5)
+        assert _final_texts(collector.events) == ["hello"]
+
+
+async def test_answered_flush_waits_for_the_confirmations_past_the_connection_timeout(caplog):
+    """The connection timeout bounds the wait for the server's reply, not for the pause
+    confirmation: once the flush is answered, only `vad_confirm_steps` ends the turn, even
+    when dips keep the count short past the timeout."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    timeout = DEFAULT_API_CONNECT_OPTIONS.timeout
+    async with _open_stream(vad_confirm_steps=3) as (ws, _, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        ws.incoming.put_nowait(FLUSHED)
+        ws.incoming.put_nowait(_step(0.95))
+        ws.incoming.put_nowait(_step(0.95))
+        await _keep_alive(ws, int(timeout) + 2, inactivity_prob=0.85)
+        assert _final_texts(collector.events) == []
+        assert "did not answer a flush" not in caplog.text
+
+        ws.incoming.put_nowait(_step(0.95))
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["hello"]
+
+
+async def test_vad_flicker_after_the_flush_keeps_the_turn_open_and_flushes_again():
+    """The user resumes after the first flush was answered: the turn must not end there, the
+    words that follow join the same turn, and the next pause flushes again to recover the
+    words the model holds by then. Ending the turn would split the sentence in two."""
+    async with _open_stream(vad_confirm_steps=2) as (ws, _, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        ws.incoming.put_nowait(FLUSHED)
+        ws.incoming.put_nowait(_step(0.2))  # the user keeps talking
+        ws.incoming.put_nowait(_text("world", 1.5))
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == []
+
+        ws.incoming.put_nowait(_step(0.95))
+        assert [m["flush_id"] for m in await ws.wait_sent("flush", 2)] == [1, 2]
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 2})
+        ws.incoming.put_nowait(_step(0.95))
+        ws.incoming.put_nowait(_step(0.95))
+        events = await collector.wait_for(7)
+        assert _final_texts(events) == ["hello world"]
+        assert _preflights(events) == ["hello", "hello world"]
+
+
+async def test_vad_hovering_without_new_words_still_ends_the_turn():
+    """After the user stops, the VAD can hover around the threshold for seconds. Dips with no
+    new words must not restart the count, or the turn stays open until the input ends: every
+    step above the threshold since the last word counts, and one flush is enough. A word the
+    flush recovers before its reply is not new speech either."""
+    async with _open_stream(vad_confirm_steps=2) as (ws, _, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        ws.incoming.put_nowait(_text("world", 0.8))
+        ws.incoming.put_nowait(FLUSHED)
+        for prob in (0.85, 0.95, 0.85):
+            ws.incoming.put_nowait(_step(prob))
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == []
+
+        ws.incoming.put_nowait(_step(0.95))
+        await collector.wait_for(6)
+        assert _final_texts(collector.events) == ["hello world"]
+        assert ws.sent_of("flush") == [{"type": "flush", "flush_id": 1}]
+
+
+def test_negative_vad_confirm_steps_is_rejected():
+    from livekit.plugins.gradium import STT
+
+    with pytest.raises(ValueError, match="vad_confirm_steps"):
+        STT(api_key="test-key", vad_confirm_steps=-1)
+
+
+async def test_vad_flush_sends_the_buffered_partial_frame_first():
+    """The audio the caller pushed reaches the server before the flush that covers it. A
+    partial frame held back would be missing from the words the flush recovers."""
+    async with _open_stream() as (ws, stream, _):
+        stream.push_frame(_audio_frame(0.04))  # half of the 80 ms frame size
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        assert [msg["type"] for msg in ws.sent[1:]] == ["audio", "flush"]
+
+
+async def test_caller_flush_during_a_vad_flush_gets_the_whole_turn():
+    """A commit while a trip's flush is in flight: the commit takes the first final it sees,
+    so the trip's reply must not publish one. The words spoken between the two flushes
+    arrive after that reply, and only the caller's reply carries the whole turn."""
+    async with _open_stream() as (ws, stream, collector):
+        ws.incoming.put_nowait(_text("book", 0.3))
+        ws.incoming.put_nowait(_text("a", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        stream.flush()
+        assert await ws.wait_sent("flush", 2) == [
+            {"type": "flush", "flush_id": 1},
+            {"type": "flush", "flush_id": 2},
+        ]
+
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        ws.incoming.put_nowait(_text("flight", 0.9))
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == []
+
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 2})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["book a flight"]
+        assert [ev.type for ev in collector.events].count(SpeechEventType.END_OF_SPEECH) == 1
+
+
+async def test_caller_flush_without_a_reply_does_not_hold_back_later_turns(caplog):
+    """A commit the server never answers can only cost its own turn, which ends at the
+    connection timeout. The next turn ends as soon as its own flush is answered: a stale
+    commit left in flight must not make every later turn on the connection wait out the
+    timeout."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    timeout = DEFAULT_API_CONNECT_OPTIONS.timeout
+    async with _open_stream() as (ws, stream, collector):
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+        stream.flush()
+        await ws.wait_sent("flush", 2)
+        # the trip's reply leaves the turn to the commit, whose reply never comes
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        await _keep_alive(ws, int(timeout) + 1)
+        assert _final_texts(collector.events) == ["hello"]
+        assert "did not answer a flush" in caplog.text
+
+        ws.incoming.put_nowait(_text("again", 15.0))
+        ws.incoming.put_nowait(_step(0.95))
+        assert [m["flush_id"] for m in await ws.wait_sent("flush", 3)] == [1, 2, 3]
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 3})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["hello", "again"]
+
+
+async def _commit_while_confirming(ws: _FakeWebSocket, stream: Any, collector: Any) -> None:
+    """With `vad_confirm_steps=1`: the trip's flush is answered, the caller commits, and the
+    step that confirms the pause arrives while the commit's flush is still unanswered."""
+    ws.incoming.put_nowait(_text("book", 0.3))
+    ws.incoming.put_nowait(_step(0.95))
+    await ws.wait_sent("flush")
+    ws.incoming.put_nowait(FLUSHED)
+    await collector.drain(ws)
+    stream.flush()
+    await ws.wait_sent("flush", 2)
+    ws.incoming.put_nowait(_step(0.95))
+    await collector.drain(ws)
+
+
+async def test_commit_during_the_pause_confirmation_gets_the_whole_turn():
+    """A commit after the trip's flush was answered, but before `vad_confirm_steps` confirmed
+    the pause: the commit takes the first final it sees, so the confirmation must not publish
+    one without the words only the commit's flush recovers."""
+    async with _open_stream(vad_confirm_steps=1) as (ws, stream, collector):
+        await _commit_while_confirming(ws, stream, collector)
+        assert _final_texts(collector.events) == []
+
+        ws.incoming.put_nowait(_text("a flight", 0.9))
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 2})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["book a flight"]
+
+
+async def test_commit_during_the_pause_confirmation_without_a_reply_ends_at_the_timeout(caplog):
+    """The confirmed pause leaves the turn to the commit, so a commit whose reply never comes
+    must not hold the turn open: it ends at the connection timeout."""
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+
+    timeout = DEFAULT_API_CONNECT_OPTIONS.timeout
+    async with _open_stream(vad_confirm_steps=1) as (ws, stream, collector):
+        await _commit_while_confirming(ws, stream, collector)
+        await _keep_alive(ws, int(timeout) - 1)
+        assert _final_texts(collector.events) == []
+        await _keep_alive(ws, 2)
+        assert _final_texts(collector.events) == ["book"]
+        assert "did not answer a flush" in caplog.text
+
+
+async def test_caller_flush_still_queued_holds_back_the_vad_flush_final():
+    """The commit can sit behind audio still being sent when the trip's reply comes back:
+    the caller's flush is not on the wire yet, but the trip's reply must already leave the
+    turn to it."""
+    async with _open_stream() as (ws, stream, collector):
+        ws.incoming.put_nowait(_text("book", 0.3))
+        ws.incoming.put_nowait(_step(0.95))
+        await ws.wait_sent("flush")
+
+        # stall the send loop on the audio ahead of the commit
+        gate = asyncio.Event()
+        send_str = ws.send_str
+
+        async def gated_send_str(message: str) -> None:
+            await gate.wait()
+            await send_str(message)
+
+        ws.send_str = gated_send_str
+        stream.push_frame(_audio_frame())
+        stream.flush()
+
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == []
+
+        gate.set()
+        await ws.wait_sent("flush", 2)
+        ws.incoming.put_nowait(_text("flight", 0.9))
+        ws.incoming.put_nowait({"type": "flushed", "flush_id": 2})
+        await collector.drain(ws)
+        assert _final_texts(collector.events) == ["book flight"]
+
+
+async def test_vad_trip_after_the_input_ended_is_left_to_end_of_stream(caplog):
+    """A trip racing the end of input cannot queue a flush: the input channel is closed, and
+    trying would log an error at the end of every such session. The server's `end_of_stream`
+    ends the turn. The one flush sent is the one `end_input` asks for."""
+    async with _open_stream() as (ws, stream, collector):
+        stream.end_input()
+        await ws.wait_sent("end_of_stream")
+        ws.incoming.put_nowait(_text("hello", 0.5))
+        ws.incoming.put_nowait(_step(0.95))
+        ws.incoming.put_nowait(EOS)
+        events = await collector.wait_for(4)
+        assert _final_texts(events) == ["hello"]
+        assert ws.sent[1:] == [{"type": "flush", "flush_id": 1}, EOS]
+    assert [r.getMessage() for r in caplog.records if r.levelname == "ERROR"] == []
+
+
+async def test_flush_send_on_a_closed_socket_raises_the_retryable_close_error():
+    """A flush racing the server's close reports the close, which the base class retries,
+    not a raw send error."""
+    frames = [READY, _text("hello", 0.1), _vad_step(1, SILENT)]
+    stt, _, _ = _make_stt(frames, after_eos=["close"], fail_send_on="flush")
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    try:
+        with pytest.raises(APIStatusError, match="closed unexpectedly") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
     finally:
         await stream.aclose()
 
@@ -486,3 +957,320 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+async def test_end_input_sends_eos_and_finalizes_pending_text():
+    """Closing the input sends end_of_stream; the server's EOS flushes the last words."""
+    stt, _, ws = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    assert ws.sent[0]["type"] == "setup"
+    assert ws.sent[-1] == {"type": "end_of_stream"}
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+    assert events[-1].type == SpeechEventType.END_OF_SPEECH
+
+
+@pytest.mark.parametrize(("code", "retryable"), [(1011, True), (1003, False)])
+async def test_error_frame_raises_api_error(code: int, retryable: bool):
+    """The server's message is surfaced; a client error (1003) is not retried."""
+    error = {"type": "error", "message": "Unsupported language 'xx'.", "code": code}
+    stt, _, _ = _make_stt([READY, error, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError, match="Unsupported language") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.status_code == code
+        assert excinfo.value.retryable is retryable
+    finally:
+        await stream.aclose()
+
+
+async def test_non_object_frame_is_skipped():
+    """Valid JSON that is not an object is logged and skipped, not fatal."""
+    stt, _, _ = _make_stt([READY, ["unexpected"], _text("hello", 0.1)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello"]
+
+
+async def test_pending_text_is_finalized_when_the_server_closes_instead_of_replying():
+    """A close in place of the server's end_of_stream must not lose the buffered words."""
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)], after_eos=["close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+
+
+async def test_error_frame_keeps_the_words_already_transcribed():
+    """An error frame after end_input() still delivers the buffered words."""
+    error = {"type": "error", "message": "Worker failure", "code": 1011}
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1)], after_eos=[error, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    events: list[Any] = []
+    try:
+        with pytest.raises(APIStatusError, match="Worker failure"):
+            async for ev in stream:
+                events.append(ev)
+    finally:
+        await stream.aclose()
+
+    finals = [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert finals == ["hello"]
+
+
+async def test_server_ending_the_session_mid_input_finalizes_then_reconnects():
+    """The server's end_of_stream while audio still flows: keep the words, and raise so
+    the base class reconnects rather than the next audio write failing raw."""
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), EOS, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError, match="while input was still open") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_audio_send_on_a_closed_socket_raises_the_retryable_close_error():
+    """An audio write racing the server's close reports the close, not a raw send error."""
+    stt, _, _ = _make_stt([READY], after_eos=["close"], fail_send_on="audio")
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIStatusError, match="closed unexpectedly") as excinfo:
+            await _collect_until(stream, lambda ev: False)
+        assert excinfo.value.retryable is True
+    finally:
+        await stream.aclose()
+
+
+async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
+    stt, _, _ = _make_stt(
+        [READY, _text("hello", 0.1)], after_eos=["close"], fail_send_on="end_of_stream"
+    )
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)  # no exception
+    finally:
+        await stream.aclose()
+    finals = [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert finals == ["hello"]
+
+
+async def test_preflight_transcript_is_emitted_when_the_vad_first_trips():
+    """The first positive VAD step sends the words so far as a preflight transcript, so the
+    session can start generating while the flush recovers the words the model still holds."""
+    frames = [READY, _text("hello", 0.1), _text("world", 0.4), _vad_step(0, SILENT), FLUSHED]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    types = [ev.type for ev in events]
+    assert types == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert events[3].alternatives[0].text == "hello world"
+    assert events[4].alternatives[0].text == "hello world"
+
+
+def _preflights(events: list[Any]) -> list[str]:
+    return [
+        ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT
+    ]
+
+
+async def test_preflight_transcript_carries_the_end_text_timing():
+    """When the server already sent `end_text` at the trip, the preview reports the same
+    end_time as the final transcript of the turn."""
+    frames = [READY, _text("hello", 0.1), {"type": "end_text", "stop_s": 0.4}]
+    frames += [_vad_step(0, SILENT), FLUSHED]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.start_time_offset = 7.0
+    # the boundary lies within audio already sent, as a real `end_text` always does
+    stream.push_frame(_audio_frame(1.0))
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    preflight = next(ev for ev in events if ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT)
+    final = events[-1]
+    # the offset is anchored at the first frame's capture time: its push minus its duration
+    assert final.alternatives[0].end_time == pytest.approx(7.0 - 1.0 + 0.4, abs=0.01)
+    assert preflight.alternatives[0].end_time == pytest.approx(final.alternatives[0].end_time)
+
+
+async def test_preflight_transcript_has_no_end_time_before_end_text():
+    """Words still being transcribed at the trip have no end timing yet."""
+    frames = [READY, _text("hello", 0.1), _vad_step(0, SILENT)]
+    stt, _, _ = _make_stt(frames)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.start_time_offset = 7.0
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.PREFLIGHT_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert events[-1].alternatives[0].end_time == 0.0
+
+
+async def test_no_preflight_transcript_without_words():
+    """A VAD-only turn (vad_start_threshold) has nothing to preview."""
+    frames = [READY, _vad_step(1, (0.1,) * len(VAD_HORIZONS)), _vad_step(2, SILENT), FLUSHED]
+    stt, _, _ = _make_stt(frames, vad_start_threshold=0.5)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(stream, lambda ev: ev.type == SpeechEventType.END_OF_SPEECH)
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == []
+
+
+async def test_preflight_transcript_can_be_disabled():
+    """`preflight_trigger=None` keeps the interim and final events but previews nothing."""
+    frames = [READY, _text("hello", 0.1), _vad_step(0, SILENT), FLUSHED]
+    stt, _, _ = _make_stt(frames, preflight_trigger=None)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert _preflights(events) == []
+    assert [ev.type for ev in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+
+
+def test_unknown_preflight_trigger_is_rejected():
+    """A misspelt trigger raises instead of silently disabling the preview."""
+    with pytest.raises(ValueError, match="preflight_trigger"):
+        _make_stt([READY], preflight_trigger="VAD_TRIP")
+
+
+@pytest.mark.asyncio
+async def test_manual_flush_asks_the_server_and_finalizes_on_its_reply():
+    """A flush (`commit_user_turn`) asks the server for the words the model delay still holds
+    and finalizes on its `flushed` reply, so they make it into the final transcript instead
+    of the next turn."""
+    from livekit.agents.stt import SpeechEventType
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stt = STT(api_key="test-key", http_session=session)
+    assert stt.capabilities.manual_flush
+    stream = stt.stream()
+    collector = _EventCollector(stream)
+    try:
+        session.ws.incoming.put_nowait(READY)
+        session.ws.incoming.put_nowait(_text("hello", 0.1))
+        await collector.wait_for(2)
+
+        stream.flush()
+        await collector.drain(session.ws)
+        assert session.ws.sent[-1] == {"type": "flush", "flush_id": 1}
+
+        # the held word comes out before the server confirms the flush
+        session.ws.incoming.put_nowait(_text("world", 0.4))
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        events = await collector.wait_for(5)
+        assert [ev.type for ev in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.INTERIM_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert events[3].alternatives[0].text == "hello world"
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manual_flush_without_speech_answers_with_an_empty_final():
+    """A commit while nothing was heard must not wait for its transcript timeout."""
+    from livekit.agents.stt import SpeechEventType
+    from livekit.plugins.gradium import STT
+
+    session = _FakeSession()
+    stt = STT(api_key="test-key", http_session=session)
+    stream = stt.stream()
+    collector = _EventCollector(stream)
+    try:
+        session.ws.incoming.put_nowait(READY)
+        await collector.drain(session.ws)
+
+        stream.flush()
+        session.ws.incoming.put_nowait({"type": "flushed", "flush_id": 1})
+        events = await collector.wait_for(1)
+        assert [ev.type for ev in events] == [SpeechEventType.FINAL_TRANSCRIPT]
+        assert events[0].alternatives[0].text == ""
+    finally:
+        await stream.aclose()

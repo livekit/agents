@@ -900,3 +900,18 @@ def test_compute_chat_ctx_diff_on_a_long_context_does_not_build_an_n_by_m_table(
     assert diff.to_update == []
     # the O(n*m) table for 2000 x 2001 items takes about 32 MB
     assert peak < 1_000_000
+
+
+@pytest.mark.parametrize("fmt", ["anthropic", "google", "aws"])
+def test_developer_preamble_becomes_the_system_prompt(fmt: str):
+    # "developer" is an instructions role like "system"; the preamble must not turn into user text
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="developer", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="user", content=["hi"])
+
+    messages, extra_data = chat_ctx.to_provider_format(format=fmt)
+
+    assert extra_data.system_messages == ["You are a helpful assistant."]
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert "You are a helpful assistant." not in str(messages[0])

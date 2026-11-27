@@ -76,7 +76,7 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model: TTSModels | str = "FALCON",
+        model: TTSModels | str = "falcon-2.1",
         locale: TTSLocales | str | None = None,
         voice: str = TTSDefaultVoiceId,
         style: TTSStyles | str | None = None,
@@ -95,14 +95,15 @@ class TTS(tts.TTS):
         """
         Create a new instance of Murf AI TTS.
 
-        See https://murf.ai/api/docs/api-reference/text-to-speech/stream-input for more details on the the Murf AI API.
+        See https://murf.ai/api/docs/text-to-speech-models/falcon-2-1 and
+        https://murf.ai/api/docs/api-reference/text-to-speech/stream-input for more details on the Murf AI API.
 
         Args:
             api_key (str | None, optional): The Murf AI API key. If not provided, it will be read from the MURF_API_KEY environment variable.
-            model (TTSModels | str, optional): The Murf AI TTS model to use. Defaults to "FALCON".
+            model (TTSModels | str, optional): The Murf AI TTS model to use. Defaults to "falcon-2.1".
             locale (str | None, optional): The locale for synthesis (e.g., "en-US", "en-UK"). If not provided, will be inferred from voice.
-            voice (str, optional): The voice ID from Murf AI's voice library (e.g., "en-US-matthew"). Defaults to TTSDefaultVoiceId.
-            style (TTSStyles | str | None, optional): The voice style to apply (e.g., "Conversation"). Can be None for default style.
+            voice (str, optional): The voice ID from Murf AI's voice library (e.g., "Gordon"). Defaults to TTSDefaultVoiceId.
+            style (TTSStyles | str | None, optional): The voice style to apply (e.g., "Conversational"). Can be None for default style.
             speed (int | None, optional): The speech speed control. Higher values = faster speech. None for default speed.
             pitch (int | None, optional): The speech pitch control. Higher values = higher pitch. None for default pitch.
             sample_rate (int, optional): The audio sample rate in Hz. Defaults to 24000.
@@ -206,8 +207,8 @@ class TTS(tts.TTS):
 
         Args:
             locale (str, optional): The locale for synthesis (e.g., "en-US", "en-UK").
-            voice (str, optional): The voice ID from Murf AI's voice library. (e.g. "en-US-matthew")
-            style (str | None, optional): The voice style to apply (e.g., "Conversation", "Promo").
+            voice (str, optional): The voice ID from Murf AI's voice library. (e.g. "Gordon")
+            style (str | None, optional): The voice style to apply (e.g., "Conversational", "Promo").
             speed (int | None, optional): Controls the speech speed. Positive values increase speed, negative values decrease it. Valid range: -50 to 50.
             pitch (int | None, optional): Controls the speech pitch. Positive values raise pitch, negative values lower it. Valid range: -50 to 50.
         """

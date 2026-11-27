@@ -17,6 +17,7 @@ from livekit.agents import (
     APITimeoutError,
     stt,
 )
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import STT
 
 from .stt_reconnect import FakeWebSocket, ReconnectClock, wait_until
@@ -92,6 +93,7 @@ async def _run_stream(
     samples: int = 512,
     timeout: float = 10.0,
     max_retry: int = 0,
+    language: NotGivenOr[str] = NOT_GIVEN,
 ) -> list[stt.SpeechEvent]:
     def ws_connect(*args: Any, **kwargs: Any) -> _WhisperSocket:
         sockets.append(_WhisperSocket(mode))
@@ -100,7 +102,8 @@ async def _run_stream(
     session = SimpleNamespace(closed=False, ws_connect=ws_connect)
     provider = STT(api_key="test-key", model_endpoint="wss://test.invalid/ws", http_session=session)
     stream = provider.stream(
-        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=timeout)
+        language=language,
+        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=timeout),
     )
     stream.push_frame(rtc.AudioFrame.create(16000, 1, samples))
     stream.end_input()
@@ -127,6 +130,14 @@ async def test_end_input_flushes_buffered_audio() -> None:
     # after the metadata, end_audio is the only text message
     assert [json.loads(m) for m in ws.sent if isinstance(m, str)][1:] == [{"type": "end_audio"}]
     assert _final_texts(events) == ["trailing words"]
+
+
+async def test_stream_language_overrides_the_configured_language() -> None:
+    sockets: list[_WhisperSocket] = []
+    await _run_stream(sockets, "reply", language="de")
+
+    metadata = json.loads(sockets[0].sent[0])
+    assert metadata["whisper_params"]["audio_language"] == "de"
 
 
 async def test_slow_flush_still_delivers_the_final_transcript() -> None:

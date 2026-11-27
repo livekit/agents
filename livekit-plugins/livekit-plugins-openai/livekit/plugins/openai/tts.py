@@ -202,6 +202,7 @@ class TTS(tts.TTS):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """
 
+        timeout = timeout or httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0)
         azure_client = openai.AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
@@ -213,9 +214,16 @@ class TTS(tts.TTS):
             organization=organization,
             project=project,
             base_url=base_url,
-            timeout=timeout
-            if timeout
-            else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
+            timeout=timeout,
+            http_client=httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=True,
+                limits=httpx.Limits(
+                    max_connections=50,
+                    max_keepalive_connections=50,
+                    keepalive_expiry=120,
+                ),
+            ),
         )  # type: ignore
 
         tts = TTS(

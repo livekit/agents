@@ -110,21 +110,24 @@ class _InputClock:
         """Cumulative audio duration dequeued from the input stream, in seconds."""
         return self._dequeued_duration
 
-    def start_connection(self) -> _ConnectionClock:
+    def start_connection(self, replayed_duration: float = 0.0) -> _ConnectionClock:
         """Create a connection clock starting at the next frame to be dequeued.
 
-        If the session start is unknown, use that frame's estimated timestamp.
+        ``replayed_duration`` is audio already dequeued that the connection receives
+        first; the clock then starts that many seconds before the next frame.
+        If the session start is unknown, use the first frame's estimated timestamp.
         """
+        start_position = max(self.dequeued_duration - replayed_duration, 0.0)
         if self._session_start is None:
             # The session start bounds this run's start without settling it.
             monotonic_start = self._stream_to_monotonic_timestamp(
-                self.dequeued_duration, after_gap=True, settle=False
+                start_position, after_gap=True, settle=False
             )
             self._session_start = _SessionStart(
                 monotonic_timestamp=monotonic_start,
                 wall_timestamp=time.time() + (monotonic_start - time.perf_counter()),
             )
-        return _ConnectionClock(self, self.dequeued_duration)
+        return _ConnectionClock(self, start_position)
 
     def on_audio_dequeued(self, duration: float) -> None:
         """Record ``duration`` seconds of audio dequeued from the input stream."""

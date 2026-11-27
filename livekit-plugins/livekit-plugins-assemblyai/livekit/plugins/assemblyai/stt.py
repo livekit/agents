@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import math
 import os
 import time
 import weakref
@@ -27,6 +28,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
+from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -61,7 +63,7 @@ class STTOptions:
         "universal-3-5-pro",
         "universal-3-6-pro",
         "assemblyai-stt-3-7-realtime-agent",
-    ] = "universal-3-6-pro"
+    ] = "assemblyai-stt-3-7-realtime-agent"
     language_detection: NotGivenOr[bool] = NOT_GIVEN
     language_codes: NotGivenOr[list[str]] = NOT_GIVEN
     end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -80,7 +82,17 @@ class STTOptions:
     domain: NotGivenOr[str] = NOT_GIVEN
     voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN
     voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN
-    mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN
+    mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy", "manual"]] = NOT_GIVEN
+
+
+# Speech models that support mode="manual", where the client ends every turn with
+# ForceEndpoint. The server closes the connection (code 3006) for any other model.
+_MANUAL_MODE_MODELS = ("assemblyai-stt-3-7-realtime-agent",)
+
+_FORCE_ENDPOINT_MSG = json.dumps({"type": "ForceEndpoint"})
+
+# AssemblyAI rejects audio chunks shorter than this (close code 3007).
+_MIN_CHUNK_SECONDS = 0.02
 
 
 # Speech models in the Universal-3 Pro family, which share the same parameter support
@@ -144,6 +156,19 @@ def _validate_agent_context(agent_context: str) -> None:
         )
 
 
+def _pad_frame(frame: rtc.AudioFrame, samples_per_channel: int, encoding: str) -> rtc.AudioFrame:
+    """Pad a short mono frame with silence up to `samples_per_channel`."""
+    if frame.samples_per_channel >= samples_per_channel:
+        return frame
+    silence = b"\xff" if encoding == "pcm_mulaw" else b"\x00"  # 0xFF is mu-law silence
+    return rtc.AudioFrame(
+        data=frame.data.tobytes().ljust(samples_per_channel * 2, silence),
+        sample_rate=frame.sample_rate,
+        num_channels=1,
+        samples_per_channel=samples_per_channel,
+    )
+
+
 class STT(stt.STT):
     def __init__(
         self,
@@ -160,7 +185,7 @@ class STT(stt.STT):
             "universal-3-5-pro",
             "universal-3-6-pro",
             "assemblyai-stt-3-7-realtime-agent",
-        ] = "universal-3-6-pro",
+        ] = "assemblyai-stt-3-7-realtime-agent",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
         language_code: NotGivenOr[str] = NOT_GIVEN,
         language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
@@ -180,7 +205,7 @@ class STT(stt.STT):
         domain: NotGivenOr[str] = NOT_GIVEN,
         voice_focus: NotGivenOr[Literal["near-field", "far-field"]] = NOT_GIVEN,
         voice_focus_threshold: NotGivenOr[float] = NOT_GIVEN,
-        mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy"]] = NOT_GIVEN,
+        mode: NotGivenOr[Literal["min_latency", "balanced", "max_accuracy", "manual"]] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
@@ -267,6 +292,20 @@ class STT(stt.STT):
                 `max_turn_silence` still take precedence over the mode's defaults.
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
+
+                'manual' turns off AssemblyAI's turn detection so LiveKit decides when each
+                turn ends. The STT advertises `manual_flush`: when AgentSession's turn
+                detector or VAD ends a turn, or on `commit_user_turn()` or `stream.flush()`,
+                the stream sends its buffered audio and then a `ForceEndpoint`, and AssemblyAI
+                returns that turn's final right away. Each `ForceEndpoint` gets exactly one
+                final, with an empty transcript if nothing was said since the last one.
+                Without a `ForceEndpoint`, the server ends a turn after `max_turn_silence` of
+                silence (10000 ms by default in this mode) or 60 seconds of speech. Use it
+                with a LiveKit turn detector or VAD turn detection; with
+                `turn_detection="stt"` nothing sends `ForceEndpoint`. `min_turn_silence` no
+                longer ends turns, so leave it unset. Only supported with
+                assemblyai-stt-3-7-realtime-agent, and not yet with `speaker_labels`.
+                See https://www.assemblyai.com/docs/streaming/turn-detection#manual-mode.
         """
         if is_given(language_code) and is_given(language_codes):
             raise ValueError(
@@ -310,11 +349,15 @@ class STT(stt.STT):
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
                 chat_context=carryover_enabled,
+                # in manual mode a flush is what ends the turn on AssemblyAI's side
+                manual_flush=mode == "manual",
             ),
         )
         if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'universal-3-6-pro' instead.")
-            model = "universal-3-6-pro"
+            logger.warning(
+                "'u3-pro' is deprecated, use 'assemblyai-stt-3-7-realtime-agent' instead."
+            )
+            model = "assemblyai-stt-3-7-realtime-agent"
 
         # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:
@@ -336,6 +379,15 @@ class STT(stt.STT):
                         f"The {_param_name!r} parameter is only supported with the "
                         f"{', '.join(_U3_PRO_MODELS)} models."
                     )
+        if mode == "manual":
+            if model not in _MANUAL_MODE_MODELS:
+                raise ValueError(
+                    f"mode='manual' is only supported with the "
+                    f"{', '.join(_MANUAL_MODE_MODELS)} model."
+                )
+            if speaker_labels is True:
+                # the server applies its speaker-label turn defaults instead of manual mode
+                raise ValueError("mode='manual' can't be combined with speaker_labels yet.")
 
         self._base_url = base_url
         assemblyai_api_key = api_key if is_given(api_key) else os.environ.get("ASSEMBLYAI_API_KEY")
@@ -694,6 +746,8 @@ class SpeechStream(stt.SpeechStream):
                 num_channels=1,
                 samples_per_channel=samples_per_buffer,
             )
+            manual_mode = self._opts.mode == "manual"
+            min_chunk_samples = math.ceil(self._opts.sample_rate * _MIN_CHUNK_SECONDS)
 
             # forward inputs to AssemblyAI
             # if we receive a close message, signal it to AssemblyAI and break.
@@ -701,14 +755,34 @@ class SpeechStream(stt.SpeechStream):
             try:
                 async for data in self._input_ch:
                     if isinstance(data, self._FlushSentinel):
-                        frames = audio_bstream.flush()
+                        input_ending = self._input_ch.closed and self._input_ch.empty()
+                        if input_ending:
+                            # nothing follows, so a short tail is padded up to the minimum
+                            frames = [
+                                _pad_frame(frame, min_chunk_samples, self._opts.encoding)
+                                for frame in audio_bstream.flush()
+                            ]
+                        elif audio_bstream.buffered_duration >= _MIN_CHUNK_SECONDS:
+                            frames = audio_bstream.flush()
+                        else:
+                            # A shorter tail stays buffered and starts the next chunk.
+                            # Padding it would insert audio and shift every later word's
+                            # timestamp.
+                            frames = []
                     else:
+                        input_ending = False
                         frames = audio_bstream.write(data.data.tobytes())
 
                     for frame in frames:
                         self._speech_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
                         self._last_frame_sent_at = time.time()
+
+                    # In manual mode a flush ends the turn: ForceEndpoint goes out after the
+                    # flushed audio so the final covers it. It's skipped when input is
+                    # ending, since Terminate finalizes the open turn.
+                    if manual_mode and isinstance(data, self._FlushSentinel) and not input_ending:
+                        await ws.send_str(_FORCE_ENDPOINT_MSG)
 
                 closing_ws = True
                 logger.debug("AssemblyAI sending close message session=%s", self._session_id)
@@ -830,11 +904,15 @@ class SpeechStream(stt.SpeechStream):
                 if is_given(self._opts.min_turn_silence)
                 else default_min
             )
-            max_silence = (
-                self._opts.max_turn_silence
-                if is_given(self._opts.max_turn_silence)
-                else min_silence
-            )
+            if is_given(self._opts.max_turn_silence):
+                max_silence = self._opts.max_turn_silence
+            elif self._opts.mode == "manual":
+                # max_turn_silence is manual mode's only server-side turn end, the
+                # fallback when no ForceEndpoint arrives. Copying min_turn_silence into
+                # it would end turns on short pauses, so the server default applies.
+                max_silence = None
+            else:
+                max_silence = min_silence
         else:
             min_silence = (
                 self._opts.min_turn_silence if is_given(self._opts.min_turn_silence) else None

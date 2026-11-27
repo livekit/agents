@@ -48,6 +48,9 @@ class DuplexCapabilities:
     """Whether the model transcribes the user's speech"""
     auto_tool_reply_generation: bool
     """Whether the model automatically continues speaking after receiving tool results"""
+    eager_tool_outputs: bool = False
+    """Whether the model wants each tool output as soon as its tool returns, and decides itself
+    when to continue"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -63,6 +66,7 @@ DuplexEventTypes = Literal[
     "input_speech_stopped",
     "input_audio_transcription_completed",
     "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
+    "_delegated_response",  # a _DelegatedResponse, each response of a delegated model
     "session_reconnected",
     "metrics_collected",
     "error",
@@ -173,6 +177,17 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         """
         self._closing = True
         self._configured.set()
+
+    async def _release_and_close(self) -> asyncio.Future[None]:
+        """Close the session as far as its agent needs, returning a future done when fully closed.
+
+        The rest waits only on the provider; the default runs the full ``aclose()`` and returns a
+        done future.
+        """
+        await self.aclose()
+        closed: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        closed.set_result(None)
+        return closed
 
     # underscored until the shape settles: this is the framework's contract with the plugin, and
     # apps reach a plugin's own methods through Agent.duplex_session

@@ -33,6 +33,23 @@ _SECRET = "f" * 32
 _GATEWAY = "http://gateway.test/v1"
 
 
+@pytest.mark.parametrize("kwargs", [{}, {"provider": None}, {"provider": "azure"}])
+async def test_provider_pinning_warns_only_when_explicitly_passed(
+    kwargs: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        model = _llm(**kwargs)
+    try:
+        if kwargs:
+            assert len(caplog.messages) == 1
+            assert "provider is deprecated and will be removed on March 1, 2027" in caplog.text
+            assert "Omit this argument" in caplog.text
+        else:
+            assert not caplog.messages
+    finally:
+        await model.aclose()
+
+
 def _sse(payload: dict) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
 
@@ -278,6 +295,41 @@ async def _wire_body(model: inference.LLM, **chat_kwargs: Any) -> dict[str, Any]
             pass
     await model.aclose()
     return captured
+
+
+@pytest.mark.parametrize(
+    "response_format",
+    [
+        {"type": "text"},
+        {"type": "json_object"},
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "Answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        },
+    ],
+    ids=["text", "json-object", "json-schema"],
+)
+async def test_response_format_dict_is_sent_unchanged(response_format: dict) -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return _sse_response(_TEXT + _STOP + _DONE)
+
+    async with _client(handler) as client, openai_plugin.LLM(model="m", client=client) as model:
+        response = await model.chat(chat_ctx=_ctx(), response_format=response_format).collect()
+
+    assert response.text == "hello"
+    assert captured["response_format"] == response_format
 
 
 @pytest.mark.parametrize(

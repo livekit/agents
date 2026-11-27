@@ -49,6 +49,7 @@ _SOFT_CAPABILITIES = (
     "user_transcription",
     "manual_function_calls",
     "auto_tool_reply_generation",
+    "eager_tool_outputs",
     "mutable_chat_context",
     "mutable_instructions",
     "mutable_tools",
@@ -388,11 +389,13 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             # a swap is a reconnect from the caller's perspective
             self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
 
-            # re-issue the interrupted reply on the new session
+            # re-issue the interrupted reply on the new session; AMD rejects direct replies,
+            # so its next turn decides the reply instead
             if (
                 was_speaking
                 and self._adapter._regenerate_on_swap
                 and self._agent_session is not None
+                and self._agent_session.amd is None
             ):
                 self._agent_session.generate_reply()
 

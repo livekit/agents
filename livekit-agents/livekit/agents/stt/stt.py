@@ -60,7 +60,9 @@ class SpeechEventType(str, Enum):
     RECOGNITION_USAGE = "recognition_usage"
     """usage event, emitted periodically to indicate usage metrics"""
     END_OF_SPEECH = "end_of_speech"
-    """indicate the end of speech, emitted when the user stops speaking"""
+    """indicate the end of speech, emitted when the user stops speaking.
+    alternatives are optional and provider-specific; they may contain only the latest segment.
+    build the complete transcript from FINAL_TRANSCRIPT events"""
 
 
 @dataclass
@@ -507,11 +509,17 @@ class RecognizeStream(ABC):
     def _translate_event_timestamps(self, event: SpeechEvent) -> SpeechEvent:
         return self._connection_clock.translate_event_timestamps(event)
 
-    def _restart_connection_clock(self) -> None:
+    def _restart_connection_clock(self, *, replayed_duration: float = 0.0) -> None:
         """Start the next connection's clock when its first frame is read.
 
-        Keep the previous connection's mapping until then.
+        Keep the previous connection's mapping until then. ``replayed_duration`` is
+        audio already read from the input that the next connection is sent first; its
+        clock then starts now, that many seconds before the next frame.
         """
+        if replayed_duration > 0:
+            self._connection_clock_restart_pending = False
+            self._connection_clock = self._input_clock.start_connection(replayed_duration)
+            return
         self._connection_clock_restart_pending = True
 
     @property
@@ -691,6 +699,15 @@ class RecognizeStream(ABC):
                 self._input_ch.send_nowait(frame)
         else:
             self._input_ch.send_nowait(frame)
+
+    @property
+    def manual_flush(self) -> bool:
+        """Whether this stream finalizes a turn only when flushed.
+
+        Defaults to the STT's current capability. A stream whose need is fixed when it is
+        created overrides this, so a later STT option change does not stop its flushes.
+        """
+        return self._stt.capabilities.manual_flush
 
     def flush(self) -> None:
         """Mark the end of the current segment"""
