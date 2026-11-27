@@ -293,34 +293,44 @@ class TTS(tts.TTS):
             add_phoneme_timestamps (bool, optional): Whether to add phoneme-level timestamps to the output.
             use_normalized_timestamps (bool, optional): Whether to use normalized timestamps.
         """
+        opts = replace(self._opts)
         if is_given(model):
-            self._opts.model = model
+            opts.model = model
         if is_given(language):
-            self._opts.language = LanguageCode(language) if language else None
+            opts.language = LanguageCode(language) if language else None
         if is_given(voice):
-            self._opts.voice = voice
+            opts.voice = voice
         if is_given(speed):
-            self._opts.speed = cast(TTSVoiceSpeed | float, speed)
+            opts.speed = cast(TTSVoiceSpeed | float, speed)
         if is_given(emotion):
             emotion = [emotion] if isinstance(emotion, str) else emotion
-            self._opts.emotion = emotion
+            opts.emotion = emotion
         if is_given(volume):
-            self._opts.volume = volume
+            opts.volume = volume
         if is_given(pronunciation_dict_id):
-            self._opts.pronunciation_dict_id = pronunciation_dict_id
+            opts.pronunciation_dict_id = pronunciation_dict_id
         if is_given(add_phoneme_timestamps):
-            self._opts.add_phoneme_timestamps = add_phoneme_timestamps
+            opts.add_phoneme_timestamps = add_phoneme_timestamps
         if is_given(use_normalized_timestamps):
-            self._opts.use_normalized_timestamps = use_normalized_timestamps
+            opts.use_normalized_timestamps = use_normalized_timestamps
+        if is_given(api_version) and api_version != opts.api_version:
+            opts.api_version = api_version
+
+        if (
+            is_given(speed)
+            or is_given(emotion)
+            or is_given(volume)
+            or is_given(pronunciation_dict_id)
+        ):
+            self._check_generation_config(opts)
+
         if is_given(api_version) and api_version != self._opts.api_version:
-            self._opts.api_version = api_version
             # cartesia_version is a query parameter on the websocket URL, so a pooled
             # socket keeps speaking the version it was opened with while
             # _to_cartesia_options starts shaping the body for the new one.
             self._pool.invalidate()
 
-        if speed or emotion or volume or pronunciation_dict_id:
-            self._check_generation_config()
+        self._opts = opts
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -341,38 +351,40 @@ class TTS(tts.TTS):
         self._streams.clear()
         await self._pool.aclose()
 
-    def _check_generation_config(self) -> None:
-        if _is_sonic_3(self._opts.model):
-            if self._opts.speed:
+    def _check_generation_config(self, opts: _TTSOptions | None = None) -> None:
+        target_opts = opts or self._opts
+        if _is_sonic_3(target_opts.model):
+            if is_given(target_opts.speed) and target_opts.speed is not None:
                 # an int such as 1 is a valid speed too; bool is an int subclass, so exclude it
-                if isinstance(self._opts.speed, bool) or not isinstance(
-                    self._opts.speed, (int, float)
+                if isinstance(target_opts.speed, bool) or not isinstance(
+                    target_opts.speed, (int, float)
                 ):
                     raise ValueError("speed must be a number for sonic-3")
-                if not 0.6 <= self._opts.speed <= 2.0:
+                target_opts.speed = float(target_opts.speed)
+                if not 0.6 <= target_opts.speed <= 2.0:
                     logger.warning("speed must be between 0.6 and 2.0 for sonic-3")
-            if self._opts.volume is not None and not 0.5 <= self._opts.volume <= 2.0:
+            if target_opts.volume is not None and not 0.5 <= target_opts.volume <= 2.0:
                 logger.warning("volume must be between 0.5 and 2.0 for sonic-3")
         elif (
-            self._opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
-            or self._opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+            target_opts.api_version != API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
+            or target_opts.model != MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS
         ):
             logger.warning(
                 f"speed and emotion controls are only supported for model '{MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', and API version '{API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS}', "
                 "see https://docs.cartesia.ai/developer-tools/changelog for details",
                 extra={
-                    "model": self._opts.model,
-                    "speed": self._opts.speed,
-                    "emotion": self._opts.emotion,
+                    "model": target_opts.model,
+                    "speed": target_opts.speed,
+                    "emotion": target_opts.emotion,
                 },
             )
 
-        if self._opts.pronunciation_dict_id and not _is_sonic_3(self._opts.model):
+        if target_opts.pronunciation_dict_id and not _is_sonic_3(target_opts.model):
             logger.warning(
                 "pronunciation_dict_id is only supported for sonic-3 models",
                 extra={
-                    "model": self._opts.model,
-                    "pronunciation_dict_id": self._opts.pronunciation_dict_id,
+                    "model": target_opts.model,
+                    "pronunciation_dict_id": target_opts.pronunciation_dict_id,
                 },
             )
 
