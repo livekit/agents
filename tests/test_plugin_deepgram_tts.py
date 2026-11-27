@@ -415,3 +415,127 @@ async def test_flux_update_options_speed_invalidates_pool():
     assert tts._opts.speed is None
 
     assert calls == [True, True]
+
+
+# --- audio format of synthesize() requests -------------------------------------------
+
+
+@pytest.mark.parametrize("flux", [False, True])
+@pytest.mark.parametrize(
+    "encoding, sends_container, sends_sample_rate",
+    [
+        ("linear16", True, True),
+        ("mp3", False, False),
+        ("opus", False, False),
+        ("aac", False, False),
+        ("flac", False, True),
+    ],
+)
+async def test_synthesize_sends_only_the_format_params_the_encoding_accepts(
+    flux: bool, encoding: str, sends_container: bool, sends_sample_rate: bool
+):
+    # Deepgram answers 400 to `container` on a compressed encoding and to `sample_rate`
+    # on mp3, opus and aac, so sending them made synthesize() fail for those encodings.
+    from livekit.plugins.deepgram import TTS
+    from livekit.plugins.deepgram.tts_v2 import TTSv2
+
+    tts = (TTSv2 if flux else TTS)(
+        api_key="test-key",
+        encoding=encoding,
+        sample_rate=48000,
+        http_session=_RecordingSession(),  # type: ignore[arg-type]
+    )
+
+    _, http_url = await _request_urls(tts)
+    query = parse_qs(urlparse(http_url).query)
+
+    assert query["encoding"] == [encoding]
+    assert query.get("container") == (["none"] if sends_container else None)
+    assert query.get("sample_rate") == (["48000"] if sends_sample_rate else None)
+
+
+class _AudioSession:
+    """Answers post() with a fixed audio body."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def post(self, url: str, **kwargs):  # noqa: ANN201
+        body = self._body
+
+        async def iter_chunks():  # noqa: ANN202
+            yield body, True
+
+        resp = SimpleNamespace(
+            raise_for_status=lambda: None,
+            content=SimpleNamespace(iter_chunks=iter_chunks),
+        )
+
+        class _Ctx:
+            async def __aenter__(self_):  # noqa: ANN204, N805
+                return resp
+
+            async def __aexit__(self_, *exc):  # noqa: ANN204, N805
+                return False
+
+        return _Ctx()
+
+
+class _InitRecordingEmitter(_FakeEmitter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mime_type: str | None = None
+
+    def initialize(self, *, mime_type: str, **kwargs) -> None:  # noqa: ANN003
+        self.mime_type = mime_type
+
+    def flush(self) -> None:
+        pass
+
+
+def _chunked_stream(tts):  # noqa: ANN001, ANN202
+    from livekit.plugins.deepgram.tts import ChunkedStream
+
+    stream = SimpleNamespace(
+        _tts=tts,
+        _opts=tts._opts,
+        _input_text="hello",
+        _conn_options=SimpleNamespace(timeout=5.0),
+    )
+    return ChunkedStream._run.__get__(stream)
+
+
+async def test_synthesize_decodes_compressed_audio_with_its_own_mime_type():
+    # The emitter was always told the bytes were PCM, whatever encoding was requested.
+    from livekit.plugins.deepgram import TTS
+
+    tts = TTS(api_key="test-key", encoding="mp3", http_session=_AudioSession(b"mp3-bytes"))  # type: ignore[arg-type]
+    emitter = _InitRecordingEmitter()
+
+    await _chunked_stream(tts)(emitter)
+
+    assert emitter.mime_type == "audio/mp3"
+    assert emitter.pushed == [b"mp3-bytes"]
+
+
+@pytest.mark.parametrize("encoding", ["mulaw", "alaw"])
+async def test_synthesize_rejects_an_encoding_the_pipeline_cannot_decode(encoding: str):
+    from livekit.plugins.deepgram import TTS
+
+    session = _RecordingSession()
+    tts = TTS(api_key="test-key", encoding=encoding, sample_rate=8000, http_session=session)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=encoding):
+        await _chunked_stream(tts)(_InitRecordingEmitter())
+
+    assert session.urls == []
+
+
+async def test_aura_stream_run_rejects_non_linear16_encoding():
+    from livekit.plugins.deepgram.tts import SynthesizeStream
+
+    stream = SimpleNamespace(_opts=SimpleNamespace(encoding="mulaw"))
+    stream._run = SynthesizeStream._run.__get__(stream)
+
+    with pytest.raises(ValueError, match="linear16"):
+        await stream._run(_FakeEmitter())  # type: ignore[arg-type]

@@ -25,7 +25,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ._utils import _to_deepgram_url
+from ._utils import _encoding_to_mimetype, _to_deepgram_url, _tts_http_format_params
 from .log import logger
 from .models import TTSModels
 
@@ -72,6 +72,9 @@ class TTS(tts.TTS):
             model (TTSModels | str): TTS model to use. Defaults to "aura-2-andromeda-en".
                 See https://developers.deepgram.com/docs/tts-models for available models.
             encoding (str): Audio encoding to use. Defaults to "linear16".
+                The streaming path (stream(), what voice agents use) only supports raw
+                "linear16" end-to-end through the LiveKit pipeline. Compressed encodings
+                (mp3/opus/flac/aac) are available on the batch synthesize() path only.
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             bit_rate (int | None): Bit rate for compressed encodings (e.g. mp3). Defaults to None.
                 See https://developers.deepgram.com/reference/text-to-speech-api#query-bit_rate
@@ -259,12 +262,11 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        mime_type = _encoding_to_mimetype(self._opts.encoding)
         try:
             http_params: dict = {
-                "encoding": self._opts.encoding,
-                "container": "none",
+                **_tts_http_format_params(self._opts.encoding, self._opts.sample_rate),
                 "model": self._opts.model,
-                "sample_rate": self._opts.sample_rate,
                 "mip_opt_out": self._opts.mip_opt_out,
             }
             if self._opts.bit_rate is not None:
@@ -286,7 +288,7 @@ class ChunkedStream(tts.ChunkedStream):
                     request_id=utils.shortuuid(),
                     sample_rate=self._opts.sample_rate,
                     num_channels=NUM_CHANNELS,
-                    mime_type="audio/pcm",
+                    mime_type=mime_type,
                 )
 
                 async for data, _ in resp.content.iter_chunks():
@@ -314,6 +316,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        # Only linear16 is playable end-to-end through the LiveKit pipeline on the
+        # streaming path. Fail fast with a clear message instead of playing noise.
+        if self._opts.encoding != "linear16":
+            raise ValueError(
+                f"Deepgram TTS streaming only supports 'linear16' encoding, got "
+                f"{self._opts.encoding!r}. Use synthesize() for compressed batch output."
+            )
+
         segments_ch = utils.aio.Chan[tokenize.WordStream]()
         request_id = utils.shortuuid()
         output_emitter.initialize(

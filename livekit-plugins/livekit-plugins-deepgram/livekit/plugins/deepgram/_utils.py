@@ -60,3 +60,41 @@ def _to_deepgram_url(opts: dict, base_url: str, *, websocket: bool) -> str:
     elif not websocket and base_url.startswith("ws"):
         base_url = base_url.replace("ws", "http", 1)
     return f"{base_url}?{urlencode(opts, doseq=True)}"
+
+
+# Encodings the LiveKit pipeline can decode, mapped to their mime type. Deepgram TTS
+# also offers mulaw/alaw, but those aren't playable through the pipeline yet, so they're
+# intentionally omitted here.
+_ENCODING_TO_MIMETYPE: dict[str, str] = {
+    "linear16": "audio/pcm",
+    "mp3": "audio/mp3",
+    "opus": "audio/opus",
+    "flac": "audio/flac",
+    "aac": "audio/aac",
+}
+
+# The /speak REST endpoints reject a format parameter the encoding has no use for:
+# `container` is only valid for the headerless encodings, and mp3/opus/aac come at a
+# single sample rate that can't be requested.
+_CONTAINERLESS_ENCODINGS = frozenset({"linear16", "mulaw", "alaw"})
+_FIXED_SAMPLE_RATE_ENCODINGS = frozenset({"mp3", "opus", "aac"})
+
+
+def _encoding_to_mimetype(encoding: str) -> str:
+    try:
+        return _ENCODING_TO_MIMETYPE[encoding]
+    except KeyError:
+        raise ValueError(
+            f"unsupported Deepgram TTS encoding {encoding!r}; "
+            f"supported encodings are: {', '.join(_ENCODING_TO_MIMETYPE)}"
+        ) from None
+
+
+def _tts_http_format_params(encoding: str, sample_rate: int) -> dict:
+    """Audio format query parameters for a /speak REST request."""
+    params: dict = {"encoding": encoding}
+    if encoding in _CONTAINERLESS_ENCODINGS:
+        params["container"] = "none"
+    if encoding not in _FIXED_SAMPLE_RATE_ENCODINGS:
+        params["sample_rate"] = sample_rate
+    return params
