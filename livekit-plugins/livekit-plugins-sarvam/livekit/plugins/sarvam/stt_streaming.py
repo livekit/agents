@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import json
 import os
 import platform
@@ -75,6 +76,98 @@ AUDIO_CHUNK_MS = 50
 # In manual endpointing it goes out between utterances, outside a speech_start/speech_end
 # pair: Sarvam accepts that, opens no utterance for it, and counts it on its audio clock.
 KEEPALIVE_INTERVAL_S = 30.0
+# Input that arrives later than the audio before it accounts for by more than this is a
+# gap in the input (a muted mic, a gated `stt_node`). Smaller lateness is delivery jitter.
+INPUT_GAP_TOLERANCE_S = 0.05
+
+
+class _CaptureTimedInputChan(stt.RecognizeStream._InputChan):
+    """Input queue that also remembers when the last frame read was captured."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        # wall-clock capture start of the last frame read, or None before the first
+        self.last_capture_start: float | None = None
+
+    def recv_nowait(self) -> rtc.AudioFrame | stt.RecognizeStream._FlushSentinel:
+        pushed_at = self._pushed_at[0] if self._pushed_at else None
+        last_pushed_at, queued_duration = self._last_pushed_at, self._queued_duration
+        value = super().recv_nowait()
+        if isinstance(value, rtc.AudioFrame) and pushed_at is not None:
+            # Same bound the base queue anchors the first frame on: a frame starts at most
+            # its own duration before its push (exact across a pause in the input), and at
+            # most all queued audio before the latest push (exact for a burst).
+            self.last_capture_start = min(
+                pushed_at - value.duration, last_pushed_at - queued_duration
+            )
+        return value
+
+
+class _InputClock:
+    """Maps Sarvam's audio clock onto the input's timeline.
+
+    Sarvam times speech in seconds of audio it has received, so its clock stops while the
+    caller sends nothing and runs during keepalive silence the caller never said. The
+    input's timeline is seconds since the capture of the stream's first frame, which is
+    the origin ``start_time_offset`` is added to. Each segment of audio written to the
+    socket is anchored on where it starts on both clocks.
+    """
+
+    def __init__(self) -> None:
+        # (provider start, input start, is keepalive padding), sorted by provider start
+        self._anchors: list[tuple[float, float, bool]] = []
+        self._provider_starts: list[float] = []
+        self._provider_end = 0.0
+        self._input_end = 0.0
+
+    def _anchor(self, input_start: float, padding: bool) -> None:
+        self._anchors.append((self._provider_end, input_start, padding))
+        self._provider_starts.append(self._provider_end)
+
+    def append_input(self, duration: float, input_start: float | None) -> None:
+        """Record input audio written to Sarvam.
+
+        Args:
+            duration: Seconds of audio.
+            input_start: When the audio was captured, in seconds since the first frame was
+                captured. None when unknown, which continues the previous input.
+        """
+        start = self._input_end if input_start is None else max(input_start, self._input_end)
+        if (
+            not self._anchors
+            or self._anchors[-1][2]
+            or start > self._input_end + INPUT_GAP_TOLERANCE_S
+        ):
+            self._anchor(start, padding=False)
+        else:
+            start = self._input_end
+        self._provider_end += duration
+        self._input_end = start + duration
+
+    def append_padding(self, duration: float) -> None:
+        """Record silence Sarvam receives that is absent from the input."""
+        self._anchor(self._input_end, padding=True)
+        self._provider_end += duration
+
+    def input_time(self, provider_time: float, *, is_start: bool = False) -> float:
+        """Convert a position on Sarvam's clock to the input's timeline.
+
+        On the boundary between two segments, an end belongs to the earlier segment, so
+        speech that ended right before a gap keeps its end there, and a start belongs to
+        the later one, where speech after the gap begins.
+        """
+        if not self._anchors:
+            return provider_time
+        # durations summed as floats land a hair off the boundary Sarvam reports
+        if is_start:
+            idx = bisect.bisect_right(self._provider_starts, provider_time + 1e-6)
+        else:
+            idx = bisect.bisect_left(self._provider_starts, provider_time - 1e-6)
+        idx = max(idx - 1, 0)
+        provider_start, input_start, padding = self._anchors[idx]
+        if padding:
+            return input_start
+        return input_start + max(provider_time - provider_start, 0.0)
 
 
 def _encode_pcm_for_wire(encoding: RealtimeEncoding | str, pcm: bytes) -> bytes:
@@ -562,6 +655,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
             http_session: aiohttp session used to open the WebSocket.
         """
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        # Nothing has been pushed or read yet, so swapping the queue loses no input.
+        self._input_ch = _CaptureTimedInputChan()
+        self._input_clock = _InputClock()
         self._opts = opts
         self._session = http_session
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -1017,7 +1113,20 @@ class RealtimeSpeechStream(stt.SpeechStream):
         duration = samples_per_channel / self._opts.sample_rate
         self._audio_duration_collector.push(duration)
         self._audio_position += duration
+        self._input_clock.append_padding(duration)
         await self._safe_send_bytes(ws, _encode_pcm_for_wire(self._opts.encoding, chunk))
+
+    def _input_start_of_last_read(self) -> float | None:
+        """Capture start of the frame just read, in seconds since the first frame's capture.
+
+        Taken from when frames were pushed, never from how much audio was sent: a send
+        backlog or a connect delay would otherwise read as speech happening earlier.
+        """
+        capture_start = getattr(self._input_ch, "last_capture_start", None)
+        first_frame_at = getattr(self._input_ch, "_first_frame_at", None)
+        if capture_start is None or first_frame_at is None:
+            return None
+        return float(capture_start - first_frame_at)
 
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -1068,6 +1177,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
             await self._send_pending_config_update(ws)
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
+                self._input_clock.append_input(data.duration, self._input_start_of_last_read())
                 frames.extend(audio_bstream.write(data.data.tobytes()))
             if isinstance(data, self._FlushSentinel):
                 self._flush_observed = True
@@ -1399,6 +1509,12 @@ class RealtimeSpeechStream(stt.SpeechStream):
             and end_time == 0.0
         ):
             end_time = self._audio_position
+
+        if end_time > 0:
+            # Sarvam's times and the positions above count audio sent, which stands still
+            # while the input pauses, so put them back on the input's timeline.
+            start_time = self._input_clock.input_time(start_time, is_start=True)
+            end_time = self._input_clock.input_time(end_time)
 
         speech_data = stt.SpeechData(
             language=LanguageCode(language),
