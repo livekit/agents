@@ -1577,7 +1577,11 @@ class TranscriptMarkupStripper:
 
 
 _BRACKET_SPAN_RE = re.compile(r"\[[^\]]*\]")
-# cap on how long an unclosed "[" is held before it is released as plain text
+# one native XML tag delimiter: an opening, closing, or self-closing tag of any provider
+_NATIVE_XML_TAG_RE = re.compile(
+    r"</?(?:" + "|".join(re.escape(tag) for tag in _ALL_MARKUP_TAGS) + r")(?=[\s/>])[^<>]*>"
+)
+# cap on how long an unclosed "[" or "<" is held before it is released as plain text
 _MAX_HELD_CHARS = 256
 
 
@@ -1608,28 +1612,71 @@ def drop_bracket_cues(
     *held* carries the tail of an unclosed span across calls; pass the same list every time
     and call once more with ``final=True`` at end of stream to release it.
     """
+    return _drop_cues(tokens, held, final=final, xml=False)
+
+
+def drop_native_cues(
+    tokens: list[TimedString], held: list[TimedString], *, final: bool = False
+) -> list[TimedString]:
+    """Remove every native cue from TTS-aligned tokens, keeping the survivors' timings.
+
+    :func:`drop_bracket_cues` plus the XML-shaped natives that ``convert_markup`` produces
+    for Cartesia (``<spell>A7X9</spell>``, ``<break time="1s"/>``, ``<emotion value="calm"/>``)
+    and the other providers. A wrapping tag keeps its inner words — they are spoken — and
+    loses only its delimiters; a self-closing tag goes entirely. Only known native tag names
+    are removed, so prose such as ``3 < 5`` survives.
+
+    Uses the same *held*/``final`` protocol as :func:`drop_bracket_cues`.
+    """
+    return _drop_cues(tokens, held, final=final, xml=True)
+
+
+def _hold_from(text: str, *, xml: bool) -> int:
+    """Where the tail of a cue still open at the end of *text* starts, else ``len(text)``.
+
+    Held so a cue straddling messages is judged as a whole. Past ``_MAX_HELD_CHARS`` the
+    tail is released: a lone ``[`` or ``<`` must not stall the transcript.
+    """
+    hold_from = len(text)
+    if (open_at := text.rfind("[")) > text.rfind("]"):
+        if len(text) - open_at <= _MAX_HELD_CHARS:
+            hold_from = open_at
+    if xml and (open_at := text.rfind("<")) > text.rfind(">"):
+        # only a tag-shaped "<" is held, so "3 < 5" isn't stalled
+        nxt = text[open_at + 1 : open_at + 2]
+        if (not nxt or nxt == "/" or nxt.isalpha()) and len(text) - open_at <= _MAX_HELD_CHARS:
+            hold_from = min(hold_from, open_at)
+    return hold_from
+
+
+def _drop_cues(
+    tokens: list[TimedString], held: list[TimedString], *, final: bool, xml: bool
+) -> list[TimedString]:
     tokens = held + tokens
     held.clear()
     text = "".join(tokens)
-    if "[" not in text:
+    if "[" not in text and not (xml and "<" in text):
         return tokens
 
+    matches = list(_BRACKET_SPAN_RE.finditer(text))
+    if xml:
+        matches += _NATIVE_XML_TAG_RE.finditer(text)
+
     dropped: set[int] = set()
-    for match in _BRACKET_SPAN_RE.finditer(text):
+    for match in matches:
         start, end = match.span()
+        # a wrapping tag's delimiters border spoken words, so mid-stream the space before
+        # one ending the text may separate it from the words still arriving
+        vanishes = not match.group().startswith("<") or match.group().endswith("/>")
+        space_after = (end < len(text) and text[end] == " ") or (vanishes and end == len(text))
         # take one of the spaces the cue sat between, so it leaves a single separator
-        if start > 0 and text[start - 1] == " " and (end == len(text) or text[end] == " "):
+        if start > 0 and text[start - 1] == " " and space_after:
             start -= 1
         elif start == 0 and end < len(text) and text[end] == " ":
             end += 1
         dropped.update(range(start, end))
 
-    # hold from an unclosed "[" so a cue straddling messages is still judged as a whole;
-    # past _MAX_HELD_CHARS give up, since a lone bracket must not stall the transcript
-    hold_from = len(text)
-    if not final and (open_at := text.rfind("[")) > text.rfind("]"):
-        if len(text) - open_at <= _MAX_HELD_CHARS:
-            hold_from = open_at
+    hold_from = len(text) if final else _hold_from(text, xml=xml)
 
     out: list[TimedString] = []
     pos = 0

@@ -15,6 +15,8 @@ from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.tts._provider_format import (
     TranscriptMarkupStripper,
     convert_markup,
+    drop_bracket_cues,
+    drop_native_cues,
     expression_attribute,
     llm_instructions,
     normalize_markup,
@@ -22,6 +24,7 @@ from livekit.agents.tts._provider_format import (
     strip_all_markup,
     strip_expr_markup,
 )
+from livekit.agents.types import TimedString
 
 pytestmark = pytest.mark.unit
 
@@ -634,3 +637,62 @@ def test_only_the_stranded_separator_goes() -> None:
     assert strip_expr_markup(turn) == "Intro:\n    indented text"
     # and a marker mid-line still leaves exactly one separator
     assert strip_all_markup('a <expr type="sound" label="laugh"/> b') == "a b"
+
+
+# ---------------------------------------------------------------------------
+# drop_native_cues: native cues in a TTS alignment of the converted text
+# ---------------------------------------------------------------------------
+
+
+def _drop_all(chunks: list[list[str]]) -> str:
+    """Feed each chunk as one alignment message; return the surviving transcript."""
+    held: list[TimedString] = []
+    out: list[TimedString] = []
+    for chunk in chunks:
+        out += drop_native_cues([TimedString(t) for t in chunk], held)
+    out += drop_native_cues([], held, final=True)
+    return "".join(out)
+
+
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        # a wrapping tag keeps its spoken inner words, only the delimiters go
+        ([["Dial ", "<spell>911</spell> ", "now. "]], "Dial 911 now. "),
+        ([["Code ", "<spell>ABC ", "123</spell>. "]], "Code ABC 123. "),
+        # a self-closing tag vanishes and leaves a single separator
+        ([["a ", '<emotion value="calm"/> ', "b "]], "a b "),
+        # a tag split across alignment messages is held until it closes
+        ([["a ", "<break "], ['time="1s"/> ', "b "]], "a b "),
+        # an opening tag ending a message keeps the space before it for the words after
+        ([["say ", "<spell>"], ["911</spell> "]], "say 911 "),
+        # bracket cues still go
+        ([["[laugh] ", "hi "]], "hi "),
+        # prose and unknown tags survive
+        ([["3 ", "< ", "5 "]], "3 < 5 "),
+        ([["<b>bold</b> "]], "<b>bold</b> "),
+        # an unclosed tag-shaped "<" is released at the end of the stream
+        ([["a ", "<spe"]], "a <spe"),
+    ],
+)
+def test_aligned_transcript_keeps_spoken_words_without_native_cues(
+    chunks: list[list[str]], expected: str
+) -> None:
+    assert _drop_all(chunks) == expected
+
+
+def test_drop_native_cues_keeps_word_timings() -> None:
+    tokens = [
+        TimedString("Dial ", start_time=0.0, end_time=0.2),
+        TimedString("<spell>911</spell> ", start_time=0.2, end_time=0.8),
+    ]
+    out = drop_native_cues(tokens, [])
+    assert [(str(t), t.start_time, t.end_time) for t in out] == [
+        ("Dial ", 0.0, 0.2),
+        ("911 ", 0.2, 0.8),
+    ]
+
+
+def test_drop_bracket_cues_leaves_xml_alone() -> None:
+    tokens = [TimedString("<spell>911</spell> "), TimedString("[laugh] ")]
+    assert "".join(drop_bracket_cues(tokens, [])) == "<spell>911</spell> "
