@@ -746,6 +746,24 @@ class TestSessionHostRequests:
         unsubscribed = {call.args[0] for call in session.off.call_args_list}
         assert unsubscribed == FORWARDED_EVENTS
 
+    @pytest.mark.asyncio
+    async def test_aclose_before_start_detaches(self, transport: InMemoryTransport) -> None:
+        """A start() that failed between register_session() and the host's start()
+        leaves callbacks subscribed and the transport built in __init__ unclosed.
+        aclose() is the only teardown then, so it must release both.
+        """
+        host = SessionHost(transport)
+        session = self._make_mock_session()
+        host.register_session(session)
+
+        await host.aclose()
+
+        assert host.session is None
+        unsubscribed = {call.args[0] for call in session.off.call_args_list}
+        assert unsubscribed == FORWARDED_EVENTS
+        assert transport._closed
+        assert host._event_ch.closed
+
     def test_attach_replaces_the_attached_session(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         first = self._make_mock_session()

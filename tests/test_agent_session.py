@@ -3023,6 +3023,60 @@ async def test_failed_start_detaches_room_io_streams_for_a_retry() -> None:
         await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
 
 
+async def test_failed_start_releases_the_unstarted_session_host() -> None:
+    """A start() that fails before SessionHost.start() has already registered the
+    host's callbacks and built its transport/channel. aclose() must release them,
+    not leave the abandoned host subscribed while a retry attaches a fresh one.
+    """
+    session = AgentSession(llm=FakeRealtimeModel())
+    no_media = RoomOptions(
+        audio_input=False,
+        audio_output=False,
+        text_input=False,
+        text_output=False,
+    )
+
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=True,
+                room_options=no_media,
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    host = session._session_host
+    assert host is not None
+    assert host.session is session
+    assert not host._started
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    assert session._session_host is None
+    assert host.session is None
+    assert host._event_ch.closed
+    assert host._transport._recv_ch.closed  # type: ignore[attr-defined]
+
+    # a retry attaches a fresh host instead of re-registering on the released one
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=True,
+                room_options=no_media,
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        assert session._session_host is not None
+        assert session._session_host is not host
+        assert session._session_host.session is session
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+
 async def test_failed_start_keeps_caller_provided_audio() -> None:
     """Only the I/O RoomIO attached is released on a partial teardown."""
     session = AgentSession(llm=FakeRealtimeModel())
