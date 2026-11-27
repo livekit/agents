@@ -1056,7 +1056,10 @@ async def test_dialogue_recv_loop_parses_audio_and_alignment() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dialogue_recv_loop_offsets_chunk_relative_alignment() -> None:
+@pytest.mark.parametrize(("first_ms", "second_ms"), [(1100, 400), (800, 730)])
+async def test_dialogue_recv_loop_offsets_chunk_relative_alignment(
+    first_ms: int, second_ms: int
+) -> None:
     context_id = "ctx_123"
 
     def pcm(ms: int) -> str:
@@ -1081,8 +1084,10 @@ async def test_dialogue_recv_loop_offsets_chunk_relative_alignment() -> None:
         [
             # audio without alignment still moves the clock
             _websocket_text_message({"context_id": context_id, "audio": pcm(500)}),
-            chunk("hi there ", 900),
-            chunk("you ", 400),
+            chunk("hi there a ", first_ms),
+            chunk("you ", second_ms),
+            _websocket_text_message({"context_id": context_id, "is_final_audio_for_turn": True}),
+            chunk("bye ", 400),
             _websocket_text_message({"context_id": context_id, "is_final": True}),
         ],
     )
@@ -1091,10 +1096,13 @@ async def test_dialogue_recv_loop_offsets_chunk_relative_alignment() -> None:
         connection
     )
 
+    next_turn_ms = 500 + first_ms + second_ms
     assert [(w, w.start_time, w.end_time) for w in connection.emitter.timed_words] == [
         ("hi ", 0.5, 0.8),
         ("there ", 0.8, 1.4),
-        ("you ", 1.4, 1.8),
+        ("a ", 1.4, 1.6),
+        ("you ", 1.6, next_turn_ms / 1000),
+        ("bye ", next_turn_ms / 1000, (next_turn_ms + 400) / 1000),
     ]
 
 
