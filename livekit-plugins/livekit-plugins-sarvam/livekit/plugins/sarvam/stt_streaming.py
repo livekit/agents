@@ -87,9 +87,9 @@ class _CaptureTimedInputChan(stt.RecognizeStream._InputChan):
 
     def __init__(self) -> None:
         super().__init__()
-        # wall-clock capture start of the last frame read; None before the first frame and
-        # for audio drained from the resampler, which continues the audio before it
-        self.last_capture_start: float | None = None
+        # (estimated, latest possible) wall-clock capture start of the last frame read;
+        # None for audio drained from the resampler, which continues the audio before it
+        self._last_read: tuple[float, float] | None = None
         # set while flush() drains the resampler: that audio was captured before the push
         # that ended the input, however long ago the flush comes
         self.draining_resampler = False
@@ -104,16 +104,29 @@ class _CaptureTimedInputChan(stt.RecognizeStream._InputChan):
         pushed_at = self._pushed_at[0] if self._pushed_at else None
         last_pushed_at, queued_duration = self._last_pushed_at, self._queued_duration
         value = super().recv_nowait()
-        if isinstance(value, rtc.AudioFrame) and self._drained.popleft():
-            self.last_capture_start = None
-        elif isinstance(value, rtc.AudioFrame) and pushed_at is not None:
-            # Same bound the base queue anchors the first frame on: a frame starts at most
-            # its own duration before its push (exact across a pause in the input), and at
-            # most all queued audio before the latest push (exact for a burst).
-            self.last_capture_start = min(
-                pushed_at - value.duration, last_pushed_at - queued_duration
-            )
+        if isinstance(value, rtc.AudioFrame):
+            drained = self._drained.popleft()
+            if drained or pushed_at is None:
+                self._last_read = None
+            else:
+                # A frame is pushed after it is captured, so it starts at most its own
+                # duration before its push. The estimate also takes the bound the base
+                # queue anchors the first frame on, all queued audio before the latest
+                # push, which is exact for a burst.
+                latest = pushed_at - value.duration
+                self._last_read = (min(latest, last_pushed_at - queued_duration), latest)
         return value
+
+    def last_read_times(self) -> tuple[float, float] | None:
+        """(estimated, latest possible) capture start of the last frame read.
+
+        Both are seconds since the capture of the stream's first frame, the origin of
+        ``start_time_offset``. None when unknown.
+        """
+        if self._last_read is None or self._first_frame_at is None:
+            return None
+        estimate, latest = self._last_read
+        return estimate - self._first_frame_at, latest - self._first_frame_at
 
 
 class _InputClock:
@@ -132,25 +145,38 @@ class _InputClock:
         self._provider_starts: list[float] = []
         self._provider_end = 0.0
         self._input_end = 0.0
+        # input seconds the current segment skipped as a gap, which it can still give back
+        self._open_gap = 0.0
 
     def _anchor(self, input_start: float, padding: bool) -> None:
         self._anchors.append((self._provider_end, input_start, padding))
         self._provider_starts.append(self._provider_end)
 
-    def append_input(self, duration: float, input_start: float | None) -> None:
+    def append_input(self, duration: float, capture: tuple[float, float] | None) -> None:
         """Record input audio written to Sarvam.
 
         Args:
             duration: Seconds of audio.
-            input_start: When the audio was captured, in seconds since the first frame was
-                captured. None when unknown, which continues the previous input.
+            capture: The audio's (estimated, latest possible) capture start, in seconds
+                since the first frame was captured. None when unknown, which continues
+                the previous input.
         """
-        start = self._input_end if input_start is None else max(input_start, self._input_end)
+        if capture is not None and self._open_gap > 0 and self._input_end > capture[1]:
+            # Audio after a gap is arriving faster than real time, so part of that gap
+            # was audio delivered late, not a pause: move the segment back.
+            back = min(self._input_end - capture[1], self._open_gap)
+            provider_start, input_start, _ = self._anchors[-1]
+            self._anchors[-1] = (provider_start, input_start - back, False)
+            self._input_end -= back
+            self._open_gap -= back
+
+        start = self._input_end if capture is None else max(capture[0], self._input_end)
         if (
             not self._anchors
             or self._anchors[-1][2]
             or start > self._input_end + INPUT_GAP_TOLERANCE_S
         ):
+            self._open_gap = start - self._input_end
             self._anchor(start, padding=False)
         else:
             start = self._input_end
@@ -159,6 +185,7 @@ class _InputClock:
 
     def append_padding(self, duration: float) -> None:
         """Record silence Sarvam receives that is absent from the input."""
+        self._open_gap = 0.0
         self._anchor(self._input_end, padding=True)
         self._provider_end += duration
 
@@ -167,7 +194,8 @@ class _InputClock:
 
         On the boundary between two segments, an end belongs to the earlier segment, so
         speech that ended right before a gap keeps its end there, and a start belongs to
-        the later one, where speech after the gap begins.
+        the later one, where speech after the gap begins. Keepalive silence has no input
+        time: an end inside it maps to the input before it, a start to the input after.
         """
         if not self._anchors:
             return provider_time
@@ -179,6 +207,10 @@ class _InputClock:
         idx = max(idx - 1, 0)
         provider_start, input_start, padding = self._anchors[idx]
         if padding:
+            if is_start:
+                for _, next_input_start, next_padding in self._anchors[idx + 1 :]:
+                    if not next_padding:
+                        return next_input_start
             return input_start
         return input_start + max(provider_time - provider_start, 0.0)
 
@@ -1144,18 +1176,6 @@ class RealtimeSpeechStream(stt.SpeechStream):
             if isinstance(chan, _CaptureTimedInputChan):
                 chan.draining_resampler = False
 
-    def _input_start_of_last_read(self) -> float | None:
-        """Capture start of the frame just read, in seconds since the first frame's capture.
-
-        Taken from when frames were pushed, never from how much audio was sent: a send
-        backlog or a connect delay would otherwise read as speech happening earlier.
-        """
-        capture_start = getattr(self._input_ch, "last_capture_start", None)
-        first_frame_at = getattr(self._input_ch, "_first_frame_at", None)
-        if capture_start is None or first_frame_at is None:
-            return None
-        return float(capture_start - first_frame_at)
-
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
@@ -1205,7 +1225,13 @@ class RealtimeSpeechStream(stt.SpeechStream):
             await self._send_pending_config_update(ws)
             frames: list[rtc.AudioFrame] = []
             if isinstance(data, rtc.AudioFrame):
-                self._input_clock.append_input(data.duration, self._input_start_of_last_read())
+                # Dated by when frames were pushed, never by how much audio was sent: a
+                # send backlog or a connect delay would read as speech happening earlier.
+                chan = self._input_ch
+                self._input_clock.append_input(
+                    data.duration,
+                    chan.last_read_times() if isinstance(chan, _CaptureTimedInputChan) else None,
+                )
                 frames.extend(audio_bstream.write(data.data.tobytes()))
             if isinstance(data, self._FlushSentinel):
                 self._flush_observed = True

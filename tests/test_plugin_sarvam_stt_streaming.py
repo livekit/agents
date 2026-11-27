@@ -2384,8 +2384,10 @@ async def test_speech_that_ends_before_a_mute_keeps_its_end() -> None:
         (1.1, 2.1, 71.0, 72.0),
         # speech whose end Sarvam places inside the keepalive silence ended before it
         (0.5, 1.05, 0.5, 1.0),
+        # speech whose start Sarvam places inside it (VAD pre-roll) starts after the mute
+        (1.07, 2.1, 71.0, 72.0),
     ],
-    ids=["after_mute", "end_in_keepalive"],
+    ids=["after_mute", "end_in_keepalive", "start_in_keepalive"],
 )
 async def test_keepalive_silence_is_not_on_the_input_clock(
     start_s: float, end_s: float, start: float, end: float
@@ -2492,16 +2494,16 @@ async def test_input_pushed_faster_than_real_time_is_not_a_gap() -> None:
 def test_input_clock_skips_keepalive_sent_before_the_first_frame() -> None:
     clock = stt_streaming._InputClock()
     clock.append_padding(0.05)
-    clock.append_input(1.0, 0.0)
+    clock.append_input(1.0, (0.0, 0.0))
     assert clock.input_time(0.05, is_start=True) == pytest.approx(0.0)
     assert clock.input_time(1.05) == pytest.approx(1.0)
 
 
 def test_input_clock_ignores_delivery_jitter() -> None:
     clock = stt_streaming._InputClock()
-    clock.append_input(0.02, 0.0)
-    clock.append_input(0.02, 0.03)  # 10 ms late: jitter, not a pause
-    clock.append_input(0.02, 0.04)
+    clock.append_input(0.02, (0.0, 0.0))
+    clock.append_input(0.02, (0.03, 0.03))  # 10 ms late: jitter, not a pause
+    clock.append_input(0.02, (0.04, 0.04))
     assert clock.input_time(0.06) == pytest.approx(0.06)
 
 
@@ -2534,3 +2536,46 @@ async def test_a_late_manual_flush_keeps_the_resampler_tail_with_the_speech() ->
         speech = await _final_speech(events)
 
         assert speech.end_time == pytest.approx(1.0, abs=0.03)
+
+
+@pytest.mark.virtual_time
+async def test_audio_delivered_late_frame_by_frame_is_not_a_gap() -> None:
+    """A stall upstream delays frames, then hands them over one at a time.
+
+    The first late frame looks like the end of a pause, but the frames behind it arrive
+    faster than real time, which only audio captured earlier can do, so the timeline
+    must not stay shifted by the stall.
+    """
+    session = _ClockSession()
+    async with _clock_stream(session) as (stream, events):
+        await _speak(stream, 1.0)
+        await asyncio.sleep(0.5)  # a stall: the next 0.5 s of audio is held upstream
+        for _ in range(25):
+            stream.push_frame(_speech_frame())
+            for _ in range(5):  # let the stream read each frame before the next arrives
+                await asyncio.sleep(0)
+        await _speak(stream, 1.0)
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.5 - 1e-9)
+
+        ws.emit_utterance(1.5, 2.5)
+        speech = await _final_speech(events)
+
+        # the audio was continuous: 2.5 s of it, captured from 0 s to 2.5 s
+        assert speech.start_time == pytest.approx(1.5, abs=0.03)
+        assert speech.end_time == pytest.approx(2.5, abs=0.03)
+
+
+def test_input_clock_takes_back_a_gap_when_audio_catches_up() -> None:
+    clock = stt_streaming._InputClock()
+    clock.append_input(1.0, (0.0, 0.0))
+    # a frame pushed 0.5 s late opens what looks like a gap ...
+    clock.append_input(0.02, (1.48, 1.48))
+    # ... but the next frames arrive with it, so they started no later than 1.48 s
+    for _ in range(24):
+        clock.append_input(0.02, (1.48, 1.48))
+    assert clock.input_time(1.5) == pytest.approx(1.5)
+    # a real pause is kept: these frames arrive in real time after it
+    for i in range(10):
+        clock.append_input(0.02, (5.5 + 0.02 * i, 5.5 + 0.02 * i))
+    assert clock.input_time(1.7) == pytest.approx(5.7)
