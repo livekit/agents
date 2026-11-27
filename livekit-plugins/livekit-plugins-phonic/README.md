@@ -128,6 +128,8 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
 | `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
 | `external_id` | `str` | Your own identifier for the conversation, stored on the Phonic conversation |
+| `data_retention_policy` | `dict` | When transcripts and audio are deleted: `{"zero_data_retention": True}`, or `{"zero_data_retention": False, "transcripts": {"delete_after_hours": int \| None}, "audio_recordings": {"delete_after_hours": int \| None}}`. Defaults to the Phonic agent's policy |
+| `external_storage_policy` | `str` \| `None` | External storage policy (your own bucket) that transcripts and audio are delivered to. Requires zero data retention |
 | `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
 | `modalities` | `list["text" \| "audio"]` | `["text", "audio"]` (default) for voice, or `["text"]` for a text conversation: typed user turns in, text replies out, no audio. Start the session with room audio off: `room_options=room_io.RoomOptions(audio_input=False, audio_output=False)` |
 
