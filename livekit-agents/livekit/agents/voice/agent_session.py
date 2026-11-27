@@ -110,6 +110,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from ..beta.guardrail import DecisionGuardrail
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
@@ -791,6 +792,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._amd: AMD | None = None
         self._turn_hooks: TurnHooks | None = None
 
+        # a DecisionGuardrail registers itself here; one per session
+        self._guardrail: DecisionGuardrail | None = None
+
     @property
     def amd(self) -> AMD | None:
         """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
@@ -803,6 +807,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_amd_completed(self, event: AMDCompletedEvent) -> None:
         if self._session_host is not None:
             self._session_host._on_amd_completed(event)
+
+    @property
+    def guardrail(self) -> DecisionGuardrail | None:
+        """The session's :class:`DecisionGuardrail`, or ``None`` if there is none."""
+        return self._guardrail
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
@@ -1512,6 +1521,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._rt_closing:
             await asyncio.wait(list(self._rt_closing))
 
+        # after the drain: speech still playing out keeps its guardrail checks
+        if self._guardrail is not None:
+            await self._guardrail.aclose()
+
         if self._agent_speaking_span:
             self._agent_speaking_span.end()
             self._agent_speaking_span = None
@@ -1780,6 +1793,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 allow_interruptions=allow_interruptions,
                 chat_ctx=chat_ctx,
                 input_details=InputDetails(modality=input_modality),
+                # typed input and run(): audio turns are checked when the turn completes
+                check_user_turn=bool(user_message),
             )
             if run_state:
                 run_state._watch_handle(handle)
