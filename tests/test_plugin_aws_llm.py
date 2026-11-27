@@ -54,6 +54,27 @@ async def test_sampling_params_sent_only_to_supporting_models(
     assert config == ({"temperature": 0.5, "topP": 0.9} if sent else {})
 
 
+async def test_extra_kwargs_reach_the_converse_request() -> None:
+    instance = BedrockLLM(model="us.anthropic.claude-sonnet-4-6", temperature=0.5)
+    guardrail = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
+    stream = instance.chat(
+        chat_ctx=ChatContext(),
+        extra_kwargs={
+            "guardrailConfig": guardrail,
+            "requestMetadata": {"session": "s1"},
+            "temperature": 0.0,
+        },
+    )
+    opts = stream._opts
+    await stream.aclose()
+
+    assert opts["guardrailConfig"] == guardrail
+    assert opts["requestMetadata"] == {"session": "s1"}
+    # temperature is only valid inside inferenceConfig, so it must not reach the top level
+    assert "temperature" not in opts
+    assert opts["inferenceConfig"]["temperature"] == 0.0
+
+
 async def test_sampling_params_warning_logged_once(caplog: pytest.LogCaptureFixture) -> None:
     # chat() runs once per turn; the warning must not repeat every turn
     with caplog.at_level("WARNING"):
