@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, ToolResult, function_tool
+from livekit.agents import Agent, AgentSession, ToolResult, function_tool, mock_tools
 from livekit.agents.llm import (
     FunctionCallOutput,
     FunctionToolCall,
@@ -84,6 +84,40 @@ async def test_tool_awaits_future_result(
         assert output.is_error is fails
     finally:
         await asyncio.gather(result, return_exceptions=True)
+
+
+async def test_mock_tool_awaits_future_result() -> None:
+    expected = "Room reserved."
+
+    @function_tool
+    async def reserve_room() -> str:
+        """Reserve the meeting room."""
+        return "Real tool output."
+
+    def mock_reserve_room() -> asyncio.Future[str]:
+        loop = asyncio.get_running_loop()
+        result = loop.create_future()
+        loop.call_soon(result.set_result, expected)
+        return result
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Reserve the meeting room.")
+    actions.add_llm(
+        content="",
+        tool_calls=[FunctionToolCall(name="reserve_room", arguments="{}", call_id="1")],
+    )
+    actions.add_llm(input=expected, content="Done.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = Agent(instructions="You reserve meeting rooms.", tools=[reserve_room])
+    with mock_tools(Agent, {"reserve_room": mock_reserve_room}):
+        await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    outputs = [item for item in session.history.items if item.type == "function_call_output"]
+    assert len(outputs) == 1
+    assert outputs[0].output == expected
+    assert not outputs[0].is_error
 
 
 @pytest.mark.parametrize("on_duplicate", ["allow", "confirm"])

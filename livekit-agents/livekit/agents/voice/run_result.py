@@ -1238,9 +1238,10 @@ async def _run_mock(mock: Callable, *fnc_args: Any, **fnc_kwargs: Any) -> Any:
     bound = sig.bind_partial(*trimmed_args, **trimmed_kwargs)
     bound.apply_defaults()
 
-    if inspect.iscoroutinefunction(mock):
-        return await mock(*bound.args, **bound.kwargs)
-    return mock(*bound.args, **bound.kwargs)
+    result = mock(*bound.args, **bound.kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def _format_events(events: list[RunEvent], *, selected_index: int | None = None) -> list[str]:
