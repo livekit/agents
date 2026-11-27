@@ -6,13 +6,37 @@ is passed through to the underlying clients, mirroring what Workload Identity
 Federation setups do with in-memory credentials.
 """
 
+from pathlib import Path
+from typing import NoReturn
+
 import pytest
 from google.auth.credentials import AnonymousCredentials
+from google.auth.exceptions import DefaultCredentialsError
 
 from livekit.agents import APIConnectionError
 from livekit.plugins.google import STT, TTS
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _isolate_google_adc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Disable ambient GCP env vars, gcloud config, and ADC lookup."""
+    for var in (
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
+        "CLOUDSDK_CORE_PROJECT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLOUDSDK_CONFIG", str(tmp_path / "gcloud"))
+    monkeypatch.setattr("google.auth._cloud_sdk.get_project_id", lambda: None)
+
+    def _raise_no_adc(*_args: object, **_kwargs: object) -> NoReturn:
+        raise DefaultCredentialsError("Application Default Credentials disabled in test")
+
+    monkeypatch.setattr("google.auth.default", _raise_no_adc)
 
 
 class _ProjectCredentials(AnonymousCredentials):
@@ -60,11 +84,10 @@ class TestSTTCredentials:
             "projects/explicit-project/locations/global/recognizers/_"
         )
 
-    async def test_clear_error_when_project_unresolvable(self, monkeypatch) -> None:
+    async def test_clear_error_when_project_unresolvable(self) -> None:
         # no project on the credentials and no ADC available: the error must
         # say what is wrong instead of a confusing "default credentials not
         # found" at transcription time (Devin finding on #6618)
-        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         creds = AnonymousCredentials()
         stt_instance = STT(credentials=creds)
         client = await stt_instance._create_client(timeout=1.0)
