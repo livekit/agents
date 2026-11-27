@@ -590,6 +590,59 @@ class LLM(llm.LLM):
         )
 
     @staticmethod
+    def with_llmtr(
+        *,
+        model: str = "minimax/minimax-m3.1-flash",
+        api_key: str | None = None,
+        base_url: str = "https://llmtr.com/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of LLMTR LLM.
+
+        LLMTR is an OpenAI-compatible gateway at ``https://llmtr.com/v1``.
+        Model IDs are namespaced ``vendor/model`` values such as
+        ``minimax/minimax-m3.1-flash``. IDs under ``llmtr/`` are hosted in
+        Turkey; other vendor/model IDs route to their vendors.
+
+        ``api_key`` must be set to your LLMTR API key, either using the argument
+        or by setting the ``LLMTR_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("LLMTR_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "LLMTR API key is required, either as argument or set LLMTR_API_KEY environment variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            max_completion_tokens=max_completion_tokens,
+            timeout=timeout,
+        )
+
+    @staticmethod
     def with_cometapi(
         *,
         model: str | CometAPIChatModels = "gpt-5-chat-latest",
