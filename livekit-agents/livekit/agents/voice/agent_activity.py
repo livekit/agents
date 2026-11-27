@@ -4717,6 +4717,40 @@ class AgentActivity(RecognitionHooks):
         except Exception:
             logger.exception("failed to reset tool_choice")
 
+    def _expect_auto_tool_reply(
+        self, *, after: asyncio.Future[Any] | None = None
+    ) -> asyncio.Future[None] | None:
+        """Make the active RunResult wait for the reply the realtime model generates on its own.
+
+        The next generation counts as that reply from now on; the timeout starts once ``after`` is
+        done, for a reply the model gives only then.
+        """
+        if (
+            self._pending_auto_tool_reply_fut is not None
+            or (run_state := self._session._global_run_state) is None
+            or run_state.done()
+        ):
+            return None
+
+        fut: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+        self._pending_auto_tool_reply_fut = fut
+        assert isinstance(self.llm, llm.RealtimeModel)
+        llm_label = self.llm._label
+
+        async def _wait_for_auto_tool_reply() -> None:
+            try:
+                if after is not None:
+                    await asyncio.wait([after])
+                await asyncio.wait_for(asyncio.shield(fut), 5.0)
+            except asyncio.TimeoutError:
+                logger.warning("timed out waiting for realtime auto tool reply from %s", llm_label)
+            finally:
+                if self._pending_auto_tool_reply_fut is fut:
+                    self._pending_auto_tool_reply_fut = None
+
+        run_state._watch_handle(asyncio.create_task(_wait_for_auto_tool_reply()))
+        return fut
+
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
         self,
@@ -5038,8 +5072,53 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx._upsert_item(fnc_call)
             self._session._tool_items_added([fnc_call])
 
+        # a model that wants tool outputs eagerly and replies on its own gets each as its tool
+        # returns while the speech that carried the calls still plays; a handoff, or a result
+        # after playout, takes the batch path
+        rt_session = self._rt_session
+        eager_outputs = (
+            rt_session.capabilities.eager_tool_outputs
+            and rt_session.capabilities.auto_tool_reply_generation
+        )
+        sent_call_ids: set[str] = set()
+        send_tasks: list[asyncio.Task[None]] = []
+        eager_reply_fut: asyncio.Future[None] | None = None
+
+        async def _send_tool_output(out: ToolExecutionOutput) -> None:
+            nonlocal eager_reply_fut
+            self._agent._chat_ctx._upsert_item(out.fnc_call)
+            self._agent._chat_ctx._upsert_item(out.fnc_call_out)
+            self._session._tool_items_added([out.fnc_call, out.fnc_call_out])
+            self._session.emit(
+                "function_tools_executed",
+                FunctionToolsExecutedEvent(
+                    function_calls=[out.fnc_call], function_call_outputs=[out.fnc_call_out]
+                ),
+            )
+            self._restore_rt_tool_choice()
+            if out.fnc_call_out.reply_required and (
+                eager_reply_fut is None or eager_reply_fut.done()
+            ):
+                # the reply usually opens a new speech, so the run waits from the end of this one
+                eager_reply_fut = self._expect_auto_tool_reply(after=process_msg_task)
+            try:
+                async with self._rt_chat_ctx_lock:
+                    chat_ctx = rt_session.chat_ctx.copy()
+                    chat_ctx.items.append(out.fnc_call_out)
+                    await rt_session.update_chat_ctx(chat_ctx)
+            except llm.RealtimeError as e:
+                logger.warning("failed to send the tool result", extra={"error": str(e)})
+
         def _tool_execution_completed_cb(out: ToolExecutionOutput) -> None:
             speech_handle._item_added([out.fnc_call_out])
+            if (
+                eager_outputs
+                and out.agent_task is None
+                and not speech_handle.interrupted
+                and not process_msg_task.done()
+            ):
+                sent_call_ids.add(out.fnc_call.call_id)
+                send_tasks.append(asyncio.create_task(_send_tool_output(out)))
 
         exe_task, tool_output = perform_tool_executions(
             session=self._session,
@@ -5192,6 +5271,8 @@ class AgentActivity(RecognitionHooks):
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
             for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call.call_id in sent_call_ids:
+                    continue
                 interrupted_calls.append(sanitized_out.fnc_call)
                 interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
@@ -5217,17 +5298,23 @@ class AgentActivity(RecognitionHooks):
                         "failed to sync the tool results of an interrupted generation",
                         exc_info=e,
                     )
+            await asyncio.gather(*send_tasks)
             if timeout_cancel is not None:
                 raise timeout_cancel
             return
 
-        # wait for the tool execution to complete
-        tool_output.first_tool_started_fut.add_done_callback(
-            lambda _: self._session._update_agent_state("thinking")
-        )
+        # wait for the tool execution to complete. a callback on a done future runs only on the next
+        # loop pass, after the reset below when nothing here awaits, so a started tool sets it now
+        if tool_output.first_tool_started_fut.done():
+            self._session._update_agent_state("thinking")
+        else:
+            tool_output.first_tool_started_fut.add_done_callback(
+                lambda _: self._session._update_agent_state("thinking")
+            )
 
         self._background_speeches.add(speech_handle)
         await exe_task
+        await asyncio.gather(*send_tasks)
         self._background_speeches.discard(speech_handle)
 
         # important: no agent output should be used after this point
@@ -5245,6 +5332,8 @@ class AgentActivity(RecognitionHooks):
             ignore_task_switch = False
 
             for sanitized_out in tool_output.output:
+                if sanitized_out.fnc_call.call_id in sent_call_ids:
+                    continue
                 fnc_executed_ev.function_calls.append(sanitized_out.fnc_call)
                 fnc_executed_ev.function_call_outputs.append(sanitized_out.fnc_call_out)
 
@@ -5270,7 +5359,8 @@ class AgentActivity(RecognitionHooks):
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
 
-            self._session.emit("function_tools_executed", fnc_executed_ev)
+            if fnc_executed_ev.function_calls:
+                self._session.emit("function_tools_executed", fnc_executed_ev)
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
@@ -5299,28 +5389,13 @@ class AgentActivity(RecognitionHooks):
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev.has_tool_reply
-                    and self._pending_auto_tool_reply_fut is None
-                    and (run_state := self._session._global_run_state) is not None
-                    and not run_state.done()
                 ):
-                    auto_reply_fut = asyncio.get_event_loop().create_future()
-                    self._pending_auto_tool_reply_fut = auto_reply_fut
-                    llm_label = self.llm._label
-
-                    async def _wait_for_auto_tool_reply() -> None:
-                        try:
-                            await asyncio.wait_for(asyncio.shield(auto_reply_fut), 5.0)
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "timed out waiting for realtime auto tool reply from %s",
-                                llm_label,
-                            )
-                        finally:
-                            if self._pending_auto_tool_reply_fut is auto_reply_fut:
-                                self._pending_auto_tool_reply_fut = None
-
-                    task = asyncio.create_task(_wait_for_auto_tool_reply())
-                    run_state._watch_handle(task)
+                    # the reply may wait for these results too, so the wait of this speech's
+                    # eager results restarts from here
+                    if eager_reply_fut and self._pending_auto_tool_reply_fut is eager_reply_fut:
+                        self._pending_auto_tool_reply_fut = None
+                        eager_reply_fut.set_result(None)
+                    auto_reply_fut = self._expect_auto_tool_reply()
 
                 # a model that replies to tool output itself does so under the session's
                 # tool_choice, so an ask's forced one must not outlive the call that answered it
@@ -5383,11 +5458,14 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
-        # no reply follows, so nothing else clears the "thinking" the tool asserted
-        if not tool_reply_expected and self._no_pending_speech:
-            self._session._update_agent_state(
-                "thinking" if self._has_followup_work else "listening"
-            )
+        # this speech is over, though the scheduler releases it only on its next pass
+        current = self._current_speech
+        no_other_speech = all(speech.done() for _, _, speech in self._speech_q) and (
+            current is None or current is speech_handle or current.done()
+        )
+        # no reply or other work follows, so nothing else clears the "thinking" the tool asserted
+        if not tool_reply_expected and not self._has_followup_work and no_other_speech:
+            self._session._update_agent_state("listening")
 
     def _disallow_interruptions(self, speech_handle: SpeechHandle) -> None:
         speech_handle.allow_interruptions = False

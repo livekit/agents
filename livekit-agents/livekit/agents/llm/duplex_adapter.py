@@ -272,6 +272,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
                 turn_detection=True,
                 user_transcription=caps.user_transcription,
                 auto_tool_reply_generation=caps.auto_tool_reply_generation,
+                eager_tool_outputs=caps.eager_tool_outputs,
                 audio_output=True,
                 manual_function_calls=False,
                 supports_overlapping_speech=True,

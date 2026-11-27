@@ -486,6 +486,111 @@ async def test_tool_result_reply_required_reaches_realtime_session(
     assert model.active_session.generate_reply_calls == 1
 
 
+@pytest.mark.parametrize("eager", [True, False])
+async def test_an_eager_tool_output_is_sent_before_the_speech_plays_out(eager: bool) -> None:
+    """A model that wants tool outputs eagerly gets each as its tool returns, not after playout."""
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def lookup(self) -> str:
+            """Look something up."""
+            self.tool_executed.set()
+            return "ok"
+
+    agent = ToolAgent()
+    sent_at: list[float] = []
+    _, model = await run_realtime_tool_turn(
+        agent,
+        tool_executed=agent.tool_executed,
+        capabilities=fake_capabilities(eager_tool_outputs=eager),
+        on_session=lambda s: s.on("function_tools_executed", lambda _: sent_at.append(time.time())),
+    )
+
+    assert len(sent_at) == 1
+    synced = [i for i in model.active_session.chat_ctx.items if i.type == "function_call_output"]
+    assert [o.call_id for o in synced] == ["1"]
+    # the turn plays a second of audio after the tool returns
+    played_out_at = time.time()
+    assert (played_out_at - sent_at[0] > 0.5) is eager
+
+
+async def test_an_early_tool_result_leaves_the_agent_listening() -> None:
+    """A result the model answers on its own does not keep the agent thinking after its turn."""
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+            self.tool_executed = asyncio.Event()
+
+        @function_tool
+        async def lookup(self) -> str:
+            """Look something up."""
+            self.tool_executed.set()
+            return "ok"
+
+    agent = ToolAgent()
+    states: list[str] = []
+    await run_realtime_tool_turn(
+        agent,
+        tool_executed=agent.tool_executed,
+        capabilities=fake_capabilities(eager_tool_outputs=True),
+        on_session=lambda s: s.on("agent_state_changed", lambda ev: states.append(ev.new_state)),
+    )
+
+    # the model's continuation played inside the turn, so no later generation resets the state
+    assert states[-1] == "listening"
+
+
+@pytest.mark.parametrize("delays", [(0.0,), (2.0,), (0.0, 5.5)], ids=["eager", "batch", "mixed"])
+async def test_the_model_reply_to_a_tool_result_is_part_of_the_run(
+    delays: tuple[float, ...],
+) -> None:
+    """The run waits for the reply whether a result is sent during the speech or after it."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(eager_tool_outputs=True))
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup(self, delay: float) -> str:
+            """Look something up."""
+            await asyncio.sleep(delay)
+            return "found"
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(ToolAgent())
+
+        run = asyncio.ensure_future(session.run(user_input="look it up"))
+        rt_session = model.active_session
+        calls = [
+            llm.FunctionCall(call_id=str(i), name="lookup", arguments=f'{{"delay": {d}}}')
+            for i, d in enumerate(delays)
+        ]
+        (await _reply_future(rt_session)).set_result(
+            _generation("let me check", audio=1.0, calls=calls)
+        )
+        # the model replies in a new speech, a moment after the last result reaches it
+        while sum(i.type == "function_call_output" for i in rt_session.chat_ctx.items) < len(calls):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(1.5)
+        reply = _generation("found it", audio=0.5, response_id="reply")
+        reply.user_initiated = False
+        rt_session.emit("generation_created", reply)
+
+        result = await asyncio.wait_for(run, timeout=15)
+
+    assert [e.item.text_content for e in result.events if e.type == "message"] == [
+        "let me check",
+        "found it",
+    ]
+
+
 # --- chat context sync ---------------------------------------------------------
 
 

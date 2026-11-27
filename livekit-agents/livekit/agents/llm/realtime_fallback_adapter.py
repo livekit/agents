@@ -49,6 +49,7 @@ _SOFT_CAPABILITIES = (
     "user_transcription",
     "manual_function_calls",
     "auto_tool_reply_generation",
+    "eager_tool_outputs",
     "mutable_chat_context",
     "mutable_instructions",
     "mutable_tools",
