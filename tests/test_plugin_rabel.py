@@ -1127,6 +1127,30 @@ def test_the_calls_own_form() -> None:
     assert written("", ("mujhe", "balance"), plain) == "mujhe balance"
 
 
+def test_a_script_without_spaces_gets_none_between_the_added_words() -> None:
+    from livekit.plugins.rabel._form import CallForm, written
+
+    # LiveKit's comparison takes kana and ideographs one character at a time, so Bell's added words
+    # are single characters; they are written as the call's finals are, with no space between
+    ja = CallForm()
+    ja.final("\u6b8b\u9ad8\u3092\u78ba\u8a8d\u3057\u305f\u3044\u3067\u3059\u3002")
+    # the shown words and the added ones: the final's string exactly
+    said = "\u6b8b\u9ad8\u3092\u78ba\u8a8d\u3002"
+    assert written("\u6b8b\u9ad8", ("\u3092", "\u78ba", "\u8a8d"), ja) == said
+    assert words_of(said) == ("\u6b8b", "\u9ad8", "\u3092", "\u78ba", "\u8a8d")
+    # an added word of such a script gets no space after a word of a spaced script either, as
+    # Japanese writes it; between two words of a spaced script the space stays
+    assert written("ATM", ("\u3067",), ja) == "ATM\u3067\u3002"
+    zh = CallForm()
+    zh.final("\u6211\u60f3\u67e5\u4f59\u989d\u3002")
+    assert written("\u6211\u60f3", ("\u67e5", "\u4f59", "\u989d"), zh) == (
+        "\u6211\u60f3\u67e5\u4f59\u989d\u3002"
+    )
+    fr = CallForm()
+    fr.final("Je voudrais un billet.")
+    assert written("Je voudrais", ("un", "billet"), fr) == "Je voudrais un billet."
+
+
 # -------------------------------------------------- the wrapped stream's flush
 
 

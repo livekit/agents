@@ -218,6 +218,25 @@ class CallForm:
         return self._capital >= 0
 
 
+def _unspaced(c: str) -> bool:
+    """A character of a script written without spaces between words, which LiveKit's comparison
+    takes one character at a time (split_words with split_character: kana, ideographs, Thai)."""
+    return not c.isspace() and len(split_words(c + c, split_character=True)) == 2
+
+
+def _join(toks: list[str], n_added: int) -> str:
+    """The tokens joined as the speech-to-text writes them: the shown ones with a space between,
+    as before, and each of the last `n_added` (Bell's added words) after a space unless the text
+    before it or the word itself is in a script written without spaces."""
+    shown = " ".join(toks[: len(toks) - n_added])
+    out = shown
+    for w in toks[len(toks) - n_added :]:
+        if out and not (_unspaced(out[-1]) or _unspaced(w[:1])):
+            out += " "
+        out += w
+    return out
+
+
 def written(shown: str, added: tuple[str, ...], form: CallForm) -> str:
     """The guess in the final's form for a language other than English: `shown` (the
     speech-to-text's text of the words so far) and the words Bell adds after them, written as this
@@ -232,4 +251,4 @@ def written(shown: str, added: tuple[str, ...], form: CallForm) -> str:
         return final_form(shown, added)  # no final transcript in this call yet: nothing to copy
     if form.capitals and (not shown or shown.endswith(_ANY_ENDS)):
         toks[len(toks) - len(words)] = _cap(words[0])
-    return " ".join(toks) + end
+    return _join(toks, len(words)) + end
