@@ -1125,3 +1125,63 @@ def test_the_calls_own_form() -> None:
     plain = CallForm()
     plain.final("mera naam ram hai")
     assert written("", ("mujhe", "balance"), plain) == "mujhe balance"
+
+
+# -------------------------------------------------- the wrapped stream's flush
+
+
+class FlushedStream(ScriptedStream):
+    """A stream that needs a flush to finalize the turn while its STT's capability says none is
+    needed, as a FallbackAdapter's stream does when its live provider needs one and another in the
+    list does not."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.flushes = 0
+
+    @property
+    def manual_flush(self) -> bool:
+        return True
+
+    async def _run(self) -> None:
+        async for item in self._input_ch:
+            if isinstance(item, self._FlushSentinel):
+                self.flushes += 1
+
+
+class FlushedSTT(ScriptedSTT):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.made: list[FlushedStream] = []
+
+    def stream(
+        self, *, language: Any = NOT_GIVEN, conn_options: Any = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FlushedStream:
+        s = FlushedStream(stt=self, conn_options=conn_options)
+        self.made.append(s)
+        return s
+
+
+async def test_the_wrapped_streams_flush_need_is_reported_and_its_flush_passed_on() -> None:
+    inner = FlushedSTT()
+    assert inner.capabilities.manual_flush is False
+    w = rabel.STT(
+        inner,
+        api_key="test",
+        base_url="https://api.example",
+        http_session=FakeSession(None),  # type: ignore[arg-type]
+    )
+    stream = w.stream()
+    stream.push_frame(
+        rtc.AudioFrame(
+            data=b"\x00\x00" * 160, sample_rate=16000, num_channels=1, samples_per_channel=160
+        )
+    )
+    await asyncio.sleep(0.05)
+    # LiveKit reads the stream's need before it flushes at the end of a turn
+    # (audio_recognition's manual_flush)
+    assert stream.manual_flush is True
+    stream.flush()
+    await asyncio.sleep(0.05)
+    assert [s.flushes for s in inner.made] == [1]
+    await stream.aclose()

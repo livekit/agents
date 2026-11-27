@@ -564,6 +564,15 @@ class SpeechStream(stt.RecognizeStream):
         if self._inner is not None:
             self._hand_on_offset(self._inner)
 
+    @property
+    def manual_flush(self) -> bool:
+        # the wrapped stream's need: LiveKit flushes this stream only when it says so, and the
+        # flush is passed on to the wrapped one. A FallbackAdapter's stream reports its live
+        # provider's need, which its STT's capability (every provider's) can hide.
+        if self._inner is not None:
+            return self._inner.manual_flush
+        return self._rstt._stt.capabilities.manual_flush
+
     def _hand_on_offset(self, inner: stt.RecognizeStream) -> None:
         if self._timeline_start is None:
             return
