@@ -341,6 +341,27 @@ class SpeechHandle:
 
         await asyncio.shield(self._generations[step_idx])
 
+    async def _wait_for_current_generation(self) -> None:
+        """Wait until the step that is playing, or next in line to play, has played out.
+
+        A step adds what it said to the chat context before its generation is marked done,
+        so a reply generated afterwards sees it. Unlike ``wait_for_playout``, this doesn't
+        wait for the step's tool calls, which may themselves wait on the user (e.g. through
+        an ``AgentTask``).
+        """
+        if len(self._generations) < self._num_steps:
+            # the step isn't authorized yet, e.g. held by `min_consecutive_speech_delay`
+            authorized = asyncio.ensure_future(self._wait_for_authorization())
+            try:
+                await asyncio.wait(
+                    [authorized, self._done_fut], return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                authorized.cancel()
+
+        if self._generations:
+            await self._wait_for_generation()
+
     async def _wait_for_scheduled(self) -> None:
         await asyncio.shield(self._scheduled_fut)
 

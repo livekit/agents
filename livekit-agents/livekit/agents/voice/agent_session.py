@@ -1852,6 +1852,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 speaking = activity is not None and not activity._user_silence_event.is_set()
                 self._update_user_state("speaking" if speaking else "listening")
 
+    async def _wait_for_activity_switch(self) -> None:
+        """Wait out an activity switch (a handoff or an AgentTask) that is in flight.
+
+        Mid-switch, the current activity's scheduling is paused and ``generate_reply``
+        targets the next activity, which refuses speech until it has started.
+        ``_update_activity`` holds ``_activity_lock`` from the old activity's drain or pause
+        through the new one's start, so waiting for the lock waits out the switch. Waiting
+        for the paused activity to resume would not do: when the switch is into an
+        AgentTask, the parent resumes only once the task completes.
+        """
+        while (
+            (activity := self._activity) is not None
+            and activity.scheduling_paused
+            and self._activity_lock.locked()
+            and not self._is_closing()
+        ):
+            async with self._activity_lock:
+                pass
+
     def clear_user_turn(self) -> None:
         """Discard uncommitted user transcription and input audio."""
         if self._activity is None:
