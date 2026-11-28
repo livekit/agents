@@ -7,6 +7,7 @@
 
 mod delay;
 mod dsp;
+mod level;
 #[cfg(test)]
 mod playout_tests;
 
@@ -66,6 +67,10 @@ pub struct Statistics {
     pub rendered: u64,
     pub stretched: u64,
     pub accelerated: u64,
+    /// Subset of `accelerated` removed by the severe-backlog mode.
+    pub fast_accelerated: u64,
+    /// Subset of `concealed` inserted to align a returning voiced waveform.
+    pub merge_inserted: u64,
     pub concealed: u64,
     pub silent: u64,
     pub underruns: u64,
@@ -95,6 +100,7 @@ pub struct Playout {
     last_time: Option<Duration>,
     delay: delay::Delay,
     target: usize,
+    level: level::Level,
     started: bool,
     finished: bool,
     outage: bool,
@@ -128,6 +134,7 @@ impl Playout {
             last_time: None,
             delay: delay::Delay::default(),
             target: samples(config.minimum_delay),
+            level: level::Level::default(),
             started: false,
             finished: false,
             outage: false,
@@ -183,6 +190,7 @@ impl Playout {
         self.last_time = None;
         self.delay = delay::Delay::default();
         self.target = samples(self.config.minimum_delay);
+        self.level = level::Level::default();
         self.started = false;
         self.finished = false;
         self.outage = false;
@@ -222,8 +230,16 @@ impl Playout {
                 && self.concealer.gain() < 0.5
                 && self.queue.len() < self.target / 2;
             if self.outage && !self.queue.is_empty() && !postpone {
-                self.recovery.start(&self.concealer, &self.queue);
+                self.recovery.start(&self.concealer, &self.queue, !self.finished);
                 self.outage = false;
+                self.level = level::Level::default();
+            }
+            if let Some(sample) = self.recovery.next_prefix() {
+                *out = sample;
+                self.last_output = sample;
+                self.statistics.concealed += 1;
+                self.statistics.merge_inserted += 1;
+                continue;
             }
             let real = self.pending.pop_front().or_else(|| {
                 if !self.started || postpone {
@@ -292,21 +308,24 @@ impl Playout {
     }
 
     fn adjust(&mut self, now: Duration) {
-        if self.config.maximum_stretch == 0.0
-            || self.statistics.rendered < self.stretch_after
-            || self.queue.len() < FRAME + PERIOD_MAX
-        {
+        if self.config.maximum_stretch == 0.0 {
             return;
         }
         let source_position =
             self.statistics.source_consumed.saturating_sub(self.pending.len() as u64);
-        let playout_delay_ms = self.delay.playout_delay_ms(now, source_position);
+        let playout_delay = self.delay.playout_delay(now, source_position);
         let target_ms = self.target * 1000 / SAMPLE_RATE as usize;
         // NetEq's decision window includes the recent arrival envelope and 20ms granularity.
         // A queue refilled by a late packet must not immediately be drained back to zero.
-        let high_limit = target_ms + self.delay.max_delay_ms() + 20;
-        let expand = playout_delay_ms < target_ms;
-        let accelerate = playout_delay_ms >= high_limit;
+        let high_limit =
+            self.target + (self.delay.max_delay_ms() + 20) * (SAMPLE_RATE as usize / 1000);
+        let filtered = self.level.update(playout_delay, target_ms, self.statistics.rendered);
+        let fast = playout_delay >= high_limit.saturating_mul(4);
+        if !fast && self.statistics.rendered < self.stretch_after {
+            return;
+        }
+        let expand = playout_delay < self.target && filtered < self.target;
+        let accelerate = playout_delay >= high_limit && (filtered >= high_limit || fast);
         if !expand && !accelerate {
             return;
         }
@@ -315,13 +334,26 @@ impl Playout {
         let available_budget =
             budget.saturating_sub(self.statistics.stretched + self.statistics.accelerated);
         let mut output = [0; FRAME];
-        let operation = if expand { Stretch::Expand } else { Stretch::Accelerate };
-        let Some((consumed, period)) = dsp::stretch(
-            &self.queue,
-            operation,
-            available_budget.min(PERIOD_MAX as u64) as usize,
-            &mut output,
-        ) else {
+        let operation = if expand {
+            Stretch::Expand
+        } else if fast {
+            Stretch::FastAccelerate
+        } else {
+            Stretch::Accelerate
+        };
+        let limit = available_budget.min(PERIOD_MAX as u64) as usize;
+        let result = if expand && self.queue.len() < FRAME + PERIOD_MAX {
+            dsp::preemptive(
+                &self.history,
+                &self.queue,
+                limit,
+                self.concealer.passive_level(),
+                &mut output,
+            )
+        } else {
+            dsp::stretch(&self.queue, operation, limit, self.concealer.passive_level(), &mut output)
+        };
+        let Some((consumed, period)) = result else {
             return;
         };
         self.pending.extend(output);
@@ -330,13 +362,18 @@ impl Playout {
             self.concealer.observe(source);
         }
         self.statistics.source_consumed += consumed as u64;
+        self.level.correct(if expand { -(period as isize) } else { period as isize });
         if expand {
             self.statistics.stretched += period as u64;
         } else {
             self.statistics.accelerated += period as u64;
+            if fast {
+                self.statistics.fast_accelerated += period as u64;
+            }
         }
         self.stretch_after = self.statistics.rendered
-            + (period as f64 / f64::from(self.config.maximum_stretch)).ceil() as u64;
+            + ((period as f64 / f64::from(self.config.maximum_stretch)).ceil() as u64)
+                .max(u64::from(SAMPLE_RATE) / 20);
     }
 }
 

@@ -190,6 +190,146 @@
     261
   ],
   "scenarios": {
+    "clean": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 0,
+        "silent": 48000,
+        "stretched": 0,
+        "accelerated": 0,
+        "underruns": 0,
+        "fast_accelerated": 0,
+        "merge_inserted": 0
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 0,
+        "missing_samples": 0
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
+      }
+    },
+    "late_20ms": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 0,
+        "silent": 48000,
+        "stretched": 0,
+        "accelerated": 0,
+        "underruns": 0,
+        "fast_accelerated": 0,
+        "merge_inserted": 0
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 1,
+        "missing_samples": 480
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
+      }
+    },
+    "late_30ms_no_reserve": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 134,
+        "silent": 47242,
+        "stretched": 624,
+        "accelerated": 0,
+        "underruns": 1,
+        "fast_accelerated": 0,
+        "merge_inserted": 38
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 1,
+        "missing_samples": 720
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
+      }
+    },
+    "repeated_stalls": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 520,
+        "silent": 47480,
+        "stretched": 0,
+        "accelerated": 0,
+        "underruns": 1,
+        "fast_accelerated": 0,
+        "merge_inserted": 40
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 1,
+        "missing_samples": 960
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
+      }
+    },
+    "slow_jittery": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 15600,
+        "silent": 32400,
+        "stretched": 0,
+        "accelerated": 0,
+        "underruns": 16,
+        "fast_accelerated": 0,
+        "merge_inserted": 462
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 16,
+        "missing_samples": 16080
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
+      }
+    },
     "startup_jitter": {
       "fault_start_ms": 100,
       "rust_metrics": {
@@ -199,15 +339,23 @@
         "target_delay_us": 100000,
         "source_consumed": 630000,
         "concealed": 6720,
-        "silent": 45624,
+        "silent": 45695,
         "stretched": 0,
-        "accelerated": 4344,
-        "underruns": 4
+        "accelerated": 4415,
+        "underruns": 4,
+        "fast_accelerated": 0,
+        "merge_inserted": 111
       },
       "baseline": {
         "startup_ms": 0,
         "underruns": 4,
         "missing_samples": 7200
+      },
+      "acceleration": {
+        "first_ms": 2500.0,
+        "first_fast_ms": null,
+        "removed_ms": 183.95833333333334,
+        "fast_removed_ms": 0.0
       }
     },
     "reported_jitter": {
@@ -218,16 +366,24 @@
         "pending_output": 0,
         "target_delay_us": 100000,
         "source_consumed": 630000,
-        "concealed": 10427,
+        "concealed": 10377,
         "silent": 41280,
         "stretched": 0,
-        "accelerated": 3707,
-        "underruns": 8
+        "accelerated": 3657,
+        "underruns": 8,
+        "fast_accelerated": 0,
+        "merge_inserted": 317
       },
       "baseline": {
         "startup_ms": 0,
         "underruns": 4,
         "missing_samples": 7200
+      },
+      "acceleration": {
+        "first_ms": 5230.0,
+        "first_fast_ms": null,
+        "removed_ms": 152.375,
+        "fast_removed_ms": 0.0
       }
     },
     "burst_recovery": {
@@ -239,15 +395,51 @@
         "target_delay_us": 100000,
         "source_consumed": 630000,
         "concealed": 9120,
-        "silent": 45650,
+        "silent": 45652,
         "stretched": 0,
-        "accelerated": 6770,
-        "underruns": 1
+        "accelerated": 6772,
+        "underruns": 1,
+        "fast_accelerated": 0,
+        "merge_inserted": 0
       },
       "baseline": {
         "startup_ms": 0,
         "underruns": 1,
         "missing_samples": 9600
+      },
+      "acceleration": {
+        "first_ms": 4360.0,
+        "first_fast_ms": null,
+        "removed_ms": 282.1666666666667,
+        "fast_removed_ms": 0.0
+      }
+    },
+    "no_catchup": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 520,
+        "silent": 47002,
+        "stretched": 478,
+        "accelerated": 0,
+        "underruns": 1,
+        "fast_accelerated": 0,
+        "merge_inserted": 40
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 1,
+        "missing_samples": 960
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
       }
     },
     "long_outage": {
@@ -259,15 +451,107 @@
         "target_delay_us": 100000,
         "source_consumed": 630000,
         "concealed": 23520,
-        "silent": 37554,
+        "silent": 41350,
         "stretched": 0,
-        "accelerated": 13074,
-        "underruns": 1
+        "accelerated": 16870,
+        "underruns": 1,
+        "fast_accelerated": 6245,
+        "merge_inserted": 0
       },
       "baseline": {
         "startup_ms": 0,
         "underruns": 1,
         "missing_samples": 24000
+      },
+      "acceleration": {
+        "first_ms": 4350.0,
+        "first_fast_ms": 5100.0,
+        "removed_ms": 702.9166666666666,
+        "fast_removed_ms": 260.2083333333333
+      }
+    },
+    "variable_chunks": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 0,
+        "silent": 48000,
+        "stretched": 0,
+        "accelerated": 0,
+        "underruns": 0,
+        "fast_accelerated": 0,
+        "merge_inserted": 0
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 0,
+        "missing_samples": 0
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
+      }
+    },
+    "clock_drift": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 0,
+        "silent": 47384,
+        "stretched": 616,
+        "accelerated": 0,
+        "underruns": 0,
+        "fast_accelerated": 0,
+        "merge_inserted": 0
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 3,
+        "missing_samples": 720
+      },
+      "acceleration": {
+        "first_ms": null,
+        "first_fast_ms": null,
+        "removed_ms": 0.0,
+        "fast_removed_ms": 0.0
+      }
+    },
+    "catchup": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 0,
+        "silent": 64147,
+        "stretched": 0,
+        "accelerated": 16147,
+        "underruns": 0,
+        "fast_accelerated": 6712,
+        "merge_inserted": 0
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 0,
+        "missing_samples": 0
+      },
+      "acceleration": {
+        "first_ms": 3730.0,
+        "first_fast_ms": 4500.0,
+        "removed_ms": 672.7916666666666,
+        "fast_removed_ms": 279.6666666666667
       }
     }
   }

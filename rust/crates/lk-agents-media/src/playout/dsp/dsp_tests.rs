@@ -91,11 +91,17 @@ fn phase_aligned_recovery_keeps_the_boundary_and_preserves_incoming_energy() {
         let input = sine(720, 120, phase, 12_000.0);
         let queue = input.iter().copied().collect();
         let mut recovery = Recovery::default();
-        recovery.start(&c, &queue);
-        let out: Vec<_> = input.iter().map(|&s| recovery.apply(s)).collect();
+        recovery.start(&c, &queue, true);
+        let mut out = Vec::new();
+        while let Some(sample) = recovery.next_prefix() {
+            out.push(sample);
+        }
+        let prefix = out.len();
+        assert!(prefix < c.period());
+        out.extend(input.iter().map(|&s| recovery.apply(s)));
         assert_eq!(out[0], last);
         assert!(rms(|i| out[240 + i], 240) > 7500.0);
-        assert_eq!(&out[480..], &input[480..]);
+        assert_eq!(&out[prefix + 480..], &input[480..]);
         assert!(!recovery.active());
         let jump = out.windows(2).map(|p| (i32::from(p[1]) - i32::from(p[0])).abs()).max().unwrap();
         assert!(jump < 3000, "phase={phase} jump={jump}");
@@ -110,7 +116,7 @@ fn long_outage_returns_without_an_abrupt_full_gain_onset() {
     }
     let input = [12_000; 960];
     let mut recovery = Recovery::default();
-    recovery.start(&c, &input.iter().copied().collect());
+    recovery.start(&c, &input.iter().copied().collect(), true);
     let out: Vec<_> = input.into_iter().map(|s| recovery.apply(s)).collect();
     assert_eq!(out[0], 0);
     assert!(out[24] < 1000);
@@ -141,7 +147,7 @@ fn time_stretch_preserves_tone_pitch_and_handles_quiet_input() {
     for operation in [Stretch::Expand, Stretch::Accelerate] {
         let input: VecDeque<_> = sine(FRAME + PERIOD_MAX, 120, 23, 8000.0).into();
         let mut output = [0; FRAME];
-        let (consumed, period) = stretch(&input, operation, PERIOD_MAX, &mut output).unwrap();
+        let (consumed, period) = stretch(&input, operation, PERIOD_MAX, 40.0, &mut output).unwrap();
         assert!((period as isize - 120).abs() < 5);
         assert_eq!(
             consumed,
@@ -149,7 +155,7 @@ fn time_stretch_preserves_tone_pitch_and_handles_quiet_input() {
         );
         assert!(correlation(|i| output[i], |i| output[i + 120], FRAME - 120) > 0.98);
         let quiet = VecDeque::from(vec![12; FRAME + PERIOD_MAX]);
-        stretch(&quiet, operation, PERIOD_MAX, &mut output).unwrap();
+        stretch(&quiet, operation, PERIOD_MAX, 40.0, &mut output).unwrap();
         assert_eq!(output, [12; FRAME]);
     }
 }
@@ -158,7 +164,7 @@ fn time_stretch_preserves_tone_pitch_and_handles_quiet_input() {
 fn unvoiced_transients_are_not_spliced_without_a_safe_match() {
     let input = noise(FRAME + PERIOD_MAX, 10_000.0).into();
     let mut output = [0; FRAME];
-    assert!(stretch(&input, Stretch::Accelerate, PERIOD_MAX, &mut output).is_none());
+    assert!(stretch(&input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut output).is_none());
 }
 
 #[test]
@@ -190,8 +196,78 @@ fn a_quiet_phoneme_does_not_force_the_returning_onset_to_near_silence() {
     }
     let input = sine(720, 120, 17, 12000.0);
     let mut recovery = Recovery::default();
-    recovery.start(&c, &input.iter().copied().collect());
+    recovery.start(&c, &input.iter().copied().collect(), true);
     let out: Vec<_> = input.iter().map(|&s| recovery.apply(s)).collect();
     assert!(rms(|i| out[240 + i], 120) > 6000.0);
     assert_eq!(&out[480..], &input[480..]);
+}
+
+#[test]
+fn preemptive_expansion_uses_history_with_only_twenty_ms_of_new_audio() {
+    let history: VecDeque<_> = sine(HISTORY, 120, 23, 8000.0).into();
+    let input: VecDeque<_> = sine(FRAME, 120, HISTORY + 23, 8000.0).into();
+    let mut output = [0; FRAME];
+    let (consumed, inserted) = preemptive(&history, &input, PERIOD_MAX, 40.0, &mut output).unwrap();
+    assert_eq!(inserted, 120);
+    assert_eq!(consumed + inserted, FRAME);
+    assert!(correlation(|i| output[i], |i| output[i + 120], FRAME - 120) > 0.99);
+    assert_eq!(output[0], input[0]);
+    assert!(output.windows(2).all(|p| (i32::from(p[1]) - i32::from(p[0])).abs() < 600));
+    // A voiced history is not permission to duplicate a returning consonant or new onset.
+    let transient: VecDeque<_> = noise(FRAME, 12000.0).into();
+    assert!(preemptive(&history, &transient, PERIOD_MAX, 40.0, &mut output).is_none());
+    assert!(preemptive(&history, &VecDeque::new(), PERIOD_MAX, 40.0, &mut output).is_none());
+}
+
+#[test]
+fn fast_acceleration_removes_multiple_periods_without_changing_tone_pitch() {
+    let input: VecDeque<_> = sine(FRAME + PERIOD_MAX, 120, 23, 8000.0).into();
+    let mut normal = [0; FRAME];
+    let mut fast = [0; FRAME];
+    let (_, regular) = stretch(&input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut normal).unwrap();
+    let (consumed, removed) =
+        stretch(&input, Stretch::FastAccelerate, PERIOD_MAX, 40.0, &mut fast).unwrap();
+    assert_eq!(regular, 120);
+    assert_eq!(removed, 360);
+    assert_eq!(consumed, FRAME + removed);
+    assert!(correlation(|i| fast[i], |i| fast[i + 120], FRAME - 120) > 0.99);
+    let transient = noise(FRAME + PERIOD_MAX, 10000.0).into();
+    assert!(stretch(&transient, Stretch::FastAccelerate, PERIOD_MAX, 40.0, &mut fast).is_none());
+}
+
+#[test]
+fn recovery_never_adds_alignment_delay_for_an_unvoiced_onset_or_eof() {
+    let mut c = begin(&sine(HISTORY, 120, 7, 12000.0), 2400);
+    for _ in 0..480 {
+        c.next();
+    }
+    for input in [noise(720, 12000.0), vec![0; 720]] {
+        let mut recovery = Recovery::default();
+        recovery.start(&c, &input.iter().copied().collect(), true);
+        assert!(recovery.next_prefix().is_none());
+    }
+    let voiced = sine(720, 120, 60, 12000.0).into();
+    let mut recovery = Recovery::default();
+    recovery.start(&c, &voiced, false);
+    assert!(recovery.next_prefix().is_none());
+    recovery.start(&c, &voiced, true);
+    assert!(recovery.next_prefix().is_some());
+    let remaining = std::iter::from_fn(|| recovery.next_prefix()).count();
+    assert!(remaining < c.period());
+}
+
+#[test]
+fn learned_room_tone_can_be_time_scaled_without_treating_it_as_voiced_speech() {
+    let background = noise(24000, 200.0);
+    let c = begin(&background, 2400);
+    assert!(c.passive_level() > 200.0);
+    let input: VecDeque<_> = noise(FRAME + PERIOD_MAX, 200.0).into();
+    let mut output = [0; FRAME];
+    assert!(stretch(&input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut output).is_none());
+    assert!(
+        stretch(&input, Stretch::Accelerate, PERIOD_MAX, c.passive_level(), &mut output).is_some()
+    );
+    assert!(output.iter().all(|s| i32::from(*s).abs() <= 200));
+    let speech_only = begin(&noise(24000, 12000.0), 2400);
+    assert_eq!(speech_only.passive_level(), 40.0);
 }

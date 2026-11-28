@@ -144,6 +144,10 @@ impl Concealer {
         }
     }
 
+    pub(in crate::playout) fn passive_level(&self) -> f64 {
+        self.background_model.passive_level()
+    }
+
     pub(in crate::playout) fn gain(&self) -> f64 {
         let gain =
             (self.segment_gain * (1.0 - self.segment_position as f64 * self.mute_slope)).max(0.0);

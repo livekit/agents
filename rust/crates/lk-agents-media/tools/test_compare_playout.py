@@ -73,6 +73,15 @@ class FaultPlacementTests(unittest.TestCase):
         self.assertEqual(rows, schedule("reported_jitter", 24_000 * 12, 51, speech))
         self.assertEqual([row[0] for row in rows], sorted(row[0] for row in rows))
 
+    def test_catchup_is_a_complete_provider_burst_with_one_second_of_lead(self):
+        rows = schedule("catchup", 24_000 * 10, 22)
+        self.assertEqual(rows[22][0], 2_200_000)
+        self.assertEqual(rows[37][0], 2_700_000)
+        self.assertEqual(rows[38][0], 2_800_000)
+        self.assertEqual([row[0] for row in rows], sorted(row[0] for row in rows))
+        self.assertEqual(sum(row[2] for row in rows), 24_000 * 10)
+        self.assertTrue(all(start == index * 2400 for index, (_, start, _) in enumerate(rows)))
+
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
             speech_activity(bytes(24_000 * 10 * 2))

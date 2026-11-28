@@ -34,6 +34,7 @@ SCENARIOS = (
     "long_outage",
     "variable_chunks",
     "clock_drift",
+    "catchup",
 )
 
 
@@ -73,7 +74,12 @@ def schedule(
         length = min(duration_ms * 24, count - start)
         nominal = start * 1_000_000 // 24000
         delay = 0
-        if name in ("late_20ms", "late_30ms_no_reserve") and index == anchor:
+        if name == "catchup" and index >= anchor:
+            # A temporary 3x-realtime provider burst creates one second of extra queued
+            # speech, then returns to realtime. No missing/reordered source or render pause.
+            progress = min(index - anchor, 15)
+            delay = -(progress * 100_000 - progress * 100_000 // 3)
+        elif name in ("late_20ms", "late_30ms_no_reserve") and index == anchor:
             delay = 30_000 if name == "late_30ms_no_reserve" else 20_000
         elif (
             name == "repeated_stalls"
@@ -236,6 +242,10 @@ def render_player(out: Path, report: dict) -> None:
             "Changing chunk size should not cause an underrun.",
         ),
         "clock_drift": ("Sender 1000 ppm slower", "Small rate mismatch accumulates over time."),
+        "catchup": (
+            "Catch-up after faster-than-realtime delivery",
+            "A 3x-realtime burst builds 1s of backlog; normal/fast acceleration reduces it.",
+        ),
     }
     tracks = {
         "baseline": "No NetEq",
@@ -255,6 +265,8 @@ def render_player(out: Path, report: dict) -> None:
                 detail = f"{metrics['missing_samples'] / 24:g} ms gaps · {metrics['startup_ms']} ms startup"
             elif track == "candidate":
                 detail = f"{case['rust_metrics']['concealed'] / 24:g} ms concealed · {case.get('delay_ms', report['delay_ms'])} ms startup"
+                if case.get("acceleration", {}).get("removed_ms"):
+                    detail += f" · {case['acceleration']['removed_ms']:.0f} ms removed ({case['acceleration']['fast_removed_ms']:.0f} fast)"
             else:
                 detail = "Adaptive delay · reference DSP"
             cells.append(
@@ -268,6 +280,11 @@ def render_player(out: Path, report: dict) -> None:
             "cases": {
                 name: {
                     "label": labels[name][0],
+                    "accelerationSeconds": (
+                        case["acceleration"]["first_ms"] / 1000
+                        if case.get("acceleration", {}).get("first_ms") is not None
+                        else None
+                    ),
                     "faultSeconds": case.get(
                         "fault_start_ms", report["speech_activity"]["anchor_ms"]
                     )
@@ -293,7 +310,7 @@ def render_player(out: Path, report: dict) -> None:
 <label for="track">Playback</label><select id="track">"""
         + "".join(f'<option value="{key}">{value}</option>' for key, value in tracks.items())
         + """</select>
-<button id="start">Play from start</button><button id="gap">Play around stall</button><button id="original">Original sentence</button>
+<button id="start">Play from start</button><button id="gap">Play around stall</button><button id="acceleration">Play acceleration</button><button id="original">Original sentence</button>
 <audio id="audio" controls preload="metadata"></audio><div id="status" role="status"></div></section>
 <p>Start at zero to compare latency. Fault onset is selected from verified active speech; see the onset time below. The Playback menu switches at the same wall-clock position; these are not speech-aligned quality scores. Gaps exclude intentional startup and the trailing observation window. Concealed time can include generated fades. NetEq alone uses offline 24→48→24 kHz conversion; its delay is adaptive.</p>
 <div class="scroll"><table><thead><tr><th>Scenario / what to listen for</th><th>No NetEq</th><th>100 ms FIFO</th><th>libwebrtc NetEq</th><th>Rust controller</th></tr></thead><tbody>"""
@@ -313,6 +330,7 @@ function select(time=0,play=false){
  audio.src=`${name}/${variant}.wav`;
  audio.currentTime=time;
  status.textContent=`${data.cases[name].label} · ${data.tracks[variant]}`;
+ document.getElementById('acceleration').disabled=data.cases[name].accelerationSeconds===null;
  history.replaceState(null,'',`?scenario=${name}&track=${variant}#player`);
  if(play)audio.play().catch(()=>{status.textContent+=' · Press the browser Play control.';});
 }
@@ -320,6 +338,7 @@ scenario.addEventListener('change',()=>select(0,false));
 track.addEventListener('change',()=>select(audio.currentTime,!audio.paused));
 document.getElementById('start').onclick=()=>select(0,true);
 document.getElementById('gap').onclick=()=>select(Math.max(0,data.cases[scenario.value].faultSeconds-0.4),true);
+document.getElementById('acceleration').onclick=()=>select(Math.max(0,data.cases[scenario.value].accelerationSeconds-0.4),true);
 document.getElementById('original').onclick=()=>{audio.src=data.source;status.textContent='Original GPTLive sentence';audio.play().catch(()=>{});};
 document.querySelectorAll('a.play').forEach(link=>link.onclick=event=>{event.preventDefault();const next=new URL(link.href);scenario.value=next.searchParams.get('scenario');track.value=next.searchParams.get('track');select(0,true);document.getElementById('player').scrollIntoView();});
 audio.addEventListener('error',()=>{status.textContent='Audio could not load. Please reload this page.';});
@@ -478,7 +497,8 @@ def main() -> None:
             case / "neteq_vs_candidate.wav",
         )
         with (case / "timeline.csv").open() as stream:
-            final = list(csv.DictReader(stream))[-1]
+            timeline = [{k: int(v) for k, v in row.items()} for row in csv.DictReader(stream)]
+            final = timeline[-1]
         with (case / "fifo_statistics.csv").open() as stream:
             fifo_metrics = {
                 row["track"]: {k: int(v) for k, v in row.items() if k != "track"}
@@ -487,7 +507,26 @@ def main() -> None:
         report["scenarios"][name] = {
             "fault_start_ms": 100 if name == "startup_jitter" else activity["anchor_ms"],
             "delay_ms": case_delay,
-            "rust_metrics": {k: int(v) for k, v in final.items()},
+            "rust_metrics": final,
+            "acceleration": {
+                "first_ms": next(
+                    (row["time_us"] / 1000 for row in timeline if row["accelerated"]), None
+                ),
+                "first_fast_ms": next(
+                    (row["time_us"] / 1000 for row in timeline if row["fast_accelerated"]), None
+                ),
+                "removed_ms": final["accelerated"] / 24,
+                "fast_removed_ms": final["fast_accelerated"] / 24,
+                "events": [
+                    {
+                        "time_ms": row["time_us"] / 1000,
+                        "removed_ms": (row["accelerated"] - previous["accelerated"]) / 24,
+                        "fast": row["fast_accelerated"] > previous["fast_accelerated"],
+                    }
+                    for previous, row in zip(timeline, timeline[1:], strict=False)
+                    if row["accelerated"] > previous["accelerated"]
+                ],
+            },
             "fifo_metrics": fifo_metrics,
             "rust": (case / "statistics.txt").read_text(),
             "neteq": reference_stats,

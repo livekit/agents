@@ -75,10 +75,10 @@ a signal-dependent envelope preserves short voiced gaps and fades unstable trans
 separately learned, conservative room-tone model. Long gaps eventually mute; silence does
 not turn into a tone. No generated audio trains the background model.
 
-Recovery searches the generated continuation for a phase match to the beginning of the
-returning source. It adjusts the synthetic phase, never skips source samples, crossfades
-with correlation-aware energy normalization, and restores gain gradually after a faded
-outage. Unvoiced onsets use a shorter merge than strongly correlated voiced returns.
+Recovery validates two consecutive source windows for a phase match to the generated
+continuation. A bounded continuation prefix aligns a strongly matched voiced return,
+without skipping source samples or abruptly warping the waveform. It crossfades with
+correlation-aware energy normalization and restores gain after a faded outage. Unvoiced onsets use a shorter merge than strongly correlated voiced returns.
 Overlap/add time stretching validates a splice over two windows and handles quiet signals
 without a pitch estimate. Unreliable transient matches are left untouched.
 
@@ -125,7 +125,7 @@ gap duration and listening quality, not just the injected delay count.
 
 ## Focused listening cases
 
-The PR table retains Startup, Jitter, Burst and Outage. Other scenarios remain available
+The PR table retains Startup, Jitter, Burst, Outage and Catchup. Other scenarios remain available
 in the offline tool.
 `startup_jitter` delays source chunks 1–4 by 60, 100,
 160 and 300 ms. Ordered arrivals for chunks 0–7 are 0, 160, 300, 460, 700, 700, 700,
@@ -151,3 +151,27 @@ Histogram arithmetic and expand-analysis formulas are adapted from WebRTC NetEq 
 `a545de4` (`histogram.cc`, `expand.cc`); the BSD license and patent grant are included as
 `LICENSE.webrtc` and `PATENTS.webrtc`. The implementation uses floating-point 24 kHz PCM
 analysis rather than reproducing NetEq fixed-point processing.
+
+## Time scaling and catch-up
+
+The Q8 timing filter updates on a 10 ms rendered-sample cadence and compensates successful
+stretching immediately. Timing comparisons retain sample precision, including fractional
+milliseconds. Ordinary operations are at least 50 ms apart and share the configured rate
+budget. History-assisted preemptive expansion also works with only 20 ms of new audio;
+new onsets must pass independent history/source correlation and amplitude checks.
+Passive speech detection uses eight times the conservatively learned room-tone energy.
+
+Severe backlog (four times the upper decision threshold) permits fast acceleration:
+verified pitch multiples, a 0.5 correlation threshold rather than the ordinary 0.9, and
+bypassing the ordinary cooldown. It still respects the same insertion/removal budget.
+It does not silently discard a chunk or promise immediate recovery of arbitrarily large delay.
+
+`catchup` starts at the common active-speech onset. A provider sends 1.5 seconds of source
+in 0.5 seconds (3x realtime), creating one second of additional queued speech, then resumes
+realtime delivery. No render pause, packet loss or reordering is fabricated. The renderer
+records each actual acceleration event, its removed duration, and whether fast mode was
+used in `report.json`; `timeline.csv` has cumulative normal/fast totals and merge prefixes.
+These are measured operation times, distinct from the schedule onset in the PR labels.
+
+See [NetEq coverage](neteq-coverage.md) for the complete operation/stage inventory,
+regression evidence and explicit transport/decoder exclusions.

@@ -16,14 +16,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect();
     let mut out = [0; 240];
     let mut stdout = std::io::stdout().lock();
-    for mode in ["normal", "stalls", "backlog"] {
+    for mode in ["normal", "stalls", "backlog", "drift"] {
         let mut p = Playout::new(Config::default())?;
         let mut timings = Vec::with_capacity(100_000);
         let started = Instant::now();
+        let mut next_arrival = 0;
         for tick in 0..100_000_u64 {
             let now = Duration::from_millis(tick * 10);
             let measure = Instant::now();
-            if tick.is_multiple_of(10) && (mode != "stalls" || tick % 100 < 70) {
+            if mode == "drift" {
+                while next_arrival <= tick * 10_000 {
+                    p.push(Duration::from_micros(next_arrival), &voice[..480])?;
+                    next_arrival += 20_200;
+                }
+            } else if tick.is_multiple_of(10) && (mode != "stalls" || tick % 100 < 70) {
                 p.push(now, &voice)?;
             }
             if mode == "backlog" && tick == 0 {

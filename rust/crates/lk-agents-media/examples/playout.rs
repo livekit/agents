@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut timeline = BufWriter::new(fs::File::create(out.join("timeline.csv"))?);
     writeln!(
         timeline,
-        "time_us,queued_source,pending_output,target_delay_us,source_consumed,concealed,silent,stretched,accelerated,underruns"
+        "time_us,queued_source,pending_output,target_delay_us,source_consumed,concealed,silent,stretched,accelerated,underruns,fast_accelerated,merge_inserted"
     )?;
     let mut untreated = Fifo::new(0, pcm.len());
     let mut buffered = Fifo::new(100_000, pcm.len());
@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         writeln!(
             timeline,
-            "{at},{},{},{},{},{},{},{},{},{}",
+            "{at},{},{},{},{},{},{},{},{},{},{},{}",
             report.queued_source,
             report.pending_output,
             report.target_delay.as_micros(),
@@ -104,7 +104,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             stats.silent,
             stats.stretched,
             stats.accelerated,
-            stats.underruns
+            stats.underruns,
+            stats.fast_accelerated,
+            stats.merge_inserted
         )?;
         final_report = Some(report);
     }

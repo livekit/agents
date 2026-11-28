@@ -11,7 +11,7 @@ mod stretch;
 
 pub(super) use conceal::Concealer;
 pub(super) use recovery::Recovery;
-pub(super) use stretch::{Stretch, stretch};
+pub(super) use stretch::{Stretch, preemptive, stretch};
 
 pub(super) const FRAME: usize = 480;
 pub(super) const OVERLAP: usize = 120;

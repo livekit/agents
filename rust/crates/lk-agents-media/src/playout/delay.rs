@@ -67,16 +67,15 @@ impl Default for Delay {
 
 impl Delay {
     pub(super) fn update(&mut self, now: Duration, source_start: u64, length: usize) {
-        let arrival_ms = now.as_millis().min((i64::MAX / 4) as u128) as i64;
+        let arrival = clock_samples(now);
         let end = source_start.saturating_add(length as u64);
         let mut position = source_start;
         let mut last_offset = self.minimum;
         while position < end {
             let bucket = position / UNIT;
             let slot = &mut self.arrivals[bucket as usize % BINS];
-            let source_ms =
-                (position / (SAMPLE_RATE as u64 / 1000)).min((i64::MAX / 4) as u64) as i64;
-            let offset = arrival_ms - source_ms;
+            let source = position.min((i64::MAX / 4) as u64) as i64;
+            let offset = arrival - source;
             if slot.bucket != bucket {
                 *slot = Arrival { bucket, minimum: offset, maximum: offset };
             } else {
@@ -98,7 +97,8 @@ impl Delay {
         }
         // Sample the maximum observed delay per 500ms interval, so a large transport chunk
         // cannot overweight the distribution merely because it was split into DSP blocks.
-        let relative = (last_offset - self.minimum).max(0) as usize;
+        let relative =
+            ((last_offset - self.minimum).max(0) as usize).div_ceil(SAMPLE_RATE as usize / 1000);
         if let Some(start) = self.interval_start {
             if now.saturating_sub(start) > Duration::from_millis(500) {
                 self.add(self.interval_peak_ms / 20);
@@ -156,20 +156,27 @@ impl Delay {
     }
 
     pub(super) fn max_delay_ms(&self) -> usize {
-        if self.seen { (self.maximum - self.minimum).max(0) as usize } else { 0 }
+        if self.seen {
+            ((self.maximum - self.minimum).max(0) as usize).div_ceil(SAMPLE_RATE as usize / 1000)
+        } else {
+            0
+        }
     }
 
     /// Source-to-render delay relative to the fastest recent delivery path. This includes
     /// packetization, unlike queue occupancy; draining a normal large chunk is not jitter.
-    pub(super) fn playout_delay_ms(&self, now: Duration, source_position: u64) -> usize {
+    pub(super) fn playout_delay(&self, now: Duration, source_position: u64) -> usize {
         if !self.seen {
             return 0;
         }
-        let now_ms = now.as_millis().min((i64::MAX / 4) as u128) as i64;
-        let source_ms =
-            (source_position / (SAMPLE_RATE as u64 / 1000)).min((i64::MAX / 4) as u64) as i64;
-        (now_ms - source_ms - self.minimum).max(0) as usize
+        let source = source_position.min((i64::MAX / 4) as u64) as i64;
+        (clock_samples(now) - source - self.minimum).max(0) as usize
     }
+}
+
+fn clock_samples(now: Duration) -> i64 {
+    (now.as_nanos().saturating_mul(u128::from(SAMPLE_RATE)) / 1_000_000_000)
+        .min((i64::MAX / 4) as u128) as i64
 }
 
 #[cfg(test)]

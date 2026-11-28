@@ -435,3 +435,115 @@ fn concealment_and_recovery_are_invariant_to_render_block_boundaries() {
     assert_eq!(reference, run(120));
     assert_eq!(reference, run(240));
 }
+
+#[test]
+fn small_provider_chunks_build_reserve_before_a_later_delivery_stall() {
+    let mut protected = Playout::new(Config {
+        minimum_delay: Duration::ZERO,
+        maximum_stretch: 0.03,
+        ..Config::default()
+    })
+    .unwrap();
+    let mut untreated = plain();
+    let mut output = [0; 240];
+    let mut chunk = 0;
+    for at in (0..4000_u64).step_by(10) {
+        while chunk < 200 {
+            let arrival = chunk * 20 + if chunk >= 150 { 20 } else { 0 };
+            if arrival > at {
+                break;
+            }
+            let input = voice(480, chunk as usize * 480);
+            protected.push(ms(arrival), &input).unwrap();
+            untreated.push(ms(arrival), &input).unwrap();
+            chunk += 1;
+        }
+        let report = protected.render(ms(at), &mut output).unwrap();
+        account(&protected, report);
+        untreated.render(ms(at), &mut output).unwrap();
+    }
+    let s = protected.statistics();
+    assert!(s.stretched >= 24 * 20, "{s:?}");
+    assert_eq!(s.underruns, 0);
+    assert_eq!(untreated.statistics().underruns, 1);
+    assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
+}
+
+#[test]
+fn severe_playout_backlog_bypasses_cooldown_but_not_the_rate_budget() {
+    let mut p = Playout::new(Config::default()).unwrap();
+    let mut output = [0; 240];
+    for at in (0..1000_u64).step_by(10) {
+        if at.is_multiple_of(100) {
+            p.push(ms(at), &voice(2400, at as usize * 24)).unwrap();
+        }
+        p.render(ms(at), &mut output).unwrap();
+    }
+    // The consumer stops rendering while delivery continues: a real 1.5s backlog, not a
+    // delayed packet whose arrival envelope should legitimately retain extra reserve.
+    for at in (1000..2500_u64).step_by(100) {
+        p.push(ms(at), &voice(2400, at as usize * 24)).unwrap();
+    }
+    p.stretch_after = u64::MAX;
+    for at in (2500..2580).step_by(10) {
+        let report = p.render(ms(at), &mut output).unwrap();
+        account(&p, report);
+        let s = p.statistics();
+        assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
+    }
+    assert!(p.statistics().fast_accelerated >= 720, "{:?}", p.statistics());
+}
+
+#[test]
+fn an_alignment_prefix_drains_with_eof_without_losing_source_or_accounting() {
+    let mut p = plain();
+    let mut output = [0; 240];
+    p.push(ms(0), &voice(2400, 7)).unwrap();
+    for at in (0..120).step_by(10) {
+        p.render(ms(at), &mut output).unwrap();
+    }
+    p.push(ms(120), &voice(2400, 60)).unwrap();
+    let report = p.render(ms(120), &mut output[..1]).unwrap();
+    account(&p, report);
+    assert_eq!(p.statistics().merge_inserted, 1);
+    assert_eq!(p.statistics().source_consumed, 2400);
+    p.finish();
+    let mut report = p.render(ms(120), &mut output[1..]).unwrap();
+    account(&p, report);
+    for at in (130..300).step_by(10) {
+        report = p.render(ms(at), &mut output).unwrap();
+        account(&p, report);
+    }
+    assert!(report.drained);
+    assert_eq!(p.statistics().source_consumed, 4800);
+    assert!(p.statistics().merge_inserted < PERIOD_MAX as u64);
+    assert_eq!(p.statistics().underruns, 1);
+}
+
+#[test]
+fn faded_recovery_rebuilds_half_the_target_reserve_but_eof_never_waits() {
+    for finish in [false, true] {
+        let mut p = plain();
+        let mut output = [0; 240];
+        p.push(ms(0), &voice(2400, 0)).unwrap();
+        for at in (0..300).step_by(10) {
+            p.render(ms(at), &mut output).unwrap();
+        }
+        p.push(ms(300), &voice(480, 2400)).unwrap();
+        let report = p.render(ms(300), &mut output).unwrap();
+        account(&p, report);
+        assert_eq!(p.statistics().source_consumed, 2400);
+        assert_eq!(report.queued_source, 480);
+        if finish {
+            p.finish();
+        } else {
+            p.push(ms(310), &voice(480, 2880)).unwrap();
+        }
+        let report = p.render(ms(310), &mut output).unwrap();
+        account(&p, report);
+        assert!(p.statistics().source_consumed > 2400);
+        if finish {
+            assert!(p.render(ms(320), &mut output).unwrap().drained);
+        }
+    }
+}

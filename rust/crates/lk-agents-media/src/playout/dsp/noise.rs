@@ -137,6 +137,7 @@ pub(super) struct Background {
     count: usize,
     index: usize,
     initialized: bool,
+    energy: f64,
 }
 
 impl Default for Background {
@@ -147,6 +148,7 @@ impl Default for Background {
             count: 0,
             index: 0,
             initialized: false,
+            energy: 0.0,
         }
     }
 }
@@ -177,8 +179,15 @@ impl Background {
                 candidate.reset_state();
                 self.model = candidate;
                 self.initialized = true;
+                self.energy = energy;
             }
         }
+    }
+
+    /// NetEq's passive-speech test compares source energy with eight times learned noise
+    /// energy. Before a quiet interval is observed, retain the conservative silence floor.
+    pub(super) fn passive_level(&self) -> f64 {
+        (8.0 * self.energy).sqrt().max(40.0)
     }
 
     pub(super) fn model(&self) -> Noise {
