@@ -37,6 +37,7 @@ from livekit.plugins import (
     soniox,
     speechmatics,
     xai,
+    yoob,
 )
 
 from .utils import make_test_speech, wer
@@ -89,6 +90,7 @@ STTs: list[Callable[[], stt.STT]] = [
         azure,
         aws,
         reson8,
+        yoob,
         # rtzr,
         # TODO: only Business account allowed outside South Korea
         # clova,
