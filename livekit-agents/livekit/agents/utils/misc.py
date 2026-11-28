@@ -66,13 +66,22 @@ def safe_render(template: str, data: dict[str, object]) -> str:
     Missing keys log a warning and become empty strings.
     ``None`` values also become empty strings.
     Nested dicts are converted to namespaces for dotted access
-    (e.g. ``{audio_recognition.stt_context.emotion}``).
+    (e.g. ``{audio_recognition.stt_context.emotion}``); keys that are not identifiers
+    can be read with item access (e.g. ``{user[support-tier]}``).
     """
     from types import SimpleNamespace
 
+    class _Namespace(SimpleNamespace):
+        # keep the dict's item access, so a template may use {user[name]} as with str.format
+        def __getitem__(self, key: str) -> object:
+            return self.__dict__[key]
+
+    # render {user} as before: namespace(...), not _Namespace(...)
+    _Namespace.__name__ = "namespace"
+
     def _to_ns(v: object) -> object:
         if isinstance(v, dict):
-            return SimpleNamespace(**{k: _to_ns(val) for k, val in v.items()})
+            return _Namespace(**{k: _to_ns(val) for k, val in v.items()})
         return v
 
     def _collect_paths(d: dict[str, object], prefix: str = "") -> list[str]:
