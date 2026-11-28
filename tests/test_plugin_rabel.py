@@ -540,6 +540,108 @@ async def test_contradicting_interim_passes_and_eager_replaces() -> None:
 
 
 @pytest.mark.parametrize(
+    "eager, held", [("Yes please do.", True), ("Yes, please do.", False)], ids=["same", "other"]
+)
+@pytest.mark.usefixtures("four_early_starts")
+async def test_the_speech_to_texts_early_start_on_the_guess_is_held_only_as_the_same_string(
+    eager: str, held: bool
+) -> None:
+    # LiveKit remembers the early start's string and, with VAD or turn-detector endpointing, starts
+    # again at a final that is another string (audio_recognition: transcript_changed). The
+    # speech-to-text's own early start on the guess's words written otherwise (a comma) passes, so
+    # LiveKit holds the string its final will have, as without Bell
+    script = [
+        ev(0.00, T.START_OF_SPEECH),
+        ev(0.05, T.INTERIM_TRANSCRIPT, "Yes", 0.95),
+        ev(0.40, T.PREFLIGHT_TRANSCRIPT, eager, 0.95),
+        ev(0.90, T.FINAL_TRANSCRIPT, eager),
+        ev(0.90, T.END_OF_SPEECH),
+    ]
+    out, counts, _, _ = await wrapped_run(script, FakeAPI(answers={"Yes": "yes please do"}))
+    passed = [] if held else [(T.PREFLIGHT_TRANSCRIPT, eager)]
+    assert out == [
+        (T.START_OF_SPEECH, None),
+        (T.INTERIM_TRANSCRIPT, "Yes"),
+        (T.PREFLIGHT_TRANSCRIPT, "Yes please do."),
+        *passed,
+        (T.FINAL_TRANSCRIPT, eager),
+        (T.END_OF_SPEECH, None),
+    ]
+    assert counts["guess_sent"] == 1 and counts.get("eager_held_back", 0) == int(held)
+
+
+def a_turn_before(at: float, order: str) -> list[tuple]:
+    """A turn of the call before the one under test, with its final before the speech-to-text's
+    end of speech (Deepgram Flux, AssemblyAI) or after it (OpenAI's realtime models with local
+    VAD), and LiveKit's commit."""
+    if order == "final_first":
+        ends = [ev(at + 0.30, T.FINAL_TRANSCRIPT, "Hello."), ev(at + 0.30, T.END_OF_SPEECH)]
+    else:
+        ends = [ev(at + 0.30, T.END_OF_SPEECH), ev(at + 0.35, T.FINAL_TRANSCRIPT, "Hello.")]
+    return [
+        ev(at, T.START_OF_SPEECH),
+        ev(at + 0.05, T.INTERIM_TRANSCRIPT, "Hello", 0.95),
+        *ends,
+        ev(at + 0.45, COMMIT, "Hello."),
+    ]
+
+
+@pytest.mark.parametrize(
+    "turns_before, held_with_stt_turns",
+    [
+        ((), False),
+        (("final_first",), True),
+        (("final_late",), False),
+        (("final_first", "final_late"), False),
+    ],
+    ids=["first_turn", "finals_first", "a_final_late", "finals_first_then_one_late"],
+)
+@pytest.mark.parametrize("turn_detection", ["stt", "vad"])
+async def test_an_early_start_written_otherwise_is_held_once_the_calls_finals_came_first(
+    monkeypatch: pytest.MonkeyPatch,
+    turn_detection: str,
+    turns_before: tuple[str, ...],
+    held_with_stt_turns: bool,
+) -> None:
+    # with turns ended by the speech-to-text, LiveKit compares a final as a string only after the
+    # speech-to-text's end of speech (audio_recognition: `_stt_turn_ended`); at its commit it keeps
+    # the running reply by words (agent_activity: `_transcripts_equivalent`). A speech-to-text that
+    # sends its final first (Deepgram Flux, AssemblyAI) has its early start on the guess's words
+    # written otherwise held, once the call has shown that order; one that has sent a final after
+    # its end of speech (OpenAI's local VAD) never, and neither does any other turn detection
+    in_session(
+        monkeypatch,
+        session_like(
+            session_with(turn_detection=turn_detection, preemptive_generation={"max_retries": 4})
+        ),
+    )
+    at = 0.6 * len(turns_before)
+    script = [
+        *(e for i, order in enumerate(turns_before) for e in a_turn_before(0.6 * i, order)),
+        ev(at, T.START_OF_SPEECH),
+        ev(at + 0.05, T.INTERIM_TRANSCRIPT, "Yes", 0.95),
+        ev(at + 0.40, T.PREFLIGHT_TRANSCRIPT, "Yes, please do.", 0.95),
+        ev(at + 0.90, T.FINAL_TRANSCRIPT, "Yes, please do."),
+        ev(at + 0.90, T.END_OF_SPEECH),
+    ]
+    out, counts, _, ends = await wrapped_run(script, FakeAPI(answers={"Yes": "yes please do"}))
+    held = held_with_stt_turns and turn_detection == "stt"
+    passed = [] if held else [(T.PREFLIGHT_TRANSCRIPT, "Yes, please do.")]
+    turn = [
+        (T.START_OF_SPEECH, None),
+        (T.INTERIM_TRANSCRIPT, "Yes"),
+        (T.PREFLIGHT_TRANSCRIPT, "Yes please do."),
+        *passed,
+        (T.FINAL_TRANSCRIPT, "Yes, please do."),
+        (T.END_OF_SPEECH, None),
+    ]
+    assert out[-len(turn) :] == turn
+    assert counts["guess_sent"] == 1 and counts.get("eager_held_back", 0) == int(held)
+    # held, LiveKit keeps the reply started on the guess at its commit, by words
+    assert ends[-1]["guess"] == ("kept" if held else "dropped")
+
+
+@pytest.mark.parametrize(
     "final, re_sent", [("check my balance.", True), ("Check my balance.", False)]
 )
 @pytest.mark.parametrize("turn_detection", [None, "stt"])
