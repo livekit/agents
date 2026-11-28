@@ -1648,7 +1648,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     ) -> SpeechHandle:
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
-        if self._amd is not None:
+        if self._turn_hooks and self._turn_hooks.gates_replies:
             # AMD would hold the speech and play it after detection
             raise RuntimeError("say() is not supported while AMD is running")
         return self._say(
@@ -1728,7 +1728,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """  # noqa: E501
         if self._activity is None:
             raise RuntimeError("AgentSession isn't running")
-        if self._amd is not None:
+        if self._turn_hooks and self._turn_hooks.gates_replies:
             # AMD would hold the reply and play it after detection
             raise RuntimeError("generate_reply() is not supported while AMD is running")
         return self._generate_reply(
@@ -1938,7 +1938,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def update_agent(self, agent: Agent) -> None:
-        if self._amd is not None:
+        if self._turn_hooks and self._turn_hooks.gates_replies:
             raise RuntimeError("agent handoffs are not supported while AMD is running")
 
         # reject before touching state: a failed handoff would leave turns blocked
@@ -2038,7 +2038,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
-            if self._amd is not None:
+            if self._turn_hooks and self._turn_hooks.gates_replies:
                 raise RuntimeError("agent handoffs are not supported while AMD is running")
             if self._closing and new_activity == "start":
                 # checked again after the drain below: closing may start while it's in flight

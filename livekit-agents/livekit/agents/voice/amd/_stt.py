@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 from livekit import rtc
 
 from ... import stt
 from ...log import logger
 from ...types import APIConnectOptions
-from ...utils import aio
+from ...utils import EventEmitter, aio
+from ..events import UserInputTranscribedEvent
 from . import _inference
 from ._chat_context import AMDTranscript, AMDTranscriptSource
 
@@ -60,12 +62,15 @@ class LateAMDFinal:
         return self._transcript or None
 
 
-class AMDTranscriber:
+class AMDTranscriber(EventEmitter[Literal["user_input_transcribed"]]):
     """Collect each turn's session transcript and, with an AMD STT, its own transcript too.
 
     Neither source wins: the classifier sees both, so a late or missing transcript from
     one STT does not empty the turn. Without session STT, AMD uses its own transcript
     alone. If the AMD stream fails, turns fall back to the session transcript alone.
+
+    Emits ``user_input_transcribed`` for each AMD STT final, except a late final that
+    goes to a turn that already ended.
     """
 
     def __init__(
@@ -75,6 +80,7 @@ class AMDTranscriber:
         *,
         session_stt: bool = True,
     ) -> None:
+        super().__init__()
         self._model = model
         self._conn_options = conn_options
         self._session_enabled = session_stt or model is None
@@ -123,8 +129,19 @@ class AMDTranscriber:
                         late, self._late = self._late, None
                         if late is None or not late.deliver(transcript):
                             self.push_transcript(transcript=transcript, source="amd")
+                            self._emit_final(transcript)
         except Exception as exc:
             self.fail(exc)
+
+    def _emit_final(self, transcript: str) -> None:
+        try:
+            self.emit(
+                "user_input_transcribed",
+                UserInputTranscribedEvent(transcript=transcript, is_final=True),
+            )
+        except Exception:
+            # a listener error is not an STT failure
+            logger.exception("amd transcript listener failed")
 
     def push_transcript(
         self, transcript: str, *, replace: bool = False, source: AMDTranscriptSource = "session"

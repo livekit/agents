@@ -29,6 +29,9 @@ completes.
 
 AMD does not use audio-based tone or hold detection. It classifies transcripts only.
 
+Ungated AMD (section 17) only classifies. It does not gate replies. Sections 5 to 13
+describe AMD that gates replies, unless section 17 says that a rule also applies.
+
 ## 2. Terms
 
 | Term | Meaning |
@@ -51,6 +54,8 @@ AMD does not use audio-based tone or hold detection. It classifies transcripts o
 | speech boundary | The time the participant starts or stops speaking, from `UserStateChangedEvent.speech_timestamp`. |
 | likely-human mark | A mark that the first `human` prediction in `machine-screening` or `machine-ivr` sets (section 9.4). |
 | customer-handled stage | A machine stage whose instructions are `None`. AMD completes when the call enters it (section 9.5). |
+| reply gate | AMD's control of each reply: it holds the reply until its turn has a prediction, then allows, denies, or directs it. |
+| ungated AMD | AMD with `gate_replies=False`. It classifies but has no reply gate and does not change the session (section 17). |
 
 Write "committed turn", not "accepted turn". Write "recommended list", not "normal
 transition". Do not write "previous label". It can mean the latest prediction or the
@@ -92,6 +97,7 @@ async with detector:
 | `stt` | auto | AMD's own streaming STT. See the model rules below. |
 | `participant_identity` | not given | The participant to listen to (section 5.1). When not given, the participant that room I/O links. |
 | `wait_until_answered` | `True` | Discard SIP audio until `sip.callStatus` is `active` (section 5.2). |
+| `gate_replies` | `True` | `False` makes AMD only listen and classify (section 17). |
 | `screening_instructions` | built in | Reply instructions in `machine-screening`. `None` makes it a customer-handled stage (section 9.5). |
 | `voicemail_instructions` | built in | Instructions for the voicemail message. `None` makes `machine-vm` a customer-handled stage (section 9.5). |
 | `ivr_instructions` | built in | Reply instructions in `machine-ivr`. `None` makes it a customer-handled stage (section 9.5). |
@@ -190,10 +196,11 @@ Entry checks these conditions in order. A failed check raises the error shown.
 
 1. The session has started, no agent handoff is in progress, and the current Agent
    is not an `AgentTask` (`RuntimeError`). AMD would reject the task's return to its
-   caller.
+   caller. Ungated AMD accepts an `AgentTask`.
 2. If the Agent uses a realtime model, the model has client-side turn detection,
    per-response tool choice, and client-controlled tool replies. Session STT or AMD
-   STT exists (`ValueError`).
+   STT exists (`ValueError`). Ungated AMD has other rules for a realtime model
+   (section 17.1).
 3. No other AMD runs on the session (`RuntimeError`).
 4. Session-level `ivr_detection` is off (`ValueError`).
 5. A classifier LLM is available (section 4.1) (`ValueError`).
@@ -208,7 +215,8 @@ raises.
    settings. If this step fails, entry closes what it created.
 2. Sets the lifecycle to `PENDING`.
 3. Sets `session.amd`, installs AMD's turn hooks, enables interruptions
-   (section 10.5), and pauses reply authorization.
+   (section 10.5), and pauses reply authorization. Ungated AMD sets `session.amd`
+   and installs turn hooks that only observe (section 17.2).
 4. Subscribes to session and room events. If room I/O exists and
    `participant_identity` is given, it calls `room_io.set_participant` with it.
 5. Starts listening setup in the background.
@@ -633,6 +641,9 @@ By default, the participant speaks first. With `opening_text` or
   `wait_until_answered=False`, it can be during early media.
 - `opening_text` plays through `say()`. `opening_instructions` plays through
   `generate_reply()` with `tool_choice="none"`, so the opening cannot call tools.
+  The limits of `generate_reply()` for the model apply. For example, a realtime
+  model that takes no instructions for one reply generates the opening from the
+  session instructions.
 - The opening is the only speech that skips the paused reply authorization
   (section 10.1). Every other reply still waits for its turn's prediction.
 - If the participant is already speaking when listening starts, AMD skips the
@@ -688,7 +699,7 @@ build a menu tree or act on the menu.
 | `timeout` | The overall limit since listening started. Stage changes do not extend it. It can complete AMD during the silence hold. |
 | `participant_missing` | No participant or audio track during setup. |
 | `participant_disconnected` | The participant or room disconnected. |
-| `agent_changed` | The session's Agent changed. AMD detects this only in the next committed turn's `should_reply` hook. |
+| `agent_changed` | The session's Agent changed. AMD detects this only in the next committed turn's `should_reply` hook. Ungated AMD allows the change. |
 | `internal_error` | A background task or a prediction listener raised. |
 | `cancelled` | `aclose()`, context exit, or session close before completion. |
 
@@ -746,6 +757,10 @@ deadlines, and cleanup. They do not prove model accuracy.
 | 13 | A prediction that enters a customer-handled stage completes AMD and never allows a reply to its turn. | 9.5, 10.1 | `test_stage_without_instructions_completes_without_a_reply` |
 | 14 | A decision model classifies with one `choice` over the seven categories and never starts menu extraction. | 8.1, 11.2 | `test_decision_model_classifies_with_one_choice_and_skips_menus` |
 | 15 | Only the opening plays before a prediction allows a reply, and participant speech before its playout cancels it. | 10.6 | `test_opening_text_plays_while_other_replies_stay_held`, `test_participant_speech_before_the_opening_plays_cancels_it` |
+| 16 | Ungated AMD never holds, cancels, or changes a reply of the session. Its turn hooks only observe, and it keeps the session's settings and commit paths. The opening is AMD's own speech and keeps its rules (section 10.6). | 17.2 | `test_only_ungated_amd_enters_without_reply_control`, `test_ungated_amd_takes_the_end_of_turn_of_the_session`, `test_ungated_amd_denies_no_reply_after_a_wait_prediction`, `test_ungated_amd_adds_no_user_message_to_the_history_of_the_agent`, `test_manual_realtime_commit_without_amd`, `test_ungated_amd_leaves_replies_and_handoffs_to_the_session`, `test_ungated_amd_keeps_the_interruption_settings`, `test_ungated_amd_keeps_the_preemptive_reply_of_the_session`, `test_ungated_amd_enters_while_an_agent_task_runs`, `test_ungated_amd_lets_a_tool_hand_off_the_agent`, `test_ungated_amd_keeps_the_user_turn_limit` |
+| 17 | With client-side turn detection, ungated AMD takes each turn at the session's EOT or at the application's commit, with both transcripts. With server-side turn detection, it classifies each final of one transcript when it arrives. | 17.3 | `test_ungated_amd_takes_the_end_of_turn_of_the_session`, `test_ungated_amd_pairs_the_session_and_amd_transcripts_of_a_turn`, `test_ungated_amd_takes_a_turn_that_the_application_commits`, `test_ungated_amd_classifies_each_final_without_client_side_turn_detection`, `test_ungated_amd_classifies_the_session_stt_final_without_model_transcription`, `test_ungated_amd_classifies_the_session_final_after_its_stt_fails`, `test_ungated_amd_follows_a_handoff_to_another_turn_detection`, `test_ungated_amd_keeps_its_transcripts_after_a_handoff_to_client_side_turn_detection` |
+| 18 | Only ungated AMD enters without the realtime checks. Stages without instructions do not lift the realtime limits. | 5.1, 17.1 | `test_only_ungated_amd_enters_without_reply_control`, `test_ungated_amd_needs_a_transcript_with_a_realtime_model` |
+| 19 | Ungated AMD completes at the first `human` or machine prediction, and at no `uncertain` or `wait` prediction. | 17.4 | `test_ungated_amd_keeps_listening_until_a_human_or_a_machine` |
 
 ## 15. Example
 
@@ -770,6 +785,10 @@ Then run `uv run python examples/telephony/amd.py dev`.
 `amd_prediction` to observe each prediction. To return at the first voicemail
 prediction, as one-shot AMD did, set `voicemail_instructions=None` (section 9.5).
 
+One-shot AMD also ran with a realtime model that detects turns itself. Multi-turn AMD
+needs `gate_replies=False` for that model (section 17). Ungated AMD does not hold the reply
+before the prediction, and it does not interrupt the agent at a machine prediction.
+
 ### 16.2 Speech timestamps
 
 `UserStateChangedEvent.created_at` now records event-creation time. Older releases
@@ -785,7 +804,139 @@ speech_time = (
 Both fields are Unix time in seconds. Remote session events keep their wire
 behavior. They carry the speech-boundary time when known, else event-creation time.
 
-## 17. Limits
+## 17. Ungated AMD
+
+`gate_replies=False` makes AMD only listen and classify. Use it when the agent must
+not interact with machines: AMD reports the category, and the application decides
+what to do. The agent replies as it does without AMD, so a person gets no added delay.
+
+```python
+async with AMD(session, gate_replies=False) as detector:
+    # Create the SIP participant here.
+    result = await detector.execute()
+if result.category is not AMDCategory.HUMAN:
+    await session.interrupt()
+    ctx.shutdown(result.category.value)
+```
+
+Ungated AMD changes one thing: the reply gate. It takes its turns and its transcripts
+as gated AMD does, wherever the session ends the turns (section 17.3).
+
+### 17.1 Entry
+
+Ungated AMD skips these entry checks (section 5.1):
+
+- the `AgentTask` check
+- client-side turn detection, per-response tool choice, and client-controlled tool
+  replies for a realtime model
+
+With a realtime model and client-side turn detection, session STT or AMD STT must
+exist, as for gated AMD (`ValueError`). With server-side turn detection, one
+transcript must exist: session STT, AMD STT, or the model's user transcription
+(`ValueError`). All other entry checks apply.
+
+### 17.2 Session
+
+Ungated AMD sets `session.amd`, installs turn hooks that only observe, and
+subscribes to session and room events. It does not change the session in any other
+way:
+
+- Its turn hooks report `gates_replies` as false. They allow each reply at once and
+  add nothing to it, and AgentSession takes the same paths as it does without hooks.
+  Ungated AMD never pauses reply authorization. A reply plays before the turn has a
+  prediction. A prediction cancels no preemptive generation.
+- It keeps the interruption settings, the `min_words` filter, and the user turn
+  limit.
+- `session.say()`, `session.generate_reply()`, agent handoffs, and deferred tool
+  replies work as they do without AMD.
+- It adds no instructions, no DTMF tool, and no user message to the Agent's history.
+- Completion cancels no speech. A reply that plays at a machine prediction continues
+  until the application interrupts it or ends the call.
+
+Listening setup (section 5.2), `wait_until_answered`, the opening (section 10.6), the
+deadlines, and the events do not change. While the lifecycle is `PENDING`,
+AgentSession still discards participant audio.
+
+### 17.3 Turns
+
+Ungated AMD reads how the current Agent detects turns each time a final or an end of
+turn arrives. So AMD follows an agent handoff to an Agent that detects turns in the
+other way. The transcripts in use stay as they were at entry. For example:
+
+- A session final that waits for an end of turn at the handoff joins the first turn
+  after it.
+- After a handoff from server-side to client-side turn detection, a turn has only
+  the AMD transcript when AMD has an STT, not the session transcript too.
+- After a handoff from client-side to server-side turn detection, AMD with an STT
+  classifies only the AMD finals. If the session has an STT too, the classifier still
+  gets the two-transcript format (section 6.1), with an empty session transcript.
+- The entry checks look only at the Agent at entry. If a handoff brings an Agent
+  that leaves AMD with no transcript, AMD classifies nothing and completes at a limit.
+
+**Client-side turn detection.** The session ends the turns, so ungated AMD takes its
+turns as gated AMD does:
+
+- AMD commits a turn at each EOT, with the transcript that AgentSession commits
+  (section 7). A turn that the application commits (`manual`) counts too: without a
+  session STT that commit ends in no EOT, so AgentSession gives it to the hooks
+  directly.
+- The turn has the transcripts in use at entry, which are the session transcript and
+  the AMD transcript when AMD entered with client-side turn detection. The late AMD
+  final rule applies (section 6).
+- The session's `min_words` filter stays on, so a turn that it drops does not reach
+  AMD.
+
+**Server-side turn detection.** No EOT reaches AMD, and no reply waits for the
+prediction. So each final transcript is a turn: AMD commits and classifies it when it
+arrives. A newer final cancels a request that has no result yet, and the classifier
+history keeps the earlier text (section 8.2). AMD classifies one transcript:
+
+| AMD STT | Transcript | Notes |
+| --- | --- | --- |
+| yes | the AMD finals | AMD ignores the session transcript. If the AMD STT fails, AMD classifies the session transcript from then on (section 6.3). A session final from before the failure is not classified. If the session has no transcript, AMD classifies nothing after the failure. |
+| no | the session's final transcription events | These are the session STT finals. With a model that has user transcription, they are the model's transcription, which arrives late. AMD then logs a warning on entry. Some models hold the final transcription until they reply. If such a model sends no reply, AMD does not classify that turn. |
+
+A final can arrive while the participant still speaks, for example between two
+sentences. AMD classifies it at once. So AMD can report a machine before a long
+greeting ends.
+
+### 17.4 Completion
+
+Each machine stage is a customer-handled stage (section 9.5), whatever the stage
+instructions are. So `human` and each machine prediction complete AMD with reason
+`finished`. `uncertain` and `wait` keep AMD active. The stage stays `uncertain` while
+AMD is active, so the likely-human mark, the silence hold, voicemail tracking, and
+menu extraction never apply. AMD ignores `screening_instructions`,
+`voicemail_instructions`, `ivr_instructions`, `human_instructions`, and
+`machine_silence_threshold`. The other limits complete AMD as usual
+(section 12.1).
+
+### 17.5 Gated and ungated AMD
+
+| | Gated AMD | Ungated AMD |
+| --- | --- | --- |
+| Reply | held until the turn has a prediction, then allowed, denied, or directed | not held |
+| Turn, with client-side turn detection | the session's EOT | the session's EOT |
+| Turn, with server-side turn detection | not supported | each final transcript |
+| Text of the turn | the committed session transcript and the AMD transcript | the same when AMD entered with client-side turn detection, else one transcript (section 17.3) |
+| Realtime model | client-side turn detection, per-response tool choice, client-controlled tool replies | any |
+| Completes at | `human`, `machine-unavailable`, a customer-handled stage, or a limit | the first `human` or machine prediction, or a limit |
+
+## 18. Limits
 
 A split greeting at call start ("Hi!" then a voicemail greeting) can still complete
-as `human` on the first turn. For other limits, see sections 1, 5.1, 5.3, and 13.
+as `human` on the first turn.
+
+Ungated AMD with server-side turn detection classifies each final transcript
+(section 17.3). It cannot tell a piece of an utterance from a full turn. So:
+
+- A first final that holds only the start of a greeting can complete AMD as `human`.
+- Each `uncertain` prediction for a final counts toward `max_uncertain_turns`. An STT
+  that sends a greeting as several short finals can get `uncertain` for each one, and
+  AMD then completes with `max_uncertain_turns` before the final that names the
+  machine. Raise `max_uncertain_turns` for such an STT.
+- A newer final cancels the request of the final before it. If finals keep arriving
+  faster than the classifier answers, no request finishes, and AMD completes with
+  `timeout`.
+
+For other limits, see sections 1, 5.1, 5.3, and 13.
