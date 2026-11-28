@@ -198,11 +198,6 @@
       "concealed_samples": 0,
       "baseline_missing_samples": 480
     },
-    "late_20ms_no_reserve": {
-      "underruns": 1,
-      "concealed_samples": 480,
-      "baseline_missing_samples": 480
-    },
     "repeated_stalls": {
       "underruns": 1,
       "concealed_samples": 480,
@@ -232,6 +227,13 @@
       "underruns": 0,
       "concealed_samples": 0,
       "baseline_missing_samples": 720
+    },
+    "late_30ms_no_reserve": {
+      "underruns": 1,
+      "concealed_samples": 720,
+      "baseline_missing_samples": 720,
+      "fault_start_ms": 10400,
+      "fault_end_ms": 10430
     }
   }
 }

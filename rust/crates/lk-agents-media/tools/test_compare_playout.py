@@ -8,6 +8,13 @@ from compare_playout import schedule, speech_activity
 
 
 class FaultPlacementTests(unittest.TestCase):
+    def test_no_reserve_case_delays_exactly_thirty_ms(self):
+        rows = schedule("late_30ms_no_reserve", 24_000 * 5, 20)
+        self.assertEqual(rows[20][0], 2_030_000)
+        self.assertEqual(rows[20][1], 48_000)
+        self.assertEqual(rows[21][0], 2_100_000)
+        self.assertEqual(sum(row[2] for row in rows), 24_000 * 5)
+
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
             speech_activity(bytes(24_000 * 10 * 2))

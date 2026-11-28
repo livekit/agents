@@ -24,7 +24,7 @@ WEBRTC_TAG = "webrtc-a545de4"
 SCENARIOS = (
     "clean",
     "late_20ms",
-    "late_20ms_no_reserve",
+    "late_30ms_no_reserve",
     "repeated_stalls",
     "burst_recovery",
     "no_catchup",
@@ -55,8 +55,6 @@ def schedule(
     name: str, count: int, anchor: int = 20, speech_chunks: set[int] | None = None
 ) -> list[tuple[int, int, int]]:
     """Ordered complete source delivery. Delays hold subsequent chunks, never reorder them."""
-    if name == "late_20ms_no_reserve":
-        name = "late_20ms"
     result = []
     start = 0
     previous = 0
@@ -66,8 +64,8 @@ def schedule(
         length = min(duration_ms * 24, count - start)
         nominal = start * 1_000_000 // 24000
         delay = 0
-        if name == "late_20ms" and index == anchor:
-            delay = 20_000
+        if name in ("late_20ms", "late_30ms_no_reserve") and index == anchor:
+            delay = 30_000 if name == "late_30ms_no_reserve" else 20_000
         elif (
             name == "repeated_stalls"
             and index >= anchor
@@ -172,8 +170,8 @@ def render_player(out: Path, report: dict) -> None:
     labels = {
         "clean": ("Clean delivery", "No failure; compare the startup latency of buffering."),
         "late_20ms": ("20 ms late delivery", "A 20 ms reserve can absorb this gap."),
-        "late_20ms_no_reserve": (
-            "20 ms late, no reserve",
+        "late_30ms_no_reserve": (
+            "30 ms late, no reserve",
             "Exposes short concealment and recovery during verified speech.",
         ),
         "repeated_stalls": ("Repeated 40 ms stalls", "Tests reserve adaptation and recovery."),
@@ -351,7 +349,7 @@ def main() -> None:
                     name, len(pcm) // 2, activity["anchor_chunk"], set(activity["speech_chunks"])
                 )
             )
-        case_delay = 0 if name == "late_20ms_no_reserve" else args.delay_ms
+        case_delay = 0 if name == "late_30ms_no_reserve" else args.delay_ms
         run(executable, raw, arrivals, case, str(duration_ms), str(case_delay))
         reference_stats = run(
             reference,

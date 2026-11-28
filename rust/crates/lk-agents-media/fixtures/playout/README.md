@@ -43,7 +43,7 @@ the Playback menu switches tracks at the same wall-clock position. The stereo WA
 baseline/NetEq on the left and candidate on the right. Use headphones or select one channel
 in an audio editor. `timeline.csv` and `statistics.txt` describe the candidate's decisions.
 
-Scenarios: clean 100 ms batching, 20 ms lateness, repeated 40 ms stalls, ordered backlog
+Scenarios: clean 100 ms batching, 20 ms lateness, a 30 ms no-reserve underrun, repeated 40 ms stalls, ordered backlog
 bursts, a permanent delivery delay increase, a one-second outage, changing 20–200 ms chunk
 sizes, and 1000 ppm clock drift. Add `--scenario late_20ms` to render one case, and
 `--delay-ms 0` to expose concealment without a startup reserve. The default 20 ms reserve
@@ -104,3 +104,6 @@ source windows. `report.json` records the selected onset, threshold and all wind
 values. Run `python3 -m unittest discover -s rust/crates/lk-agents-media/tools -p
 'test_compare_playout.py'` from the repository root for placement regressions. These
 energy checks establish audibility, not semantic intelligibility or a perceptual score.
+
+The no-reserve listening case uses a 30 ms delay. In the recorded passage it occurs at
+10.400–10.430 seconds; input chunk duration remains 100 ms. Playback-added delays are retained.
