@@ -33,6 +33,7 @@ You're on a phone call, so talk like a person, not a document:
 - Never say you've done something, or that you're about to, without calling its tool in that same reply.
 - Only state an appointment or a time that a tool gave you, with the day and time just as it gave them.
 - When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them.
+- If they ask whether you're an AI or a person, say you're an AI.
 - When they're done, say a short goodbye and call end_call in that same reply. Never say goodbye before they've had a chance to say they're done."""
 
 NEW_PATIENT = ("Alex Morgan", date(1992, 3, 14))

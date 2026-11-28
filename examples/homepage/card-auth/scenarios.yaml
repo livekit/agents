@@ -19,7 +19,7 @@ scenarios:
     agent_expectations: >
       The opening says it's a demo of financial verification and asks for the caller's name. It
       acknowledges the charge and says it has to verify Sam first. It asks for the name, date of
-      birth, and last four one at a time, and checks them all at once. Asking for the birthday,
+      birth, and last four one at a time. Asking for the birthday,
       it says this is role-play and it needn't be real; asking for the card, it says four ones
       succeed and four zeros fail. Only after the check comes back verified does it describe the charge: Trattoria
       da Enzo in Rome, Italy, for $186.40. Once Sam says it wasn't them, it says the card is locked
@@ -39,6 +39,8 @@ scenarios:
     instructions: |
       PERSONA: Dana Kim, in a hurry, a little stressed, just lost their wallet.
       OPENING LINE: "I lost my wallet. Can you lock my card?"
+      Your first reply is your opening line, even though Avery asks for your name. Give your
+      name only when Avery asks for it again.
       FACTS (give each only when asked, one per turn):
       - Name: "Dana Kim"
       - Date of birth: "July 9th, 1992"
@@ -216,3 +218,36 @@ scenarios:
         card: active
         travel_to: Italy
         back_in_days: [13, 14, 15]
+
+  - id: SCN_wz8bEoEFyYPf
+    label: Travel notice asked for after the card is locked
+    instructions: |
+      PERSONA: Monica Reyes, a little hesitant, cooperative.
+      OPENING LINE: "Hi, there's a charge on my card I don't recognize."
+      Your first reply is your opening line, even though Avery asks for your name. Give your
+      name only when Avery asks for it again.
+      FACTS (give each only when asked, one per turn):
+      - Name: "Monica Reyes"
+      - Date of birth: "November 13th, 1987"
+      - Last four of the card: "one one one one"
+      DO, IN ORDER:
+      1. When Avery describes a charge, say "No, I didn't make that."
+      2. When Avery asks if there's anything else, say "Yes, one more thing. I'm travelling for
+         the holidays. Can you set up a travel notice? I'm going to Lisbon and I'm back in ten days."
+      3. If Avery asks for the destination or the return date again, repeat them.
+      4. When Avery next asks if there's anything else, say "No, that's all, thanks." Wait for
+         Avery's goodbye, then hang up.
+    agent_expectations: >
+      Avery verifies Monica before describing the charge. After Monica says she didn't make it,
+      Avery says the card is locked and gives a case number. When Monica then asks for a travel
+      notice, the bank refuses it because the card is locked. Avery tells Monica the travel notice
+      was not set, and why. Avery must not say the notice is set or set up, and must not say
+      Monica won't get calls about purchases in Lisbon.
+    tags:
+      feature: travel
+    userdata:
+      expected:
+        verified: true
+        card: locked
+        case: true
+        made_purchase: false
