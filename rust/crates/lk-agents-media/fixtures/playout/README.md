@@ -156,3 +156,29 @@ Known EOF or sufficient burst coverage can release startup earlier than its budg
 Latency labels in the PR are added playout startup relative to the same source signal,
 measured in 1 ms windows. They exclude model generation, live network and listener-device
 latency, so they are not absolute live request-to-ear measurements.
+
+### Repeated slow-start listening pair
+
+The PR now uses only answer 2 from a separate `--slow-start` replay. Reproduce its PCM with:
+
+```sh
+CARGO_TARGET_DIR=/tmp/playout-target cargo run --manifest-path rust/Cargo.toml \
+  -p lk-agents-media --release --example playout_turns -- \
+  /tmp/playout-comparison/source.pcm /tmp/playout-comparison/slow-turns.csv \
+  /tmp/playout-comparison/slow-audio --slow-start
+```
+
+Both controls use the same 20 ms prior, **explicit 400 ms maximum**, speech and DSP. The
+first five chunks arrive at 0/180/360/540/720 ms; subsequent chunks arrive every 100 ms,
+retaining the accumulated 320 ms delivery delay. Only `reset()` versus `begin_utterance()`
+differs. This is a synthetic stress test, not a measured provider trace or the default
+100 ms maximum. The original single-delay replay and its plot remain separate controls.
+
+`learning-slow.json` records the exact arrivals, active source-window RMS, hashes and
+answer-2 metrics. Reset: 20 ms startup, four underruns and 300 ms concealed audio. Retained:
+340 ms startup and no underruns. The added startup cost is **320 ms**. The first-answer
+PCM remains byte-identical between controls; its duplicate clips are omitted from the PR.
+The two previews retain the same 0–3.5 s wall-clock crop and gain, including initial wait;
+there is no track realignment or removal of internal pauses. These metrics establish a
+buffering tradeoff, not a subjective quality rating. The Rust regression reproduces this
+schedule and checks both source accounting and retained/reset behavior.

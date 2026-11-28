@@ -13,8 +13,10 @@ const ANSWER_SAMPLES: usize = 72_000;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if !(3..=4).contains(&args.len()) {
-        return Err("usage: playout_turns source.pcm turns.csv [capture_directory]".into());
+    if !(3..=5).contains(&args.len()) || args.get(4).is_some_and(|v| v != "--slow-start") {
+        return Err(
+            "usage: playout_turns source.pcm turns.csv [capture_directory [--slow-start]]".into()
+        );
     }
     let bytes = fs::read(&args[1])?;
     let source = lk_agents_media::pcm_samples(&bytes);
@@ -22,6 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("need at least three seconds of speech".into());
     }
     let capture = args.get(3).map(Path::new);
+    let slow = args.get(4).is_some();
     if let Some(directory) = capture {
         fs::create_dir_all(directory)?;
     }
@@ -36,6 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // starts at the production default and shows how its initial waiting time relaxes.
         let mut p = Playout::new(Config {
             startup_delay: Duration::from_millis(if variant == "clean" { 80 } else { 20 }),
+            maximum_delay: Duration::from_millis(if slow { 400 } else { 100 }),
             ..Config::default()
         })?;
         for turn in 0..10_u64 {
@@ -64,8 +68,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut after = (0, None);
             for tick in (0..3500_u64).step_by(10) {
                 while packet < 30 {
-                    let arrival =
-                        packet * 100 + if packet == 1 && variant != "clean" { 60 } else { 0 };
+                    let late = if variant == "clean" {
+                        0
+                    } else if slow {
+                        packet.min(4) * 80
+                    } else if packet == 1 {
+                        60
+                    } else {
+                        0
+                    };
+                    let arrival = packet * 100 + late;
                     if arrival > tick {
                         break;
                     }

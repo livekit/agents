@@ -762,3 +762,67 @@ fn a_clean_answer_does_not_raise_a_small_configured_startup_prior() {
         }
     }
 }
+
+#[test]
+fn repeated_slow_start_is_protected_only_when_answer_timing_is_retained() {
+    let source = voice(72_000, 23);
+    let mut first = Vec::new();
+    for retain in [false, true] {
+        let mut p = Playout::new(Config {
+            startup_delay: ms(20),
+            maximum_delay: ms(400),
+            ..Config::default()
+        })
+        .unwrap();
+        for turn in 0..2 {
+            if turn > 0 {
+                if retain {
+                    p.begin_utterance();
+                } else {
+                    p.reset();
+                }
+            }
+            let base = turn * 60_000;
+            let mut packet = 0_u64;
+            let mut output = Vec::new();
+            for tick in (0..3500).step_by(10) {
+                while packet < 30 {
+                    let arrival = packet * 100 + packet.min(4) * 80;
+                    if arrival > tick {
+                        break;
+                    }
+                    let offset = packet as usize * 2400;
+                    p.push(ms(base + arrival), &source[offset..offset + 2400]).unwrap();
+                    packet += 1;
+                    if packet == 30 {
+                        p.finish();
+                    }
+                }
+                let mut block = [0; 240];
+                let report = p.render(ms(base + tick), &mut block).unwrap();
+                account(&p, report);
+                if tick == 0 {
+                    let learned = retain && turn > 0;
+                    assert_eq!(report.startup_delay, ms(if learned { 340 } else { 20 }));
+                    assert_eq!(report.startup_observations, u64::from(learned));
+                }
+                output.extend_from_slice(&block);
+            }
+            assert_eq!(p.statistics().source_consumed, source.len() as u64);
+            if turn == 0 {
+                if retain {
+                    assert_eq!(output, first);
+                } else {
+                    first = output;
+                }
+            }
+            if retain && turn > 0 {
+                assert_eq!(p.statistics().underruns, 0);
+                assert_eq!(p.statistics().concealed, 0);
+            } else {
+                assert!(p.statistics().underruns >= 3);
+                assert!(p.statistics().concealed >= 24_000 / 5);
+            }
+        }
+    }
+}

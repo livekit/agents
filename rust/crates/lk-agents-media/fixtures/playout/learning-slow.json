@@ -1,0 +1,101 @@
+{
+  "description": "Synthetic progressively slow startup; second answer only. Both paths share configuration/source/arrivals/DSP; only reset versus begin_utterance differs. Not a customer trace or the default delay-cap configuration. No normalization, gain changes or track realignment.",
+  "source_pcm_sha256": "738acf372ea3aa3f8fbbb9765c26efeb68d1dcada6f49cc54971346c67ac314c",
+  "capture_samples_per_answer": 72000,
+  "render_ms": 3500,
+  "preview_ms": 3500,
+  "arrival_ms": [
+    0,
+    180,
+    360,
+    540,
+    720,
+    820,
+    920,
+    1020,
+    1120,
+    1220,
+    1320,
+    1420,
+    1520,
+    1620,
+    1720,
+    1820,
+    1920,
+    2020,
+    2120,
+    2220,
+    2320,
+    2420,
+    2520,
+    2620,
+    2720,
+    2820,
+    2920,
+    3020,
+    3120,
+    3220
+  ],
+  "cold_prior_ms": 20,
+  "maximum_delay_ms": 400,
+  "inter_answer_start_ms": 60000,
+  "first_answers_byte_identical": true,
+  "active_source_windows": [
+    {
+      "source_start_ms": 100,
+      "duration_ms": 100,
+      "rms": 3590
+    },
+    {
+      "source_start_ms": 200,
+      "duration_ms": 100,
+      "rms": 3304
+    },
+    {
+      "source_start_ms": 300,
+      "duration_ms": 100,
+      "rms": 2065
+    },
+    {
+      "source_start_ms": 400,
+      "duration_ms": 100,
+      "rms": 796
+    }
+  ],
+  "rows": [
+    {
+      "turn": 2,
+      "startup_delay_ms": 20,
+      "gate_release_ms": 20,
+      "underruns": 4,
+      "concealed": 7200,
+      "stretched": 1245,
+      "passive_stretched": 180,
+      "observations_before": 0,
+      "quantile_before_ms": null,
+      "observations_after": 1,
+      "quantile_after_ms": 340,
+      "variant": "reset",
+      "measured_added_startup_ms": 20.0,
+      "pcm_sha256": "b8a2b280d65175414281eba5f2be66457ca827e5af25bc535ea4f06863a84640",
+      "preview_sha256": "ef9b9237409b6e18448664e90ba0096f58121279a822a244e636fc6ed3034c9c"
+    },
+    {
+      "turn": 2,
+      "startup_delay_ms": 340,
+      "gate_release_ms": 340,
+      "underruns": 0,
+      "concealed": 0,
+      "stretched": 699,
+      "passive_stretched": 60,
+      "observations_before": 1,
+      "quantile_before_ms": 340,
+      "observations_after": 2,
+      "quantile_after_ms": 340,
+      "variant": "retained",
+      "measured_added_startup_ms": 340.0,
+      "pcm_sha256": "46fe1b240481a5af2875296739479c61c659c4dbe4d42e2a210a36d775db61af",
+      "preview_sha256": "d7fcfd2ccaa2ca3a4aa3e57ba4895ecedb4bf735c92555e332619d636e1a5dcd"
+    }
+  ]
+}
