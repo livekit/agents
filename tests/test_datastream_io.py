@@ -10,6 +10,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd, _datastream_io as ds
+from livekit.agents.voice.io import BufferedAudioOutput
 from livekit.agents.voice.recorder_io.recorder_io import RecorderAudioOutput
 from livekit.agents.voice.transcription.synchronizer import TranscriptSynchronizer
 
@@ -543,6 +544,43 @@ async def test_clear_fallback_releases_waiter_and_preserves_next_reply(
     _finish(output)
     event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
     assert not event.interrupted
+
+
+async def test_buffered_interruption_reopens_the_avatar_stream(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock],
+) -> None:
+    """After clearing a buffered avatar reply, the next reply opens a fresh stream."""
+    leaf, room = sink
+    first_writer = MagicMock(spec=rtc.ByteStreamWriter)
+    first_writer.write = AsyncMock()
+    first_writer.aclose = AsyncMock()
+    second_writer = MagicMock(spec=rtc.ByteStreamWriter)
+    second_writer.write = AsyncMock()
+    second_writer.aclose = AsyncMock()
+    room.local_participant.stream_bytes.side_effect = [first_writer, second_writer]
+
+    output = BufferedAudioOutput(next_in_chain=leaf, buffer_duration=0.005)
+    await output.capture_frame(_frame())
+    output.flush()
+    output.clear_buffer()
+
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=3.0)
+    assert event.interrupted is True
+
+    # the retired writer is closed only after the clear RPC path has settled
+    await asyncio.wait_for(asyncio.gather(*leaf._tasks), timeout=1.0)
+    assert first_writer.aclose.await_count == 1
+    assert room.local_participant.stream_bytes.await_count == 1
+
+    await output.capture_frame(_frame())
+    assert room.local_participant.stream_bytes.await_count == 2
+    assert leaf._stream_writer is second_writer
+
+    output.flush()
+    _finish(leaf)
+    event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
+    assert event.interrupted is False
+    assert second_writer.aclose.await_count == 1
 
 
 # -- DataStreamAudioReceiver: a lost stream trailer must not wedge later segments; a new stream

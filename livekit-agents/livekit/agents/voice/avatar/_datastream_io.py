@@ -53,7 +53,7 @@ class DataStreamAudioOutput(AudioOutput):
             label="DataStreamIO",
             next_in_chain=None,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=False),
+            capabilities=AudioOutputCapabilities(pause=False, flush_ends_segment=True),
         )
         self._room = room
         self._destination_identity = destination_identity
@@ -215,6 +215,42 @@ class DataStreamAudioOutput(AudioOutput):
             self._clear_buffer_atask = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def interrupt_buffer(self) -> None:
+        """Discard an interrupted stream without publishing a normal end-of-speech."""
+        if not self._started:
+            return
+
+        writer = self._stream_writer
+        pushed_duration = self._pushed_duration
+        # Retire the writer before the clear RPC: the next capture must open a new
+        # stream, because the receiver discards every remaining byte of this one.
+        self._stream_writer = None
+        self._pushed_duration = 0.0
+        # Reset only local capture bookkeeping. Do not call self.flush(): closing
+        # the writer through the normal path would signal end-of-speech.
+        AudioOutput.flush(self)
+        self.clear_buffer()
+
+        if writer is not None:
+            task = asyncio.create_task(self._discard_interrupted_stream(writer, pushed_duration))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _discard_interrupted_stream(
+        self, writer: rtc.ByteStreamWriter, pushed_duration: float
+    ) -> None:
+        """Close the retired writer after the clear request has been dispatched."""
+        if self._clear_buffer_atask is not None and not self._clear_buffer_atask.done():
+            try:
+                await asyncio.shield(self._clear_buffer_atask)
+            except asyncio.CancelledError:
+                if not self._clear_buffer_atask.cancelled():
+                    raise
+        try:
+            await writer.aclose()
+        except Exception as e:
+            logger.warning("failed to close interrupted audio stream", exc_info=e)
 
     def resume(self) -> None:
         super().resume()
