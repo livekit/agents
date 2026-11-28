@@ -132,3 +132,27 @@ arithmetic and analysis are adapted from WebRTC NetEq under `LICENSE.webrtc` and
 `PATENTS.webrtc`. This remains independent floating-point Rust DSP, not a sample-exact port
 or demonstrated perceptual equivalent. Provider/runtime wiring remains outside this
 media-only change; broader listening and real arrival traces remain important.
+
+## Listen to answer 2 and see the buffering cost
+
+`playout_turns` accepts an optional capture directory after the CSV path. It replays the
+first three seconds of the same generated speech, with the same late second chunk as the
+Startup row (0, 160, 200, 300... ms arrivals). Both learning controls start with a deliberate
+20 ms prior. Only the retained variant calls `begin_utterance()`; the reset control calls
+`reset()`. Captures of answers 1 and 2 share a 0–3 s preview crop.
+
+`learning.json` records observations/quantile before each answer, selected budget, actual
+startup delay, underruns and preview hashes. The first answer files are byte-identical.
+Before answer 2, the retained startup histogram has one observation and an 80 ms p95 bin;
+reset has none. The 60 ms coverage deficit occupies the 60–80 ms histogram bucket. Answer 2
+therefore waits 80 ms instead of 20 ms: 60 ms extra startup cost, with zero underruns in
+this replay. This isolates histogram state using the same Rust DSP, not a new NetEq model.
+
+The clean control starts with the normal 80 ms prior. Its measured startup delays are
+80, 60, 40, 20 ms on successive clean answers. Recent bad observations remain in the
+histogram and may keep the budget elevated longer; one clean answer does not erase them.
+Known EOF or sufficient burst coverage can release startup earlier than its budget.
+
+Latency labels in the PR are added playout startup relative to the same source signal,
+measured in 1 ms windows. They exclude model generation, live network and listener-device
+latency, so they are not absolute live request-to-ear measurements.

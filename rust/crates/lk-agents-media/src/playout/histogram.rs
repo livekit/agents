@@ -64,6 +64,10 @@ impl Histogram {
         self.target_ms = (quantile + 1) * 20;
     }
 
+    pub(super) fn observations(&self) -> u64 {
+        self.updates
+    }
+
     pub(super) fn quantile_ms(&self) -> usize {
         self.target_ms
     }

@@ -96,6 +96,10 @@ pub struct Render {
     pub target_delay: Duration,
     /// Selected startup waiting-time budget; queued bursts/EOF may release it sooner.
     pub startup_delay: Duration,
+    /// Completed answer-start observations retained across `begin_utterance()`.
+    pub startup_observations: u64,
+    /// Unclamped learned quantile; the selected budget also respects bounds and slow release.
+    pub startup_quantile: Option<Duration>,
     pub started: bool,
     /// All accepted source audio has been rendered and input was explicitly finished.
     pub drained: bool,
@@ -344,6 +348,8 @@ impl Playout {
             startup_delay: Duration::from_secs_f64(
                 self.startup_target as f64 / f64::from(SAMPLE_RATE),
             ),
+            startup_observations: self.delay.startup_observations(),
+            startup_quantile: self.delay.startup_quantile(),
             started: self.started,
             drained: self.finished && self.queue.is_empty() && self.pending.is_empty(),
         })

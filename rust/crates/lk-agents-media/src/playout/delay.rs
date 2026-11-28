@@ -114,6 +114,15 @@ impl Delay {
         }
     }
 
+    pub(super) fn startup_observations(&self) -> u64 {
+        self.startup_histogram.observations()
+    }
+
+    pub(super) fn startup_quantile(&self) -> Option<Duration> {
+        (self.startup_observations() > 0)
+            .then(|| Duration::from_millis(self.startup_histogram.quantile_ms() as u64))
+    }
+
     pub(super) fn startup_observed(&self) -> bool {
         self.startup_complete
     }

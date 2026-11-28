@@ -625,6 +625,10 @@ fn learned_startup_protects_later_answers_without_learning_idle_time() {
             }
             let report = p.render(ms(base + tick), &mut out).unwrap();
             account(&p, report);
+            if tick == 0 {
+                assert_eq!(report.startup_observations, turn);
+                assert_eq!(report.startup_quantile, (turn > 0).then_some(ms(80)));
+            }
             assert!(report.startup_delay <= ms(100));
             if turn > 0 {
                 assert_eq!(report.startup_delay, ms(80));
