@@ -1458,6 +1458,111 @@ def test_a_script_without_spaces_gets_none_between_the_added_words() -> None:
     assert written("Je voudrais", ("un", "billet"), fr) == "Je voudrais un billet."
 
 
+JA_SHOWN = "残高を"
+JA_SAID = "残高を確認。"
+
+
+@pytest.mark.parametrize("language", ["ja", "", "multi"])
+@pytest.mark.usefixtures("four_early_starts")
+async def test_a_script_without_spaces_is_written_without_them_before_any_final(
+    language: str,
+) -> None:
+    # in the call's first turn there is no final to copy, and a speech-to-text that names no one
+    # language is written by the English rules; Bell's added words of a script written without
+    # spaces are still joined without them, and closed with the ideographic full stop, not "."
+    script = [
+        ev(0.00, T.START_OF_SPEECH),
+        ev(0.05, T.INTERIM_TRANSCRIPT, JA_SHOWN, 0.95),
+        ev(0.40, T.FINAL_TRANSCRIPT, JA_SAID),
+        ev(0.40, T.END_OF_SPEECH),
+    ]
+    out, ends = await run_in(language, script, FakeAPI(answers={JA_SHOWN: JA_SAID[:-1]}))
+    assert [text for typ, text in out if typ == T.PREFLIGHT_TRANSCRIPT] == [JA_SAID]
+    assert ends[-1]["guess"] == "kept"
+
+
+@pytest.mark.parametrize("language", ["ja", "", "multi"])
+@pytest.mark.usefixtures("four_early_starts")
+async def test_a_script_without_spaces_is_written_as_the_calls_finals_whatever_language_is_named(
+    language: str,
+) -> None:
+    # a speech-to-text that closes its turns with no mark: from the call's first final on, Bell's
+    # added words of a script written without spaces are written as the call's finals are, also
+    # where the speech-to-text names no one language
+    shown, said = "口座を", "口座を開設"
+    script = [
+        ev(0.00, T.START_OF_SPEECH),
+        ev(0.30, T.FINAL_TRANSCRIPT, JA_SAID[:-1]),
+        ev(0.30, T.END_OF_SPEECH),
+        ev(0.45, COMMIT, JA_SAID[:-1]),
+        ev(0.60, T.START_OF_SPEECH),
+        ev(0.65, T.INTERIM_TRANSCRIPT, shown, 0.95),
+        ev(1.00, T.FINAL_TRANSCRIPT, said),
+        ev(1.00, T.END_OF_SPEECH),
+    ]
+    out, ends = await run_in(language, script, FakeAPI(answers={shown: said}))
+    assert [text for typ, text in out if typ == T.PREFLIGHT_TRANSCRIPT] == [said]
+    assert ends[-1]["guess"] == "kept"
+
+
+def test_a_script_without_spaces_before_any_final_and_english_as_before() -> None:
+    from livekit.plugins.rabel._form import CallForm, final_form, written
+
+    zh = ("我想", ("查", "余", "额"))
+    assert final_form(*zh) == written(*zh, CallForm()) == "我想查余额。"
+    # Thai closes a turn with no mark
+    th = ("ผม", ("อ", "ย", "า", "ก"))
+    assert final_form(*th) == "ผมอยาก"
+    # English guesses are written byte for byte as before (the public benchmark is English)
+    english = {
+        ("I'd like to check", ("my", "balance")): "I'd like to check my balance.",
+        ("Can I pay at", ("five", "pm")): "Can I pay at five PM?",
+        ("Yes.", ("im", "done")): "Yes. I'm done.",
+        ("what's", ("the", "time")): "what's the time?",
+        (
+            "Yes, and",
+            ("i", "want", "to", "pay", "at", "3", "pm"),
+        ): "Yes, and I want to pay at 3 PM.",
+        ("My card number is 4", ("2", "7")): "My card number is 4 2 7.",
+        ("I want", ()): "I want",
+        # a name of a script written without spaces in an English sentence: the added words and
+        # the shown text they join are not all of that script, so the English rules, as before
+        ("I'd like to speak to", ("王", "please")): "I'd like to speak to 王 please.",
+        ("My name is", ("田", "中")): "My name is 田 中.",
+        ("Is", ("東", "京", "open")): "Is 東 京 open?",
+    }
+    for (shown, added), said in english.items():
+        assert final_form(shown, added) == written(shown, added, CallForm()) == said
+
+
+@pytest.mark.parametrize("after_a_final", [False, True], ids=["first_turn", "after_a_final"])
+@pytest.mark.parametrize("language", ["en", "multi"])
+@pytest.mark.usefixtures("four_early_starts")
+async def test_english_with_a_name_of_a_script_without_spaces_is_written_by_the_english_rules(
+    language: str, after_a_final: bool
+) -> None:
+    # Bell adds a name of a script written without spaces to an English sentence: the guess is
+    # written by the English rules as before, in the call's first turn and after its first final
+    said = "I'd like to speak to 王 please."
+    first = [
+        ev(0.00, T.START_OF_SPEECH),
+        ev(0.30, T.FINAL_TRANSCRIPT, "Hello."),
+        ev(0.30, T.END_OF_SPEECH),
+        ev(0.45, COMMIT, "Hello."),
+    ]
+    script = [
+        *(first if after_a_final else []),
+        ev(0.60, T.START_OF_SPEECH),
+        ev(0.65, T.INTERIM_TRANSCRIPT, "I'd like to speak to", 0.95),
+        ev(1.00, T.FINAL_TRANSCRIPT, said),
+        ev(1.00, T.END_OF_SPEECH),
+    ]
+    api = FakeAPI(answers={"I'd like to speak to": "i'd like to speak to 王 please"})
+    out, ends = await run_in(language, script, api)
+    assert [text for typ, text in out if typ == T.PREFLIGHT_TRANSCRIPT] == [said]
+    assert ends[-1]["guess"] == "kept"
+
+
 @pytest.mark.parametrize("gap", [" ", ""], ids=["spaced", "unspaced"])
 def test_where_two_scripts_meet_the_space_is_written_as_the_calls_finals_write_it(
     gap: str,

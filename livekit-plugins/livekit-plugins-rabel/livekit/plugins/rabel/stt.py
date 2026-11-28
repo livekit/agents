@@ -86,7 +86,7 @@ from livekit.agents.types import (
 )
 
 from ._bell import BellConnection
-from ._form import CallForm, final_form, written
+from ._form import CallForm, final_form, unspaced, written
 from .log import logger
 
 if TYPE_CHECKING:
@@ -1276,11 +1276,12 @@ class SpeechStream(stt.RecognizeStream):
         shown_words = words_of(t.shown)
         if t.words == committed + shown_words and _is_begin(t.words, g):
             added = g[len(t.words) :]
-            if _english(t.last_alt):
+            if _english(t.last_alt) and not unspaced(t.shown, added):
                 text = final_form(t.shown, added)
             else:
-                # another language: no rule of English, the guess is written as this call's
-                # finals have been
+                # another language, or added words of a script written without spaces after shown
+                # text of that script where the speech-to-text names no one language: no rule of
+                # English, the guess is written as this call's finals have been
                 text = written(t.shown, added, self._form)
         elif committed:
             text = " ".join(g[len(committed) :])
@@ -1319,7 +1320,8 @@ class SpeechStream(stt.RecognizeStream):
 
 def _english(alt: stt.SpeechData | None) -> bool:
     """The speech-to-text says the words are English, or does not say one language (none given,
-    "multi"): the guess is then written by the English rules, as it always was."""
+    "multi"): the guess is then written by the English rules, as it always was, unless its added
+    words and the shown text they join are of a script written without spaces."""
     lang = getattr(alt, "language", None)
     base = str(getattr(lang, "language", lang) or "").lower()
     return base in ("", "en", "multi", "und")

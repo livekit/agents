@@ -34,7 +34,11 @@ Those rules are English. For any other language the guess is written from what t
 shown (`CallForm`, `written`): each added word as the speech-to-text last wrote it in this call, and
 the turn closed the way this call's final transcripts have closed after the same opening word, or
 the way most of them have closed. Nothing about the language is assumed. Until the call has had a
-final transcript there is nothing to copy, and the guess is written as above.
+final transcript there is nothing to copy, and the guess is written as above, except that added
+words of a script written without spaces (kana, ideographs, Thai), after shown text that ends in such
+a script or after none, are joined without them and the turn is not closed with ".": after kana or
+an ideograph with "\u3002", else with no mark. Such words in a sentence of a spaced script (a name in
+English) are written by the English rules, as before.
 """
 
 from __future__ import annotations
@@ -119,6 +123,12 @@ def final_form(shown: str, added: tuple[str, ...]) -> str:
     shown = shown.strip()
     if not added:
         return shown
+    if unspaced(shown, added):
+        # a script written without spaces (kana, ideographs, Thai): no English rule applies, the
+        # added words are joined without spaces, and the turn closed with the ideographic full stop
+        # after kana or an ideograph, else with no mark (Thai writes none)
+        toks = (shown.split() if shown else []) + list(added)
+        return _join(toks, len(added)) + ("\u3002" if _ideographic(added[-1][-1:]) else "")
     words = [_form(w) for w in added]
     before = [norm_word(t) for t in shown.split()[-1:]] + list(added)
     for i, w in enumerate(added):  # "five pm" -> "five PM": the hour's mark, after a number
@@ -243,6 +253,24 @@ def _unspaced(c: str) -> bool:
     """A character of a script written without spaces between words, which LiveKit's comparison
     takes one character at a time (split_words with split_character: kana, ideographs, Thai)."""
     return not c.isspace() and len(split_words(c + c, split_character=True)) == 2
+
+
+def unspaced(shown: str, added: tuple[str, ...]) -> bool:
+    """Bell's added words are all of a script written without spaces (an English word never is),
+    and so is the end of the shown text they join, if there is one. A name of such a script in a
+    sentence of a spaced one ("I'd like to speak to" and "王", "please") is not."""
+    end = next((c for c in reversed(shown) if not _is_mark(c)), "")
+    return (
+        bool(added) and all(_unspaced(c) for w in added for c in w) and (not end or _unspaced(end))
+    )
+
+
+def _ideographic(c: str) -> bool:
+    """Kana or an ideograph: Japanese and Chinese close a sentence with the ideographic full
+    stop."""
+    return unicodedata.name(c, "").startswith(
+        ("CJK UNIFIED IDEOGRAPH", "CJK COMPATIBILITY IDEOGRAPH", "HIRAGANA", "KATAKANA")
+    )
 
 
 def _join(toks: list[str], n_added: int, spaces_scripts: bool = False) -> str:
