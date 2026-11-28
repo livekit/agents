@@ -303,6 +303,61 @@ async def test_transcription_output_aclose_unregisters_and_closes_resources() ->
 
 
 @pytest.mark.asyncio
+async def test_transcription_output_holds_text_until_it_has_a_participant() -> None:
+    room = _FakeRoom()
+    writer = _FakeWriter()
+    room.local_participant.stream_text = AsyncMock(return_value=writer)
+    room.local_participant.track_publications = {}
+    output = _ParticipantTranscriptionOutput(room=room, participant=None)
+
+    capture = asyncio.create_task(output.capture_text("hello"))
+    await asyncio.sleep(1.0)
+    assert not capture.done()
+
+    output.set_participant("local")
+    await capture
+    assert "".join(writer.chunks) == "hello"
+
+    # one-shot gate: clearing the participant later drops text instead of blocking again
+    output.set_participant(None)
+    await output.capture_text("dropped")
+    assert "".join(writer.chunks) == "hello"
+    await output.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_agent_state_speaking_before_room_connects() -> None:
+    class _UnconnectedRoom(_FakeRoom):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connected = False
+
+        @property
+        def local_participant(self) -> object:
+            raise Exception("cannot access local participant before connecting")
+
+        @local_participant.setter
+        def local_participant(self, _: object) -> None:
+            pass
+
+    room = _UnconnectedRoom()
+    async with AgentSession(vad=None, turn_handling={"turn_detection": None}) as session:
+        await session.start(
+            Agent(instructions="test"),
+            room=room,  # type: ignore[arg-type]
+            session_host=False,
+            room_options=RoomOptions(
+                audio_input=False,
+                audio_output=False,
+                text_input=False,
+                text_output=False,
+            ),
+        )
+        session._update_agent_state("speaking")
+        assert session.agent_state == "speaking"
+
+
+@pytest.mark.asyncio
 async def test_transcription_output_strips_markup_but_keeps_links() -> None:
     room = _FakeRoom()
     writer = _FakeWriter()
