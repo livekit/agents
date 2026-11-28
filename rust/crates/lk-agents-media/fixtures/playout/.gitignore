@@ -1,0 +1,6 @@
+*.wav
+*.pcm
+*.mp4
+listen/
+previews/
+output/

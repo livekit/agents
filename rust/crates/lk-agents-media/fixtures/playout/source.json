@@ -1,0 +1,760 @@
+{
+  "provider": "OpenAI GPTLive",
+  "model": "gpt-live-1",
+  "voice": "marin",
+  "sample_rate": 24000,
+  "channels": 1,
+  "format": "PCM16 little-endian",
+  "requested_sentence": "A small audio buffer keeps speech smooth when network packets arrive a little late.",
+  "transcript": "A small audio buffer keeps speech smooth when network packets arrive a little late.",
+  "transcript_events": [
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 200,
+      "end_ms": 400,
+      "delta": "A small"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 400,
+      "end_ms": 600,
+      "delta": " audio"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 800,
+      "end_ms": 1000,
+      "delta": " buffer"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 1000,
+      "end_ms": 1200,
+      "delta": " keeps"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 1400,
+      "end_ms": 1600,
+      "delta": " speech"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 1800,
+      "end_ms": 2000,
+      "delta": " smooth"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 2200,
+      "end_ms": 2400,
+      "delta": " when"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 2400,
+      "end_ms": 2600,
+      "delta": " network"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 2800,
+      "end_ms": 3000,
+      "delta": " packets"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 3200,
+      "end_ms": 3400,
+      "delta": " arrive"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 3600,
+      "end_ms": 3800,
+      "delta": " a little"
+    },
+    {
+      "type": "session.output_transcript.delta",
+      "start_ms": 3800,
+      "end_ms": 4000,
+      "delta": " late."
+    }
+  ],
+  "duration_samples": 192000,
+  "capture_date_utc": "2026-11-28",
+  "sha256": "eed30d810c33be37c73d861edb1bb05e5cb36152f0de29bd6bacfd23ce278f9a",
+  "captured_chunks": [
+    {
+      "arrival_us": 690411,
+      "source_start": 0,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 789292,
+      "source_start": 2400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 885464,
+      "source_start": 4800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 986977,
+      "source_start": 7200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1084840,
+      "source_start": 9600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1195997,
+      "source_start": 12000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1285965,
+      "source_start": 14400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1394405,
+      "source_start": 16800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1491270,
+      "source_start": 19200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1587864,
+      "source_start": 21600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1686857,
+      "source_start": 24000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1786095,
+      "source_start": 26400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1890395,
+      "source_start": 28800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 1991042,
+      "source_start": 31200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2088082,
+      "source_start": 33600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2192753,
+      "source_start": 36000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2288909,
+      "source_start": 38400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2388987,
+      "source_start": 40800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2486962,
+      "source_start": 43200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2598274,
+      "source_start": 45600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2687814,
+      "source_start": 48000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2791173,
+      "source_start": 50400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2893458,
+      "source_start": 52800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 2987706,
+      "source_start": 55200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3091048,
+      "source_start": 57600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3187005,
+      "source_start": 60000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3294214,
+      "source_start": 62400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3391740,
+      "source_start": 64800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3509129,
+      "source_start": 67200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3600701,
+      "source_start": 69600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3694718,
+      "source_start": 72000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3798736,
+      "source_start": 74400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3903514,
+      "source_start": 76800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 3997158,
+      "source_start": 79200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4096949,
+      "source_start": 81600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4198828,
+      "source_start": 84000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4300812,
+      "source_start": 86400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4409976,
+      "source_start": 88800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4499973,
+      "source_start": 91200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4597267,
+      "source_start": 93600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4705603,
+      "source_start": 96000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4798260,
+      "source_start": 98400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4901866,
+      "source_start": 100800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 4997822,
+      "source_start": 103200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5102020,
+      "source_start": 105600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5211977,
+      "source_start": 108000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5302154,
+      "source_start": 110400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5416746,
+      "source_start": 112800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5523158,
+      "source_start": 115200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5598703,
+      "source_start": 117600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5702226,
+      "source_start": 120000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5799466,
+      "source_start": 122400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5901250,
+      "source_start": 124800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 5998986,
+      "source_start": 127200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6098945,
+      "source_start": 129600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6204803,
+      "source_start": 132000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6301204,
+      "source_start": 134400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6401297,
+      "source_start": 136800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6503155,
+      "source_start": 139200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6601184,
+      "source_start": 141600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6699347,
+      "source_start": 144000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6801721,
+      "source_start": 146400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 6898262,
+      "source_start": 148800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7000962,
+      "source_start": 151200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7096988,
+      "source_start": 153600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7201785,
+      "source_start": 156000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7299062,
+      "source_start": 158400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7401372,
+      "source_start": 160800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7500241,
+      "source_start": 163200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7604340,
+      "source_start": 165600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7701841,
+      "source_start": 168000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7800584,
+      "source_start": 170400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7905254,
+      "source_start": 172800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 7999460,
+      "source_start": 175200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8103870,
+      "source_start": 177600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8206153,
+      "source_start": 180000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8298424,
+      "source_start": 182400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8400172,
+      "source_start": 184800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8505635,
+      "source_start": 187200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8605469,
+      "source_start": 189600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8696821,
+      "source_start": 192000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8796463,
+      "source_start": 194400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8898426,
+      "source_start": 196800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 8999342,
+      "source_start": 199200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9101554,
+      "source_start": 201600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9199961,
+      "source_start": 204000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9303566,
+      "source_start": 206400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9399038,
+      "source_start": 208800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9502133,
+      "source_start": 211200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9604665,
+      "source_start": 213600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9703940,
+      "source_start": 216000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9800413,
+      "source_start": 218400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 9900276,
+      "source_start": 220800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10002689,
+      "source_start": 223200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10096395,
+      "source_start": 225600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10202051,
+      "source_start": 228000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10298339,
+      "source_start": 230400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10421138,
+      "source_start": 232800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10504332,
+      "source_start": 235200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10619511,
+      "source_start": 237600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10700952,
+      "source_start": 240000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10798372,
+      "source_start": 242400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10901265,
+      "source_start": 244800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 10997173,
+      "source_start": 247200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11104472,
+      "source_start": 249600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11207044,
+      "source_start": 252000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11303736,
+      "source_start": 254400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11397727,
+      "source_start": 256800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11501203,
+      "source_start": 259200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11598981,
+      "source_start": 261600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11706795,
+      "source_start": 264000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11799304,
+      "source_start": 266400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 11897648,
+      "source_start": 268800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12007244,
+      "source_start": 271200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12096993,
+      "source_start": 273600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12197296,
+      "source_start": 276000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12297512,
+      "source_start": 278400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12399075,
+      "source_start": 280800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12501122,
+      "source_start": 283200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12598199,
+      "source_start": 285600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12698375,
+      "source_start": 288000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12812680,
+      "source_start": 290400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12898645,
+      "source_start": 292800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 12997267,
+      "source_start": 295200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13099690,
+      "source_start": 297600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13199750,
+      "source_start": 300000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13300731,
+      "source_start": 302400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13398335,
+      "source_start": 304800,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13498838,
+      "source_start": 307200,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13600839,
+      "source_start": 309600,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13703162,
+      "source_start": 312000,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13802507,
+      "source_start": 314400,
+      "samples": 2400
+    },
+    {
+      "arrival_us": 13900084,
+      "source_start": 316800,
+      "samples": 2400
+    }
+  ],
+  "event_counts": {
+    "session.started": 1,
+    "session.output_audio.delta": 133,
+    "session.output_transcript.delta": 12,
+    "session.commentary.appended": 1
+  }
+}

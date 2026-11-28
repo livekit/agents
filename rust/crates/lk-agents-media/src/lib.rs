@@ -16,6 +16,7 @@ pub mod media_queue;
 pub mod mime;
 pub mod mixer;
 pub mod pauses;
+pub mod playout;
 pub mod pool;
 pub mod recorder;
 pub mod resample;
