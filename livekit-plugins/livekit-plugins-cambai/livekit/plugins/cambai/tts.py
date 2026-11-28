@@ -103,6 +103,9 @@ class TTS(tts.TTS):
                 "Camb.ai API key must be provided via api_key parameter or "
                 "CAMB_API_KEY environment variable"
             )
+        # the emitter frames audio/pcm as 16-bit samples
+        if output_format in ("pcm_s32le",):
+            raise ValueError(f"Unsupported output_format: {output_format}")
 
         if is_given(credentials_info) or is_given(credentials_file):
             logger.warning("Vertex AI credentials provided but not yet implemented - using API key")
@@ -191,7 +194,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
 
         # Determine MIME type based on output format
-        if self._opts.output_format in ("pcm_s16le", "pcm_s32le"):
+        if self._opts.output_format == "pcm_s16le":
             mime_type = "audio/pcm"
         elif self._opts.output_format == "wav":
             mime_type = "audio/wav"
