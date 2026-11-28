@@ -31,8 +31,6 @@ struct Hooks {
     panic_setup: bool,
     panic_close: bool,
     children: Option<Arc<Group>>,
-    /// Its setup sets up an MCP server's tools, as an `MCPToolset`'s lifecycle does.
-    mcp: bool,
 }
 impl Hooks {
     fn new() -> Self {
@@ -51,7 +49,6 @@ impl Hooks {
             panic_setup: false,
             panic_close: false,
             children: None,
-            mcp: false,
         }
     }
 }
@@ -68,9 +65,6 @@ impl toolsets::ToolsetHooks for Hooks {
             let setup = async {
                 self.setups.fetch_add(1, Ordering::SeqCst);
                 assert!(!self.panic_setup, "setup panicked");
-                if self.mcp {
-                    self.lifetime.mcp_set_up();
-                }
                 if let Some(children) = &self.children {
                     children.start().await?;
                 }
@@ -325,23 +319,4 @@ async fn lifetime_replies_resolve_when_their_operation_dies() {
     let lease = ticket.result().await.unwrap();
     let released = tokio::time::timeout(LIMIT, lease.close()).await;
     assert!(released.is_ok(), "the release outlived its close");
-}
-
-// Catches: a session's scopes not knowing they activated an MCP toolset (the session's own, an
-// agent's, or one nested in another toolset), or taking a plain toolset for one.
-#[tokio::test]
-async fn scopes_know_when_a_toolset_they_activated_is_an_mcp_toolset() {
-    let mcp = || Arc::new(Hooks { mcp: true, ..Hooks::new() });
-    let scopes = Scopes::new(&ProcessEnv::current_runtime());
-    scopes.acquire(0, vec![Arc::new(Hooks::new())]).await.unwrap();
-    assert!(!toolsets::ScopesPort::mcp(&scopes));
-    let wrapper = Arc::new(Hooks { children: Some(group(vec![mcp()])), ..Hooks::new() });
-    scopes.acquire(1, vec![wrapper]).await.unwrap();
-    assert!(toolsets::ScopesPort::mcp(&scopes), "a nested MCP toolset");
-    scopes.release(None).await.unwrap();
-
-    let own = Scopes::new(&ProcessEnv::current_runtime());
-    own.acquire(0, vec![mcp()]).await.unwrap();
-    assert!(toolsets::ScopesPort::mcp(&own), "the session's own MCP toolset");
-    own.release(None).await.unwrap();
 }

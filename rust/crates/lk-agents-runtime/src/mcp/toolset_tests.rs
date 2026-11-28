@@ -13,7 +13,6 @@ struct Host {
     lists: AtomicUsize,
     cancelled: AtomicUsize,
     closes: AtomicUsize,
-    lifetime: Arc<dyn lk_agents_abi::llm::toolsets::Lifetime>,
     session: Arc<super::super::session::McpSession>,
     server: Arc<super::super::session::tests::Server>,
 }
@@ -28,9 +27,6 @@ impl Default for Host {
             lists: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
             closes: AtomicUsize::new(0),
-            lifetime: Arc::new(<crate::toolsets::lifetime::Lifetime as lk_agents_abi::llm::toolsets::ToolsetLifetime>::new(
-                &lk_agents_net::env::ProcessEnv::current_runtime(),
-            )),
             session: Arc::new(
                 super::super::session::McpSession::new(
                     &lk_agents_net::env::ProcessEnv::current_runtime(),
@@ -46,9 +42,6 @@ impl Default for Host {
 }
 
 impl McpToolsetHost for Host {
-    fn lifetime(&self) -> &Arc<dyn lk_agents_abi::llm::toolsets::Lifetime> {
-        &self.lifetime
-    }
     fn list<'a>(
         &'a self,
         _cx: &telemetry::Cx,
@@ -111,9 +104,7 @@ async fn release(lifecycle: &Lifecycle) {
 async fn an_unreachable_server_is_listed_again_at_the_sessions_backoff() {
     let host = Arc::new(Host::default());
     let lifecycle = lifecycle(&host);
-    assert!(!host.lifetime.mcp());
     setup(&lifecycle).await;
-    assert!(host.lifetime.mcp(), "an unreachable server's toolset is still an MCP toolset");
     assert_eq!(host.lists.load(Ordering::SeqCst), 1);
     tokio::time::sleep(Duration::from_millis(900)).await;
     assert_eq!(host.lists.load(Ordering::SeqCst), 1, "the native session is backing off");
@@ -164,4 +155,17 @@ async fn release_stops_a_recovery_and_settles_its_listing() {
     assert_eq!(host.cancelled.load(Ordering::SeqCst), 1, "cancelled and settled by release");
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(host.lists.load(Ordering::SeqCst), 2);
+}
+
+// Catches: an MCP toolset's setup not counted, or counted only the first time it lists.
+#[tokio::test(start_paused = true)]
+async fn each_setup_of_an_mcp_toolset_counts_the_feature() {
+    let stats = lk_agents_telemetry::testkit::Recorded::default();
+    let host = Arc::new(Host::default());
+    let lifecycle = lifecycle(&host);
+    for _ in 0..2 {
+        lifecycle.0.setup(lifecycle.1.clone(), CallContext::default(), stats.cx()).await;
+    }
+    let counted: Vec<_> = stats.take().into_iter().map(|(metric, ..)| metric).collect();
+    assert_eq!(counted, ["lk.product.agents.feature.mcp"; 2]);
 }

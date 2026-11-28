@@ -2,12 +2,12 @@ use crate::agent_session::VoiceDriver;
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::metrics::base::AgentMetrics;
-use lk_agents_abi::productstats::features::{Feature, FeatureModelSwitch};
+use lk_agents_abi::productstats::features::{FeatureLanguageSwitch, FeatureModelSwitch};
 use lk_agents_abi::productstats::models::{
     ModelKind, ModelLabels, ModelRequests, ModelTranscriptionDelay, ModelTtft, ModelUsage,
 };
 use lk_agents_abi::productstats::sessions::{
-    Entrypoint, FalseInterruption, Interruption, Pipeline, TurnDetection, VoiceSessions,
+    Entrypoint, FalseInterruption, Interruption, Pipeline, Sessions, TurnDetection, VoiceSessions,
 };
 use lk_agents_abi::resources::{LlmRef, RealtimeRef, SttRef, TtsRef};
 use lk_agents_abi::tokenize::language::LanguageCode;
@@ -63,7 +63,7 @@ impl VoiceDriver {
             return;
         };
         if !(was_adapter && adapter) && (from, &old) != (to, &new) {
-            self.session.stats.used(Feature::ModelSwitch(FeatureModelSwitch { from, to }));
+            self.telemetry.measure(&FeatureModelSwitch { from, to }, 1u64.into());
         }
     }
 
@@ -96,7 +96,7 @@ impl VoiceDriver {
         if let (Some(before), Some(now)) = (before, now)
             && before.language() != now.language()
         {
-            self.session.stats.used(Feature::LanguageSwitch);
+            self.telemetry.measure(&FeatureLanguageSwitch, 1u64.into());
         }
     }
 
@@ -135,10 +135,10 @@ impl VoiceDriver {
         self.telemetry.measure(&started, 1u64.into());
     }
 
-    /// The session ends: its one count with what its agents did, and each feature it used.
+    /// The call ends: its one count.
     pub(crate) fn count_session_end(&mut self) {
-        let stats = std::mem::take(&mut self.session.stats);
-        stats.emit(Entrypoint::RtcSession, &mut self.telemetry);
+        let ended = Sessions { entrypoint: Entrypoint::RtcSession };
+        self.telemetry.measure(&ended, 1u64.into());
     }
 
     /// The session STT's labels: a `FallbackAdapter`'s are the instance serving.

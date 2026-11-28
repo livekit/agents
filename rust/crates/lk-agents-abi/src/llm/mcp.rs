@@ -552,9 +552,6 @@ pub trait McpServerHttpFacade {
 /// runs in the context of the `setup()` or `aclose()` that started it.
 #[crate::host(proxy(host = "livekit.agents.llm.mcp.MCPToolset"))]
 pub trait McpToolsetHost: Send + Sync {
-    /// The toolset's lifetime port, which its setup marks as an MCP toolset's.
-    #[host(read_once, getter = "_lifetime")]
-    fn lifetime(&self) -> &std::sync::Arc<dyn crate::llm::toolsets::Lifetime>;
     /// Connect the server when it is not, list its tools and make them the toolset's.
     /// Cancelled when the toolset is closed while recovering.
     #[host(await, name = "_core_list")]

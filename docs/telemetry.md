@@ -256,14 +256,11 @@ session's VAD ended the speech, `stt` when the STT detects the end of speech its
 
 **Sessions**
 
-`sessions` counts sessions, once each when the session ends. Its labels are read
-together, so the combinations are visible.
+`sessions` counts sessions, once each when the session ends. It has one label.
 
 | Label | Values |
 | --- | --- |
 | `session.entrypoint` | `rtc_session`, `a2a_session` |
-| `session.topology` | `single`: one agent for the whole session; `handoff`: one agent replaced another; `agent_as_tool`: a local agent was called as a tool; `both`: a handoff and an agent as a tool |
-| `session.delegation` | `none`: everything ran in this process; `remote`: a `RemoteAgent` was called |
 
 **Voice sessions**
 
@@ -279,19 +276,20 @@ configuration it starts with.
 
 **Features**
 
-One counter per feature. Each counts the sessions that used it, except
-`feature.background_audio`, which counts players. A session adds 1 to a counter the first
-time it uses that feature, and never more than 1. The counters are independent: a session
-that used MCP and `override_options` adds 1 to each of those two, and nothing to the others.
+One counter per feature. Each counter counts uses of the feature. A session that calls
+`update_options` three times adds 3.
 
-| Metric | Counts the sessions that |
+| Metric | Counts each time |
 | --- | --- |
-| `feature.mcp` | ran an agent that has an MCP toolset |
-| `feature.update_options` | called `session.update_options(...)` |
-| `feature.override_options` | entered `session.override_options(...)` |
-| `feature.background_audio` | counts background audio players started, with or without a session |
-| `feature.language_switch` | heard the person change language: the STT reported a different language than earlier in the session |
-| `feature.model_switch` | replaced a model with another while running |
+| `feature.handoff` | an agent replaced another in a voice session |
+| `feature.agent_as_tool` | a local agent was called as a tool |
+| `feature.remote_agent` | a `RemoteAgent` was called |
+| `feature.mcp` | an MCP toolset was set up |
+| `feature.update_options` | `session.update_options(...)` was called |
+| `feature.override_options` | `session.override_options(...)` was entered |
+| `feature.background_audio` | a background audio player was started, with or without a session |
+| `feature.language_switch` | the STT reported a different language than the one before |
+| `feature.model_switch` | a model was replaced with another while a session ran |
 
 A feature that needs more than a count gets labels on its own counter. One does so far.
 `feature.model_switch` says which kind of model was replaced by which, in two labels:
@@ -304,8 +302,7 @@ A feature that needs more than a count gets labels on its own counter. One does 
   `override_options`, or an agent that brings its own model). A model installed where the
   session had none is not a switch, and neither is the same model installed again or a
   fallback adapter moving to another of its members.
-- A session adds 1 for each distinct pair it made: one that swapped its TTS three times and
-  its LLM once adds 1 under `tts -> tts` and 1 under `llm -> llm`.
+- Each switch adds 1: a session that swapped its TTS three times adds 3 under `tts -> tts`.
 
 **Never collected**
 

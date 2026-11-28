@@ -18,8 +18,6 @@ struct State {
     /// Activations stay owned until their close settles, including after the policy releases
     /// them. Whole-session shutdown must join an earlier close whose waiter was cancelled.
     groups: BTreeMap<u64, Arc<Group>>,
-    /// A toolset activated so far, or one nested in those, is an MCP toolset.
-    mcp: bool,
 }
 // A cancelled or failed admission cannot occupy the older activation's release slot.
 struct Admission {
@@ -104,10 +102,6 @@ impl toolsets::ToolsetScopes for Scopes {
             return Err(error);
         }
         admission.accepted = true;
-        // The session's own toolsets and each agent's are activated here, nested ones included.
-        if toolsets::LeaseGroup::mcp(&*group) {
-            self.state.lock().mcp = true;
-        }
         Ok(id)
     }
     async fn release(&self, scope: Option<u64>) -> Result<(), HostError> {
@@ -133,9 +127,6 @@ impl toolsets::ScopesPort for Scopes {
         toolsets: Vec<Arc<dyn ToolsetHooks>>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<u64, HostError>> {
         Box::pin(toolsets::ToolsetScopes::acquire(self, scope, toolsets))
-    }
-    fn mcp(&self) -> bool {
-        self.state.lock().mcp
     }
     fn discard(&self, activation: u64) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
         let group = {

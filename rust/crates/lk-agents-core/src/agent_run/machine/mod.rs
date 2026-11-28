@@ -251,9 +251,6 @@ pub struct AgentRun {
     next_id: u64,
     /// This invocation's requests and tool bodies.
     ledger: Ledger,
-    /// What its session's product statistics report of this invocation: the agents it called as
-    /// tools, local and remote.
-    pub session_stats: lk_agents_abi::productstats::sessions::SessionStats,
     /// What reached the person as written, in order: it leads the answer.
     verbatim: Vec<String>,
     pending_call: Option<lk_agents_abi::a2a::turn::PendingCall>,
@@ -402,7 +399,6 @@ impl AgentRun {
             input,
             next_id: 0,
             ledger: Ledger::default(),
-            session_stats: Default::default(),
             verbatim: Vec::new(),
             pending_call: None,
             input_requirements: Vec::new(),
@@ -485,13 +481,8 @@ impl AgentRun {
     ) -> Vec<AgentRunEffect> {
         let fx = self.step(event, now, running);
         // A tool body starts with its `ToolExecute`, whatever it then returns.
-        for effect in &fx {
-            let AgentRunEffect::ToolExecute { function_call, .. } = effect else { continue };
+        for _ in fx.iter().filter(|e| matches!(e, AgentRunEffect::ToolExecute { .. })) {
             self.ledger.tool_started();
-            let tools = &self.agent.tools;
-            if let Some(tool) = tools.iter().find(|tool| tool.spec.name == function_call.name) {
-                self.session_stats.tool_started(tool);
-            }
         }
         fx
     }

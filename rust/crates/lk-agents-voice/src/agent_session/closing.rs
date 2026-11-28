@@ -454,7 +454,6 @@ impl VoiceDriver {
             | Command::Close(_)
             | Command::HookDone { .. }
             | Command::HostMetrics(_)
-            | Command::FeatureUsed(_)
             | Command::AvatarError(_)
             | Command::DelegateUsage(_)
             | Command::SetStaticKeyterms(_)

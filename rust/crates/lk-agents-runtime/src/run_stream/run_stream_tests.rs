@@ -55,7 +55,7 @@ impl Input for Fake {
 async fn owner(held: bool) -> (RunStream, Arc<RunResources>, Arc<State>, mpsc::Sender<Message>) {
     let env = ProcessEnv::current_runtime();
     let resources =
-        Arc::new(RunResources::new(&env, None, None, None, "agent".into(), vec![], None).unwrap());
+        Arc::new(RunResources::new(&env, None, None, None, "agent".into(), vec![]).unwrap());
     resources.open().unwrap().await.unwrap();
     let stream = RunStream::new(&env);
     stream.enter().unwrap();
@@ -269,7 +269,7 @@ async fn a_hung_resource_close_is_bounded_by_the_teardown_deadline() {
     let lifetime = Arc::new(crate::toolsets::lifetime::Lifetime::new(&env));
     let hooks = vec![Arc::new(HungClose(lifetime)) as _];
     let resources =
-        Arc::new(RunResources::new(&env, None, None, None, "agent".into(), hooks, None).unwrap());
+        Arc::new(RunResources::new(&env, None, None, None, "agent".into(), hooks).unwrap());
     resources.open().unwrap().await.unwrap();
     let stream = RunStream::new(&env);
     stream.enter().unwrap();

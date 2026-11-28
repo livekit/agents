@@ -217,8 +217,8 @@ LiveKit's own statistics, never customer data; the list is
 - Recorded through the one recording API: `measure(cx, &metric, value)` in async code and
   `Trace::measure(&metric, value)` in a sans-I/O machine take a metric of either audience. The
   metric's declared audience chooses the record (`Record::Measurement` or
-  `Record::ProductStat`); no argument does. The emitters machines and async code share
-  (`ModelUsage::measure`, `SessionStats::emit`) take either as a `Measure`.
+  `Record::ProductStat`); no argument does. The one emitter machines and async code
+  share (`ModelUsage::measure`) takes either as a `Measure`.
 - Exported by `lk_agents_net::export::otlp`, as the exporter's third destination
   (`otlp/product_stats.rs`): see [Destinations](#destinations).
 - Models: `ModelLabels::of(kind, &ProviderId)` derives the four labels. Requests, tokens,
@@ -226,22 +226,19 @@ LiveKit's own statistics, never customer data; the list is
   (`lk-agents-inference/src/telemetry.rs`, `stt/retrying.rs`); what only a session knows (the
   audio its STT reported, a realtime response, the transcription delay, its own start) in
   `lk-agents-voice/src/agent_session/product_stats.rs`.
-- Sessions and features: one `SessionStats` per session holds what its agents did (a handoff
-  landed, a tool body started for a local agent or a `RemoteAgent`) and each feature it used,
-  once. A voice session's machine fills it, told by its executor of what only the executor sees
-  (`Command::FeatureUsed`: an options call, an MCP toolset activated), and emits it when its spans close. A text request's runs report theirs to their
-  turn (`HandlerPort::session_stats`), which emits it when the request ends.
-- Background audio is the one feature not counted per session: each player started counts
-  once, when it starts, under the process tracer's root context
-  (`runtime/src/voice/background_audio.rs`), with or without a session.
+- Sessions: one line where a call ends (`count_session_end`, when the voice machine's spans
+  close) and one where a text request ends (`runtime/src/a2a/mod.rs::run_message`).
+- Features: each is one `measure` where the feature is used, counting uses. Nothing is carried,
+  summarised or deduplicated. The sites: a handoff landing and a model switch in the voice
+  machine (`handoff.rs`, `product_stats.rs`), a language change where the recogniser's
+  `last_language` moves, `update_options`/`override_options` at the session owner, an MCP
+  toolset's lifecycle setup, a background audio player's start, a local agent called as a tool
+  (`delegation/local` `run`, and a text session's child invocation start) and a `RemoteAgent`
+  call (`delegation/remote` `run`).
 - Model switch: the voice machine keeps the model installed in each slot (STT, TTS, LLM,
-  realtime) and, when another is installed there, adds `FeatureModelSwitch { from, to }` (two
-  `ModelKind`s) to the session's summary. An empty slot, the same identity, or an adapter over
-  an adapter (`adapter` on the model's ref: its own label differs from its identity's) is no
-  switch.
-- MCP: an `MCPToolset`'s lifecycle marks its toolset's lifetime port when it sets it up; a
-  toolset group knows after its start whether one of its toolsets, or one nested in them, is
-  marked.
+  realtime), the fact a switch is told from. An empty slot, the same identity, or an adapter
+  over an adapter (`adapter` on the model's ref: its own label differs from its identity's) is
+  no switch.
 - Tests record under a tracer of their own (`testkit::Recorded`), or read the machine's drained
   records.
 

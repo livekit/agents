@@ -234,7 +234,6 @@ def run_resources(
         store._activation if store is not None else None,
         thread._partition_key if thread is not None else DEFAULT_PARTITION_KEY,
         [tool for run in runs for tool in run.agent_tools if isinstance(tool, Toolset)],
-        hooks.output if hooks is not None else None,
     )
 
 

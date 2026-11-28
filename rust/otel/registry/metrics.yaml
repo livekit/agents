@@ -664,13 +664,33 @@
       "attributes": []
     },
     {
+      "id": "metric.lk.product.agents.feature.agent_as_tool",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.agent_as_tool",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "A local agent was invoked as a tool.",
+      "attributes": []
+    },
+    {
       "id": "metric.lk.product.agents.feature.background_audio",
       "type": "metric",
       "metric_name": "lk.product.agents.feature.background_audio",
       "instrument": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "stability": "development",
-      "brief": "Background audio players started, with or without a session: the one feature counted per use and not per session.",
+      "brief": "A background audio player was started, with or without a session.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.handoff",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.handoff",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "An agent replaced another in a voice session.",
       "attributes": []
     },
     {
@@ -678,9 +698,9 @@
       "type": "metric",
       "metric_name": "lk.product.agents.feature.language_switch",
       "instrument": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "stability": "development",
-      "brief": "Sessions that heard the person change language.",
+      "brief": "The STT reported another language than the one before.",
       "attributes": []
     },
     {
@@ -688,9 +708,9 @@
       "type": "metric",
       "metric_name": "lk.product.agents.feature.mcp",
       "instrument": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "stability": "development",
-      "brief": "Sessions that ran an agent that has an MCP toolset.",
+      "brief": "An MCP toolset was set up.",
       "attributes": []
     },
     {
@@ -698,9 +718,9 @@
       "type": "metric",
       "metric_name": "lk.product.agents.feature.model_switch",
       "instrument": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "stability": "development",
-      "brief": "Sessions that replaced a model with another while running, once for each distinct pair of kinds.",
+      "brief": "A model was replaced with another while a session ran.",
       "attributes": [
         {
           "ref": "lk.product.agents.feature.model_switch.from.kind",
@@ -717,9 +737,19 @@
       "type": "metric",
       "metric_name": "lk.product.agents.feature.override_options",
       "instrument": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "stability": "development",
-      "brief": "Sessions that entered `session.override_options(...)`.",
+      "brief": "`session.override_options(...)` was entered.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.remote_agent",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.remote_agent",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "A `RemoteAgent` call was made.",
       "attributes": []
     },
     {
@@ -727,9 +757,9 @@
       "type": "metric",
       "metric_name": "lk.product.agents.feature.update_options",
       "instrument": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "stability": "development",
-      "brief": "Sessions that called `session.update_options(...)`.",
+      "brief": "`session.update_options(...)` was called.",
       "attributes": []
     },
     {
@@ -963,14 +993,6 @@
       "attributes": [
         {
           "ref": "lk.product.agents.session.entrypoint",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "lk.product.agents.session.topology",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "lk.product.agents.session.delegation",
           "requirement_level": "required"
         }
       ]

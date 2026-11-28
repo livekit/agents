@@ -1,66 +1,94 @@
 use super::models::ModelKind;
 use crate::telemetry::decl::{Attrs, metric};
 
-// One counter per feature, each counting the sessions that used it: a session's summary holds
-// each feature it used once, and adds 1 for it when the session ends.
+// One counter per feature, each counting uses: one measurement where the feature is used, and
+// nothing carried or summarised.
 
-/// Sessions that ran an agent that has an MCP toolset.
+/// An agent replaced another in a voice session.
+#[metric(
+    name = "lk.product.agents.feature.handoff",
+    kind = Counter,
+    unit = "{use}",
+    audience = ProductStats
+)]
+#[derive(Attrs)]
+pub struct FeatureHandoff;
+
+/// A local agent was invoked as a tool.
+#[metric(
+    name = "lk.product.agents.feature.agent_as_tool",
+    kind = Counter,
+    unit = "{use}",
+    audience = ProductStats
+)]
+#[derive(Attrs)]
+pub struct FeatureAgentAsTool;
+
+/// A `RemoteAgent` call was made.
+#[metric(
+    name = "lk.product.agents.feature.remote_agent",
+    kind = Counter,
+    unit = "{use}",
+    audience = ProductStats
+)]
+#[derive(Attrs)]
+pub struct FeatureRemoteAgent;
+
+/// An MCP toolset was set up.
 #[metric(
     name = "lk.product.agents.feature.mcp",
     kind = Counter,
-    unit = "{session}",
+    unit = "{use}",
     audience = ProductStats
 )]
 #[derive(Attrs)]
 pub struct FeatureMcp;
 
-/// Sessions that called `session.update_options(...)`.
+/// `session.update_options(...)` was called.
 #[metric(
     name = "lk.product.agents.feature.update_options",
     kind = Counter,
-    unit = "{session}",
+    unit = "{use}",
     audience = ProductStats
 )]
 #[derive(Attrs)]
 pub struct FeatureUpdateOptions;
 
-/// Sessions that entered `session.override_options(...)`.
+/// `session.override_options(...)` was entered.
 #[metric(
     name = "lk.product.agents.feature.override_options",
     kind = Counter,
-    unit = "{session}",
+    unit = "{use}",
     audience = ProductStats
 )]
 #[derive(Attrs)]
 pub struct FeatureOverrideOptions;
 
-/// Background audio players started, with or without a session: the one feature counted per use
-/// and not per session.
+/// A background audio player was started, with or without a session.
 #[metric(
     name = "lk.product.agents.feature.background_audio",
     kind = Counter,
-    unit = "{session}",
+    unit = "{use}",
     audience = ProductStats
 )]
 #[derive(Attrs)]
 pub struct FeatureBackgroundAudio;
 
-/// Sessions that heard the person change language.
+/// The STT reported another language than the one before.
 #[metric(
     name = "lk.product.agents.feature.language_switch",
     kind = Counter,
-    unit = "{session}",
+    unit = "{use}",
     audience = ProductStats
 )]
 #[derive(Attrs)]
 pub struct FeatureLanguageSwitch;
 
-/// Sessions that replaced a model with another while running, once for each distinct pair of
-/// kinds.
+/// A model was replaced with another while a session ran.
 #[metric(
     name = "lk.product.agents.feature.model_switch",
     kind = Counter,
-    unit = "{session}",
+    unit = "{use}",
     audience = ProductStats
 )]
 #[derive(Attrs, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -71,14 +99,4 @@ pub struct FeatureModelSwitch {
     /// The kind of the model the switch installed.
     #[attr("lk.product.agents.feature.model_switch.to.kind")]
     pub to: ModelKind,
-}
-
-/// A feature a session can use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Feature {
-    Mcp,
-    UpdateOptions,
-    OverrideOptions,
-    LanguageSwitch,
-    ModelSwitch(FeatureModelSwitch),
 }

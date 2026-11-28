@@ -10,6 +10,7 @@ use crate::agent_session::{
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::trace::HandoffStep;
 use lk_agents_abi::Ts;
+use lk_agents_abi::productstats::features::FeatureHandoff;
 use std::collections::VecDeque;
 
 /// The switches asked for and the one in progress, and the user turn held while one runs.
@@ -431,7 +432,9 @@ impl VoiceDriver {
             }
         }
 
-        self.session.stats.handoff |= !previous_agent.is_empty();
+        if !previous_agent.is_empty() {
+            self.telemetry.measure(&FeatureHandoff, 1u64.into());
+        }
         self.record_handoff((!previous_agent.is_empty()).then_some(previous_agent));
 
         let legs = self.reopen_legs(stt, vad);

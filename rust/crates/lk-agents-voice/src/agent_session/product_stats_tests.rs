@@ -10,7 +10,6 @@ use crate::audio_recognition::{EndOfTurnInfo, TurnDetectionMode, TurnId, TurnSna
 use crate::events::SessionEvent;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::metrics::base::{AgentMetrics, RealtimeModelMetrics};
-use lk_agents_abi::productstats::features::Feature;
 use lk_agents_abi::productstats::models::EndpointedBy;
 use lk_agents_abi::productstats::testkit::{Stat, stat};
 use lk_agents_abi::resources::{LlmRef, RealtimeRef, ResourceId, SttRef, TtsRef};
@@ -231,23 +230,22 @@ fn a_voice_session_is_counted_once_at_its_start_with_its_configuration() {
     assert_eq!(started(duplex)[0][0], "duplex");
 }
 
-// Catches: a session not counted once when it ends, counted when it starts, or an agent replacing
-// another not reported as a handoff.
+// Catches: a call not counted once when it ends, counted when it starts, or an agent replacing
+// another not counted as a handoff each time (the first agent replaces nobody).
 #[test]
-fn a_session_is_counted_once_at_its_end_with_its_topology() {
-    let ended = |mut session: VoiceDriver| {
-        assert_eq!(counted(&taken(&mut session), "lk.product.agents.sessions"), [[""; 0]; 0]);
-        session.close_spans();
-        session.close_spans();
-        counted(&taken(&mut session), "lk.product.agents.sessions")
-    };
-    // [entrypoint, topology, delegation]
-    assert_eq!(ended(driver()), [["rtc_session", "single", "none"]]);
-    let mut handed = driver();
-    let update = Box::new(agent_update("billing", None));
-    handed.handoff_step(HandoffEvent::Asked { update, run: None });
-    handed.settle_step();
-    assert_eq!(ended(handed), [["rtc_session", "handoff", "none"]]);
+fn a_call_is_counted_at_its_end_and_each_handoff_when_it_lands() {
+    let mut session = driver();
+    assert_eq!(counted(&taken(&mut session), "lk.product.agents.sessions"), [[""; 0]; 0]);
+    for agent in ["billing", "shipping"] {
+        let update = Box::new(agent_update(agent, None));
+        session.handoff_step(HandoffEvent::Asked { update, run: None });
+        let mut stats = handed_over(session.settle_step());
+        stats.extend(taken(&mut session));
+        assert_eq!(features(&stats), [("handoff".to_owned(), vec![])], "{agent}");
+    }
+    session.close_spans();
+    session.close_spans();
+    assert_eq!(counted(&taken(&mut session), "lk.product.agents.sessions"), [["rtc_session"]]);
 }
 
 fn model(label: &str, name: &str) -> ProviderId {
@@ -276,28 +274,22 @@ fn llm(id: u64, name: &str) -> LlmRef {
     }
 }
 
-/// The features the session counts when it ends.
-fn ended_features(session: &mut VoiceDriver) -> Vec<(String, Vec<String>)> {
-    session.close_spans();
-    features(&taken(session))
-}
-
 /// The features counted among `stats`: each metric's last name, with its labels' values.
 fn features(stats: &[Stat]) -> Vec<(String, Vec<String>)> {
     let named = stats.iter().filter_map(|(metric, labels, value)| {
         let feature = metric.strip_prefix("lk.product.agents.feature.")?;
-        assert_eq!(*value, 1.0, "a session adds 1 to a feature, never more");
+        assert_eq!(*value, 1.0, "each use adds 1");
         Some((feature.to_owned(), labels.iter().map(|(_, v)| v.clone()).collect()))
     });
     named.collect()
 }
 
 // Catches: a model re-installed unchanged (every handoff names the agent's models) counted as a
-// switch, a second swap of the same kind counted again, a model installed where the session had
-// none counted (there is nothing to switch from), a fallback adapter re-installed after its
-// active member changed counted, or the switch reported under the wrong kinds.
+// switch, a swap not counted each time, a model installed where the session had none counted
+// (there is nothing to switch from), a fallback adapter re-installed after its active member
+// changed counted, or the switch reported under the wrong kinds.
 #[test]
-fn a_model_switch_is_counted_once_for_each_pair_of_kinds() {
+fn each_model_switch_is_counted_with_the_kinds_it_went_between() {
     let parts = SessionParts {
         agent: "agent".into(),
         tts: Some(tts(1, "sonic-2")),
@@ -322,17 +314,22 @@ fn a_model_switch_is_counted_once_for_each_pair_of_kinds() {
         given(fallen_back),
         given(tts(3, "sonic-2")),
     );
-    assert!(session.session.stats.features.is_empty(), "{:?}", session.session.stats.features);
+    assert_eq!(features(&taken(&mut session)), []);
     // TTS A -> B -> C, and an agent that brings a plain LLM in place of the adapter.
-    session.update_models(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, given(tts(5, "v3")));
-    session.update_models(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, given(tts(6, "v4")));
+    for (id, name) in [(5, "v3"), (6, "v4")] {
+        let next = given(tts(id, name));
+        session.update_models(Maybe::NotGiven, Maybe::NotGiven, Maybe::NotGiven, next);
+    }
     let mut update = agent_update("billing", None);
     update.llm = given(llm(7, "gpt-4.1"));
     session.handoff_step(HandoffEvent::Asked { update: Box::new(update), run: None });
-    session.settle_step();
+    let mut stats = taken(&mut session);
+    stats.extend(handed_over(session.settle_step()));
+    let switches: Vec<_> =
+        features(&stats).into_iter().filter(|(feature, _)| feature == "model_switch").collect();
     let switched =
         |from: &str, to: &str| ("model_switch".to_owned(), vec![from.to_owned(), to.to_owned()]);
-    assert_eq!(ended_features(&mut session), [switched("tts", "tts"), switched("llm", "llm")]);
+    assert_eq!(switches, [switched("tts", "tts"), switched("tts", "tts"), switched("llm", "llm")]);
 }
 
 // Catches: a realtime session moving onto a duplex model (or back) reported as a same-kind
@@ -341,10 +338,11 @@ fn a_model_switch_is_counted_once_for_each_pair_of_kinds() {
 fn a_realtime_model_swap_names_the_kinds_it_moved_between() {
     use lk_agents_abi::productstats::models::ModelKind;
     let mut session = realtime_driver();
+    taken(&mut session);
     let realtime = session.activity.realtime().expect("a realtime session").clone();
     let installed = |session: &RealtimeRef| super::realtime_model(session);
     session.count_model_installed(ModelKind::Realtime, Some(installed(&realtime)));
-    assert!(session.session.stats.features.is_empty(), "the same model is no switch");
+    assert_eq!(features(&taken(&mut session)), [], "the same model is no switch");
     let mut duplex = realtime.clone();
     duplex.capabilities.supports_overlapping_speech = true;
     session.count_model_installed(ModelKind::Realtime, Some(installed(&duplex)));
@@ -352,16 +350,16 @@ fn a_realtime_model_swap_names_the_kinds_it_moved_between() {
     let switched =
         |from: &str, to: &str| ("model_switch".to_owned(), vec![from.to_owned(), to.to_owned()]);
     assert_eq!(
-        ended_features(&mut session),
+        features(&taken(&mut session)),
         [switched("realtime", "duplex"), switched("duplex", "realtime")]
     );
 }
 
 // Catches: the person's first language counted as a switch, a region or an unspecific code
-// (`multi`) taken for another language, an STT that reports no language counted, or a second
-// switch counted again.
+// (`multi`) taken for another language, an STT that reports no language counted, or a change
+// back not counted as another.
 #[test]
-fn a_language_switch_is_counted_once_when_the_stt_reports_another_language() {
+fn each_language_change_the_stt_reports_is_counted() {
     let mut session = inference_stt_session();
     session.input.live_stt = Some(ResourceId(7));
     taken(&mut session);
@@ -369,28 +367,11 @@ fn a_language_switch_is_counted_once_when_the_stt_reports_another_language() {
         let mut heard = SpeechEvent::new(SpeechEventType::FinalTranscript);
         heard.alternatives.push(SpeechData::new(language, "a sentence long enough to tell"));
         session.on_stt(Ts::ZERO, Tagged { stream: ResourceId(7), item: heard });
-        session.session.stats.features.contains(&Feature::LanguageSwitch)
+        features(&taken(session)).len()
     };
     for same in ["", "en", "en-US", "multi", "en-GB"] {
-        assert!(!hear(&mut session, same), "{same}");
+        assert_eq!(hear(&mut session, same), 0, "{same}");
     }
-    assert!(hear(&mut session, "fr"));
-    hear(&mut session, "en");
-    assert_eq!(ended_features(&mut session), [("language_switch".to_owned(), vec![])]);
-}
-
-// Catches: a feature the session's executor saw (an options call, an MCP toolset it activated) missing from the session's one summary, counted more than once for
-// a feature used twice, or counted before the session ends.
-#[test]
-fn features_the_executor_reports_are_counted_once_when_the_session_ends() {
-    let mut session = driver();
-    taken(&mut session);
-    let seen = [Feature::Mcp, Feature::OverrideOptions, Feature::Mcp];
-    for feature in seen.into_iter().chain([Feature::UpdateOptions, Feature::UpdateOptions]) {
-        session.on_api(Ts::ZERO, crate::agent_session::Command::FeatureUsed(feature));
-    }
-    assert_eq!(features(&taken(&mut session)), []);
-    let counted = ended_features(&mut session);
-    let names: Vec<&str> = counted.iter().map(|(feature, _)| feature.as_str()).collect();
-    assert_eq!(names, ["mcp", "update_options", "override_options"]);
+    assert_eq!(hear(&mut session, "fr"), 1);
+    assert_eq!(hear(&mut session, "en"), 1);
 }

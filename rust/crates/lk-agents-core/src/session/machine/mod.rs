@@ -79,7 +79,6 @@ impl Session {
             phase: Phase::NotStarted,
             live: None,
             deferred_input_offers: BTreeMap::new(),
-            stats: Default::default(),
             usage: Ledger::default(),
             sequence: 0,
         })
@@ -437,6 +436,8 @@ impl Session {
     ) {
         let active = self.state.active_frame_id.clone();
         let frame = &self.state.frames[&active];
+        // A child frame's first invocation, with its task: a local agent called as a tool.
+        let agent_tool = message.is_some() && frame.parent.is_some();
         if frame.history.iter().any(|item| {
             matches!(item, ChatItem::FunctionCall(call)
             if crate::tool_calls::provisional(call)
@@ -573,6 +574,7 @@ impl Session {
             origin: self.live.as_ref().and_then(|live| live.origin().cloned()),
             frame_id: frame.id.clone(),
             agent_name: frame.agent_name.clone(),
+            agent_tool,
             invocation_id: invocation_id.clone(),
             execution_id: self.live.as_ref().and_then(|live| live.origin()).map_or_else(
                 || self.state.execution_id.clone(),
@@ -627,8 +629,6 @@ impl Session {
             }
         }
         let run_effects = invocation.run.handle_with_running_tools(event, now, &running);
-        let called = invocation.run.session_stats.clone();
-        self.stats.merge(called);
         self.run_effects(run_effects, now, effects);
     }
 
@@ -655,7 +655,6 @@ impl Session {
                 agent_run::AgentRunEffect::ToolExecute {
                     call, prepared, function_call, ..
                 } if invocation.children.contains_key(&call) => {
-                    self.stats.agent_as_tool = true;
                     self.execute_child(call, function_call, invocation_id, prepared, effects)
                 }
                 agent_run::AgentRunEffect::ToolExecute {
@@ -1040,12 +1039,6 @@ impl Session {
     /// The latest snapshot of the turn's usage: every local invocation it ran, once.
     pub fn routing_usage(&mut self, usage: &Usage) {
         self.usage.add(usage);
-    }
-
-    /// Whether this turn called a local agent or a `RemoteAgent` as a tool, for its session's
-    /// product statistics.
-    pub fn session_stats(&self) -> lk_agents_abi::productstats::sessions::SessionStats {
-        self.stats.clone()
     }
 
     pub fn usage(&self) -> Usage {

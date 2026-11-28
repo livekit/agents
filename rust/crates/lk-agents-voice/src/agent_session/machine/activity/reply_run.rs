@@ -453,9 +453,6 @@ impl VoiceDriver {
                 }
                 AgentRunEffect::ToolExecute { call, function_call, .. } => {
                     self.session.usage.tool_started();
-                    if let Some(tool) = self.activity.tool_info(&function_call.name) {
-                        self.session.stats.tool_started(tool);
-                    }
                     if self.run_contains_speech(speech)
                         && let Some(usage) = self.session.runs.usage()
                     {

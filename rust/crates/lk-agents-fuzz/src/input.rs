@@ -766,7 +766,6 @@ not_sent! {
     command::Turn => "a family, not a leaf: its leaves are in the table";
     command::Activity => "a family, not a leaf: its leaves are in the table";
     command::DelegateUsage => "an agent tool's in-process child reports its usage; no fake runs one";
-    command::FeatureUsed => "product statistics only: it sets a fact of the session's summary and decides nothing";
 }
 
 /// Compiles only while every production command leaf is either in the table or excused above.

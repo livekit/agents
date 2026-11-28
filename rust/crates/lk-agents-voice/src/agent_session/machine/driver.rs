@@ -608,7 +608,7 @@ impl VoiceDriver {
         }
     }
 
-    pub(crate) fn on_api(&mut self, now: Ts, cmd: Command) {
+    pub(super) fn on_api(&mut self, now: Ts, cmd: Command) {
         match cmd {
             Command::Speech(cmd) => self.on_speech(now, cmd),
             Command::Activity(cmd) => self.on_frame(now, cmd),
@@ -627,7 +627,6 @@ impl VoiceDriver {
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
-            Command::FeatureUsed(feature) => self.session.stats.used(feature),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {
                     metrics: record,

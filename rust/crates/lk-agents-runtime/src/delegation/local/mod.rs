@@ -93,6 +93,7 @@ impl Port for LocalInteraction {
         if let Err(refused) = agent_tool::admit(self.depth) {
             return Ok(refused);
         }
+        telemetry::measure(&cx, &lk_agents_abi::productstats::features::FeatureAgentAsTool, 1u64);
         let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
         let stop = CancellationToken::new();
         let (done, settled) = signal::once();

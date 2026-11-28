@@ -1,9 +1,4 @@
-use super::features::{
-    Feature, FeatureLanguageSwitch, FeatureMcp, FeatureOverrideOptions, FeatureUpdateOptions,
-};
-use crate::agent::FunctionToolInfo;
-use crate::telemetry::decl::{Attrs, Measure, SpanValue, metric};
-use std::collections::BTreeSet;
+use crate::telemetry::decl::{Attrs, SpanValue, metric};
 
 // A session is one call (`rtc_session`) or one text request (`a2a_session`).
 
@@ -12,28 +7,6 @@ use std::collections::BTreeSet;
 pub enum Entrypoint {
     RtcSession,
     A2aSession,
-}
-
-/// How a session's agents were arranged.
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Topology {
-    /// One agent for the whole session.
-    Single,
-    /// One agent replaced another.
-    Handoff,
-    /// A local agent was called as a tool.
-    AgentAsTool,
-    /// A handoff and an agent as a tool.
-    Both,
-}
-
-/// Whether a session left its process.
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Delegation {
-    /// Everything ran in this process.
-    None,
-    /// A `RemoteAgent` was called.
-    Remote,
 }
 
 /// Sessions, counted once each when the session ends.
@@ -48,69 +21,6 @@ pub struct Sessions {
     /// A call or a text request.
     #[attr("lk.product.agents.session.entrypoint")]
     pub entrypoint: Entrypoint,
-    /// One agent, a handoff, an agent as a tool, or both.
-    #[attr("lk.product.agents.session.topology")]
-    pub topology: Topology,
-    /// Whether a `RemoteAgent` was called.
-    #[attr("lk.product.agents.session.delegation")]
-    pub delegation: Delegation,
-}
-
-/// One session's summary: what its agents did and the features it used, each once. The voice
-/// session and the text request both fill one and emit it once, when the session ends.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SessionStats {
-    /// One agent replaced another.
-    pub handoff: bool,
-    /// A local agent ran as a tool.
-    pub agent_as_tool: bool,
-    /// A `RemoteAgent` was called.
-    pub remote: bool,
-    /// The features the session used.
-    pub features: BTreeSet<Feature>,
-}
-
-impl SessionStats {
-    /// The body of `tool` starts: a local agent's, a `RemoteAgent`'s, or neither.
-    pub fn tool_started(&mut self, tool: &FunctionToolInfo) {
-        self.agent_as_tool |= tool.local_agent.is_some();
-        self.remote |= tool.remote.is_some() && tool.local_agent.is_none();
-    }
-
-    /// The session used `feature`.
-    pub fn used(&mut self, feature: Feature) {
-        self.features.insert(feature);
-    }
-
-    /// What another part of the same session did, too.
-    pub fn merge(&mut self, other: SessionStats) {
-        self.handoff |= other.handoff;
-        self.agent_as_tool |= other.agent_as_tool;
-        self.remote |= other.remote;
-        self.features.extend(other.features);
-    }
-
-    /// The session ended: its one count, and one for each feature it used.
-    pub fn emit(self, entrypoint: Entrypoint, mut into: impl Measure) {
-        let topology = match (self.handoff, self.agent_as_tool) {
-            (false, false) => Topology::Single,
-            (true, false) => Topology::Handoff,
-            (false, true) => Topology::AgentAsTool,
-            (true, true) => Topology::Both,
-        };
-        let delegation = if self.remote { Delegation::Remote } else { Delegation::None };
-        into.measure(&Sessions { entrypoint, topology, delegation }, 1u64.into());
-        for feature in self.features {
-            let once = 1u64.into();
-            match feature {
-                Feature::Mcp => into.measure(&FeatureMcp, once),
-                Feature::UpdateOptions => into.measure(&FeatureUpdateOptions, once),
-                Feature::OverrideOptions => into.measure(&FeatureOverrideOptions, once),
-                Feature::LanguageSwitch => into.measure(&FeatureLanguageSwitch, once),
-                Feature::ModelSwitch(switch) => into.measure(&switch, once),
-            }
-        }
-    }
 }
 
 /// The models a voice session runs on.

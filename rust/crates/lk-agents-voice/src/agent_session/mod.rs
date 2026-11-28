@@ -108,9 +108,6 @@ pub(crate) struct VoiceSessionState {
     pub(crate) local_inputs: machine::activity::local_input::LocalInputs,
     /// `start_user_turn()`'s turn; it outlives a handoff.
     pub(crate) user_turns: machine::activity::user_turn::UserTurns,
-    /// What the session's agents did and the features it used, which its product statistics
-    /// report when it ends.
-    pub(crate) stats: lk_agents_abi::productstats::sessions::SessionStats,
     /// The model of each kind installed now, which the next one is a migration from.
     pub(crate) installed: product_stats::Installed,
 }
@@ -203,7 +200,6 @@ impl VoiceSessionState {
             experts: Default::default(),
             local_inputs: Default::default(),
             user_turns: Default::default(),
-            stats: Default::default(),
             installed,
         }
     }

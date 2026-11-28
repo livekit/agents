@@ -5579,34 +5579,50 @@
       ]
     },
     {
-      "name": "lk.product.agents.feature.background_audio",
-      "brief": "Background audio players started, with or without a session: the one feature counted per use and not per session.",
+      "name": "lk.product.agents.feature.agent_as_tool",
+      "brief": "A local agent was invoked as a tool.",
       "kind": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.product.agents.feature.background_audio",
+      "brief": "A background audio player was started, with or without a session.",
+      "kind": "counter",
+      "unit": "{use}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.product.agents.feature.handoff",
+      "brief": "An agent replaced another in a voice session.",
+      "kind": "counter",
+      "unit": "{use}",
       "registry": "agents",
       "labels": []
     },
     {
       "name": "lk.product.agents.feature.language_switch",
-      "brief": "Sessions that heard the person change language.",
+      "brief": "The STT reported another language than the one before.",
       "kind": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "registry": "agents",
       "labels": []
     },
     {
       "name": "lk.product.agents.feature.mcp",
-      "brief": "Sessions that ran an agent that has an MCP toolset.",
+      "brief": "An MCP toolset was set up.",
       "kind": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "registry": "agents",
       "labels": []
     },
     {
       "name": "lk.product.agents.feature.model_switch",
-      "brief": "Sessions that replaced a model with another while running, once for each distinct pair of kinds.",
+      "brief": "A model was replaced with another while a session ran.",
       "kind": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "registry": "agents",
       "labels": [
         {
@@ -5639,17 +5655,25 @@
     },
     {
       "name": "lk.product.agents.feature.override_options",
-      "brief": "Sessions that entered `session.override_options(...)`.",
+      "brief": "`session.override_options(...)` was entered.",
       "kind": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
+      "registry": "agents",
+      "labels": []
+    },
+    {
+      "name": "lk.product.agents.feature.remote_agent",
+      "brief": "A `RemoteAgent` call was made.",
+      "kind": "counter",
+      "unit": "{use}",
       "registry": "agents",
       "labels": []
     },
     {
       "name": "lk.product.agents.feature.update_options",
-      "brief": "Sessions that called `session.update_options(...)`.",
+      "brief": "`session.update_options(...)` was called.",
       "kind": "counter",
-      "unit": "{session}",
+      "unit": "{use}",
       "registry": "agents",
       "labels": []
     },
@@ -6045,28 +6069,6 @@
           "members": [
             "rtc_session",
             "a2a_session"
-          ],
-          "label": true
-        },
-        {
-          "key": "lk.product.agents.session.topology",
-          "type": "string",
-          "required": true,
-          "members": [
-            "single",
-            "handoff",
-            "agent_as_tool",
-            "both"
-          ],
-          "label": true
-        },
-        {
-          "key": "lk.product.agents.session.delegation",
-          "type": "string",
-          "required": true,
-          "members": [
-            "none",
-            "remote"
           ],
           "label": true
         }

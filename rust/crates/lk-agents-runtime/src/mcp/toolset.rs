@@ -167,7 +167,7 @@ impl Port for McpToolsetLifecycle {
     }
 
     async fn setup(&self, host: Arc<dyn McpToolsetHost>, context: CallContext, cx: telemetry::Cx) {
-        host.lifetime().mcp_set_up();
+        telemetry::measure(&cx, &lk_agents_abi::productstats::features::FeatureMcp, 1u64);
         let _one = self.setting_up.lock().await;
         // A server that said its tools changed is listed again by the next run.
         let changed = self.session.tools_changed();

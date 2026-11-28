@@ -1,8 +1,5 @@
 use lk_agents_abi::agent::resources::{BindingCleanup, ContextHydration, ResourceError};
-use lk_agents_abi::llm::toolsets::LeaseGroup;
 use lk_agents_abi::llm::toolsets::{ToolsetGroup as _, ToolsetHooks};
-use lk_agents_abi::productstats::features::Feature;
-use lk_agents_abi::productstats::sessions::SessionStats;
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::{BoxFuture, errors::HostError};
@@ -29,8 +26,6 @@ struct Inner {
     inputs: Mutex<Option<Inputs>>,
     opened: OnceLock<Opened>,
     toolsets: crate::toolsets::group::Group,
-    /// The text request the runs belong to, which counts the MCP toolsets they set up.
-    turn: Option<Arc<dyn lk_agents_abi::a2a::turn::HandlerPort>>,
     hydration: Mutex<Hydration>,
     tasks: Arc<TaskSet>,
     closing: tokio_util::sync::CancellationToken,
@@ -161,11 +156,6 @@ impl Inner {
             }
         }
         if result.is_ok() {
-            if let Some(turn) = self.turn.as_ref().filter(|_| LeaseGroup::mcp(&self.toolsets)) {
-                let mut stats = SessionStats::default();
-                stats.used(Feature::Mcp);
-                turn.session_stats(stats);
-            }
             if let Some(started) = started.take() {
                 started.resolve(Ok(()));
             }
@@ -262,7 +252,6 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
         activation: Option<ContextStore>,
         partition_key: String,
         toolsets: Vec<Arc<dyn ToolsetHooks>>,
-        turn: Option<Arc<dyn lk_agents_abi::a2a::turn::HandlerPort>>,
     ) -> Result<Self, ResourceError> {
         let plan = StoragePlan::new(namespace.is_some(), thread_id.is_some(), activation.is_some())
             .ok_or(ResourceError::ThreadStorage)?;
@@ -274,7 +263,6 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
             inputs: Mutex::new(Some(Inputs { namespace, thread_id, activation, partition_key })),
             opened: OnceLock::new(),
             toolsets: crate::toolsets::group::Group::new(env, toolsets),
-            turn,
             hydration: Mutex::default(),
             tasks: Arc::default(),
             closing: tokio_util::sync::CancellationToken::new(),

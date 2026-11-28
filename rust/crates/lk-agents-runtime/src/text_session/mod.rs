@@ -3,6 +3,7 @@ pub(crate) mod live;
 mod runner;
 pub use runner::{Runner, Updates};
 
+use lk_agents_abi::productstats::features::FeatureAgentAsTool;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
@@ -456,17 +457,23 @@ impl Driver {
                 origin,
                 frame_id,
                 agent_name,
+                agent_tool,
                 invocation_id,
                 execution_id,
                 history,
-            } => self.start_invocation(InvocationStart {
-                origin,
-                frame_id,
-                agent_name,
-                invocation_id,
-                execution_id,
-                history,
-            }),
+            } => {
+                if agent_tool {
+                    telemetry::measure(&self.cx, &FeatureAgentAsTool, 1u64);
+                }
+                self.start_invocation(InvocationStart {
+                    origin,
+                    frame_id,
+                    agent_name,
+                    invocation_id,
+                    execution_id,
+                    history,
+                })
+            }
             SessionEffect::Run { invocation_id, effect } => {
                 if let Some(work) = self.work.get_mut(&invocation_id)
                     && let Some(RunUpdate::IncompleteCleanup(pending)) = work.execute(effect).await
@@ -586,9 +593,6 @@ impl Driver {
         input_requirements: Vec<RunInputRequirement>,
     ) {
         self.finished = true;
-        if let Some(crate::agent_run::output::Target::Handler(turn)) = &self.output_target {
-            turn.session_stats(self.session.session_stats());
-        }
         self.routing.take();
         self.pending.clear();
         self.releases.clear();

@@ -53,7 +53,6 @@ pub trait RunResources: Send + Sync + Sized + 'static {
         activation: Option<Self::Activation>,
         partition_key: String,
         toolsets: Vec<Arc<dyn ToolsetHooks>>,
-        #[host(default = None)] turn: Option<Arc<dyn crate::a2a::turn::HandlerPort>>,
     ) -> Result<Self, ResourceError>;
 
     /// Open storage and toolsets before any run starts. Cancelling the caller requests cleanup;

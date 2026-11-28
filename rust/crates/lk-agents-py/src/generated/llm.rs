@@ -4124,7 +4124,6 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
 #[derive(Clone)]
 pub struct McpToolsetHostProxy {
     host: crate::py_objects::HostObject,
-    lifetime: ::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::Lifetime>,
 }
 
 impl McpToolsetHostProxy {
@@ -4177,27 +4176,11 @@ impl McpToolsetHostProxy {
             false => crate::py_objects::HostObject::weak(obj)?,
         };
         let _ = context;
-        let lifetime = {
-            let v = obj.getattr("_lifetime")?;
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::toolsets::Lifetime>(v.as_any())
-                .and_then(|native| {
-                    native.ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "McpToolsetHost._lifetime",
-                            ": expected a native toolset lifetime"
-                        ))
-                    })
-                })?
-        };
-        Ok(McpToolsetHostProxy { host, lifetime })
+        Ok(McpToolsetHostProxy { host })
     }
 }
 
 impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
-    fn lifetime(&self) -> &::std::sync::Arc<dyn ::lk_agents_abi::llm::toolsets::Lifetime> {
-        &self.lifetime
-    }
-
     fn list<'a>(
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,

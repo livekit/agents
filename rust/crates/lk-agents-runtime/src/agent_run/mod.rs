@@ -179,12 +179,8 @@ impl Driver {
             }
             for effect in effects.drain(..) {
                 if let Some(update) = self.work.execute(effect).await {
-                    let ended = matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed { .. });
-                    if let (true, Some(output::Target::Handler(turn))) = (ended, &self.work.output)
-                    {
-                        turn.session_stats(self.run.session_stats.clone());
-                    }
-                    self.finished |= ended;
+                    self.finished |=
+                        matches!(update, RunUpdate::Finished(_) | RunUpdate::Failed { .. });
                     self.updates.send(update).await;
                 }
             }

@@ -31,6 +31,11 @@ impl Default for Recorded {
 }
 
 impl Recorded {
+    /// The tracer, for a test that builds what records under it.
+    pub fn tracer(&self) -> crate::Tracer {
+        self.tracer.clone()
+    }
+
     /// The context to record under.
     pub fn cx(&self) -> crate::Cx {
         self.tracer.root()

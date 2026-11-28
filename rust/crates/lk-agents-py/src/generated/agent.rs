@@ -403,7 +403,7 @@ pub struct CoreRunResources(pub(crate) ::std::sync::Arc<CoreRunResourcesImpl>);
 #[pymethods]
 impl CoreRunResources {
     #[new]
-    #[pyo3(signature = (namespace, thread_id, activation, partition_key, toolsets, turn = None))]
+    #[pyo3(signature = (namespace, thread_id, activation, partition_key, toolsets))]
     fn new(
         py: Python<'_>,
         namespace: Option<Bound<'_, PyAny>>,
@@ -411,7 +411,6 @@ impl CoreRunResources {
         activation: Option<Bound<'_, PyAny>>,
         partition_key: ::std::string::String,
         toolsets: Bound<'_, PyAny>,
-        turn: Option<Bound<'_, PyAny>>,
     ) -> PyResult<CoreRunResources> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
@@ -437,20 +436,7 @@ impl CoreRunResources {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let turn = turn
-            .map(|v| {
-                crate::py_objects::native::<dyn ::lk_agents_abi::a2a::turn::HandlerPort>(v.as_any())
-                    .and_then(|native| {
-                        native.ok_or_else(|| {
-                            ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                                "turn",
-                                ": expected a native handler turn"
-                            ))
-                        })
-                    })
-            })
-            .transpose()?;
-        let out = py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::new(&env, namespace, thread_id, activation, partition_key, toolsets, turn)).map_err(|e: ::lk_agents_abi::agent::resources::ResourceError| <::lk_agents_abi::agent::resources::ResourceError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <CoreRunResourcesImpl as ::lk_agents_abi::agent::resources::RunResources>::new(&env, namespace, thread_id, activation, partition_key, toolsets)).map_err(|e: ::lk_agents_abi::agent::resources::ResourceError| <::lk_agents_abi::agent::resources::ResourceError as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(CoreRunResources(::std::sync::Arc::new(out)))
     }
 
