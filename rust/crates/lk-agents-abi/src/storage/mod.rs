@@ -189,13 +189,15 @@ pub trait Storage: Send + Sync + Sized + 'static {
     #[host(class(name = "_core_ThreadServer"))]
     type ThreadServer: Send + Sync + 'static;
 
+    /// The local thread service, which checks its callers with the key pair. `None` without one
+    /// (token mode).
     #[host(await)]
     async fn _core_serve_threads(
         &self,
         api_key: String,
         api_secret: String,
         #[host(default = 0)] port: u16,
-    ) -> Result<Self::ThreadServer, StorageError>;
+    ) -> Result<Option<Self::ThreadServer>, StorageError>;
 
     /// What the hosting process lends the class.
     #[host(env)]

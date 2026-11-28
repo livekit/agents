@@ -914,7 +914,7 @@ fn blocking_io() -> lk_agents_net::blocking_io::BlockingIo {
     lk_agents_net::blocking_io::BlockingIo::with_limits("lk-test-io", 4, &[4]).unwrap()
 }
 
-/// A fake token mode worker. It answers a token request with a token that names the job and the
+/// A fake token mode worker: it answers a token request with a token that names the job and the
 /// claims.
 struct IssuingHost(Arc<FakeHost>);
 
@@ -927,18 +927,15 @@ impl SupervisorCallbacks for IssuingHost {
         &self,
         job_id: String,
         claims: String,
-    ) -> lk_agents_abi::BoxFuture<'static, JobTokenAnswer> {
-        let answer = JobTokenAnswer::Issued {
-            token: crate::ipc::Token(format!("{job_id}:{claims}")),
-            expires_at: 1,
-        };
-        Box::pin(std::future::ready(answer))
+    ) -> lk_agents_abi::BoxFuture<'static, Result<JobToken, lk_agents_abi::errors::ApiError>> {
+        let token = JobToken { token: format!("{job_id}:{claims}"), expires_at: 1 };
+        Box::pin(std::future::ready(Ok(token)))
     }
 }
 
-// A runner sends a token request before it has a job, and again after it gets one. Catches a
-// request that goes to the worker for the wrong job, an answer with the wrong request id, or a
-// request without a job that reaches the worker.
+// A runner asks for a token before it has a job, and again after. Catches a request that goes to
+// the worker for the wrong job, an answer with the wrong request id, or a request without a job
+// that reaches the worker.
 #[tokio::test(start_paused = true)]
 async fn a_runners_token_request_is_answered_for_its_job() {
     let host = Arc::new(FakeHost::default());
@@ -956,10 +953,10 @@ async fn a_runners_token_request_is_answered_for_its_job() {
     init.await.unwrap().unwrap();
 
     write(&child, &ToParent::CreateJobToken { request_id: 1, claims: "{}".into() }).await.unwrap();
-    let refused = JobTokenAnswer::Refused("cannot create a job token: no running job".into());
+    let refused = Err("the runner has no job".to_owned());
     assert_eq!(
         recv_skipping_pings(&child).await,
-        ToChild::JobToken { request_id: 1, answer: refused }
+        ToChild::JobToken { request_id: 1, result: refused }
     );
 
     let starting = sup.clone();
@@ -970,13 +967,11 @@ async fn a_runners_token_request_is_answered_for_its_job() {
     write(&child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
     started.await.unwrap().unwrap();
     let claims = r#"{"video":{"roomAdmin":true}}"#;
-    write(&child, &ToParent::CreateJobToken { request_id: 7, claims: claims.into() })
-        .await
-        .unwrap();
-    let token = crate::ipc::Token(format!("AJ_123:{claims}"));
-    let issued = JobTokenAnswer::Issued { token, expires_at: 1 };
+    let request = ToParent::CreateJobToken { request_id: 7, claims: claims.into() };
+    write(&child, &request).await.unwrap();
+    let issued = Ok(JobToken { token: format!("AJ_123:{claims}"), expires_at: 1 });
     assert_eq!(
         recv_skipping_pings(&child).await,
-        ToChild::JobToken { request_id: 7, answer: issued }
+        ToChild::JobToken { request_id: 7, result: issued }
     );
 }

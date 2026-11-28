@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import datetime
 import functools
 import inspect
-import json
 import logging
 import multiprocessing as mp
 import os
@@ -52,7 +50,6 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from livekit import api
-    from livekit.api import TokenGrants, VideoGrants
     from livekit.api.access_token import Claims
 
     from .evals import SimulationContext
@@ -290,77 +287,18 @@ class JobContext:
         """A LiveKitAPI client using the server's URL and credentials.
 
         Those are the values passed to `AgentServer`, else LIVEKIT_URL, LIVEKIT_API_KEY and
-        LIVEKIT_API_SECRET. In token mode (LIVEKIT_TOKEN, and no API key or secret), each call
-        asks the worker for a token with the grants it needs, and the server issues it.
+        LIVEKIT_API_SECRET.
         """
         from livekit import api
 
         env = self._server_env
-        # livekit-api only accepts an aiohttp session.
-        session = http_client.http_session()._pool.client()
-        if self._token_mode():
-            return api.LiveKitAPI(
-                env.get("LIVEKIT_URL"), token_provider=self._token_provider, session=session
-            )
         return api.LiveKitAPI(
             env.get("LIVEKIT_URL"),
             env.get("LIVEKIT_API_KEY"),
             env.get("LIVEKIT_API_SECRET"),
-            session=session,
+            # livekit-api only accepts an aiohttp session.
+            session=http_client.http_session()._pool.client(),
         )
-
-    def _token_mode(self) -> bool:
-        """Returns True in token mode: the worker has a worker token and no API key or secret.
-        Then every token of this job comes from the server."""
-        env = self._server_env
-        return bool(env.get("LIVEKIT_TOKEN")) and not (
-            env.get("LIVEKIT_API_KEY") or env.get("LIVEKIT_API_SECRET")
-        )
-
-    async def _token_provider(self, grants: TokenGrants) -> str:
-        return await self._run.create_job_token(json.dumps(grants.asdict()))
-
-    async def create_participant_token(
-        self,
-        *,
-        identity: str,
-        name: str = "",
-        kind: Literal["standard", "egress", "ingress", "sip", "agent"] | None = None,
-        attributes: dict[str, str] | None = None,
-        grants: VideoGrants | None = None,
-        ttl: datetime.timedelta | None = None,
-    ) -> str:
-        """A token for another participant to join the room, such as an avatar worker.
-
-        In key mode, the job signs it with the server's API key and secret. In token mode
-        (LIVEKIT_TOKEN, and no API key or secret), the job asks the worker, and the server creates
-        the token and sets its lifetime.
-
-        Args:
-            identity: The participant's identity.
-            name: Its display name.
-            kind: Its participant kind, such as ``"agent"``.
-            attributes: Its participant attributes.
-            grants: Its video grants. The default joins the job's room.
-            ttl: The lifetime of a token signed here; ignored in token mode.
-        """
-        from livekit import api
-
-        token = api.AccessToken(
-            self._server_env.get("LIVEKIT_API_KEY") or "",
-            self._server_env.get("LIVEKIT_API_SECRET") or "",
-        )
-        token.with_identity(identity).with_name(name)
-        token.with_grants(grants or api.VideoGrants(room_join=True, room=self.job.room.name))
-        if kind is not None:
-            token.with_kind(kind)
-        if attributes:
-            token.with_attributes(attributes)
-        if self._token_mode():
-            return await self._run.create_job_token(token.to_claims_json())
-        if ttl is not None:
-            token.with_ttl(ttl)
-        return token.to_jwt()
 
     @property
     def proc(self) -> JobProcess:

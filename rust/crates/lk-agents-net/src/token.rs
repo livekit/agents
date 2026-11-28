@@ -6,6 +6,10 @@ use livekit_token::{
 };
 use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::telemetry::record::JobKey;
+use lk_agents_abi::worker::TokenRefused;
+use serde_json::{Map, Value};
+
+use crate::job_token::{self, INFERENCE_CLAIMS, OBSERVABILITY_CLAIMS};
 
 // Renewal preserves the verified claim document, including future server restrictions.
 
@@ -156,13 +160,17 @@ pub fn database_token(
 
 pub const INFERENCE_TOKEN_TTL: Duration = Duration::from_secs(600);
 
-/// Returns true when a client with `api_key` and `api_secret` must use job tokens.
-///
-/// This is [`token_mode`](crate::job_token::token_mode) with the worker token of this process.
-/// When it is true, the client gets its token from the server instead of signing one.
+/// Returns true in token mode: a worker token is set, and no API key and no API secret. With a
+/// key or a secret, the process runs in key mode, even when a worker token is set.
+pub fn token_mode(api_key: &str, api_secret: &str, token: &str) -> bool {
+    !token.is_empty() && api_key.is_empty() && api_secret.is_empty()
+}
+
+/// Returns true when a client with `api_key` and `api_secret` uses job tokens: this process runs
+/// in token mode (`LIVEKIT_TOKEN`) and the client has no key pair of its own.
 pub fn uses_job_token(api_key: &str, api_secret: &str) -> bool {
     let token = crate::env::server_setting("LIVEKIT_TOKEN").unwrap_or_default();
-    crate::job_token::token_mode(api_key, api_secret, &token)
+    token_mode(api_key, api_secret, &token)
 }
 
 /// Returns the bearer for the LiveKit Inference gateway, with identity `agent` and the grant to
@@ -187,7 +195,7 @@ pub fn inference_bearer_with_ttl(
     ttl: Duration,
 ) -> Result<String, ApiError> {
     if uses_job_token(api_key, api_secret) {
-        return crate::job_token::inference_token(job);
+        return job_token::cached(job, INFERENCE_CLAIMS);
     }
     if api_key.is_empty() {
         return Err(ApiError::new(
@@ -224,7 +232,7 @@ pub fn observability_bearer(
     api_secret: &str,
 ) -> Result<String, ApiError> {
     if uses_job_token(api_key, api_secret) {
-        return crate::job_token::observability_token(job);
+        return job_token::cached(Some(job), OBSERVABILITY_CLAIMS);
     }
     observability_key_bearer(api_key, api_secret)
 }
@@ -250,6 +258,68 @@ pub fn observability_key_bearer(api_key: &str, api_secret: &str) -> Result<Strin
         })
 }
 
+/// How long a participant token lives when the caller sets no lifetime.
+pub const PARTICIPANT_TOKEN_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Signs `claims` with the key pair. `claims` is JSON in the form of `CreateJobTokenRequest`:
+/// the payload of an access token, with the identity in `identity`.
+pub fn sign_claims(
+    claims: &str,
+    api_key: &str,
+    api_secret: &str,
+    ttl: Duration,
+) -> Result<String, ApiError> {
+    require(api_key, api_secret)?;
+    validate_token_ttl(ttl)?;
+    let invalid =
+        |error: serde_json::Error| ApiError::new(ErrorKind::InvalidRequest, error.to_string());
+    let mut fields: Map<String, Value> = serde_json::from_str(claims).map_err(invalid)?;
+    if let Some(identity) = fields.remove("identity") {
+        fields.insert("sub".into(), identity);
+    }
+    let claims: Claims = serde_json::from_value(Value::Object(fields)).map_err(invalid)?;
+    let mut token = AccessToken::with_api_key(api_key, api_secret)
+        .with_ttl(ttl)
+        .with_identity(&claims.sub)
+        .with_name(&claims.name)
+        .with_kind(&claims.kind)
+        .with_metadata(&claims.metadata)
+        .with_attributes(claims.attributes)
+        .with_sha256(&claims.sha256)
+        .with_grants(claims.video)
+        .with_sip_grants(claims.sip)
+        .with_agent_grants(claims.agent)
+        .with_agent_endpoint_grants(claims.agent_endpoint)
+        .with_agent_thread_grants(claims.agent_thread)
+        .with_agent_database_grants(claims.agent_database)
+        .with_inference_grants(claims.inference)
+        .with_observability_grants(claims.observability);
+    if let Some(config) = claims.room_config {
+        token = token.with_room_config(config);
+    }
+    token.to_jwt().map_err(refused)
+}
+
+/// A token for a participant other than the agent, such as an avatar.
+///
+/// With a key pair, it is signed here and lives `ttl`. Without one, it is a job token of `job`,
+/// which the server issues and gives a lifetime (token mode). For example, an avatar token in
+/// key mode is signed with the key; in token mode it comes from the server for the job.
+pub async fn participant_token(
+    claims: &str,
+    api_key: &str,
+    api_secret: &str,
+    job: Option<&JobKey>,
+    ttl: Duration,
+) -> Result<String, ApiError> {
+    match job {
+        Some(job) if api_key.is_empty() && api_secret.is_empty() => {
+            job_token::token(job, claims).await
+        }
+        _ => sign_claims(claims, api_key, api_secret, ttl),
+    }
+}
+
 /// The join tokens as the host calls them.
 pub struct JoinTokens;
 
@@ -271,6 +341,24 @@ impl lk_agents_abi::worker::JoinTokens for JoinTokens {
             .transpose()?;
         room_join_token(&api_key, &api_secret, &identity, &room, RoomJoinOptions { agent, ttl })
             .map_err(|error| lk_agents_abi::worker::TokenRefused(error.to_string()))
+    }
+
+    async fn participant_token(
+        claims: String,
+        api_key: String,
+        api_secret: String,
+        job_id: Option<String>,
+        ttl: Option<f64>,
+    ) -> Result<String, TokenRefused> {
+        let ttl = match ttl {
+            Some(seconds) => Duration::try_from_secs_f64(seconds)
+                .map_err(|_| TokenRefused("ttl must be a nonnegative number".into()))?,
+            None => PARTICIPANT_TOKEN_TTL,
+        };
+        let job = job_id.map(JobKey);
+        participant_token(&claims, &api_key, &api_secret, job.as_ref(), ttl)
+            .await
+            .map_err(|error| TokenRefused(error.message))
     }
 }
 
@@ -302,6 +390,27 @@ mod tests {
         assert!(claims.exp > claims.nbf && claims.exp - claims.nbf <= 600);
         assert!(!inference_bearer(None, "", "secret").unwrap_err().retryable);
         assert!(!inference_bearer(None, "key", "").unwrap_err().retryable);
+    }
+
+    // Catches a key pair that does not sign a participant token (or loses its identity, kind,
+    // attributes or lifetime), a token signed without a key pair, and a job token asked for while
+    // a key pair is set.
+    #[test]
+    fn a_participant_token_is_signed_with_a_key_pair_and_else_comes_from_the_job() {
+        let claims = r#"{"identity":"avatar","kind":"agent","attributes":{"a":"b"},"video":{"roomJoin":true,"room":"call"}}"#;
+        let job = JobKey("AJ_not_running".into());
+        let ttl = Duration::from_secs(60);
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let token = rt.block_on(participant_token(claims, "key", "secret", Some(&job), ttl));
+        let signed = TokenVerifier::with_api_key("key", "secret").verify(&token.unwrap()).unwrap();
+        assert_eq!((signed.sub.as_str(), signed.kind.as_str()), ("avatar", "agent"));
+        assert_eq!((signed.video.room.as_str(), signed.attributes["a"].as_str()), ("call", "b"));
+        assert_eq!(signed.exp - signed.nbf, 60);
+        let no_job = rt.block_on(participant_token(claims, "", "", Some(&job), ttl)).unwrap_err();
+        assert!(no_job.message.contains("token mode"), "{no_job}");
+        assert!(rt.block_on(participant_token(claims, "", "", None, ttl)).is_err());
+        let no_identity = r#"{"video":{"roomJoin":true,"room":"call"}}"#;
+        assert!(sign_claims(no_identity, "key", "secret", ttl).is_err());
     }
 
     mod worker {

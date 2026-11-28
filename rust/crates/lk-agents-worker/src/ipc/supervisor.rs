@@ -4,14 +4,16 @@ use lk_agents_net::task::TaskSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::errors::HostError;
-use lk_agents_abi::{Clock, Ts};
+use futures_util::stream::{FuturesUnordered, StreamExt as _};
+use lk_agents_abi::errors::{ApiError, ErrorKind, HostError};
+use lk_agents_abi::{BoxFuture, Clock, Ts};
+use lk_agents_net::job_token::JobToken;
 use lk_agents_net::signal;
 use tokio::sync::{mpsc, oneshot};
 
 use super::executor::{Connection, Exit, Runner, RunnerExecutor};
 use super::ipc_channel::{ChannelError, SendError, VERSION};
-use super::wire::{Hello, JobTokenAnswer, StartJob, ToChild, ToParent};
+use super::wire::{Hello, StartJob, ToChild, ToParent, bounded};
 use lk_agents_abi::worker::ipc::JobRunnerOptions;
 
 #[path = "supervisor_lifecycle.rs"]
@@ -195,16 +197,16 @@ pub trait SupervisorCallbacks: Send + Sync + 'static {
     }
     /// The runner ended and its supervision is over: the host's handle can go.
     fn release(&self) {}
-    /// Asks the server for a job token with `claims`, for the runner's job `job_id`. A worker in
-    /// key mode refuses.
+    /// Token mode: asks the server for a token with `claims` for the runner's job `job_id`. A
+    /// worker in key mode refuses.
     fn create_job_token(
         &self,
         job_id: String,
         claims: String,
-    ) -> lk_agents_abi::BoxFuture<'static, JobTokenAnswer> {
+    ) -> BoxFuture<'static, Result<JobToken, ApiError>> {
         let _ = (job_id, claims);
-        let refused = "cannot create a job token: the worker is not in token mode";
-        Box::pin(std::future::ready(JobTokenAnswer::Refused(refused.into())))
+        let refused = ApiError::new(ErrorKind::Auth, "the worker is not in token mode");
+        Box::pin(std::future::ready(Err(refused)))
     }
 }
 
@@ -271,23 +273,13 @@ impl RunnerSupervisor {
         let host: Arc<dyn SupervisorCallbacks> = Arc::new(host);
         // Self-owned: it ends once the runner ended and its channel settled.
         let driving = Arc::new(TaskSet::default());
-        let (answering, spawner) = (driving.clone(), rt.spawner.clone());
         let run = async move {
             match executor.launch().await {
                 Ok((runner, channel)) => {
                     drop(executor);
                     status_tx.modify(|status| status.launched = Some(Ok(())));
-                    let answers = Answers { tasks: answering, spawner };
-                    let driver = Driver::new(
-                        opts,
-                        host,
-                        blocking_io,
-                        runner,
-                        channel,
-                        status_tx,
-                        clock,
-                        answers,
-                    );
+                    let driver =
+                        Driver::new(opts, host, blocking_io, runner, channel, status_tx, clock);
                     driver.run(commands_rx, control_rx).await;
                 }
                 Err(cause) => refuse(cause, host, commands_rx, status_tx).await,
@@ -392,12 +384,6 @@ async fn refuse(
 /// The host's memory sample, off the runtime.
 type Sampling = Option<lk_agents_net::blocking_io::Job<Option<f64>>>;
 
-/// The supervisor's tasks that wait for the server's answers to the runner's token requests.
-struct Answers {
-    tasks: Arc<TaskSet>,
-    spawner: Arc<dyn lk_agents_abi::Spawner>,
-}
-
 /// The supervisor's actor: the runner's state and every deadline, changed only here.
 struct Driver {
     opts: JobRunnerOptions,
@@ -417,13 +403,13 @@ struct Driver {
     baseline_mb: Option<f64>,
     gate: WarnGate,
     protocol_failure: Option<Arc<ProtocolError>>,
-    /// The job that the runner got, or `None` before it got one.
+    /// The job the runner got: its token requests are for this job only.
     job_id: Option<String>,
-    answers: Answers,
+    /// Token mode: the runner's token requests, each ending in the answer to send it.
+    job_tokens: FuturesUnordered<BoxFuture<'static, ToChild>>,
 }
 
 impl Driver {
-    #[allow(clippy::too_many_arguments, reason = "the actor's parts, each moved in once")]
     fn new(
         opts: JobRunnerOptions,
         host: Arc<dyn SupervisorCallbacks>,
@@ -432,7 +418,6 @@ impl Driver {
         channel: Connection,
         status: signal::Producer<Status>,
         clock: Arc<dyn Clock>,
-        answers: Answers,
     ) -> Self {
         let origin = clock.now();
         Self {
@@ -456,7 +441,7 @@ impl Driver {
             gate: WarnGate::default(),
             protocol_failure: None,
             job_id: None,
-            answers,
+            job_tokens: FuturesUnordered::new(),
         }
     }
 
@@ -502,6 +487,9 @@ impl Driver {
                         self.input(AfterExit::Dropped, Self::end);
                     }
                 },
+                Some(answer) = self.job_tokens.next(), if !self.job_tokens.is_empty() => {
+                    self.sent(self.channel.try_send(answer));
+                }
                 sample = async { match self.sampling.as_mut() {
                     Some(sample) => sample.await,
                     None => std::future::pending().await,
@@ -907,28 +895,20 @@ impl Driver {
         }
     }
 
-    /// Asks the server for a job token for the runner's job, and sends the answer to the runner.
-    /// When the runner has no job, the request is refused.
+    /// Asks for a token of the runner's job; the answer goes to the runner. A runner with no job
+    /// gets a refusal.
     fn create_job_token(&mut self, request_id: u64, claims: String) {
         let asking = match &self.job_id {
             Some(job_id) => self.host.create_job_token(job_id.clone(), claims),
             None => {
-                let refused = "cannot create a job token: no running job";
-                Box::pin(std::future::ready(JobTokenAnswer::Refused(refused.into())))
+                let refused = ApiError::new(ErrorKind::Auth, "the runner has no job");
+                Box::pin(std::future::ready(Err(refused)))
             }
         };
-        let channel = self.channel.clone();
-        let answer = async move {
-            let answer = asking.await;
-            // If the runner is already gone, it needs no answer.
-            if let Err(error) = channel.send(ToChild::JobToken { request_id, answer }).await {
-                log::debug!(target: lk_agents_abi::LOG_TARGET, "the runner did not hear its job token: {error}");
-            }
-        };
-        let Answers { tasks, spawner } = &self.answers;
-        if !tasks.try_spawn(spawner.as_ref(), "job token", answer) {
-            log::debug!(target: lk_agents_abi::LOG_TARGET, "the supervisor stopped before a job token request");
-        }
+        self.job_tokens.push(Box::pin(async move {
+            let result = asking.await.map_err(|error| bounded(error.message));
+            ToChild::JobToken { request_id, result }
+        }));
     }
 
     /// The runner's answer to the initialize: a refusal or anything but `Ready` fails it.

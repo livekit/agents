@@ -31,10 +31,9 @@ pub use transport::{
     WebSocketTransport, WorkerSink, WorkerStream, WorkerTransport, WtTransport, agent_url,
 };
 pub use worker::{
-    DrainError, DrainOutcome, HEARTBEAT_INTERVAL, HostError, HostResult, JOB_TOKEN_AGENT_PROTOCOL,
-    JOB_TOKEN_TIMEOUT, JobId, JobTokenError, JobTokenIssuer, RuntimeConfig, RuntimeError, Slot,
-    Snapshot, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification, WorkerToken,
-    retry_delay,
+    DrainError, DrainOutcome, HEARTBEAT_INTERVAL, HostError, HostResult, JobId, RuntimeConfig,
+    RuntimeError, Slot, Snapshot, Worker, WorkerClient, WorkerCommand, WorkerHost,
+    WorkerNotification, retry_delay,
 };
 
 pub use http::IncomingRequest;

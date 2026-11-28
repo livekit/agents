@@ -7,13 +7,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::inference::InferenceCredentials as _;
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_inference::credentials::Credentials;
 use lk_agents_net::job_token::{
-    self, INFERENCE_CLAIMS, Issue, Issued, JobTokens, OBSERVABILITY_CLAIMS,
+    self, Fetch, INFERENCE_CLAIMS, JobToken, JobTokens, OBSERVABILITY_CLAIMS,
 };
 
 const WORKER_TOKEN: &str = "the-worker-token";
@@ -34,20 +33,19 @@ fn serve_token_mode() {
     assert!(lk_agents_net::token::uses_job_token("", ""));
 }
 
-struct Server;
-
-#[async_trait::async_trait]
-impl Issue for Server {
-    async fn issue(&self, claims: &str) -> Result<Issued, ApiError> {
+/// A fake server: it issues `job-token-for-<claims>`.
+fn server() -> Fetch {
+    Box::new(|claims| {
         let expires_at = lk_agents_net::clock::unix_now() as i64 + 600;
-        Ok(Issued { token: format!("job-token-for-{claims}"), expires_at })
-    }
+        let token = JobToken { token: format!("job-token-for-{claims}"), expires_at };
+        Box::pin(std::future::ready(Ok(token)))
+    })
 }
 
 fn running_job(id: &str) -> JobKey {
     let job = JobKey(id.into());
     let clock = Arc::new(lk_agents_net::clock::RealClock::new());
-    let tokens = Arc::new(JobTokens::new(Arc::new(Server), clock));
+    let tokens = Arc::new(JobTokens::new(server(), clock));
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(tokens.token(INFERENCE_CLAIMS)).unwrap();
     runtime.block_on(tokens.token(OBSERVABILITY_CLAIMS)).unwrap();
@@ -85,7 +83,7 @@ fn a_model_needs_no_key_and_a_request_outside_a_job_fails_clearly() {
     assert_eq!(eot.unwrap().model, lk_agents_abi::tokenize::language::TurnDetectorModel::V1);
 
     let error = lk_agents_net::token::inference_bearer(None, "", "").unwrap_err();
-    assert!(error.message.contains("needs a running job"), "{error}");
+    assert!(error.message.contains("no running job in token mode"), "{error}");
     let error =
         lk_agents_net::token::observability_bearer(&JobKey("AJ_none".into()), "", "").unwrap_err();
     assert!(error.message.contains("token mode"), "{error}");

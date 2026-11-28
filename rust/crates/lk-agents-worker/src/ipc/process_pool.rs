@@ -1,7 +1,8 @@
 use crate::ipc::telemetry;
 use std::sync::Arc;
 
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::BoxFuture;
+use lk_agents_abi::errors::{ApiError, HostError};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc::{JobRunnerOptions, JobStatus};
 use lk_agents_abi::worker::ipc_host::{
@@ -14,6 +15,7 @@ use super::pool::{Executors, LaunchError, PoolOptions, ProcPool, ProcessEvent};
 use super::supervisor::runner_log;
 use super::{SupervisorCallbacks, secs};
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::job_token::JobToken;
 use lk_agents_net::task::TokioSpawner;
 
 /// One of the pool's processes, compared by identity.
@@ -41,6 +43,11 @@ fn host_error(error: WorkerError) -> HostError {
 /// Told each job's status as its process takes it and ends.
 pub type JobObserver = Box<dyn Fn(&RunningJobInfo, JobStatus) + Send + Sync>;
 
+/// Token mode: asks the server for a token for a job of this worker. Called with the job id and
+/// the claims (JSON, the payload of an access token).
+pub type JobTokenIssuer =
+    Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<JobToken, ApiError>> + Send + Sync>;
+
 /// The host's launchers, the processes' settings, the context their host calls run in (the
 /// pool's constructor's) and the job status observer.
 struct HostExecutors {
@@ -49,8 +56,7 @@ struct HostExecutors {
     options: JobRunnerOptions,
     context: CallContext,
     observer: Option<JobObserver>,
-    /// In token mode, the function that receives the token requests of each process.
-    job_tokens: Option<crate::JobTokenIssuer>,
+    job_tokens: Option<JobTokenIssuer>,
 }
 
 #[async_trait::async_trait]
@@ -129,7 +135,7 @@ impl ProcessPool {
         options: JobRunnerOptions,
         context: CallContext,
         observer: Option<JobObserver>,
-        job_tokens: Option<crate::JobTokenIssuer>,
+        job_tokens: Option<JobTokenIssuer>,
     ) -> Result<Self, WorkerError> {
         let opts = PoolOptions {
             num_idle_processes,

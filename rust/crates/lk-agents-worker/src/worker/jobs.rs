@@ -14,7 +14,17 @@ use livekit_protocol::{
     AvailabilityRequest, Job, JobAssignment, JobStatus, RegisterWorkerResponse, ServerMessage,
     WorkerMessage,
 };
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::worker::types::{DrainOutcome, RegisteredInfo};
+use lk_agents_net::job_token::JobToken;
+use tokio::sync::oneshot;
+
+/// How long a job token request waits for the server's answer.
+pub const JOB_TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The lowest `ServerInfo.agent_protocol` that answers `CreateJobTokenRequest`. An older server
+/// closes the connection of a worker that sends one.
+pub const JOB_TOKEN_AGENT_PROTOCOL: i32 = 2;
 
 /// One offered job's place while it is decided, assigned and launched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -334,9 +344,8 @@ impl Worker {
         if std::mem::replace(&mut self.conn, ConnState::Disconnected) == ConnState::Registered {
             self.notify(WorkerNotification::Disconnected);
         }
-        self.job_tokens.fail_all(
-            "the connection to the LiveKit server was lost before it answered the job token request",
-        );
+        // Their answers could come only on the lost connection.
+        self.job_token_requests.clear();
         self.timers.clear_deadline(WorkerTimer::StatusUpdate);
         // Decisions and assignments belong to the lost connection. Launches already handed to
         // the host must still complete and become active jobs.
@@ -781,6 +790,66 @@ pub(super) fn update_job(job_id: &str, status: JobStatus) -> WorkerMessage {
         error: String::new(),
         ..Default::default()
     }))
+}
+
+impl Worker {
+    /// Token mode needs a server that issues job tokens: an older one is a configuration error,
+    /// which no retry fixes. Key mode needs no job tokens.
+    pub(super) fn check_token_mode_server(
+        &self,
+        response: &RegisterWorkerResponse,
+    ) -> Result<(), super::RuntimeError> {
+        let config = &self.runtime_cfg;
+        let token = config.token.lock().clone();
+        let token_mode =
+            lk_agents_net::token::token_mode(&config.api_key, &config.api_secret, &token);
+        let agent_protocol = response.server_info.as_ref().map_or(0, |info| info.agent_protocol);
+        if token_mode && agent_protocol < JOB_TOKEN_AGENT_PROTOCOL {
+            return Err(super::RuntimeError::Configuration(format!(
+                "the LiveKit server does not support token mode (LIVEKIT_TOKEN): it reports agent \
+                 protocol {agent_protocol}, token mode needs {JOB_TOKEN_AGENT_PROTOCOL}. Upgrade \
+                 the server, or set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in place of \
+                 LIVEKIT_TOKEN"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Sends a job token request, or fails it at once when the worker is not registered.
+    pub(super) fn request_job_token(
+        &mut self,
+        job_id: JobId,
+        claims: String,
+        reply: oneshot::Sender<Result<JobToken, ApiError>>,
+        outbox: &mut Outbox,
+    ) {
+        if self.conn != ConnState::Registered {
+            let error = "cannot request a job token: the worker is not connected to the LiveKit \
+                         server";
+            // The asker may have stopped waiting.
+            let _ = reply.send(Err(ApiError::new(ErrorKind::Connection, error)));
+            return;
+        }
+        // Forget the requests whose askers stopped waiting.
+        self.job_token_requests.retain(|_, reply| !reply.is_closed());
+        let request_id = lk_agents_net::strings::shortuuid("JT_");
+        self.job_token_requests.insert(request_id.clone(), reply);
+        let request = pb::CreateJobTokenRequest { request_id, job_id, claims };
+        self.queue(wrap(pb::worker_message::Message::CreateJobToken(request)), outbox);
+    }
+
+    /// The server's answer to a job token request.
+    fn on_job_token(&mut self, response: pb::CreateJobTokenResponse) {
+        let Some(reply) = self.job_token_requests.remove(&response.request_id) else { return };
+        let result = if response.error.is_empty() {
+            Ok(JobToken { token: response.token, expires_at: response.expires_at })
+        } else {
+            let error = format!("the LiveKit server refused the job token: {}", response.error);
+            Err(ApiError::new(ErrorKind::Auth, error))
+        };
+        // The asker may have stopped waiting.
+        let _ = reply.send(result);
+    }
 }
 
 /// Sent once after registration: the jobs this worker already holds, as they were assigned and

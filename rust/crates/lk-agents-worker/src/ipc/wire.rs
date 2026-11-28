@@ -1,3 +1,4 @@
+use lk_agents_net::job_token::JobToken;
 use serde::{Deserialize, Serialize};
 
 // The parent speaks first, `Hello`; the child answers `ToParent::Ready`. Everything after is
@@ -18,30 +19,8 @@ pub enum ToChild {
     /// Acked with `ShutdownAck`; the job then shuts down with `reason` (the process exits at once
     /// without one).
     Shutdown { reason: String },
-    /// The answer to a `CreateJobToken` request, in token mode.
-    JobToken { request_id: u64, answer: JobTokenAnswer },
-}
-
-/// A job token that the server signed, or the reason that there is none.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum JobTokenAnswer {
-    Issued {
-        token: Token,
-        /// Unix seconds.
-        expires_at: i64,
-    },
-    Refused(String),
-}
-
-/// A credential. Its `Debug` output never shows the value.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Token(pub String);
-
-impl std::fmt::Debug for Token {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Token(<redacted>)")
-    }
+    /// Token mode: the answer to `CreateJobToken`, the token or why there is none.
+    JobToken { request_id: u64, result: Result<JobToken, String> },
 }
 
 /// A job process's messages to the worker.
@@ -66,9 +45,8 @@ pub enum ToParent {
     Exiting {
         reason: String,
     },
-    /// A job token request from the job, in token mode. `claims` is JSON with the same fields as
-    /// the payload of an access token. The worker passes it to the server in a
-    /// `CreateJobTokenRequest`.
+    /// Token mode: asks for a token of the job, which the worker asks the server for. `claims` is
+    /// JSON, the payload of an access token.
     CreateJobToken {
         request_id: u64,
         claims: String,

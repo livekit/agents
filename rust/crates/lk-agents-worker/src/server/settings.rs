@@ -1,4 +1,6 @@
 use livekit_protocol as proto;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::{EnvOption, RuntimeConfig, WorkerConfig};
 use lk_agents_abi::worker::ipc_host::WorkerError;
@@ -56,10 +58,8 @@ pub struct ServerSettings {
     pub ws_url: String,
     pub api_key: String,
     pub api_secret: String,
-    /// `LIVEKIT_TOKEN`: the first worker token, used when no key and no secret are set.
-    ///
-    /// This value only marks token mode. The registrations read the current worker token from the
-    /// server's `WorkerToken`, which the CLI can replace.
+    /// `LIVEKIT_TOKEN`: the worker token of token mode, used when no key and no secret are set.
+    /// The registrations send the server's current one, which the CLI can replace.
     pub token: String,
     /// `LIVEKIT_WORKER_TOKEN`: set on a worker hosted on Cloud.
     pub worker_token: String,
@@ -299,10 +299,9 @@ impl ServerSettings {
             .find_map(|name| read_env(name).filter(|v| !v.is_empty()))
     }
 
-    /// Returns true when these settings run in token mode (see
-    /// [`token_mode`](lk_agents_net::job_token::token_mode)).
+    /// Token mode: a worker token, and no key and no secret.
     pub fn token_mode(&self) -> bool {
-        lk_agents_net::job_token::token_mode(&self.api_key, &self.api_secret, &self.token)
+        lk_agents_net::token::token_mode(&self.api_key, &self.api_secret, &self.token)
     }
 
     /// Hosted on Cloud: the worker's load is the platform's to judge.
@@ -370,7 +369,7 @@ impl ServerSettings {
         &self,
         devmode: bool,
         endpoints: Vec<proto::agent_http::AgentEndpoint>,
-        token: crate::WorkerToken,
+        token: Arc<Mutex<String>>,
     ) -> (WorkerConfig, RuntimeConfig) {
         let worker = WorkerConfig {
             agent_name: self.agent_name.clone(),

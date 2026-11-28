@@ -132,7 +132,7 @@ fn options() -> ServerStart {
         has_rtc: true,
         has_text_doors: true,
         has_load_fnc: false,
-        worker_token: Default::default(),
+        token: Default::default(),
         endpoints: vec![],
         transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
         serving: Arc::default(),

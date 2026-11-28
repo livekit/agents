@@ -183,10 +183,8 @@ async fn a_kept_job_survives_the_dev_channel_round_trip() {
 
 #[tokio::test]
 async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_channel() {
-    struct RecordingServer(
-        parking_lot::Mutex<Vec<RunningJobInfo>>,
-        parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    );
+    #[derive(Default)]
+    struct RecordingServer(parking_lot::Mutex<Vec<RunningJobInfo>>);
     impl ServerJobs for RecordingServer {
         fn running_jobs(&self) -> Vec<RunningJobInfo> {
             self.0.lock().clone()
@@ -197,9 +195,6 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
         ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::worker::ipc_host::WorkerError>>
         {
             self.0.lock().extend(jobs);
-            if let Some(reloaded) = self.1.lock().take() {
-                reloaded.send(()).unwrap();
-            }
             Box::pin(async { Ok(()) })
         }
         fn update_token(&self, _: String) {}
@@ -224,8 +219,6 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
     ];
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
-    let (reloaded, reloading) = tokio::sync::oneshot::channel();
-    let server = Arc::new(RecordingServer(Default::default(), Some(reloaded).into()));
     let peer = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         recv(&mut socket).await.unwrap().unwrap();
@@ -238,8 +231,6 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
         )
         .await
         .unwrap();
-        // Ask for the running jobs only after the reload started.
-        reloading.await.unwrap();
         send(&mut socket, Message::GetRunningJobsRequest(Default::default())).await.unwrap();
         let reply = recv(&mut socket).await.unwrap().unwrap();
         let Some(Message::GetRunningJobsResponse(reply)) = reply.message else {
@@ -249,6 +240,7 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
             reply.jobs.into_iter().map(|job| from_proto(job).unwrap().job.id).collect();
         assert_eq!(ids, ["first", "last"]);
     });
+    let server = Arc::new(RecordingServer::default());
     serve_dev_channel(
         addr,
         "test".into(),
@@ -265,14 +257,11 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
     assert!(jobs.iter().all(|job| job.url == "wss://new-sfu"));
 }
 
-/// A fake token mode server. Its reload waits for the new worker token, as a registration
-/// does.
+/// A fake token mode server: it records each reload and each new worker token.
 #[derive(Default)]
 struct TokenServer {
     reloaded: parking_lot::Mutex<Vec<RunningJobInfo>>,
     updated: parking_lot::Mutex<Vec<String>>,
-    registered: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    registration: parking_lot::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 impl ServerJobs for TokenServer {
@@ -284,34 +273,21 @@ impl ServerJobs for TokenServer {
         jobs: Vec<RunningJobInfo>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::worker::ipc_host::WorkerError>>
     {
-        let registration = self.registration.lock().take().expect("one reload");
-        Box::pin(async move {
-            registration.await.expect("registered");
-            self.reloaded.lock().extend(jobs);
-            Ok(())
-        })
+        self.reloaded.lock().extend(jobs);
+        Box::pin(async { Ok(()) })
     }
     fn update_token(&self, token: String) {
         self.updated.lock().push(token);
-        if let Some(registered) = self.registered.lock().take() {
-            registered.send(()).unwrap();
-        }
     }
 }
 
-// Token mode reload: the CLI sends the kept job, then a new worker token. Catches these bugs:
-// - the reload blocks the channel, so the new worker token that the reload waits for never
-//   arrives;
-// - the new worker token does not reach the server;
-// - the kept job's token is extended with a key that does not exist, which drops the job.
+// Token mode: the CLI sends the worker token, then the kept job, as it does after the server
+// info. Catches a worker token that does not reach the server, a channel that reads only the
+// first message as the kept jobs, and a kept job's token extended with a key that does not exist,
+// which drops the job.
 #[tokio::test]
-async fn token_mode_reloads_beside_the_channel_and_takes_the_clis_worker_token() {
-    let (registered, registration) = tokio::sync::oneshot::channel();
-    let server = Arc::new(TokenServer {
-        registered: parking_lot::Mutex::new(Some(registered)),
-        registration: parking_lot::Mutex::new(Some(registration)),
-        ..Default::default()
-    });
+async fn token_mode_takes_the_clis_worker_token_and_keeps_the_jobs_token() {
+    let server = Arc::new(TokenServer::default());
     let token =
         lk_agents_net::token::room_join_token("key", "secret", "agent", "room", Default::default())
             .unwrap();
@@ -326,14 +302,13 @@ async fn token_mode_reloads_beside_the_channel_and_takes_the_clis_worker_token()
         let (mut socket, _) = listener.accept().await.unwrap();
         recv(&mut socket).await.unwrap().unwrap();
         recv(&mut socket).await.unwrap().unwrap();
-        let jobs = vec![kept];
-        let response = livekit_protocol::agent::GetRunningAgentJobsResponse { jobs };
-        send(&mut socket, Message::GetRunningJobsResponse(response)).await.unwrap();
         let credentials = livekit_protocol::agent::Credentials {
             token: "refreshed-worker-token".into(),
             ..Default::default()
         };
         send(&mut socket, Message::Credentials(credentials)).await.unwrap();
+        let response = livekit_protocol::agent::GetRunningAgentJobsResponse { jobs: vec![kept] };
+        send(&mut socket, Message::GetRunningJobsResponse(response)).await.unwrap();
     });
     let served = serve_dev_channel(
         addr,
@@ -348,7 +323,6 @@ async fn token_mode_reloads_beside_the_channel_and_takes_the_clis_worker_token()
     assert_eq!(*server.updated.lock(), ["refreshed-worker-token"]);
     let reloaded = server.reloaded.lock();
     let [job] = reloaded.as_slice() else { panic!("{reloaded:?}") };
-    assert_eq!(job.job.id, "AJ_kept");
-    assert_eq!(job.token, token, "the server replaces it once the worker registers");
-    assert_eq!(job.url, "wss://new-sfu");
+    assert_eq!((job.job.id.as_str(), job.url.as_str()), ("AJ_kept", "wss://new-sfu"));
+    assert_eq!(job.token, token, "the server replaces it after the worker registers");
 }

@@ -846,3 +846,270 @@ async fn the_registration_is_published_before_its_notification() {
     assert!(state.registered, "notified of a registration the snapshot does not show");
     assert_eq!(state.worker_id, "worker");
 }
+
+// Token mode: job token requests on the worker connection.
+
+const CLAIMS: &str = r#"{"identity":"avatar","video":{"roomJoin":true,"room":"r"}}"#;
+
+type Outgoing = tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>;
+
+/// Starts a worker loop and waits until it is registered.
+async fn registered() -> (WorkerClient, Peer, Outgoing, Run) {
+    use lk_agents_abi::SpawnerExt as _;
+    let RuntimeRig { mut runtime, handle, peer, sent, .. } = runtime_rig();
+    let mut notifications = handle.subscribe();
+    peer.send(register_message("worker")).unwrap();
+    let task =
+        lk_agents_net::task::TokioSpawner::current().spawn(async move { runtime.run().await });
+    while !matches!(notifications.recv().await.unwrap(), WorkerNotification::Registered(_)) {}
+    (handle, peer, sent, task)
+}
+
+async fn stop(handle: WorkerClient, task: Run) {
+    handle.send(WorkerCommand::Close).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), task).await.unwrap().unwrap().unwrap();
+}
+
+async fn next_request(sent: &mut Outgoing) -> protocol::CreateJobTokenRequest {
+    let message = until_sent(sent, |m| matches!(m.message, Some(Sent::CreateJobToken(_)))).await;
+    let Some(Sent::CreateJobToken(request)) = message.message else { unreachable!() };
+    request
+}
+
+fn answer(request_id: &str, token: &str, error: &str) -> Result<ServerMessage, TransportError> {
+    let response = protocol::CreateJobTokenResponse {
+        request_id: request_id.into(),
+        token: token.into(),
+        expires_at: 600,
+        error: error.into(),
+    };
+    Ok(ServerMessage { message: Some(server_message::Message::CreateJobToken(response)) })
+}
+
+fn ask(
+    handle: &WorkerClient,
+    claims: &'static str,
+) -> lk_agents_abi::OwnedTask<Result<JobToken, ApiError>> {
+    use lk_agents_abi::SpawnerExt as _;
+    let handle = handle.clone();
+    let spawner = lk_agents_net::task::TokioSpawner::current();
+    spawner.spawn(async move { handle.create_job_token("AJ_1", claims).await })
+}
+
+// Two requests answered in reverse order, then a refusal. Catches an answer that goes to the
+// wrong request, a request without its job id or claims, and a refusal that is read as a token
+// or loses the server's reason.
+#[tokio::test(start_paused = true)]
+async fn a_job_token_request_is_answered_by_its_request_id() {
+    let (handle, peer, mut sent, task) = registered().await;
+    let first = ask(&handle, CLAIMS);
+    let second = ask(&handle, r#"{"video":{"roomAdmin":true,"room":"r"}}"#);
+    let (a, b) = (next_request(&mut sent).await, next_request(&mut sent).await);
+    assert_eq!((a.job_id.as_str(), b.job_id.as_str()), ("AJ_1", "AJ_1"));
+    let (a, b) = if a.claims == CLAIMS { (a, b) } else { (b, a) };
+    assert_ne!(a.request_id, b.request_id);
+    peer.send(answer(&b.request_id, "signed-b", "")).unwrap();
+    peer.send(answer(&a.request_id, "signed-a", "")).unwrap();
+    let issued = first.await.unwrap().unwrap();
+    assert_eq!((issued.token.as_str(), issued.expires_at), ("signed-a", 600));
+    assert_eq!(second.await.unwrap().unwrap().token, "signed-b");
+
+    let refused = ask(&handle, CLAIMS);
+    let request = next_request(&mut sent).await;
+    peer.send(answer(&request.request_id, "", "job not on this worker")).unwrap();
+    let error = refused.await.unwrap().unwrap_err();
+    assert!(error.message.contains("job not on this worker"), "{error}");
+    stop(handle, task).await;
+}
+
+// Catches a job that waits forever on a server that never answers.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_job_token_request_times_out() {
+    let (handle, _peer, mut sent, task) = registered().await;
+    let started = tokio::time::Instant::now();
+    let asking = ask(&handle, CLAIMS);
+    next_request(&mut sent).await;
+    let error = asking.await.unwrap().unwrap_err();
+    assert!(error.message.contains("did not answer"), "{error}");
+    assert_eq!(started.elapsed(), JOB_TOKEN_TIMEOUT);
+    stop(handle, task).await;
+}
+
+// A request before registration, and one just before the connection drops. Catches a request
+// sent unregistered, which could only time out, and one that waits through a lost connection,
+// which its answer can no longer come on.
+#[tokio::test(start_paused = true)]
+async fn job_tokens_need_a_registered_connection_and_fail_when_it_drops() {
+    use lk_agents_abi::SpawnerExt as _;
+    let RuntimeRig { mut runtime, handle, peer, mut sent, .. } = runtime_rig_with_retry(5);
+    let task =
+        lk_agents_net::task::TokioSpawner::current().spawn(async move { runtime.run().await });
+    until_sent(&mut sent, |m| matches!(m.message, Some(Sent::Register(_)))).await;
+    let started = tokio::time::Instant::now();
+    let error = handle.create_job_token("AJ_1", CLAIMS).await.unwrap_err();
+    assert!(error.message.contains("not connected"), "{error}");
+    assert!(started.elapsed() < JOB_TOKEN_TIMEOUT);
+
+    let mut notifications = handle.subscribe();
+    peer.send(register_message("worker")).unwrap();
+    while !matches!(notifications.recv().await.unwrap(), WorkerNotification::Registered(_)) {}
+    let asking = ask(&handle, CLAIMS);
+    next_request(&mut sent).await;
+    peer.send(Err(TransportError::Failed("peer disconnected".into()))).unwrap();
+    let error = asking.await.unwrap().unwrap_err();
+    assert!(error.message.contains("closed before it answered"), "{error}");
+    stop(handle, task).await;
+}
+
+// Catches a reload whose token request goes out before the server learns the kept job runs here
+// (the server then refuses it), or a migration without the job's accepted identity.
+#[tokio::test(start_paused = true)]
+async fn kept_jobs_are_migrated_before_their_token_requests() {
+    let (handle, peer, mut sent, task) = registered().await;
+    let kept = RunningJobInfo {
+        accept_arguments: AcceptArguments { identity: "agent-7".into(), ..Default::default() },
+        job: protocol::Job { id: "AJ_1".into(), ..Default::default() },
+        url: "wss://sfu".into(),
+        token: "kept".into(),
+        worker_id: "old-worker".into(),
+        fake_job: false,
+        received_at: None,
+        accepted_at: None,
+        assigned_at: None,
+        launched_at: 0.0,
+    };
+    handle.send(WorkerCommand::MigrateJobs(vec![kept])).unwrap();
+    let asking = ask(&handle, CLAIMS);
+    let mut order = Vec::new();
+    while order.len() < 2 {
+        match sent.recv().await.unwrap().message {
+            Some(Sent::MigrateJob(migrated)) => {
+                let [job] = migrated.jobs.as_slice() else { panic!("{migrated:?}") };
+                let identity = job.state.as_ref().map(|s| s.participant_identity.as_str());
+                assert_eq!((job.id.as_str(), identity), ("AJ_1", Some("agent-7")));
+                order.push("migrate");
+            }
+            Some(Sent::CreateJobToken(request)) => {
+                peer.send(answer(&request.request_id, "signed", "")).unwrap();
+                order.push("token");
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(order, ["migrate", "token"]);
+    asking.await.unwrap().unwrap();
+    stop(handle, task).await;
+}
+
+/// A register response from a server that reports `agent_protocol`.
+fn register_on(worker_id: &str, agent_protocol: i32) -> Result<ServerMessage, TransportError> {
+    let server_info = protocol::ServerInfo { agent_protocol, ..Default::default() };
+    let response = protocol::RegisterWorkerResponse {
+        worker_id: worker_id.to_owned(),
+        server_info: Some(server_info),
+        ..Default::default()
+    };
+    Ok(ServerMessage { message: Some(server_message::Message::Register(response)) })
+}
+
+/// A transport that records each connect, then replaces the worker token as the CLI's
+/// `Credentials` message does.
+struct Refreshing {
+    inner: ScriptedTransport,
+    token: Option<Arc<Mutex<String>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::WorkerTransport for Refreshing {
+    async fn connect(
+        &self,
+        url: &str,
+        worker_token: Option<&str>,
+        headers: Vec<(String, String)>,
+    ) -> Result<crate::transport::Connected, TransportError> {
+        let connected = self.inner.connect(url, worker_token, headers).await;
+        if let Some(token) = &self.token {
+            *token.lock() = "refreshed-worker-token".into();
+        }
+        connected
+    }
+}
+
+/// Runs a worker over two scripted connections to servers that report `agent_protocol`.
+/// Returns the run's outcome (`None` while it still runs) and each connect's `Authorization`.
+fn run_against(
+    cfg: RuntimeConfig,
+    agent_protocol: i32,
+    refresh: bool,
+) -> (Option<Result<(), RuntimeError>>, Vec<Option<String>>) {
+    let wire = Arc::new(Mutex::new(Wire::default()));
+    let steps = vec![
+        Step::Serves(vec![
+            register_on("W-1", agent_protocol),
+            Err(TransportError::Failed("peer disconnected".into())),
+        ]),
+        Step::Serves(vec![register_on("W-2", agent_protocol)]),
+    ];
+    let inner = ScriptedTransport { script: Mutex::new(steps.into()), wire: wire.clone() };
+    let transport = Refreshing { inner, token: refresh.then(|| cfg.token.clone()) };
+    let runtime =
+        tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build();
+    let outcome = runtime.unwrap().block_on(async {
+        let (mut worker, _handle) = Worker::with_components(
+            Arc::new(transport),
+            cfg,
+            WorkerConfig { ws_url: "wss://gw".into(), ..Default::default() },
+            Arc::new(LoadHost::default()),
+            rt(Arc::new(TestClock(tokio::time::Instant::now()))),
+            blocking_io(),
+        );
+        tokio::time::timeout(Duration::from_millis(50), worker.run()).await.ok()
+    });
+    let headers = wire.lock().headers.clone();
+    let bearers = headers.iter().map(|headers| {
+        headers.iter().find(|(name, _)| name == "Authorization").map(|(_, v)| v.clone())
+    });
+    (outcome, bearers.collect())
+}
+
+fn token_cfg(api_key: &str, api_secret: &str) -> RuntimeConfig {
+    RuntimeConfig {
+        api_key: api_key.into(),
+        api_secret: api_secret.into(),
+        token: Arc::new(Mutex::new("lk-worker-token".into())),
+        ..runtime_cfg(5)
+    }
+}
+
+// Catches a token mode worker that signs, drops or reuses an old worker token instead of the
+// current one at each registration, a worker token that wins over a key pair, and a bearer sent
+// with no credentials.
+#[test]
+fn token_mode_registers_with_the_current_worker_token_and_a_key_pair_wins() {
+    let (_, bearers) = run_against(token_cfg("", ""), JOB_TOKEN_AGENT_PROTOCOL, true);
+    let want = ["Bearer lk-worker-token", "Bearer refreshed-worker-token"].map(|b| Some(b.into()));
+    assert_eq!(bearers, want);
+
+    let (key, secret) = ("APIkey", "thiskeyistotallyunsafe");
+    for bearer in run_against(token_cfg(key, secret), JOB_TOKEN_AGENT_PROTOCOL, true).1 {
+        let jwt = bearer.as_deref().and_then(|b| b.strip_prefix("Bearer ")).expect("a bearer");
+        lk_agents_net::token::extend_job_token(jwt, key, secret).expect("signed with the key pair");
+    }
+
+    assert_eq!(run_against(runtime_cfg(5), JOB_TOKEN_AGENT_PROTOCOL, false).1, [None, None]);
+}
+
+// Catches a token mode worker that stays registered on, or retries, a server that does not issue
+// job tokens (its first token request would close the connection), and a key mode worker that
+// the same check stops.
+#[test]
+fn token_mode_stops_on_a_server_without_job_tokens_and_a_key_pair_does_not() {
+    let (outcome, bearers) = run_against(token_cfg("", ""), 1, false);
+    let error = outcome.expect("the worker stopped").unwrap_err();
+    assert!(matches!(error, RuntimeError::Configuration(_)), "{error}");
+    assert!(error.to_string().contains("does not support token mode"), "{error}");
+    assert_eq!(bearers.len(), 1, "not retried");
+
+    let (outcome, _) = run_against(token_cfg("APIkey", "thiskeyistotallyunsafe"), 0, false);
+    assert!(outcome.is_none(), "a key pair stays registered: {outcome:?}");
+}

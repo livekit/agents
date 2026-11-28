@@ -556,6 +556,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::wait_for_agent, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_track_publication, m)?)?;
     m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
+    m.add_function(wrap_pyfunction!(worker::participant_token, m)?)?;
     m.add_class::<worker::HttpExchange>()?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_class::<worker::ProcessLaunch>()?;

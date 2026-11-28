@@ -326,11 +326,15 @@ impl HostStorageClass for Namespace {
         api_key: String,
         api_secret: String,
         port: u16,
-    ) -> Result<Self::ThreadServer, StorageError> {
+    ) -> Result<Option<Self::ThreadServer>, StorageError> {
         if !matches!(self.config, Config::Local { .. }) {
             return Err(StorageError::Invalid(
                 "the local ThreadService requires SQLiteStorage".into(),
             ));
+        }
+        if api_key.is_empty() || api_secret.is_empty() {
+            log::info!(target: lk_agents_abi::LOG_TARGET, "local thread service off: it needs LIVEKIT_API_KEY and LIVEKIT_API_SECRET");
+            return Ok(None);
         }
         crate::http::ThreadServer::start(
             self.storage().await?,
@@ -340,6 +344,7 @@ impl HostStorageClass for Namespace {
             port,
         )
         .await
+        .map(Some)
     }
 
     fn new(

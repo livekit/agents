@@ -30,7 +30,7 @@ from .._websocket import (
     WebSocketProtocol,
     WebSocketTarget,
 )
-from ..job import JobContext, _server_credentials, get_job_context
+from ..job import _server_credentials, get_job_context
 from ..log import logger
 from ..types import (
     ATTRIBUTE_PUBLISH_ON_BEHALF,
@@ -134,42 +134,12 @@ class AvatarStart:
     avatar_name: str
     _api_key: str = field(repr=False)
     _api_secret: str = field(repr=False)
-    _job: JobContext | None = field(default=None, repr=False)
 
-    async def participant_token(
-        self,
-        *,
-        identity: str,
-        name: str = "",
-        kind: Literal["standard", "egress", "ingress", "sip", "agent"] | None = None,
-        attributes: Mapping[str, str] | None = None,
-        grants: api.VideoGrants | None = None,
-        ttl: timedelta = timedelta(hours=1),
-    ) -> str:
-        """A token for a participant of this room other than the avatar.
+    def access_token(self) -> api.AccessToken:
+        """A token signed with the LiveKit credentials, for a participant other than the avatar."""
+        return api.AccessToken(api_key=self._api_key, api_secret=self._api_secret)
 
-        With a LiveKit key and secret, this method signs the token. In token mode (LIVEKIT_TOKEN,
-        and no key or secret), the server creates it for the job and sets its lifetime.
-        ``grants`` defaults to joining this room.
-        """
-        grants = grants or api.VideoGrants(room_join=True, room=self.room.name)
-        if not (self._api_key and self._api_secret) and self._job is not None:
-            return await self._job.create_participant_token(
-                identity=identity,
-                name=name,
-                kind=kind,
-                attributes=dict(attributes) if attributes else None,
-                grants=grants,
-            )
-        token = api.AccessToken(api_key=self._api_key, api_secret=self._api_secret)
-        token.with_identity(identity).with_name(name).with_ttl(ttl).with_grants(grants)
-        if kind is not None:
-            token.with_kind(kind)
-        if attributes:
-            token.with_attributes(dict(attributes))
-        return token.to_jwt()
-
-    async def livekit_token(
+    def livekit_token(
         self,
         *,
         ttl: timedelta = timedelta(hours=1),
@@ -179,13 +149,17 @@ class AvatarStart:
         """A token for the avatar participant: kind agent, its identity and name, joining this
         room and publishing on behalf of ``agent_identity``. ``grants`` replaces the default
         room join; ``attributes`` are added to the publish-on-behalf one."""
-        return await self.participant_token(
-            identity=self.avatar_identity,
-            name=self.avatar_name,
-            kind="agent",
-            attributes={ATTRIBUTE_PUBLISH_ON_BEHALF: self.agent_identity, **(attributes or {})},
-            grants=grants,
-            ttl=ttl,
+        return (
+            self.access_token()
+            .with_kind("agent")
+            .with_identity(self.avatar_identity)
+            .with_name(self.avatar_name)
+            .with_ttl(ttl)
+            .with_grants(grants or api.VideoGrants(room_join=True, room=self.room.name))
+            .with_attributes(
+                {ATTRIBUTE_PUBLISH_ON_BEHALF: self.agent_identity, **(attributes or {})}
+            )
+            .to_jwt()
         )
 
 
@@ -309,15 +283,12 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
 
     def _start_context(self, agent_session: VoiceSession, room: rtc.Room) -> AvatarStart:
         url, key, secret = _server_credentials(*self._credentials)
-        job = get_job_context(required=False)
-        # In token mode there is no key or secret. The server creates the avatar's token for the
-        # job.
-        signs = bool(key and secret) or (job is not None and job._token_mode())
-        if not url or not signs:
+        if not url or not key or not secret:
             raise ValueError(
                 "livekit_url, livekit_api_key and livekit_api_secret must be set by arguments or "
                 "environment variables"
             )
+        job = get_job_context(required=False)
         if job is not None:
             agent_identity = job.local_participant_identity
         elif room.isconnected():
@@ -334,7 +305,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
             avatar_name=self._name or self.avatar_identity,
             _api_key=key,
             _api_secret=secret,
-            _job=job,
         )
 
     async def _attempt(self, ctx: AvatarStart) -> str | None:

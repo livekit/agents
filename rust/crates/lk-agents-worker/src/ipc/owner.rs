@@ -3,18 +3,20 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::BoxFuture;
+use lk_agents_abi::errors::{ApiError, ErrorKind, HostError};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc::{JobCompletion, JobRunnerOptions, JobStatus};
 use lk_agents_abi::worker::ipc_host::{
     self, JobLauncher, LaunchReport, SupervisedJob, WorkerError,
 };
 use lk_agents_abi::worker::job::{RunningJobInfo, StartJob};
+use lk_agents_net::job_token::JobToken;
 use lk_agents_net::signal;
 
 use super::executor::{RunnerExecutor, ThreadExecutor};
 use super::process::{ProcessExecutor, ProcessReceipt};
-use super::wire::{JobTokenAnswer, Token, bounded};
+use super::process_pool::JobTokenIssuer;
 use super::{
     HEALTH_CHECK_GRACE, Hello, InitError, RunnerFields, RunnerSupervisor, SupervisorCallbacks, secs,
 };
@@ -80,8 +82,8 @@ impl JobSupervisor {
         &self.logger
     }
 
-    /// In token mode, sends the job's token requests to `issuer`.
-    pub(crate) fn with_job_tokens(mut self, issuer: Option<crate::JobTokenIssuer>) -> Self {
+    /// Token mode: the job's token requests go to `issuer`.
+    pub(crate) fn with_job_tokens(mut self, issuer: Option<JobTokenIssuer>) -> Self {
         self.logger.job_tokens = issuer;
         self
     }
@@ -348,12 +350,12 @@ impl ipc_host::ThreadLaunch for ThreadLaunch {
     }
 }
 
-/// What the runner's diagnostics name: its process and its job. In token mode, it also holds the
-/// function that receives the job's token requests.
+/// What the runner's diagnostics name: its process and its job. In token mode, also where the
+/// job's token requests go.
 #[derive(Clone, Default)]
 pub(crate) struct JobLogger {
     pub(crate) state: Arc<Mutex<RunnerState>>,
-    pub(crate) job_tokens: Option<crate::JobTokenIssuer>,
+    pub(crate) job_tokens: Option<JobTokenIssuer>,
 }
 
 impl SupervisorCallbacks for JobLogger {
@@ -374,21 +376,14 @@ impl SupervisorCallbacks for JobLogger {
         &self,
         job_id: String,
         claims: String,
-    ) -> lk_agents_abi::BoxFuture<'static, JobTokenAnswer> {
-        let issuer = self.job_tokens.clone();
-        Box::pin(async move {
-            let Some(issuer) = issuer else {
-                let refused = "cannot create a job token: the worker is not in token mode";
-                return JobTokenAnswer::Refused(refused.into());
-            };
-            match issuer(job_id, claims).await {
-                Ok(issued) => JobTokenAnswer::Issued {
-                    token: Token(issued.token),
-                    expires_at: issued.expires_at,
-                },
-                Err(error) => JobTokenAnswer::Refused(bounded(error.0)),
+    ) -> BoxFuture<'static, Result<JobToken, ApiError>> {
+        match &self.job_tokens {
+            Some(issuer) => issuer(job_id, claims),
+            None => {
+                let refused = ApiError::new(ErrorKind::Auth, "the worker is not in token mode");
+                Box::pin(std::future::ready(Err(refused)))
             }
-        })
+        }
     }
 }
 

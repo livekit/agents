@@ -133,11 +133,9 @@ class _JobProc:
         thread = self._job_ctx._thread
         # The root span must exist before the job task can run.
         run.start_trace(job, thread.id if thread is not None else None)
-        return run
-
-    async def _core_run_job(self) -> None:
         job_task = self._tasks.spawn(self._run_job_task(), name="job_task")
         job_task.add_done_callback(lambda _: self._client.stop())
+        return run
 
     async def _core_ping(self) -> None:
         # Empty on purpose: the pong measures the loop's responsiveness.

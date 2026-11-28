@@ -30,6 +30,21 @@ pub trait JoinTokens {
         #[host(kw, default = false)] agent: bool,
         #[host(default = None)] ttl: Option<f64>,
     ) -> Result<String, TokenRefused>;
+
+    /// A token for a participant other than the agent, such as an avatar. `claims` is JSON, the
+    /// payload of an access token with the identity in `identity`.
+    ///
+    /// With `api_key` and `api_secret`, the token is signed here and lives `ttl` seconds (six
+    /// hours when `None`). Without them, in token mode, the server issues it for the job
+    /// `job_id` and sets its lifetime.
+    #[host(function)]
+    async fn participant_token(
+        claims: String,
+        api_key: String,
+        api_secret: String,
+        job_id: Option<String>,
+        #[host(default = None)] ttl: Option<f64>,
+    ) -> Result<String, TokenRefused>;
 }
 
 // Public data contracts. Python behavior remains in its adapters.

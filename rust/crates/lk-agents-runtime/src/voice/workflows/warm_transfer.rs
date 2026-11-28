@@ -11,9 +11,11 @@ pub use lk_agents_abi::voice::workflows::warm_transfer::{
 };
 use lk_agents_abi::voice::workflows::{TwilioCallEnd, TwilioDial};
 use lk_agents_abi::{Clock, Spawner};
+use lk_agents_net::job_token;
 use lk_agents_net::owned::Background;
 use lk_agents_net::room_service::{RoomService, SipCall, Telephony, api_error};
 use lk_agents_net::task::{ScopedTask, TaskSet};
+use lk_agents_net::token::{RoomJoinOptions, room_join_token};
 use lk_agents_voice::workflows::effects::{TransferEffects, TransferToolEffect};
 use serde_json::Value;
 
@@ -59,35 +61,37 @@ pub trait TransferApi: Send + Sync {
     ) -> BoxFuture<'_, Result<(), ApiError>>;
     /// Deletes `room`; a room already gone is not an error.
     fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), ApiError>>;
+    /// The token that joins the human agent's `room` as `identity`, an agent participant.
+    fn human_token(
+        &self,
+        room: String,
+        identity: String,
+    ) -> BoxFuture<'_, Result<String, ApiError>>;
 }
 
 type BoxFuture<'a, T> = lk_agents_abi::BoxFuture<'a, T>;
 
-/// [`TransferApi`] over a project's services, with the server's URL and key pair.
-///
-/// In token mode there is no key pair. Each call then uses a token of the caller's job, with the
-/// grants of that call.
+/// [`TransferApi`] over a project's services, with the server's URL and key pair. Without a key
+/// pair (token mode), each call uses a token of the caller's job.
 pub struct ProjectApi {
     rooms: RoomService,
     telephony: Telephony,
+    api_key: String,
+    api_secret: String,
+    job: JobKey,
 }
 
 impl ProjectApi {
-    /// The project of the server's `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
-    /// In token mode, the calls use the tokens of `job`, the caller's job.
+    /// The project of the server's `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, for
+    /// the caller's `job`.
     pub fn of_server(env: &BTreeMap<String, String>, job: JobKey) -> Self {
-        let get = |name: &str| env.get(name).map_or("", String::as_str);
-        let (url, key, secret) =
-            (get("LIVEKIT_URL"), get("LIVEKIT_API_KEY"), get("LIVEKIT_API_SECRET"));
-        if lk_agents_net::token::uses_job_token(key, secret) {
-            return ProjectApi {
-                rooms: RoomService::with_job_tokens(url, job.clone()),
-                telephony: Telephony::with_job_tokens(url, job),
-            };
-        }
+        let get = |name: &str| env.get(name).cloned().unwrap_or_default();
         ProjectApi {
-            rooms: RoomService::new(url, key, secret),
-            telephony: Telephony::new(url, key, secret),
+            rooms: RoomService::of_server(env, job.clone()),
+            telephony: Telephony::of_server(env, job.clone()),
+            api_key: get("LIVEKIT_API_KEY"),
+            api_secret: get("LIVEKIT_API_SECRET"),
+            job,
         }
     }
 }
@@ -128,6 +132,31 @@ impl TransferApi for ProjectApi {
     }
     fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), ApiError>> {
         Box::pin(async move { self.rooms.delete_room(&room).await.map_err(api_error) })
+    }
+    fn human_token(
+        &self,
+        room: String,
+        identity: String,
+    ) -> BoxFuture<'_, Result<String, ApiError>> {
+        Box::pin(async move {
+            if !self.api_key.is_empty() || !self.api_secret.is_empty() {
+                let options = RoomJoinOptions { agent: true, ttl: None };
+                return room_join_token(&self.api_key, &self.api_secret, &identity, &room, options);
+            }
+            // Token mode: the server issues it. A job token never carries the agent grant.
+            let claims = serde_json::json!({
+                "identity": identity,
+                "kind": "agent",
+                "video": {
+                    "roomJoin": true,
+                    "room": room,
+                    "canPublish": true,
+                    "canSubscribe": true,
+                    "canUpdateOwnMetadata": true,
+                },
+            });
+            job_token::token(&self.job, &claims.to_string()).await
+        })
     }
 }
 
@@ -342,15 +371,12 @@ impl TransferRun {
         caller: &Arc<dyn RtcRoom>,
     ) -> Result<(), DialError> {
         let room_name = human_agent_room_name(&caller.name()?);
-        let room = host
-            .connect_human(
-                &telemetry::Cx::NONE,
-                room_name.clone(),
-                caller.local().identity()?.to_string(),
-            )
-            .await?
-            .rtc()
-            .ok_or_else(|| HostError::new("warm transfer requires a connected human RTC room"))?;
+        let identity = caller.local().identity()?.to_string();
+        let token = api.human_token(room_name.clone(), identity).await.map_err(DialError::Api)?;
+        let room =
+            host.connect_human(&telemetry::Cx::NONE, token).await?.rtc().ok_or_else(|| {
+                HostError::new("warm transfer requires a connected human RTC room")
+            })?;
         let events = room.events();
         let this = self.clone();
         {
@@ -863,7 +889,6 @@ mod tests {
             &self,
             _cx: &telemetry::Cx,
             _: String,
-            _: String,
         ) -> lk_agents_abi::BoxFuture<
             '_,
             Result<Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>, HostError>,
@@ -976,6 +1001,9 @@ mod tests {
                 Ok(())
             })
         }
+        fn human_token(&self, _: String, _: String) -> BoxFuture<'_, Result<String, ApiError>> {
+            Box::pin(async move { unreachable!() })
+        }
     }
 
     fn dial() -> TwilioDial {
@@ -998,6 +1026,45 @@ mod tests {
             tokio::task::yield_now().await;
         }
         panic!("the dial's cleanup did not run");
+    }
+
+    // Catches a key mode human agent token without the agent grant, and a token mode one that is
+    // signed with no key or asks the server for the agent grant, which a job token never has.
+    #[tokio::test]
+    async fn the_human_agents_token_is_signed_with_a_key_pair_or_comes_from_the_job() {
+        use lk_agents_net::job_token::{Fetch, JobToken, JobTokens};
+        let (key, secret) = ("key", "secret-secret-secret-secret-secret");
+        let keyed = BTreeMap::from([
+            ("LIVEKIT_API_KEY".to_owned(), key.to_owned()),
+            ("LIVEKIT_API_SECRET".to_owned(), secret.to_owned()),
+        ]);
+        let job = JobKey("AJ_transfer".into());
+        let api = ProjectApi::of_server(&keyed, job.clone());
+        let token = api.human_token("human-room".into(), "agent-1".into()).await.unwrap();
+        let claims =
+            livekit_token::TokenVerifier::with_api_key(key, secret).verify(&token).unwrap();
+        assert!(claims.video.agent && claims.video.room == "human-room" && claims.sub == "agent-1");
+
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let recording = asked.clone();
+        let fetch: Fetch = Box::new(move |claims| {
+            recording.lock().push(claims);
+            let token = JobToken { token: "job-token".into(), expires_at: i64::MAX / 2 };
+            Box::pin(std::future::ready(Ok(token)))
+        });
+        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+        job_token::open(job.clone(), Arc::new(JobTokens::new(fetch, clock)));
+        let api = ProjectApi::of_server(&BTreeMap::new(), job.clone());
+        let token = api.human_token("human-room".into(), "agent-1".into()).await;
+        job_token::close(&job);
+        assert_eq!(token.unwrap(), "job-token");
+        let claims: Value = serde_json::from_str(&asked.lock()[0]).unwrap();
+        assert_eq!(
+            (claims["identity"].as_str(), claims["kind"].as_str()),
+            (Some("agent-1"), Some("agent"))
+        );
+        assert_eq!(claims["video"]["room"], "human-room");
+        assert!(claims["video"].get("agent").is_none());
     }
 
     #[tokio::test]

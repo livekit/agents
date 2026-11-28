@@ -24,6 +24,17 @@ fn _extract_join_tokens_room_join_token_ttl(
 }
 type JoinTokensRoomJoinTokenTtlInput = ::std::option::Option<f64>;
 
+fn _extract_join_tokens_participant_token_ttl(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<JoinTokensParticipantTokenTtlInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "ttl")).map(Some)
+    }
+}
+type JoinTokensParticipantTokenTtlInput = ::std::option::Option<f64>;
+
 /// A token joining `room` as `identity`, publishing, subscribing and updating its own
 /// metadata; `agent` joins as an agent. `ttl` in seconds; the signer's default when `None`.
 #[pyfunction]
@@ -51,6 +62,38 @@ pub fn room_join_token(
             )
         })?;
     ::pyo3::PyResult::Ok(out)
+}
+
+/// A token for a participant other than the agent, such as an avatar. `claims` is JSON, the
+/// payload of an access token with the identity in `identity`.
+///
+/// With `api_key` and `api_secret`, the token is signed here and lives `ttl` seconds (six
+/// hours when `None`). Without them, in token mode, the server issues it for the job
+/// `job_id` and sets its lifetime.
+#[pyfunction]
+#[pyo3(signature = (claims, api_key, api_secret, job_id, ttl = None))]
+pub fn participant_token<'py>(
+    py: Python<'py>,
+    claims: ::std::string::String,
+    api_key: ::std::string::String,
+    api_secret: ::std::string::String,
+    job_id: ::std::option::Option<::std::string::String>,
+    #[pyo3(from_py_with = _extract_join_tokens_participant_token_ttl)]
+    ttl: JoinTokensParticipantTokenTtlInput,
+) -> PyResult<Bound<'py, PyAny>> {
+    crate::py_calls::check_pid()?;
+    crate::py_calls::future_into_py(py, async move {
+        let out = <JoinTokensImpl as ::lk_agents_abi::worker::JoinTokens>::participant_token(
+            claims, api_key, api_secret, job_id, ttl,
+        )
+        .await
+        .map_err(|e: ::lk_agents_abi::worker::TokenRefused| {
+            <::lk_agents_abi::worker::TokenRefused as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
+        Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+    })
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
@@ -863,26 +906,6 @@ impl JobRun {
             let () =
                 <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::close_tasks(&this).await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
-        })
-    }
-
-    /// Returns a job token with `claims` for this job, in token mode. The worker asks the server to
-    /// sign it.
-    ///
-    /// `claims` is JSON with the same fields as the payload of an access token. The job caches one
-    /// token per set of claims until half of its life has passed.
-    #[pyo3(signature = (claims))]
-    fn create_job_token<'py>(
-        &self,
-        py: Python<'py>,
-        claims: ::std::string::String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::create_job_token(&this, claims)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
         })
     }
 
@@ -3028,43 +3051,6 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let o = out.value.bind(py);
                 let out = (crate::py_objects::native::<dyn ::lk_agents_abi::worker::ipc_host::JobExecution>(o.as_any()).and_then(|native| native.ok_or_else(|| ::pyo3::exceptions::PyTypeError::new_err(concat!("JobProcess._core_start_job", ": expected a native JobRun"))))).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
-            })
-        })
-    }
-
-    fn run_job(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::clone::Clone::clone(&self.host);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "JobProcess._core_run_job",
-            &crate::py_calls::calling_context(&self.context),
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py)?.getattr("_core_run_job")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
             })
         })
     }

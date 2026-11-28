@@ -8,8 +8,9 @@ use livekit_protocol as proto;
 use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::telemetry::record::JobKey;
 
-/// A project's RoomService at its `LIVEKIT_URL` (`wss://` or `https://`). It signs calls with the
-/// key pair, or in token mode it uses the job's tokens.
+use crate::job_token;
+
+/// A project's RoomService at the server's `LIVEKIT_URL` (`wss://` or `https://`).
 pub struct RoomService(LiveKitApi);
 
 /// What `remove_participant` found.
@@ -25,16 +26,19 @@ fn not_found(error: &ServiceError) -> bool {
         if code.code == ServerErrorCode::NOT_FOUND)
 }
 
-/// Builds the project's services for token mode.
-///
-/// For each call, the client asks the server for a token of `job` with the grants of that call.
-fn job_api(url: &str, job: JobKey) -> LiveKitApi {
+/// The project's API at the server's `LIVEKIT_URL`. With the server's key pair, each call is
+/// signed with it. Without one (token mode), each call uses a token of `job` with the grants of
+/// that call, which the server issues.
+fn server_api(env: &BTreeMap<String, String>, job: JobKey) -> LiveKitApi {
+    let get = |name: &str| env.get(name).map_or("", String::as_str);
+    let (url, key, secret) =
+        (get("LIVEKIT_URL"), get("LIVEKIT_API_KEY"), get("LIVEKIT_API_SECRET"));
+    if !key.is_empty() || !secret.is_empty() {
+        return LiveKitApi::with_api_key(url, key, secret);
+    }
     LiveKitApi::with_token_provider(url, move |grants: TokenGrants| {
         let job = job.clone();
-        async move {
-            let claims = grants.to_claims_json()?;
-            Ok(crate::job_token::token(&job, &claims).await?)
-        }
+        async move { Ok(job_token::token(&job, &grants.to_claims_json()?).await?) }
     })
 }
 
@@ -43,9 +47,9 @@ impl RoomService {
         Self(LiveKitApi::with_api_key(url, api_key, api_secret))
     }
 
-    /// Token mode: each call uses a token of `job` (see [`job_api`]).
-    pub fn with_job_tokens(url: &str, job: JobKey) -> Self {
-        Self(job_api(url, job))
+    /// The server's RoomService for `job`: see [`server_api`].
+    pub fn of_server(env: &BTreeMap<String, String>, job: JobKey) -> Self {
+        Self(server_api(env, job))
     }
 
     /// `RemoveParticipant`: `identity` leaves `room`. A participant already gone is
@@ -105,9 +109,9 @@ impl Telephony {
         Self(LiveKitApi::with_api_key(url, api_key, api_secret))
     }
 
-    /// Token mode: each call uses a token of `job` (see [`job_api`]).
-    pub fn with_job_tokens(url: &str, job: JobKey) -> Self {
-        Self(job_api(url, job))
+    /// The server's telephony for `job`: see [`server_api`].
+    pub fn of_server(env: &BTreeMap<String, String>, job: JobKey) -> Self {
+        Self(server_api(env, job))
     }
 
     /// `CreateSIPParticipant`: dials `call`, returning once it is answered when
@@ -216,6 +220,60 @@ mod tests {
             head.split_whitespace().nth(1).unwrap_or_default().to_owned()
         });
         (url, served)
+    }
+
+    // Two jobs run in token mode, and the first calls the server API. Catches a call that signs
+    // with no key instead of using a job token with the call's grants, a call that uses another
+    // job's token, a call outside a running job, and a job token asked for while a key pair is
+    // set.
+    #[tokio::test]
+    async fn without_a_key_pair_each_call_uses_a_token_of_its_own_job() {
+        use crate::job_token::{self, Fetch, JobToken, JobTokens};
+        use lk_agents_abi::telemetry::record::JobKey;
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+        let recorder = |asked: Arc<Mutex<Vec<String>>>| -> Fetch {
+            Box::new(move |claims| {
+                asked.lock().push(claims);
+                let token = JobToken { token: "job-token".into(), expires_at: i64::MAX / 2 };
+                Box::pin(std::future::ready(Ok(token)))
+            })
+        };
+        let (asked, other) = (Arc::default(), Arc::default());
+        let clock = Arc::new(crate::clock::RealClock::new());
+        let (job, newer) = (JobKey("AJ_room_1".into()), JobKey("AJ_room_2".into()));
+        job_token::open(
+            job.clone(),
+            Arc::new(JobTokens::new(recorder(Arc::clone(&asked)), clock.clone())),
+        );
+        job_token::open(
+            newer.clone(),
+            Arc::new(JobTokens::new(recorder(Arc::clone(&other)), clock)),
+        );
+
+        let (url, served) = answer_once("200 OK", "").await;
+        let env = BTreeMap::from([("LIVEKIT_URL".to_owned(), url)]);
+        RoomService::of_server(&env, job.clone()).delete_room("room").await.unwrap();
+        assert_eq!(served.await.unwrap(), "/twirp/livekit.RoomService/DeleteRoom");
+        let ended = RoomService::of_server(&env, JobKey("AJ_ended".into()));
+        assert!(ended.delete_room("room").await.is_err(), "no running job, no token");
+
+        let (url, served) = answer_once("200 OK", "").await;
+        let keyed = BTreeMap::from([
+            ("LIVEKIT_URL".to_owned(), url),
+            ("LIVEKIT_API_KEY".to_owned(), "key".to_owned()),
+            ("LIVEKIT_API_SECRET".to_owned(), "a-secret-long-enough-for-signing-000000".to_owned()),
+        ]);
+        RoomService::of_server(&keyed, job.clone()).delete_room("room").await.unwrap();
+        served.await.unwrap();
+        job_token::close(&job);
+        job_token::close(&newer);
+        assert_eq!(
+            *asked.lock(),
+            [r#"{"video":{"roomCreate":true}}"#],
+            "one job token, its grants"
+        );
+        assert!(other.lock().is_empty(), "another job's token was asked for");
     }
 
     // Catches: a room already gone failing the caller's cleanup.

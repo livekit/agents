@@ -218,12 +218,6 @@ pub trait JobProcess: Send + Sync {
         cx: &crate::telemetry::Cx,
         job: StartJob,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecution>, HostError>>;
-    /// Launches the task that runs the started job.
-    ///
-    /// The runner calls this after the run is connected to the parent. So the run's first token
-    /// request already reaches the parent.
-    #[host(await, name = "_core_run_job")]
-    fn run_job(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     /// The entrypoint's task.
     #[host(await, name = "_core_start_entrypoint")]
@@ -443,13 +437,6 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     /// Cancels the API calls still running and waits for them.
     #[host(await)]
     async fn close_tasks(&self);
-    /// Returns a job token with `claims` for this job, in token mode. The worker asks the server to
-    /// sign it.
-    ///
-    /// `claims` is JSON with the same fields as the payload of an access token. The job caches one
-    /// token per set of claims until half of its life has passed.
-    #[host(await)]
-    async fn create_job_token(&self, claims: String) -> Result<String, WorkerError>;
     /// The session's recording options: the job registers with the exporter's Cloud destination
     /// once, at the first call.
     #[host(call)]

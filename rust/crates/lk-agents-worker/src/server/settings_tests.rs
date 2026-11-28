@@ -80,8 +80,8 @@ fn token_mode_is_a_worker_token_without_a_key_and_its_jobs_are_told() {
     assert!(s.token_mode());
     s.check_registration().unwrap();
     assert!(s.child_env().contains(&("LIVEKIT_TOKEN", "wt".to_owned())));
-    let token: crate::WorkerToken = std::sync::Arc::new(parking_lot::Mutex::new("wt".into()));
-    let (_, connection) = s.worker(false, vec![], token.clone());
+    let token = std::sync::Arc::new(parking_lot::Mutex::new("wt".to_owned()));
+    let (_, connection) = s.worker(false, vec![], token);
     assert_eq!(*connection.token.lock(), "wt");
     assert!(connection.api_key.is_empty() && connection.api_secret.is_empty());
 

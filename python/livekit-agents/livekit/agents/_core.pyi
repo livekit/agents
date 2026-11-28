@@ -357,6 +357,7 @@ from ._generated._core_worker import (
     cpu_count as cpu_count,
     init as init,
     ipc_pair as ipc_pair,
+    participant_token as participant_token,
     room_join_token as room_join_token,
     skip_host_time as skip_host_time,
 )
