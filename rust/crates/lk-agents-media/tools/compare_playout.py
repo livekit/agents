@@ -147,6 +147,7 @@ def speech_activity(pcm: bytes, preferred_ms: int = 5000) -> dict:
         "preferred_onset_ms": preferred_ms,
         "anchor_chunk": anchor,
         "anchor_ms": anchor * 100,
+        "startup_active": len(energies) >= 15 and min(energies[10:15]) >= threshold,
         "threshold_rms": threshold,
         "window_ms": 10,
         "active_fraction_next_second": sum(active[anchor * 10 : anchor * 10 + 100]) / 100,
@@ -356,6 +357,10 @@ def main() -> None:
             raise ValueError("fixture must be mono 24 kHz signed PCM16")
         pcm = source.readframes(source.getnframes())
     activity = speech_activity(pcm, args.fault_at_ms)
+    if "startup_jitter" in (args.scenario or SCENARIOS) and not activity["startup_active"]:
+        raise ValueError(
+            "startup fixture must have active speech at 0.100–0.150s; trim source leading silence"
+        )
     raw = out / "source.pcm"
     raw.write_bytes(pcm)
     source48 = out / "source48.pcm"

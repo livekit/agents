@@ -22,6 +22,7 @@ class FaultPlacementTests(unittest.TestCase):
         ]
         activity = speech_activity(struct.pack(f"<{len(pcm)}h", *pcm), preferred_ms=5000)
         self.assertEqual(activity["anchor_ms"], 5100)
+        self.assertFalse(activity["startup_active"])
         self.assertEqual(min(activity["window_rms"][510:515]) > 150, True)
         for scenario in ["variable_chunks", "clock_drift"]:
             rows = schedule(scenario, len(pcm), 51)
