@@ -124,7 +124,7 @@ fn concealment_and_recovery_bound_discontinuities_and_fade_out() {
             last = output[239];
         }
     }
-    for at in (200..400).step_by(10) {
+    for at in (200..500).step_by(10) {
         p.render(ms(at), &mut output).unwrap();
     }
     assert_eq!(output, [0; 240]);
@@ -200,30 +200,30 @@ fn finish_drains_without_inventing_speech_and_reset_clears_epoch() {
 
 #[test]
 fn voiced_time_stretching_accounts_for_every_source_sample() {
-    for expand in [false, true] {
-        let mut p = Playout::new(Config {
-            minimum_delay: if expand { ms(100) } else { Duration::ZERO },
-            maximum_stretch: 0.05,
-            ..Config::default()
-        })
-        .unwrap();
-        p.push(ms(0), &voice(if expand { 2400 } else { 12_000 }, 0)).unwrap();
-        let mut output = [0; 240];
-        // Deliver a second chunk before the first has drained to give the stretcher lookahead.
-        if expand {
-            p.push(ms(100), &voice(2400, 2400)).unwrap();
+    let mut p = Playout::new(Config {
+        minimum_delay: Duration::ZERO,
+        maximum_stretch: 0.05,
+        ..Config::default()
+    })
+    .unwrap();
+    let mut output = [0; 240];
+    // Forty-millisecond deliveries leave enough lookahead to build the initial target.
+    for at in (0..500).step_by(10) {
+        if at % 40 == 0 {
+            p.push(ms(at), &voice(960, at as usize * 24)).unwrap();
         }
-        for at in (100..310).step_by(10) {
-            let r = p.render(ms(at), &mut output).unwrap();
-            account(&p, r);
-        }
-        if expand {
-            // With the next delivery withheld, the reserve is rebuilt gradually.
-            assert!(p.statistics().stretched > 0);
-        } else {
-            assert!(p.statistics().accelerated > 0);
-        }
+        let report = p.render(ms(at), &mut output).unwrap();
+        account(&p, report);
     }
+    assert!(p.statistics().stretched > 0);
+    p.reset();
+    p.push(ms(0), &voice(12_000, 0)).unwrap();
+    // Delay pulling an already queued signal: this is real playout delay to remove.
+    for at in (100..310).step_by(10) {
+        let report = p.render(ms(at), &mut output).unwrap();
+        account(&p, report);
+    }
+    assert!(p.statistics().accelerated > 0);
 }
 
 #[test]
@@ -320,7 +320,7 @@ fn render_sizes_do_not_change_when_pcm_runs_out() {
             account(&p, r);
         }
         assert_eq!(p.statistics().source_consumed, 2400);
-        assert_eq!(p.statistics().concealed, 960);
+        assert_eq!(p.statistics().concealed, 2400);
         assert_eq!(p.statistics().underruns, 1);
     }
 }

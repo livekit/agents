@@ -5,6 +5,7 @@ mod conceal;
 #[cfg(test)]
 mod dsp_tests;
 mod noise;
+mod pitch;
 mod recovery;
 mod stretch;
 

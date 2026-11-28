@@ -32,6 +32,14 @@ impl Noise {
     /// No unstable model is installed. Lag damping and reflection limits deliberately trade
     /// spectral resolution for bounded synthesis on transients and nearly periodic input.
     pub(super) fn analyze(&mut self, input: &[i16]) -> f64 {
+        self.analyze_order(input, ORDER)
+    }
+
+    pub(super) fn analyze_speech(&mut self, input: &[i16]) -> f64 {
+        self.analyze_order(input, 6)
+    }
+
+    fn analyze_order(&mut self, input: &[i16], order: usize) -> f64 {
         if input.len() < FRAME {
             self.gain = 0.0;
             return 0.0;
@@ -55,7 +63,7 @@ impl Noise {
         let energy = r[0] * 1.0001;
         let mut error = energy;
         let mut a = [0.0; ORDER];
-        for order in 0..ORDER {
+        for order in 0..order {
             let mut residual = r[order + 1];
             for j in 0..order {
                 residual += a[j] * r[order - j];
@@ -69,7 +77,19 @@ impl Noise {
             error *= 1.0 - reflection * reflection;
         }
         self.coefficients = a;
-        self.gain = (error / input.len() as f64).max(0.0).sqrt();
+        // Measure the residual of the actual recent input, rather than using the regularized
+        // autocorrelation error as excitation gain. The latter can produce a hiss burst when
+        // a nearly periodic signal is regularized for filter stability.
+        let mut residual_energy = 0.0;
+        let residual_start = (input.len().saturating_sub(128)).max(ORDER);
+        for i in residual_start..input.len() {
+            let mut residual = f64::from(input[i]) - self.mean;
+            for (j, &coefficient) in a.iter().enumerate() {
+                residual += coefficient * (f64::from(input[i - j - 1]) - self.mean);
+            }
+            residual_energy += residual * residual;
+        }
+        self.gain = (residual_energy / (input.len() - residual_start) as f64).sqrt();
         let rms = (energy / input.len() as f64).sqrt();
         self.bound = (rms * 6.0).min(32_767.0);
         for i in 0..ORDER {

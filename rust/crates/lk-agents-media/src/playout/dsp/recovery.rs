@@ -76,7 +76,7 @@ impl Recovery {
         // Keep a short-gap return at original gain. Only a substantially faded interruption
         // warrants gradual unmuting; never boost an incoming quiet consonant to match a vowel.
         self.gain = if conceal.duration() > 480 && old_rms < new_rms * 0.7 {
-            (old_rms / new_rms.max(1.0)).clamp(0.0, 1.0)
+            (old_rms / new_rms.max(1.0)).clamp(0.0, 1.0).max(conceal.gain())
         } else {
             1.0
         };

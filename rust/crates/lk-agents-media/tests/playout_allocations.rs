@@ -44,7 +44,7 @@ fn normal_stretch_conceal_recover_and_reset_do_not_allocate() {
         .map(|i| ((i as f64 * std::f64::consts::TAU / 120.0).sin() * 12_000.0) as i16)
         .collect();
     let mut expansion = Playout::new(Config {
-        minimum_delay: Duration::from_millis(100),
+        minimum_delay: Duration::ZERO,
         maximum_stretch: 0.05,
         ..Config::default()
     })
@@ -58,9 +58,10 @@ fn normal_stretch_conceal_recover_and_reset_do_not_allocate() {
         }
         playout.render(Duration::from_millis(at), &mut out).unwrap();
     }
-    expansion.push(Duration::ZERO, &voice).unwrap();
-    expansion.push(Duration::from_millis(100), &voice).unwrap();
-    for at in (100..310).step_by(10) {
+    for at in (0..500).step_by(10) {
+        if at % 40 == 0 {
+            expansion.push(Duration::from_millis(at), &voice[..960]).unwrap();
+        }
         expansion.render(Duration::from_millis(at), &mut out).unwrap();
     }
     playout.finish();
@@ -69,7 +70,7 @@ fn normal_stretch_conceal_recover_and_reset_do_not_allocate() {
     for _ in 0..4 {
         playout.push(Duration::ZERO, &voice).unwrap();
     }
-    for at in (20..220).step_by(10) {
+    for at in (100..310).step_by(10) {
         playout.render(Duration::from_millis(at), &mut out).unwrap();
     }
     ENABLED.set(false);

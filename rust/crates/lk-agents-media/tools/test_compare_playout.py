@@ -85,6 +85,7 @@ class FaultPlacementTests(unittest.TestCase):
                 pcm[i] = int(5000 * math.sin(i * math.tau / 120))
         activity = speech_activity(struct.pack(f"<{len(pcm)}h", *pcm))
         anchor = activity["anchor_chunk"]
+        self.assertEqual(anchor, 20)  # Default preference is two seconds, in active speech.
         self.assertIn(anchor, activity["speech_chunks"])
         self.assertGreaterEqual(activity["active_fraction_next_second"], 0.7)
         for scenario in [

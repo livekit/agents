@@ -117,7 +117,7 @@ def schedule(
     return result
 
 
-def speech_activity(pcm: bytes, preferred_ms: int = 5000) -> dict:
+def speech_activity(pcm: bytes, preferred_ms: int = 2000) -> dict:
     """Find an audibly active fault window; reject silent fixtures instead of masking failures."""
     values = struct.unpack(f"<{len(pcm) // 2}h", pcm)
     energies = []
@@ -342,7 +342,7 @@ def main() -> None:
     parser.add_argument(
         "--fault-at-ms",
         type=int,
-        default=5000,
+        default=2000,
         help="preferred fault onset; nearest verified speech window is selected",
     )
     parser.add_argument("--scenario", choices=SCENARIOS, action="append")

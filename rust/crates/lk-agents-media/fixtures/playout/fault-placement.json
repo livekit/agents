@@ -1,10 +1,11 @@
 {
-  "preferred_onset_ms": 5000,
-  "anchor_chunk": 51,
-  "anchor_ms": 5100,
+  "preferred_onset_ms": 2000,
+  "anchor_chunk": 22,
+  "anchor_ms": 2200,
+  "startup_active": true,
   "threshold_rms": 150,
   "window_ms": 10,
-  "active_fraction_next_second": 0.94,
+  "active_fraction_next_second": 0.98,
   "speech_chunks": [
     1,
     2,
@@ -189,70 +190,85 @@
     261
   ],
   "scenarios": {
-    "clean": {
-      "underruns": 0,
-      "concealed_samples": 0,
-      "baseline_missing_samples": 0
-    },
-    "late_20ms": {
-      "underruns": 0,
-      "concealed_samples": 0,
-      "baseline_missing_samples": 480
-    },
-    "late_30ms_no_reserve": {
-      "underruns": 1,
-      "concealed_samples": 720,
-      "baseline_missing_samples": 720
-    },
-    "repeated_stalls": {
-      "underruns": 1,
-      "concealed_samples": 480,
-      "baseline_missing_samples": 960
-    },
-    "burst_recovery": {
-      "underruns": 1,
-      "concealed_samples": 9120,
-      "baseline_missing_samples": 9600
-    },
-    "no_catchup": {
-      "underruns": 1,
-      "concealed_samples": 480,
-      "baseline_missing_samples": 960
-    },
-    "long_outage": {
-      "underruns": 1,
-      "concealed_samples": 23520,
-      "baseline_missing_samples": 24000
-    },
-    "variable_chunks": {
-      "underruns": 0,
-      "concealed_samples": 0,
-      "baseline_missing_samples": 0
-    },
-    "clock_drift": {
-      "underruns": 0,
-      "concealed_samples": 0,
-      "baseline_missing_samples": 720
-    },
-    "slow_jittery": {
-      "underruns": 24,
-      "concealed_samples": 25366,
-      "baseline_missing_samples": 14640,
-      "note": "Synthetic stress case; controller is not established as preferable to baseline."
-    },
     "startup_jitter": {
-      "underruns": 4,
-      "concealed_samples": 3840,
-      "baseline_missing_samples": 7200,
       "fault_start_ms": 100,
-      "provenance": "Illustrative synthetic delivery schedule, not a captured customer packet trace."
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 6720,
+        "silent": 45624,
+        "stretched": 0,
+        "accelerated": 4344,
+        "underruns": 4
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 4,
+        "missing_samples": 7200
+      }
     },
     "reported_jitter": {
-      "underruns": 14,
-      "concealed_samples": 17019,
-      "baseline_missing_samples": 7200,
-      "fault_start_ms": 5100,
-      "provenance": "Illustrative synthetic delivery schedule, not a captured customer packet trace."
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 10427,
+        "silent": 41280,
+        "stretched": 0,
+        "accelerated": 3707,
+        "underruns": 8
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 4,
+        "missing_samples": 7200
+      }
+    },
+    "burst_recovery": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 9120,
+        "silent": 45650,
+        "stretched": 0,
+        "accelerated": 6770,
+        "underruns": 1
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 1,
+        "missing_samples": 9600
+      }
+    },
+    "long_outage": {
+      "fault_start_ms": 2200,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 23520,
+        "silent": 37554,
+        "stretched": 0,
+        "accelerated": 13074,
+        "underruns": 1
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 1,
+        "missing_samples": 24000
+      }
     }
   }
 }

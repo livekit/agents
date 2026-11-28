@@ -69,8 +69,9 @@ hardware-specific speed thresholds. It is not an end-to-end deployment benchmark
 
 The controller accepts continuous ordered mono 24 kHz PCM16. Source-only noise analysis
 runs at a fixed sample cadence, independent of incoming chunks and render call size.
-A stabilized eight-order LPC model generates unvoiced continuation; a confidence-weighted
-pitch estimate mixes two source periods for voiced continuation. Speech fades into a
+A stabilized sixth-order LPC model generates unvoiced continuation using measured residual
+energy. Multi-candidate correlation and distortion searches select alternating pitch periods;
+a signal-dependent envelope preserves short voiced gaps and fades unstable transients. Speech fades into a
 separately learned, conservative room-tone model. Long gaps eventually mute; silence does
 not turn into a tone. No generated audio trains the background model.
 
@@ -105,11 +106,11 @@ values. Run `python3 -m unittest discover -s rust/crates/lk-agents-media/tools -
 'test_compare_playout.py'` from the repository root for placement regressions. These
 energy checks establish audibility, not semantic intelligibility or a perceptual score.
 
-The no-reserve listening case uses a 30 ms delay. In the recorded passage it occurs at
-5.100–5.130 seconds; input chunk duration remains 100 ms. Playback-added delays are retained.
+The no-reserve listening case uses a 30 ms delay; input chunk duration remains 100 ms.
+Playback-added delays are retained.
 
-Fault placement prefers five seconds (`--fault-at-ms 5000`) and selects the nearest
-verified active window. For this passage that is 5.1 seconds; 5.0 seconds is quiet.
+Fault placement prefers two seconds (`--fault-at-ms 2000`) and selects the nearest
+verified active window. For this passage that is 2.2 seconds; 2.0 seconds fails the activity check.
 All stall cases, chunk-size changes and clock drift begin at that common source time.
 The clean row has no injected fault and is a comparison reference.
 
@@ -124,8 +125,8 @@ gap duration and listening quality, not just the injected delay count.
 
 ## Focused listening cases
 
-The primary report-focused cases are Startup and Jitter; the PR also retains short gaps,
-bursts, long outages, permanent delay, chunk changes, clock drift and a stress case.
+The PR table retains Startup, Jitter, Burst and Outage. Other scenarios remain available
+in the offline tool.
 `startup_jitter` delays source chunks 1–4 by 60, 100,
 160 and 300 ms. Ordered arrivals for chunks 0–7 are 0, 160, 300, 460, 700, 700, 700,
 700 ms. Speech is active at the first underrun (100 ms), so this tests the beginning
@@ -136,3 +137,17 @@ to active source speech. It reflects the reported symptom that a 100 ms reply bu
 absorbs many gaps but cannot absorb a 300 ms delivery stall. The magnitudes are inspired
 by the report; the schedule is synthetic because no packet-arrival trace was supplied.
 No customer recordings or Slack message content are included in these audio artifacts.
+
+## Delay decisions and attribution
+
+A fixed-size, source-time arrival envelope distinguishes transport batching from jitter.
+A Q30 delay histogram samples 500 ms peaks and selects the 95th percentile. The acceleration
+threshold includes the recent arrival envelope, avoiding immediate removal of reserve just
+refilled by a late chunk. After heavily faded concealment, recovery waits for half the target
+reserve unless the stream has finished. The default speech extrapolation ceiling is 200 ms;
+this is a ceiling, not a fixed fade or additional startup delay.
+
+Histogram arithmetic and expand-analysis formulas are adapted from WebRTC NetEq at
+`a545de4` (`histogram.cc`, `expand.cc`); the BSD license and patent grant are included as
+`LICENSE.webrtc` and `PATENTS.webrtc`. The implementation uses floating-point 24 kHz PCM
+analysis rather than reproducing NetEq fixed-point processing.

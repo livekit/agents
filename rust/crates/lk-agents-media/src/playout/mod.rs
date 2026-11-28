@@ -5,6 +5,7 @@
 //! are never silently dropped: queue pressure rejects a whole chunk for the caller to handle.
 //! `finish` drains real audio; `reset` begins a new timeline and discards the old epoch explicitly.
 
+mod delay;
 mod dsp;
 #[cfg(test)]
 mod playout_tests;
@@ -18,7 +19,9 @@ pub const SAMPLE_RATE: u32 = 24_000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
+    /// Initial reserve and lower bound for the adaptive target.
     pub minimum_delay: Duration,
+    /// Upper bound for the target, not a hard latency cap: accepted speech is never dropped.
     pub maximum_delay: Duration,
     pub capacity: Duration,
     /// Bounds extrapolated speech. Zero disables it but retains the short transition.
@@ -34,7 +37,7 @@ impl Default for Config {
             minimum_delay: Duration::from_millis(20),
             maximum_delay: Duration::from_millis(100),
             capacity: Duration::from_secs(2),
-            maximum_concealment: Duration::from_millis(40),
+            maximum_concealment: Duration::from_millis(200),
             maximum_stretch: 0.03,
         }
     }
@@ -89,14 +92,9 @@ pub struct Playout {
     concealer: Concealer,
     statistics: Statistics,
     first_arrival: Option<Duration>,
-    last_arrival: Option<Duration>,
     last_time: Option<Duration>,
-    last_chunk: usize,
-    // Relative arrival delay, in samples; fixed storage and bounded O(128 log 128) per chunk.
-    delays: [i64; 128],
-    delay_count: usize,
+    delay: delay::Delay,
     target: usize,
-    arrival_lateness: usize,
     started: bool,
     finished: bool,
     outage: bool,
@@ -127,13 +125,9 @@ impl Playout {
             concealer: Concealer::default(),
             statistics: Statistics::default(),
             first_arrival: None,
-            last_arrival: None,
             last_time: None,
-            last_chunk: 0,
-            delays: [0; 128],
-            delay_count: 0,
+            delay: delay::Delay::default(),
             target: samples(config.minimum_delay),
-            arrival_lateness: 0,
             started: false,
             finished: false,
             outage: false,
@@ -158,20 +152,10 @@ impl Playout {
         if pcm.is_empty() {
             return Ok(());
         }
-        let first = *self.first_arrival.get_or_insert(now);
-        let offset = (samples(now - first) as i128 - i128::from(self.statistics.source_received))
-            .clamp(i128::from(i64::MIN / 2), i128::from(i64::MAX / 2)) as i64;
-        self.delays[self.statistics.chunks as usize % self.delays.len()] = offset;
-        self.delay_count = (self.delay_count + 1).min(self.delays.len());
-        let mut sorted = self.delays;
-        sorted[..self.delay_count].sort_unstable();
-        let jitter = (sorted[(self.delay_count - 1) * 95 / 100] - sorted[0]).max(0) as usize;
-        self.arrival_lateness = (offset - sorted[0]).max(0) as usize;
-        self.target =
-            (samples(self.config.minimum_delay) + jitter).min(samples(self.config.maximum_delay));
+        self.first_arrival.get_or_insert(now);
+        self.delay.update(now, self.statistics.source_received, pcm.len());
+        self.target = self.delay.target(self.config.minimum_delay, self.config.maximum_delay);
         self.queue.extend(pcm.iter().copied());
-        self.last_arrival = Some(now);
-        self.last_chunk = pcm.len();
         self.statistics.chunks += 1;
         self.statistics.source_received += pcm.len() as u64;
         self.statistics.smallest_chunk = if self.statistics.chunks == 1 {
@@ -196,13 +180,9 @@ impl Playout {
         self.concealer = Concealer::default();
         self.statistics = Statistics::default();
         self.first_arrival = None;
-        self.last_arrival = None;
         self.last_time = None;
-        self.last_chunk = 0;
-        self.delays.fill(0);
-        self.delay_count = 0;
+        self.delay = delay::Delay::default();
         self.target = samples(self.config.minimum_delay);
-        self.arrival_lateness = 0;
         self.started = false;
         self.finished = false;
         self.outage = false;
@@ -237,12 +217,16 @@ impl Playout {
             self.adjust(now);
         }
         for out in output.iter_mut() {
-            if self.outage && !self.queue.is_empty() {
+            let postpone = self.outage
+                && !self.finished
+                && self.concealer.gain() < 0.5
+                && self.queue.len() < self.target / 2;
+            if self.outage && !self.queue.is_empty() && !postpone {
                 self.recovery.start(&self.concealer, &self.queue);
                 self.outage = false;
             }
             let real = self.pending.pop_front().or_else(|| {
-                if !self.started {
+                if !self.started || postpone {
                     return None;
                 }
                 let sample = self.queue.pop_front()?;
@@ -314,16 +298,15 @@ impl Playout {
         {
             return;
         }
-        // Estimate the trough just before the next delivery, rather than reacting to the normal
-        // sawtooth from a large chunk. Past the expected arrival, treat remaining audio as reserve.
-        let elapsed = samples(now - self.last_arrival.expect("started audio has an arrival"));
-        let until_next = self.last_chunk.saturating_sub(elapsed);
-        let reserve = self.queue.len().saturating_sub(until_next);
-        // Arrival lateness already contributes to source-to-render delay. Do not add that
-        // same delay a second time as reserve after a permanent transport delay change.
-        let reserve_target = self.target.saturating_sub(self.arrival_lateness);
-        let expand = reserve + OVERLAP < reserve_target;
-        let accelerate = reserve > reserve_target + FRAME;
+        let source_position =
+            self.statistics.source_consumed.saturating_sub(self.pending.len() as u64);
+        let playout_delay_ms = self.delay.playout_delay_ms(now, source_position);
+        let target_ms = self.target * 1000 / SAMPLE_RATE as usize;
+        // NetEq's decision window includes the recent arrival envelope and 20ms granularity.
+        // A queue refilled by a late packet must not immediately be drained back to zero.
+        let high_limit = target_ms + self.delay.max_delay_ms() + 20;
+        let expand = playout_delay_ms < target_ms;
+        let accelerate = playout_delay_ms >= high_limit;
         if !expand && !accelerate {
             return;
         }

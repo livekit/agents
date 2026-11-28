@@ -160,3 +160,38 @@ fn unvoiced_transients_are_not_spliced_without_a_safe_match() {
     let mut output = [0; FRAME];
     assert!(stretch(&input, Stretch::Accelerate, PERIOD_MAX, &mut output).is_none());
 }
+
+#[test]
+fn pitch_search_rejects_a_strong_half_period_harmonic() {
+    let input: Vec<_> = (0..HISTORY)
+        .map(|i| {
+            let phase = i as f64 * std::f64::consts::TAU / 120.0;
+            sample(1000.0 * phase.sin() + 9000.0 * (2.0 * phase).sin())
+        })
+        .collect();
+    let c = begin(&input, 4800);
+    assert!((c.period() as isize - 120).abs() <= 2, "selected period={}", c.period());
+}
+
+#[test]
+fn stable_voiced_continuation_survives_a_thirty_ms_gap_without_premature_muting() {
+    let mut c = begin(&sine(HISTORY, 120, 23, 10_000.0), 4800);
+    let out: Vec<_> = (0..960).map(|_| c.next()).collect();
+    let level = rms(|i| out[600 + i], 240);
+    assert!(level > 4500.0, "voiced RMS during 25–35ms gap={level}");
+    assert!(correlation(|i| out[600 + i], |i| out[720 + i], 120) > 0.98);
+}
+
+#[test]
+fn a_quiet_phoneme_does_not_force_the_returning_onset_to_near_silence() {
+    let mut c = begin(&sine(HISTORY, 120, 23, 1500.0), 4800);
+    for _ in 0..720 {
+        c.next();
+    }
+    let input = sine(720, 120, 17, 12000.0);
+    let mut recovery = Recovery::default();
+    recovery.start(&c, &input.iter().copied().collect());
+    let out: Vec<_> = input.iter().map(|&s| recovery.apply(s)).collect();
+    assert!(rms(|i| out[240 + i], 120) > 6000.0);
+    assert_eq!(&out[480..], &input[480..]);
+}
