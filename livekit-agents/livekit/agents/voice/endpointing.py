@@ -268,6 +268,49 @@ class DynamicEndpointing(BaseEndpointing):
             self._utterance_pause.reset(alpha=alpha)
 
 
+def learned_delay(endpointing: BaseEndpointing) -> float | None:
+    """The pause ``endpointing`` has learned from the user, or None if it does not learn one."""
+    if isinstance(endpointing, DynamicEndpointing):
+        return endpointing._utterance_pause.value
+    return None
+
+
+def inherit_learned_delay(new: BaseEndpointing, learned: float | None) -> None:
+    """Seed ``new`` with a pause learned from the user earlier in the session.
+
+    Used on agent handoff: every activity talks to the same user, so the pause learned by an
+    earlier agent's ``DynamicEndpointing`` should not reset to the configured floor, even when
+    an agent with fixed endpointing ran in between. The learned value is clamped to the bounds
+    of ``new``. Nothing changes unless ``new`` uses dynamic endpointing.
+    """
+    if learned is None or not isinstance(new, DynamicEndpointing):
+        return
+
+    new._utterance_pause.reset(initial=min(max(learned, new._min_delay), new._max_delay))
+
+
+def update_endpointing(current: BaseEndpointing, options: EndpointingOptions) -> BaseEndpointing:
+    """Apply ``options`` to the endpointing in use, keeping what it has learned when possible.
+
+    When ``current`` is a ``DynamicEndpointing`` and the mode stays dynamic, the options are
+    applied in place through ``DynamicEndpointing.update_options``, so changing only
+    ``max_delay`` or ``alpha`` keeps the learned pause. Changing ``min_delay`` still resets the
+    learned value to the new floor, as ``update_options`` does. Otherwise a new endpointing is
+    created from ``options``.
+    """
+    if options.get("mode", "fixed") == "dynamic" and type(current) is DynamicEndpointing:
+        current.update_options(
+            min_delay=options["min_delay"]
+            if options["min_delay"] != current._min_delay
+            else NOT_GIVEN,
+            max_delay=options["max_delay"],
+            alpha=options["alpha"],
+        )
+        return current
+
+    return create_endpointing(options)
+
+
 def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
     match options.get("mode", "fixed"):
         case "dynamic":

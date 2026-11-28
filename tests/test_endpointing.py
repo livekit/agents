@@ -2,7 +2,14 @@ import pytest
 
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.exp_filter import ExpFilter
-from livekit.agents.voice.endpointing import DynamicEndpointing, create_endpointing
+from livekit.agents.voice.endpointing import (
+    BaseEndpointing,
+    DynamicEndpointing,
+    create_endpointing,
+    inherit_learned_delay,
+    learned_delay,
+    update_endpointing,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -674,3 +681,101 @@ class TestCreateEndpointing:
         assert not isinstance(ep, DynamicEndpointing)
         assert ep.min_delay == 0.5
         assert ep.max_delay == 3.0
+
+
+def _learned(min_delay: float = 0.3, max_delay: float = 3.0) -> DynamicEndpointing:
+    """A DynamicEndpointing that has learned a ~1.2 s pause from one long pause (small alpha)."""
+    ep = DynamicEndpointing(min_delay=min_delay, max_delay=max_delay, alpha=0.01)
+    ep.on_end_of_speech(ended_at=100.0)
+    ep.on_start_of_speech(started_at=101.2)
+    ep.on_end_of_speech(ended_at=102.0)
+    assert ep.min_delay == pytest.approx(1.2, abs=0.02)
+    return ep
+
+
+class TestInheritLearnedDelay:
+    def test_handoff_keeps_learned_pause(self) -> None:
+        previous = _learned()
+        new = DynamicEndpointing(min_delay=0.3, max_delay=3.0)
+
+        inherit_learned_delay(new, learned_delay(previous))
+
+        assert new.min_delay == pytest.approx(previous.min_delay)
+
+    def test_learned_pause_is_clamped_to_new_bounds(self) -> None:
+        lower_ceiling = DynamicEndpointing(min_delay=0.3, max_delay=1.0)
+        inherit_learned_delay(lower_ceiling, learned_delay(_learned()))
+        assert lower_ceiling.min_delay == pytest.approx(1.0)
+
+        higher_floor = DynamicEndpointing(min_delay=1.5, max_delay=3.0)
+        inherit_learned_delay(higher_floor, learned_delay(_learned()))
+        assert higher_floor.min_delay == pytest.approx(1.5)
+
+    def test_new_agent_keeps_learning_from_inherited_value(self) -> None:
+        new = DynamicEndpointing(min_delay=0.3, max_delay=3.0, alpha=0.5)
+        inherit_learned_delay(new, learned_delay(_learned()))
+
+        new.on_end_of_speech(ended_at=200.0)
+        new.on_start_of_speech(started_at=200.4)
+        new.on_end_of_speech(ended_at=201.0)
+
+        # EMA continues from the inherited ~1.2 s, not from the 0.3 s floor
+        assert new.min_delay == pytest.approx(0.5 * 1.2 + 0.5 * 0.4, abs=0.02)
+
+    def test_fixed_endpointing_neither_learns_nor_uses_the_pause(self) -> None:
+        assert learned_delay(BaseEndpointing(min_delay=0.8, max_delay=3.0)) is None
+
+        fixed_new = BaseEndpointing(min_delay=0.3, max_delay=3.0)
+        inherit_learned_delay(fixed_new, learned_delay(_learned()))
+        assert fixed_new.min_delay == 0.3
+
+    def test_no_learned_pause_keeps_new_floor(self) -> None:
+        dynamic_new = DynamicEndpointing(min_delay=0.3, max_delay=3.0)
+        inherit_learned_delay(dynamic_new, None)
+        assert dynamic_new.min_delay == 0.3
+
+    def test_nothing_learned_keeps_new_floor(self) -> None:
+        new = DynamicEndpointing(min_delay=0.4, max_delay=3.0)
+        inherit_learned_delay(new, learned_delay(DynamicEndpointing(min_delay=0.3, max_delay=3.0)))
+        assert new.min_delay == pytest.approx(0.4)
+
+
+class TestUpdateEndpointing:
+    def test_max_delay_change_keeps_learned_pause(self) -> None:
+        ep = _learned()
+        learned = ep.min_delay
+
+        updated = update_endpointing(
+            ep, {"mode": "dynamic", "min_delay": 0.3, "max_delay": 4.0, "alpha": 0.01}
+        )
+
+        assert updated is ep
+        assert updated.min_delay == pytest.approx(learned)
+        assert updated.max_delay == 4.0
+
+    def test_min_delay_change_resets_to_new_floor(self) -> None:
+        ep = _learned()
+
+        updated = update_endpointing(
+            ep, {"mode": "dynamic", "min_delay": 0.5, "max_delay": 3.0, "alpha": 0.01}
+        )
+
+        assert updated is ep
+        assert updated.min_delay == pytest.approx(0.5)
+
+    def test_mode_change_creates_new_endpointing(self) -> None:
+        ep = _learned()
+
+        updated = update_endpointing(
+            ep, {"mode": "fixed", "min_delay": 0.5, "max_delay": 3.0, "alpha": 0.9}
+        )
+
+        assert updated is not ep
+        assert not isinstance(updated, DynamicEndpointing)
+        assert updated.min_delay == 0.5
+
+        fixed = BaseEndpointing(min_delay=0.5, max_delay=3.0)
+        dynamic = update_endpointing(
+            fixed, {"mode": "dynamic", "min_delay": 0.5, "max_delay": 3.0, "alpha": 0.9}
+        )
+        assert isinstance(dynamic, DynamicEndpointing)

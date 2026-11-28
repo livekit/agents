@@ -286,6 +286,7 @@ def _activity(agent: Agent, stt: object, turn_detection: object = None) -> Magic
     type(act).stt = PropertyMock(return_value=stt)
     act._turn_detection = turn_detection
     act._rt_session = None
+    act._inherited_endpointing_delay = None
     type(act).llm = PropertyMock(return_value=None)
     type(act).tools = PropertyMock(return_value=[])
     return act
