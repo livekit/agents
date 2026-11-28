@@ -11,6 +11,7 @@ import tempfile
 import wave
 from bisect import bisect_left
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Literal, NamedTuple, NotRequired, TypedDict
 
@@ -347,6 +348,17 @@ class Schedule:
             raise ValueError(f"{self.name}: chunk spacing merges distinct faults")
         if any(start not in starts for start in self.fault_sources):
             raise ValueError("fault events must reference actual source chunks")
+        if self.name in ("late-start", "slow-start"):
+            # Recovery requires a real interval at nominal pacing, not merely source
+            # samples extending past the fault. Derive this from the emitted arrivals.
+            resumed = any(
+                before.source_start >= self.fault_sources[0]
+                and (after.arrival_us - before.arrival_us) * self.sample_rate
+                == (after.source_start - before.source_start) * 1_000_000
+                for before, after in pairwise(self.arrivals)
+            )
+            if not resumed:
+                raise ValueError(f"{self.name}: source ends before nominal pacing resumes")
 
     @property
     def fault_source_ms(self) -> int | None:
@@ -361,8 +373,6 @@ class Schedule:
         tail_ms = 50 if self.name in ("late-start", "slow-start") else 1500
         minimum = self.fault_sources[0] + tail_ms * samples_per_ms
         minimum = max(minimum, self.fault_sources[-1] + 50 * samples_per_ms)
-        if self.name == "slow-start":
-            minimum = max(minimum, 450 * samples_per_ms)
         if self.source_samples < minimum:
             raise ValueError(f"{self.name}: source is too short for the complete fault window")
         for start in self.fault_sources:

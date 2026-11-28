@@ -455,3 +455,41 @@ fn expansion_rejects_a_brief_unmatched_burst_hidden_by_a_matching_vowel() {
         );
     }
 }
+
+#[test]
+fn time_scaling_accepts_exact_clipped_periods_but_rejects_unequal_plateaus() {
+    for hz in [16_000, 24_000, 48_000] {
+        let rate = Rate::new(hz).unwrap();
+        let period = rate.period_max();
+        let input: Vec<_> = (0..rate.stretch_window())
+            .map(|i| if i % period < period / 2 { 10000 } else { -10000 })
+            .collect();
+        let queue = input.iter().copied().collect();
+        let mut output = [0; MAX_STRETCH];
+        for operation in [Stretch::Expand, Stretch::Accelerate, Stretch::FastAccelerate] {
+            let scale = stretch(rate, &queue, operation, period, 40.0, &mut output)
+                .expect("identical clipped periods are safe to crossfade");
+            assert_eq!(scale.change, period);
+            for (i, &sample) in output[..scale.produced].iter().enumerate() {
+                assert_eq!(sample, input[i % period], "rate={hz}, operation={operation:?}");
+            }
+        }
+        let scale = preemptive(rate, &queue, &queue, period, 40.0, &mut output)
+            .expect("history-based expansion also accepts exact clipped periods");
+        assert_eq!(scale.change, period);
+
+        let unequal = input
+            .iter()
+            .enumerate()
+            .map(
+                |(i, &value)| {
+                    if i >= period && i % period < period / 2 { value + 1000 } else { value }
+                },
+            )
+            .collect();
+        assert!(
+            stretch(rate, &unequal, Stretch::Expand, period, 40.0, &mut output).is_none(),
+            "rate={hz}: unequal flat windows must not pass as identical"
+        );
+    }
+}
