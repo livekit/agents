@@ -7,7 +7,7 @@ import logging
 from array import array
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, get_args
 from unittest.mock import patch
 
 import pytest
@@ -44,6 +44,74 @@ from livekit.plugins.openai.realtime.realtime_model import (
 from livekit.plugins.openai.realtime.utils import livekit_item_to_openai_item
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
+
+def _session_update_payload(model: RealtimeModel) -> dict[str, Any]:
+    sess = model.session()
+    try:
+        event = sess._create_session_update_event()
+        if not isinstance(event, dict):
+            event = event.model_dump(by_alias=True, exclude_unset=True, exclude_defaults=False)
+        session: dict[str, Any] = event["session"]
+        return session
+    finally:
+        sess._msg_ch.close()
+
+
+async def test_default_model_uses_current_realtime_model() -> None:
+    model = RealtimeModel(api_key="fake")
+    try:
+        assert model.model == "gpt-realtime-2.1"
+        assert _session_update_payload(model)["model"] == "gpt-realtime-2.1"
+    finally:
+        await model.aclose()
+
+
+async def test_azure_default_model_preserves_existing_session_label() -> None:
+    model = RealtimeModel.with_azure(
+        azure_deployment="my-deployment",
+        api_key="fake",
+        base_url="https://example.openai.azure.com/openai",
+    )
+    try:
+        assert model.model == "gpt-realtime"
+        assert _session_update_payload(model)["model"] == "gpt-realtime"
+    finally:
+        await model.aclose()
+
+    direct_model = RealtimeModel(
+        azure_deployment="my-deployment",
+        api_key="fake",
+        base_url="https://example.openai.azure.com/openai",
+    )
+    try:
+        assert direct_model.model == "gpt-realtime"
+        assert _session_update_payload(direct_model)["model"] == "gpt-realtime"
+    finally:
+        await direct_model.aclose()
+
+    legacy_model = RealtimeModel.with_azure(
+        azure_deployment="my-deployment",
+        api_key="fake",
+        base_url="https://example.openai.azure.com/openai",
+        api_version="2024-10-01-preview",
+    )
+    try:
+        assert legacy_model.model == "gpt-realtime"
+        assert _session_update_payload(legacy_model)["model"] == "gpt-realtime"
+    finally:
+        await legacy_model.aclose()
+
+
+def test_explicit_model_id_is_preserved() -> None:
+    assert RealtimeModel(model="gpt-realtime", api_key="fake").model == "gpt-realtime"
+
+
+def test_realtime_models_include_current_model_variants() -> None:
+    realtime_models = get_args(CoreRealtimeModels)
+
+    assert "gpt-realtime-2.1" in realtime_models
+    assert "gpt-realtime-2.1-mini" in realtime_models
 
 
 def test_direct_model_preserves_public_label_and_model_types() -> None:

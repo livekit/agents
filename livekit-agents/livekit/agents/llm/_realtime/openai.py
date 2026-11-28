@@ -127,6 +127,9 @@ SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
+DEFAULT_MODEL = "gpt-realtime-2.1"
+# Azure selects the model by deployment, so preserve its existing session label.
+_AZURE_DEFAULT_MODEL = "gpt-realtime"
 
 lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
@@ -351,7 +354,7 @@ class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
-        model: RealtimeModels | str = "gpt-realtime",
+        model: RealtimeModels | str = "gpt-realtime-2.1",
         voice: str = DEFAULT_VOICE,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[
@@ -410,7 +413,7 @@ class RealtimeModel(llm.RealtimeModel):
     def __init__(
         self,
         *,
-        model: str = "gpt-realtime",
+        model: NotGivenOr[str] = NOT_GIVEN,
         voice: str = DEFAULT_VOICE,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
@@ -441,7 +444,8 @@ class RealtimeModel(llm.RealtimeModel):
         Initialize a Realtime model client for OpenAI or Azure OpenAI.
 
         Args:
-            model (str): Realtime model name, e.g., "gpt-realtime".
+            model (str): Realtime model name. Defaults to "gpt-realtime-2.1" for OpenAI;
+                Azure keeps "gpt-realtime" because the deployment selects the model.
             voice (str): Voice used for audio responses. Defaults to "marin".
             modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
             tool_choice (llm.ToolChoice | None | NotGiven): Tool selection policy for responses.
@@ -452,7 +456,7 @@ class RealtimeModel(llm.RealtimeModel):
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
             truncation (RealtimeTruncation | None | NotGiven): Truncation configuration for OpenAI Realtime.
-            reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models (e.g. ``gpt-realtime-2``), e.g. ``RealtimeReasoning(effort="low")``.
+            reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models (e.g. ``gpt-realtime-2.1``), e.g. ``RealtimeReasoning(effort="low")``.
             api_key (str | None): OpenAI API key. If None and not using Azure, read from OPENAI_API_KEY.
             http_session (aiohttp.ClientSession | None): Optional shared HTTP session.
             azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
@@ -521,6 +525,9 @@ class RealtimeModel(llm.RealtimeModel):
         is_azure = (
             api_version is not None or entra_token is not None or azure_deployment is not None
         )
+        resolved_model = (
+            model if is_given(model) else _AZURE_DEFAULT_MODEL if is_azure else DEFAULT_MODEL
+        )
 
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None and not is_azure:
@@ -544,7 +551,7 @@ class RealtimeModel(llm.RealtimeModel):
                 base_url_val = os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL)
 
         self._opts = _RealtimeOptions(
-            model=model,
+            model=resolved_model,
             voice=voice,
             tool_choice=tool_choice or None,
             modalities=modalities,
