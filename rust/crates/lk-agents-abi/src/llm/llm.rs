@@ -262,6 +262,7 @@ pub trait Llm: Send + Sync {
             label: self.label(),
             model: self.model(),
             provider: "unknown".to_owned(),
+            ..Default::default()
         })
     }
 

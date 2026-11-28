@@ -155,6 +155,7 @@ impl Port for RemoteInteraction {
         context: CallContext,
         cx: telemetry::Cx,
     ) -> Result<RemoteEvent, AgentClientError> {
+        telemetry::measure(&cx, &lk_agents_abi::productstats::features::FeatureRemoteAgent, 1u64);
         let (endpoint, project) = {
             let state = self.inner.0.lock();
             (state.policy.snapshot().id.endpoint, state.project.clone())

@@ -219,6 +219,7 @@ fn reply(user: Option<lk_agents_abi::MetricsReport>) -> Reply {
             label: "openai.LLM".into(),
             model: "gpt-4o".into(),
             provider: "openai".into(),
+            ..Default::default()
         }),
     }
 }

@@ -27,12 +27,15 @@ async def _shutdown() -> None:
 _provider_adopted = False
 
 
-def _install() -> None:
+def _install(runner_cmd: _core.RunnerCmd = _core.RunnerCmd.NoCommand) -> None:
+    # `runner_cmd`: the `lk agent` command that started the process; none for a script or a test.
     # Adopts the global provider if unset and bridges an SDK provider; any other is left alone.
     global _provider_adopted
     from .version import __version__
 
-    _core._core_telemetry_install(__version__, python_version=platform.python_version())
+    _core._core_telemetry_install(
+        __version__, _core.Runtime.Python, platform.python_version(), runner_cmd
+    )
     if _provider_adopted:
         return
     _provider_adopted = True

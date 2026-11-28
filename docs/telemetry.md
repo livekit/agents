@@ -203,7 +203,8 @@ people use.
   the model string. The model name is the vendor's id as the application gave it; nothing
   is renamed or grouped, so a dated snapshot (`gpt-4o-mini-2024-07-18`) stays itself.
 - A model that declares no provider, like a plugin given only a base URL, is `unknown`:
-  its host name is never sent.
+  its host name is never sent. So is any declared value that is not a short identifier (at
+  most 64 ASCII letters, digits and `. - _ / : +`): free text never leaves the process.
 - A plugin id is the last part of the package name, the same in every language:
   `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram` in Node are
   both `deepgram`.
@@ -256,14 +257,11 @@ session's VAD ended the speech, `stt` when the STT detects the end of speech its
 
 **Sessions**
 
-`sessions` counts sessions, once each when the session ends. Its labels are read
-together, so the combinations are visible.
+`sessions` counts sessions, once each when the session ends. It has one label.
 
 | Label | Values |
 | --- | --- |
 | `session.entrypoint` | `rtc_session`, `a2a_session` |
-| `session.topology` | `single`: one agent for the whole session; `handoff`: one agent replaced another; `agent_as_tool`: a local agent was called as a tool; `both`: a handoff and an agent as a tool |
-| `session.delegation` | `none`: everything ran in this process; `remote`: a `RemoteAgent` was called |
 
 **Voice sessions**
 
@@ -279,25 +277,33 @@ configuration it starts with.
 
 **Features**
 
-One counter per feature, each counting the sessions that used it. A session adds 1 to a
-counter the first time it uses that feature, and never more than 1. The counters are
-independent: a session that used MCP and `override_options` adds 1 to each of those two,
-and nothing to the others.
+One counter per feature. Each counter counts uses of the feature. A session that calls
+`update_options` three times adds 3.
 
-| Metric | Counts the sessions that |
+| Metric | Counts each time |
 | --- | --- |
-| `feature.mcp` | ran an agent that has an MCP toolset |
-| `feature.update_options` | called `session.update_options(...)` |
-| `feature.override_options` | entered `session.override_options(...)` |
-| `feature.background_audio` | played background audio |
-| `feature.language_switch` | heard the person change language: the STT reported a different language than earlier in the session |
-| `feature.model_switch` | changed a model while running: a different STT, TTS, LLM or realtime model than the one they started with |
+| `feature.handoff` | an agent replaced another in a voice session |
+| `feature.agent_as_tool` | a local agent was called as a tool |
+| `feature.remote_agent` | a `RemoteAgent` was called |
+| `feature.mcp` | an MCP toolset was set up |
+| `feature.update_options` | `session.update_options(...)` was called |
+| `feature.override_options` | `session.override_options(...)` was entered |
+| `feature.background_audio` | a background audio player was started, with or without a session |
+| `feature.language_switch` | the STT reported a different language than the one before |
+| `feature.model_switch` | a model was replaced with another while a session ran |
 
-A feature that needs more than a count gets labels on its own counter. One does so far:
-`feature.model_switch.kind` is the kind of model that changed, `stt`, `tts`, `llm` or
-`realtime`. A session adds 1 for each kind it changed, however the switch is made
-(`update_options`, `override_options`, or an agent that brings its own model): one that
-swapped its TTS twice and its LLM once adds 1 under `tts` and 1 under `llm`.
+A feature that needs more than a count gets labels on its own counter. One does so far.
+`feature.model_switch` says which kind of model was replaced by which, in two labels:
+`feature.model_switch.from.kind` and `feature.model_switch.to.kind`, each `stt`, `tts`, `llm`,
+`realtime` or `duplex`. No provider and no model name is recorded.
+
+- A different TTS in place of the TTS is `tts -> tts`. A session that moves from a realtime
+  model to a duplex one is `realtime -> duplex`.
+- "From" is the model installed just before, however the switch is made (`update_options`,
+  `override_options`, or an agent that brings its own model). A model installed where the
+  session had none is not a switch, and neither is the same model installed again or a
+  fallback adapter moving to another of its members.
+- Each switch adds 1: a session that swapped its TTS three times adds 3 under `tts -> tts`.
 
 **Never collected**
 

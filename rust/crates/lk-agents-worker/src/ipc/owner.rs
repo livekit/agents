@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
+use lk_agents_abi::productstats::runner::RunnerCmd;
 use lk_agents_abi::worker::ipc::{JobCompletion, JobRunnerOptions, JobStatus};
 use lk_agents_abi::worker::ipc_host::{
     self, JobLauncher, LaunchReport, SupervisedJob, WorkerError,
@@ -235,7 +236,8 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             asyncio_debug: opts.asyncio_debug,
             http_proxy: opts.http_proxy.clone().filter(|p| !p.is_empty()),
             health_timeout_ms,
-            launch: lk_agents_net::env::launch(),
+            cmd: lk_agents_net::export::exporter()
+                .map_or(RunnerCmd::NoCommand, |exporter| exporter.runner_cmd()),
         };
         let outcome = self
             .spawner

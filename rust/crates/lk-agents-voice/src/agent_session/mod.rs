@@ -16,6 +16,7 @@ pub mod host_events;
 pub mod lifecycle;
 pub mod machine;
 pub mod options;
+mod product_stats;
 mod report;
 pub mod room;
 mod spans;
@@ -107,6 +108,8 @@ pub(crate) struct VoiceSessionState {
     pub(crate) local_inputs: machine::activity::local_input::LocalInputs,
     /// `start_user_turn()`'s turn; it outlives a handoff.
     pub(crate) user_turns: machine::activity::user_turn::UserTurns,
+    /// The model of each kind installed now, which the next one is a migration from.
+    pub(crate) installed: product_stats::Installed,
 }
 
 /// What the builder hands the session besides its options: the providers, the opening agent and
@@ -156,6 +159,7 @@ impl VoiceSessionState {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
         let cfg = config.effective();
+        let installed = product_stats::Installed::models(&stt, &tts, &llm);
         VoiceSessionState {
             usage: Default::default(),
             requests: Default::default(),
@@ -196,6 +200,7 @@ impl VoiceSessionState {
             experts: Default::default(),
             local_inputs: Default::default(),
             user_turns: Default::default(),
+            installed,
         }
     }
 

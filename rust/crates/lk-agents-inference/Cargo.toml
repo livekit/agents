@@ -61,6 +61,9 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["h
 livekit-token.workspace = true
 # The integration tests' fakes (`testkit`).
 lk-agents-inference = { path = ".", features = ["testkit"] }
+lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
+# A test's own recorder of product statistics.
+lk-agents-telemetry = { path = "../lk-agents-telemetry", features = ["testkit"] }
 fastrand = "2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util", "net", "io-util"] }
 

@@ -112,6 +112,26 @@ def proxy_overrides(cls: type, hooks: tuple[str, ...]) -> None:
         cls._core_proxied = True  # type: ignore[attr-defined]
 
 
+def plugin_id(cls: type) -> str:
+    """The id of the plugin a model class belongs to, which its identity declares.
+
+    A class of ``livekit.plugins.<name>`` is ``<name>`` with hyphens, as its package spells it
+    (``boson_avatar`` is ``boson-avatar``); a LiveKit Inference class is ``livekit-inference``;
+    any other class is ``custom``. A framework class that stands for a plugin's model names it
+    in ``_plugin``.
+    """
+    return getattr(cls, "_plugin", None) or plugin_of(cls.__module__)
+
+
+def plugin_of(module: str) -> str:
+    """The plugin id of the class path or module ``module``."""
+    if module.startswith("livekit.plugins."):
+        return module.split(".")[2].replace("_", "-")
+    if (module + ".").startswith("livekit.agents.inference."):
+        return "livekit-inference"
+    return "custom"
+
+
 def _framework(cls: type) -> bool:
     return cls.__module__ == "livekit.agents" or cls.__module__.startswith("livekit.agents.")
 

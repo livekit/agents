@@ -1,4 +1,5 @@
 use crate::agent_session::effects::Timer;
+use lk_agents_abi::productstats::models::EndpointedBy;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{ChatContext, EotPrediction, Ts};
 use lk_agents_core::tokenize::spoken_words;
@@ -272,6 +273,8 @@ pub struct Promoted {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TurnSnapshot {
     pub last_speaking_time: Option<Ts>,
+    /// What detected `last_speaking_time`: the VAD, the STT, or neither.
+    pub speech_ended_by: Option<EndpointedBy>,
     pub last_final_transcript_time: Option<Ts>,
     pub speech_start_time: Option<Ts>,
 }
@@ -381,6 +384,19 @@ pub struct EndOfTurnInfo {
     pub snapshot: TurnSnapshot,
     /// The interim the turn committed with, while its final may still come.
     pub promoted: Option<Promoted>,
+}
+
+impl EndOfTurnInfo {
+    /// How long after the end of speech the final transcript came, and what detected that end.
+    /// `None` when the final came first (nothing to measure, never a zero), when neither the VAD
+    /// nor the STT detected the end, or when the turn has no valid anchors.
+    pub fn transcription_after_endpoint(&self) -> Option<(Duration, EndpointedBy)> {
+        self.metrics.transcription_delay?;
+        let turn = &self.snapshot;
+        let (stopped, transcribed) = (turn.last_speaking_time?, turn.last_final_transcript_time?);
+        let by = turn.speech_ended_by.filter(|_| transcribed > stopped)?;
+        Some((transcribed.saturating_duration_since(stopped), by))
+    }
 }
 
 pub use lk_agents_abi::turn::interruption::{InterruptionSignal, OverlapVerdict};

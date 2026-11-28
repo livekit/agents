@@ -307,6 +307,7 @@ fn job_exporter(url: &str) -> Exporter {
             deployment_id: None,
         },
         Limits::default(),
+        None,
     );
     exporter.configure_cloud(cloud(url));
     let key = JobKey("AJ_1".into());

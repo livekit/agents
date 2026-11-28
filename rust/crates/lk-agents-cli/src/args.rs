@@ -2,6 +2,7 @@ use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 use lk_agents_abi::Maybe;
 use lk_agents_abi::cli::{CliArgs, CliParseResult, LogLevel};
+use lk_agents_abi::productstats::runner::RunnerCmd;
 use lk_agents_abi::worker::job::JobExecutorType;
 use lk_agents_abi::worker::types::{MultiprocessingContext, ProcessOptions, ServerOptions};
 
@@ -113,6 +114,11 @@ pub fn parse_cli(argv: Vec<String>) -> CliParseResult {
             dev: args.dev,
             cli_addr: args.cli_addr,
             simulation: args.simulation,
+            runner_cmd: match (args.simulation, args.dev) {
+                (true, _) => RunnerCmd::Simulation,
+                (false, true) => RunnerCmd::Dev,
+                (false, false) => RunnerCmd::Start,
+            },
             options: Box::new(ServerOptions {
                 ws_url: given(args.url.filter(|s| !s.is_empty())),
                 api_key: given(args.api_key.filter(|s| !s.is_empty())),
@@ -161,6 +167,18 @@ mod tests {
 
     #[test]
     fn launcher_contract_and_deadline_overrides() {
+        // Catches: the runner command product statistics name derived from the wrong flag.
+        for (flags, cmd) in [
+            (&["start"][..], RunnerCmd::Start),
+            (&["start", "--dev"], RunnerCmd::Dev),
+            (&["start", "--dev", "--simulation"], RunnerCmd::Simulation),
+        ] {
+            let CliParseResult::Parsed { args: CliArgs::Start { runner_cmd, .. } } = parse(flags)
+            else {
+                panic!("expected start")
+            };
+            assert_eq!(runner_cmd, cmd, "{flags:?}");
+        }
         let CliParseResult::Parsed { args: CliArgs::Start { cli_addr, dev, options, process, .. } } =
             parse(&[
                 "start",

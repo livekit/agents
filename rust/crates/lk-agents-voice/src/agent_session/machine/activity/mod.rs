@@ -819,6 +819,14 @@ impl AgentActivity {
     pub(crate) fn agent_name(&self) -> &str {
         &self.agent
     }
+    /// The language the STT last reported for the person's speech.
+    pub(crate) fn heard_language(&self) -> Option<lk_agents_abi::tokenize::language::LanguageCode> {
+        self.audio_recognition.last_language().cloned()
+    }
+    /// Whether a false interruption pauses the agent's speech and resumes it.
+    pub(crate) fn resumes_false_interruptions(&self) -> bool {
+        self.paused_speech.pause_timeout().is_some()
+    }
     pub(crate) fn realtime(&self) -> Option<&lk_agents_abi::resources::RealtimeRef> {
         self.realtime_activity().map(|rt| &rt.session)
     }

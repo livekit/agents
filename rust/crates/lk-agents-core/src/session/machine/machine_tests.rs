@@ -182,7 +182,11 @@ fn config(approval: bool, mode: ChatHistory, merge: bool) -> SessionConfig {
             output,
             retries: Retries::default(),
         },
-        llm: Some(LlmRef { id: ResourceId(1), provider: ProviderId::of_label("fake") }),
+        llm: Some(LlmRef {
+            adapter: false,
+            id: ResourceId(1),
+            provider: ProviderId::of_label("fake"),
+        }),
         output_type_explicit: true,
         agent_tools: BTreeMap::new(),
     };
@@ -421,6 +425,11 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     let child_id = second.session.state.active_frame_id.clone();
     assert!(second.effects.iter().any(|e| matches!(e, SessionEffect::InvocationParked { .. })));
     assert_ne!(child_id, root_id);
+    let tool_calls = second.effects.iter().filter_map(|e| match e {
+        SessionEffect::InvocationStarted { frame_id, agent_tool: true, .. } => Some(frame_id),
+        _ => None,
+    });
+    assert_eq!(tool_calls.collect::<Vec<_>>(), [&child_id], "the child alone runs as a tool");
     assert_eq!(second.session.state.ancestors.as_slice(), std::slice::from_ref(&root_id));
     let call = second.session.state.frames[&child_id].parent.clone().unwrap();
     assert_eq!(call.frame_id, root_id);

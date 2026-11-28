@@ -1,12 +1,12 @@
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, Current, EventDecl, HasEvent, MetricDecl, Observability, ParentOf, SpanDecl, SpanEnd,
-    finish_span,
+    Attrs, Current, EventDecl, HasEvent, Measure, MetricDecl, Observability, ParentOf, SpanDecl,
+    SpanEnd, finish_span, record_of,
 };
 use lk_agents_abi::telemetry::errors::ErrorType;
 use lk_agents_abi::telemetry::record::{
-    EventRecord, FRAMEWORK, JobKey, Key, KeyValues, Measurement, Number, Record, SpanContext,
-    SpanKind, SpanRecord, Status,
+    EventRecord, FRAMEWORK, JobKey, Key, KeyValues, Number, Record, SpanContext, SpanKind,
+    SpanRecord, Status,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use lk_agents_abi::telemetry::spans::session::AgentSession;
@@ -18,6 +18,13 @@ use std::time::{Duration, SystemTime};
 
 /// Where span and trace ids come from: random in production, seeded in the DST.
 pub type IdSource = Box<dyn FnMut() -> u64 + Send>;
+
+/// A machine's trace measures for the emitters it shares with async code.
+impl Measure for &mut Trace {
+    fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number) {
+        Trace::measure(self, metric, value);
+    }
+}
 
 /// A deterministic id source (splitmix64).
 pub fn seeded_ids(seed: u64) -> IdSource {
@@ -230,8 +237,11 @@ impl Trace {
     }
 
     /// Adds a declared event, at the step's instant or the event's `#[at]`.
-    pub fn event<D, E: EventDecl>(&mut self, span: &ManualSpan<D>, event: E)
-    where
+    pub fn event<D, E: EventDecl<Audience = Observability>>(
+        &mut self,
+        span: &ManualSpan<D>,
+        event: E,
+    ) where
         D: SpanDecl + HasEvent<E>,
     {
         let at = self.wall(event.at().unwrap_or(self.now));
@@ -309,19 +319,11 @@ impl Trace {
         self.swept
     }
 
-    /// Records one measurement of a declared instrument, labeled by `metric`.
-    pub fn measure<M: MetricDecl<Audience = Observability>>(&mut self, metric: &M, value: Number) {
-        let mut labels = KeyValues::new();
-        metric.write(&mut labels);
-        self.records.push(Record::Measurement(Measurement {
-            instrument: M::NAME,
-            kind: M::KIND,
-            unit: M::UNIT,
-            bounds: M::BOUNDS,
-            value,
-            labels,
-            job: self.job.clone(),
-        }));
+    /// Records one measurement of a declared instrument of either audience, labeled by
+    /// `metric`. Its declared audience chooses the record: a customer instrument's is the
+    /// session's job's, a product statistic's belongs to no job.
+    pub fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number) {
+        self.records.push(record_of(metric, value, self.job.clone()));
     }
 
     /// Unix nanoseconds of a session instant.

@@ -20,6 +20,7 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     fn new(
         env: &Self::Env,
         #[host(label)] label: String,
+        #[host(plugin)] plugin: String,
         events: std::sync::Arc<dyn crate::types::provider::ProviderEvents>,
         sentence_tokenizer: crate::tts::types::OptionsTokenizer,
         model: String,

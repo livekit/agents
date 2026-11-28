@@ -37,6 +37,9 @@ pub enum CliArgs {
         dev: bool,
         cli_addr: Option<String>,
         simulation: bool,
+        /// The command as product statistics name it: `simulation` for a simulation, else `dev`
+        /// with `--dev`, else `start`. The parser derives it; nothing else does.
+        runner_cmd: crate::productstats::runner::RunnerCmd,
         /// The server options the command line gives (`--url`, `--api-key`, `--api-secret`,
         /// `--shutdown-timeout`, `--drain-timeout`), over the `AgentServer`'s own.
         options: Box<crate::worker::types::ServerOptions>,
@@ -47,19 +50,6 @@ pub enum CliArgs {
         connect_addr: String,
         record: bool,
     },
-}
-
-impl CliArgs {
-    /// The command, as the process's runner reads it.
-    pub fn launch(&self) -> crate::telemetry::runner::Launch {
-        use crate::telemetry::runner::Launch;
-        match self {
-            CliArgs::Start { simulation: true, .. } => Launch::Simulation,
-            CliArgs::Start { dev: true, .. } => Launch::Dev,
-            CliArgs::Start { .. } => Launch::Start,
-            CliArgs::Console { .. } => Launch::Console,
-        }
-    }
 }
 
 /// Parsing never prints or exits the hosting process.

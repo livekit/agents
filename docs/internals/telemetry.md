@@ -207,6 +207,58 @@ the usage ledger. `lk_agents_net::export` aggregates measurements per destinatio
 exports them on a fixed interval with delta temporality to Cloud and the
 temporality the user endpoint requests (cumulative by default).
 
+### Product statistics
+
+LiveKit's own statistics, never customer data; the list is
+[telemetry.md](../telemetry.md#what-is-collected). They are laid out like observability:
+
+- Declared in `abi::productstats` (`models`, `sessions`, `features`, `runner`), every key under
+  `lk.product.agents.`, with `audience = ProductStats`.
+- Recorded through the one recording API: `measure(cx, &metric, value)` in async code and
+  `Trace::measure(&metric, value)` in a sans-I/O machine take a metric of either audience. The
+  metric's declared audience chooses the record (`Record::Measurement` or
+  `Record::ProductStat`); no argument does. The one emitter machines and async code
+  share (`ModelUsage::measure`) takes either as a `Measure`.
+- Exported by `lk_agents_net::export::otlp`, as the exporter's third destination
+  (`otlp/product_stats.rs`): see [Destinations](#destinations).
+- Models: `ModelId::of(kind, &ProviderId)` copies the four labels from the identity the model
+  declares, parsing and mapping nothing. `ProviderId.plugin` is filled once per host by its
+  base classes (Python: `_bindings.plugin_id`, from the class's package) and by a Rust-native
+  provider itself; a LiveKit Inference model keeps `provider`/`model` as customer metrics and
+  usage name them (`livekit`, `deepgram/nova-3:en`) and declares the vendor and model it runs
+  in `upstream_provider`/`upstream_model`, which `ModelId` prefers. Requests, tokens,
+  characters, audio and first-output times are recorded where the request's span ends
+  (`lk-agents-inference/src/telemetry.rs`, `stt/retrying.rs`); what only a session knows (the
+  audio its STT reported, a realtime response, the transcription delay, its own start) in
+  `lk-agents-voice/src/agent_session/product_stats.rs`.
+- Sessions: one line where a call ends (`count_session_end`, when the voice machine's spans
+  close) and one where a text request ends (`runtime/src/a2a/mod.rs::run_message`).
+- Features: each is one `measure` where the feature is used, counting uses. Nothing is carried,
+  summarised or deduplicated. The sites: a handoff landing and a model switch in the voice
+  machine (`handoff.rs`, `product_stats.rs`), a language change where the recogniser's
+  `last_language` moves, `update_options`/`override_options` at the session owner, an MCP
+  toolset's lifecycle setup, a background audio player's start, a local agent called as a tool
+  (`delegation/local` `run`, and a text session's child invocation start) and a `RemoteAgent`
+  call (`delegation/remote` `run`).
+- Model switch: the voice machine keeps the model installed in each slot (STT, TTS, LLM,
+  realtime), the fact a switch is told from. An empty slot, the same identity, or an adapter
+  over an adapter (`adapter` on the model's ref: its own label differs from its identity's) is
+  no switch.
+- Tests record under a tracer of their own (`testkit::Recorded`), or read the machine's drained
+  records.
+
+What keeps the two audiences apart, now that one function records both:
+
+| Guarantee | Enforced by |
+| --- | --- |
+| A declaration's audience, name prefix and module agree, both ways; so do its keys | compile time: `#[span]`/`#[event]`/`#[metric]` expand to `decl::declared::<A>(name, module_path!())`, `#[derive(Attrs)]` to `decl::key_declared(..)`; `lk-agents-codegen --check` repeats it |
+| A product statistic carries closed enums and bounded labels only | compile time: its fields must be `decl::Bounded`, a sealed marker implemented by `BoundedLabel`, closed `SpanValue` enums and `#[derive(Bounded)]` groups. `BoundedLabel` has one constructor: a value of at most 64 ASCII letters, digits and `. - _ / : +` is kept, any other is `unknown`. The customer's `Label` is unchanged |
+| There are two audiences | compile time: `Audience` is sealed |
+| The audience alone routes a measurement | compile time: `Audience::record` makes the record; `ProductStat` has no constructor outside ABI |
+| Spans and events are observability only | compile time: `Audience = Observability` bounds on `start`, `Trace::open`, `event` |
+| A `ProductStat` reaches its destination only, under its own policy | the exporter's typed split and its tests (`otlp/product_stats_tests.rs`) |
+
+
 ### Report records
 
 Chat history items, session options, the usage summary and evaluation results
@@ -285,17 +337,24 @@ the recording decision separately from the application endpoint's admission.
 
 ## Destinations
 
-| | LiveKit Cloud | User endpoint |
-| --- | --- | --- |
-| Enabled by | hosted or Cloud-connected job | `OTEL_EXPORTER_OTLP_*` or `telemetry.configure(...)` |
-| Signals | traces, metrics, report logs | traces, metrics |
-| Scope | per job: a record is exported only while its job is registered and recording that signal | process |
-| Before the recording decision | spans of the job are held, bounded, and released or dropped with the decision | exported |
-| Content | sent as recorded, keyed for Cloud's redaction ([reference](telemetry-reference.md#cloud-ingest-and-redaction)) | `allow_pii` |
-| Identity | the job's identity on every span, log and measurement, and on the resource (below) | the same on spans; measurements carry only declared labels |
-| Batching | one job per request: a request never mixes jobs, so Cloud's per-batch session flags apply to one session | any |
-| Temporality | delta | cumulative unless configured |
-| Transport | OTLP/HTTP protobuf, gzip, with the job's Cloud token | OTLP/HTTP protobuf with configured headers |
+One exporter (`lk_agents_net::export::otlp::Exporter`: one task loop, one flush, one shutdown)
+with three destinations. Each has its own queue or aggregator and its own policy.
+
+| | LiveKit Cloud | User endpoint | Product statistics |
+| --- | --- | --- | --- |
+| Whose data | the customer's | the customer's | LiveKit's |
+| Enabled by | hosted or Cloud-connected job | `OTEL_EXPORTER_OTLP_*` or `telemetry.configure(...)` | on unless `LIVEKIT_PRODUCT_STATS=0` or `DO_NOT_TRACK=1`; sent only to a LiveKit Cloud host |
+| Takes | spans, measurements, report logs | spans, measurements | `Record::ProductStat` only, and no other destination takes one |
+| Signals | traces, metrics, report logs | traces, metrics | metrics |
+| Scope | per job: a record is exported only while its job is registered and recording that signal | process | process: no job, no recording decision, no project observability flag |
+| Before the recording decision | spans of the job are held, bounded, and released or dropped with the decision | exported | not applicable; before a credential, the last window is held |
+| Content | sent as recorded, keyed for Cloud's redaction ([reference](telemetry-reference.md#cloud-ingest-and-redaction)) | `allow_pii` | closed enums and bounded labels only, by declaration |
+| Identity | the job's identity on every span, log and measurement, and on the resource (below) | the same on spans; measurements carry only declared labels | none; its own resource (framework, runtime, platform, runner, storage), never the customer's |
+| Batching | one job per request: a request never mixes jobs, so Cloud's per-batch session flags apply to one session | any | one window per request; an empty window is no request |
+| Interval | spans each second or per full batch, metrics every 30 s | the same | one minute |
+| Temporality | delta | cumulative unless configured | delta |
+| Transport | OTLP/HTTP protobuf, gzip, with the job's Cloud token | OTLP/HTTP protobuf with configured headers | OTLP/HTTP protobuf, gzip, to `/observability/productstats/agents/metrics/otlp/v0` with the project key's observability bearer |
+| A refusal | a 401 "recording disabled" stops that job's Cloud export | logged | dropped; neither product's failure stops the other |
 
 The identity stamp is the one place job identity is written. It uses protocol's
 shared keys, and also the spellings Cloud's consumers read today, until they read

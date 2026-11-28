@@ -109,7 +109,7 @@ class _JobProc:
         self._client: _core.IpcClient
         self._loop_monitor = telemetry._LoopMonitor()
 
-    def initialize(self, http_proxy: str | None) -> None:
+    def initialize(self, http_proxy: str | None, runner_cmd: _core.RunnerCmd) -> None:
         self._job_proc = JobProcess(
             executor_type=self._executor_type,
             user_arguments=self._args.user_arguments,
@@ -119,7 +119,7 @@ class _JobProc:
 
         load_preload_modules(self._args.preload_modules)
         # After the preloads, so a tracer provider an application installs there is kept.
-        telemetry._install()
+        telemetry._install(runner_cmd)
         _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
         _preload._step("the local inference models", _preload._local_inference_models)
 

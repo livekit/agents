@@ -180,11 +180,16 @@ pub trait JobSupervisor: Send + Sync + Sized + 'static {
     async fn join(&self) -> bool;
 }
 
-/// The process's setup, called with the parent's HTTP proxy before readiness.
+/// The process's setup, called before readiness with the parent's HTTP proxy and the command
+/// that started the worker, which the job's telemetry names.
 #[crate::host(proxy(host = "collections.abc.Callable", owns))]
 pub trait ChildInitialize: Send + Sync {
     #[host(call, name = "__call__")]
-    fn initialize(&self, http_proxy: Option<String>) -> Result<(), HostError>;
+    fn initialize(
+        &self,
+        http_proxy: Option<String>,
+        runner_cmd: crate::productstats::runner::RunnerCmd,
+    ) -> Result<(), HostError>;
 }
 
 /// The entrypoint's `asyncio.Task`, awaited and cancelled in the context the job's run captured.

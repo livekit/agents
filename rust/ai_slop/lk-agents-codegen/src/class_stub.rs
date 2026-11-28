@@ -514,7 +514,12 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
     match ty {
         Ty::Unit => "None".into(),
         // Hidden from the host's signature: the binding captures it.
-        Ty::CallContext | Ty::Cx | Ty::Cancellation | Ty::Env | Ty::ClassLabel => "object".into(),
+        Ty::CallContext
+        | Ty::Cx
+        | Ty::Cancellation
+        | Ty::Env
+        | Ty::ClassLabel
+        | Ty::ClassPlugin => "object".into(),
         Ty::Bool => "bool".into(),
         Ty::Int(_) => "int".into(),
         Ty::Float | Ty::Timestamp => "float".into(),

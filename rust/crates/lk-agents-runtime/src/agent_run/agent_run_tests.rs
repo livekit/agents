@@ -400,7 +400,11 @@ fn setup(
         history: vec![],
         delegated: false,
         mode: Mode::Text,
-        llm: Some(LlmRef { id: ResourceId(1), provider: ProviderId::of_label("scripted") }),
+        llm: Some(LlmRef {
+            adapter: false,
+            id: ResourceId(1),
+            provider: ProviderId::of_label("scripted"),
+        }),
         wall: WallAnchor { wall: 0.0, at: Ts::ZERO },
         cleanup_timeout: Duration::from_secs(5),
     };

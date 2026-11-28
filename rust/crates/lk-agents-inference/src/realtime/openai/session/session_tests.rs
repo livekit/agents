@@ -414,7 +414,8 @@ async fn voice_live_connects_through_azure_and_sends_the_beta_session() {
 }
 
 // Catches: LiveKit Inference reached with a static key instead of a gateway JWT, without the
-// provider it routes to, or with `session.model` (the gateway picks the model from the URL).
+// provider it routes to, with `session.model` (the gateway picks the model from the URL), or
+// counted under the gateway instead of the vendor it routes to.
 #[tokio::test]
 async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
     let ws = Arc::new(FakeWs::new(vec![]).keep_open());
@@ -442,6 +443,13 @@ async fn livekit_inference_signs_each_connection_and_drops_the_session_model() {
     assert_eq!(headers.get("X-LiveKit-Inference-Provider"), Some("openai"));
     assert_eq!(headers.get("User-Agent"), Some(lk_agents_net::job_identity::user_agent().as_str()));
     assert_eq!(headers.get("X-LiveKit-Inference-Priority"), None);
+    // It declares LiveKit Inference as the code that runs and the routed vendor's model.
+    let id = lk_agents_abi::Realtime::id(&realtime);
+    assert_eq!(
+        (id.plugin.as_str(), id.upstream_provider.as_str()),
+        ("livekit-inference", "openai")
+    );
+    assert_eq!((id.model.as_str(), id.upstream_model.as_str()), ("gpt-realtime", "gpt-realtime"));
     session.aclose().await;
 }
 

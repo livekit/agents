@@ -662,6 +662,367 @@
       "stability": "development",
       "brief": "Each job process's time from its spawn to ready: imports, `setup_fnc` and prewarm.",
       "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.agent_as_tool",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.agent_as_tool",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "A local agent was invoked as a tool.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.background_audio",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.background_audio",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "A background audio player was started, with or without a session.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.handoff",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.handoff",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "An agent replaced another in a voice session.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.language_switch",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.language_switch",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "The STT reported another language than the one before.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.mcp",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.mcp",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "An MCP toolset was set up.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.model_switch",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.model_switch",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "A model was replaced with another while a session ran.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.feature.model_switch.from.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.feature.model_switch.to.kind",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.feature.override_options",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.override_options",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "`session.override_options(...)` was entered.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.remote_agent",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.remote_agent",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "A `RemoteAgent` call was made.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.feature.update_options",
+      "type": "metric",
+      "metric_name": "lk.product.agents.feature.update_options",
+      "instrument": "counter",
+      "unit": "{use}",
+      "stability": "development",
+      "brief": "`session.update_options(...)` was called.",
+      "attributes": []
+    },
+    {
+      "id": "metric.lk.product.agents.model.audio_duration",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.audio_duration",
+      "instrument": "counter",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Audio a model heard (an STT) or spoke (a TTS).",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.model.characters",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.characters",
+      "instrument": "counter",
+      "unit": "{character}",
+      "stability": "development",
+      "brief": "Characters of text a model was given to speak.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.model.input_tokens",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.input_tokens",
+      "instrument": "counter",
+      "unit": "{token}",
+      "stability": "development",
+      "brief": "Tokens a model consumed, as its provider reports them.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.model.output_tokens",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.output_tokens",
+      "instrument": "counter",
+      "unit": "{token}",
+      "stability": "development",
+      "brief": "Tokens a model produced, as its provider reports them.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.model.requests",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.requests",
+      "instrument": "counter",
+      "unit": "{request}",
+      "stability": "development",
+      "brief": "Requests made to a model: one LLM completion, one TTS synthesis, one STT stream or recognition, one realtime response.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.model.transcription_delay",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.transcription_delay",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Time from the end of the person's speech to the STT's final transcript, once per turn; a turn whose final came first, or whose end of speech was not detected, records nothing.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.transcription_delay.endpointing",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.model.ttfb",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.ttfb",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Time to the first audio of a TTS request.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.model.ttft",
+      "type": "metric",
+      "metric_name": "lk.product.agents.model.ttft",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Time to the first token of an LLM, realtime or duplex response.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.model.kind",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.plugin",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.provider",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.model.name",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.sessions",
+      "type": "metric",
+      "metric_name": "lk.product.agents.sessions",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Sessions, counted once each when the session ends.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.session.entrypoint",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
+      "id": "metric.lk.product.agents.voice.sessions",
+      "type": "metric",
+      "metric_name": "lk.product.agents.voice.sessions",
+      "instrument": "counter",
+      "unit": "{session}",
+      "stability": "development",
+      "brief": "Voice sessions, counted once each when the session starts, with what it starts with.",
+      "attributes": [
+        {
+          "ref": "lk.product.agents.voice.pipeline",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.voice.turn_detection",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.voice.interruption",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.product.agents.voice.false_interruption",
+          "requirement_level": "required"
+        }
+      ]
     }
   ]
 }

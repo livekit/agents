@@ -10,6 +10,7 @@ use crate::audio_recognition::overlap::{In, OverlapRefusal};
 use crate::events::{
     EndOfSpeechEvent, PreemptiveGenerationEvent, SessionEvent, StartOfSpeechEvent,
 };
+use lk_agents_abi::productstats::models::EndpointedBy;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::turn::detector::ReqId;
@@ -203,7 +204,7 @@ impl AudioRecognition {
         self.preflight_transcript.clear();
 
         if self.stt_timing_wins() {
-            self.last_speaking_time = Some(stt_last_speaking_time);
+            self.speech_ended(stt_last_speaking_time, Some(EndpointedBy::Stt));
         }
 
         eff.extend(self.check_user_turn_limit(now, &alt.text));
@@ -266,7 +267,7 @@ impl AudioRecognition {
         self.hear_interim(stream, ev, &alt.text);
 
         if self.stt_timing_wins() {
-            self.last_speaking_time = Some(stt_last_speaking_time);
+            self.speech_ended(stt_last_speaking_time, Some(EndpointedBy::Stt));
         }
 
         if self.cfg.turn_detection_mode != TurnDetectionMode::Manual || self.declared() {
@@ -312,7 +313,7 @@ impl AudioRecognition {
             return eff;
         }
         if self.stt_timing_wins() {
-            self.last_speaking_time = Some(stt_last_speaking_time);
+            self.speech_ended(stt_last_speaking_time, Some(EndpointedBy::Stt));
         }
         eff.extend(self.run_eou_detection(now, Start::Auto { declared: true }));
         eff
@@ -380,7 +381,7 @@ impl AudioRecognition {
         eff.extend(self.start_of_speech(started_at, Duration::ZERO));
         eff.extend(self.arm_turn_limit(started_at));
 
-        self.last_speaking_time = Some(stt_last_speaking_time);
+        self.speech_ended(stt_last_speaking_time, Some(EndpointedBy::Stt));
         eff.extend(self.begin_speaking(started_at));
         eff
     }
@@ -416,7 +417,7 @@ impl AudioRecognition {
     /// Speech heard in this inference: the times are stamped, and a stale prediction dropped.
     fn note_speaking(&mut self, now: Ts, raw_speech: f64) -> Vec<AudioRecognitionEffect> {
         // Metrics want the earliest signal of speech.
-        self.last_speaking_time = Some(now);
+        self.speech_ended(now, Some(EndpointedBy::Vad));
         if self.speech_start_time.is_none() {
             self.speech_start_time = Some(now.saturating_sub(secs(raw_speech)));
         }
@@ -502,12 +503,20 @@ impl AudioRecognition {
     fn user_speech_ended(&mut self, ev: EndOfSpeechEvent) -> Vec<AudioRecognitionEffect> {
         let mut eff = Vec::new();
         let ended_at = ev.at;
+        // A detached microphone or a realtime server's stop is neither the VAD's nor the STT's.
+        let by = ev.from_vad.then_some(EndpointedBy::Vad);
         eff.extend(self.emit_end_of_speech(ev));
         eff.extend(self.end_of_speech(ended_at));
         self.vad_speech_started = false;
         eff.extend(self.end_speaking(ended_at, false));
-        self.last_speaking_time = Some(ended_at);
+        self.speech_ended(ended_at, by);
         eff
+    }
+
+    /// The person was last heard speaking at `at`, which `by` detected.
+    fn speech_ended(&mut self, at: Ts, by: Option<EndpointedBy>) {
+        self.last_speaking_time = Some(at);
+        self.speech_ended_by = by;
     }
 
     /// The local VAD's onset and the server's, one path.

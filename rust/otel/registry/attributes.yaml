@@ -8,28 +8,479 @@
       "brief": "Attributes declared in `lk_agents_abi::productstats`.",
       "attributes": [
         {
-          "id": "lk.productstats.arch",
+          "id": "lk.product.agents.arch",
           "type": "string",
           "stability": "development",
           "brief": "The CPU architecture (`std::env::consts::ARCH`)."
         },
         {
-          "id": "lk.productstats.framework.version",
+          "id": "lk.product.agents.framework.version",
           "type": "string",
           "stability": "development",
           "brief": "The framework's version."
         },
         {
-          "id": "lk.productstats.os",
+          "id": "lk.product.agents.os",
           "type": "string",
           "stability": "development",
           "brief": "The operating system (`std::env::consts::OS`)."
         },
         {
-          "id": "lk.productstats.python.version",
+          "id": "lk.product.agents.runtime.name",
+          "type": {
+            "members": [
+              {
+                "id": "python",
+                "value": "python",
+                "brief": "python",
+                "stability": "development"
+              },
+              {
+                "id": "node",
+                "value": "node",
+                "brief": "node",
+                "stability": "development"
+              },
+              {
+                "id": "bun",
+                "value": "bun",
+                "brief": "bun",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The runtime the agent runs on."
+        },
+        {
+          "id": "lk.product.agents.runtime.version",
           "type": "string",
           "stability": "development",
-          "brief": "The Python version the framework runs on."
+          "brief": "That runtime's version."
+        },
+        {
+          "id": "lk.product.agents.storage",
+          "type": {
+            "members": [
+              {
+                "id": "agent_db",
+                "value": "agent_db",
+                "brief": "agent_db",
+                "stability": "development"
+              },
+              {
+                "id": "sqlite",
+                "value": "sqlite",
+                "brief": "sqlite",
+                "stability": "development"
+              },
+              {
+                "id": "none",
+                "value": "none",
+                "brief": "none",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Where threads are stored."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.features",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats::features`.",
+      "attributes": [
+        {
+          "id": "lk.product.agents.feature.model_switch.from.kind",
+          "type": {
+            "members": [
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "tts",
+                "value": "tts",
+                "brief": "tts",
+                "stability": "development"
+              },
+              {
+                "id": "llm",
+                "value": "llm",
+                "brief": "llm",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The kind of the model installed just before the switch."
+        },
+        {
+          "id": "lk.product.agents.feature.model_switch.to.kind",
+          "type": {
+            "members": [
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "tts",
+                "value": "tts",
+                "brief": "tts",
+                "stability": "development"
+              },
+              {
+                "id": "llm",
+                "value": "llm",
+                "brief": "llm",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The kind of the model the switch installed."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.models",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats::models`.",
+      "attributes": [
+        {
+          "id": "lk.product.agents.model.kind",
+          "type": {
+            "members": [
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "tts",
+                "value": "tts",
+                "brief": "tts",
+                "stability": "development"
+              },
+              {
+                "id": "llm",
+                "value": "llm",
+                "brief": "llm",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "STT, TTS, LLM, realtime or duplex."
+        },
+        {
+          "id": "lk.product.agents.model.name",
+          "type": "string",
+          "stability": "development",
+          "brief": "The vendor's own id for the model."
+        },
+        {
+          "id": "lk.product.agents.model.plugin",
+          "type": "string",
+          "stability": "development",
+          "brief": "The code that runs: a plugin id, `livekit-inference`, or `custom`."
+        },
+        {
+          "id": "lk.product.agents.model.provider",
+          "type": "string",
+          "stability": "development",
+          "brief": "The vendor whose model runs, as the model declares it."
+        },
+        {
+          "id": "lk.product.agents.model.transcription_delay.endpointing",
+          "type": {
+            "members": [
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              },
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "What ended the speech."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.runner",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats::runner`.",
+      "attributes": [
+        {
+          "id": "lk.product.agents.runner.cmd",
+          "type": {
+            "members": [
+              {
+                "id": "dev",
+                "value": "dev",
+                "brief": "dev",
+                "stability": "development"
+              },
+              {
+                "id": "console",
+                "value": "console",
+                "brief": "console",
+                "stability": "development"
+              },
+              {
+                "id": "simulation",
+                "value": "simulation",
+                "brief": "simulation",
+                "stability": "development"
+              },
+              {
+                "id": "start",
+                "value": "start",
+                "brief": "start",
+                "stability": "development"
+              },
+              {
+                "id": "none",
+                "value": "none",
+                "brief": "none",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The command that started the process."
+        },
+        {
+          "id": "lk.product.agents.runner.kind",
+          "type": {
+            "members": [
+              {
+                "id": "production",
+                "value": "production",
+                "brief": "production",
+                "stability": "development"
+              },
+              {
+                "id": "development",
+                "value": "development",
+                "brief": "development",
+                "stability": "development"
+              },
+              {
+                "id": "ci",
+                "value": "ci",
+                "brief": "ci",
+                "stability": "development"
+              },
+              {
+                "id": "unknown",
+                "value": "unknown",
+                "brief": "unknown",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Production, development, CI or unknown."
+        }
+      ]
+    },
+    {
+      "id": "registry.livekit.agents.sessions",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::productstats::sessions`.",
+      "attributes": [
+        {
+          "id": "lk.product.agents.session.entrypoint",
+          "type": {
+            "members": [
+              {
+                "id": "rtc_session",
+                "value": "rtc_session",
+                "brief": "rtc_session",
+                "stability": "development"
+              },
+              {
+                "id": "a2a_session",
+                "value": "a2a_session",
+                "brief": "a2a_session",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "A call or a text request."
+        },
+        {
+          "id": "lk.product.agents.voice.false_interruption",
+          "type": {
+            "members": [
+              {
+                "id": "on",
+                "value": "on",
+                "brief": "on",
+                "stability": "development"
+              },
+              {
+                "id": "off",
+                "value": "off",
+                "brief": "off",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Whether a false interruption pauses the agent's speech and resumes it."
+        },
+        {
+          "id": "lk.product.agents.voice.interruption",
+          "type": {
+            "members": [
+              {
+                "id": "adaptive",
+                "value": "adaptive",
+                "brief": "adaptive",
+                "stability": "development"
+              },
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              },
+              {
+                "id": "off",
+                "value": "off",
+                "brief": "off",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "How the session decides that the person is interrupting."
+        },
+        {
+          "id": "lk.product.agents.voice.pipeline",
+          "type": {
+            "members": [
+              {
+                "id": "stt_llm_tts",
+                "value": "stt_llm_tts",
+                "brief": "stt_llm_tts",
+                "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
+              },
+              {
+                "id": "realtime_tts",
+                "value": "realtime_tts",
+                "brief": "realtime_tts",
+                "stability": "development"
+              },
+              {
+                "id": "duplex",
+                "value": "duplex",
+                "brief": "duplex",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "The models the session runs on."
+        },
+        {
+          "id": "lk.product.agents.voice.turn_detection",
+          "type": {
+            "members": [
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              },
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
+              },
+              {
+                "id": "realtime_llm",
+                "value": "realtime_llm",
+                "brief": "realtime_llm",
+                "stability": "development"
+              },
+              {
+                "id": "manual",
+                "value": "manual",
+                "brief": "manual",
+                "stability": "development"
+              },
+              {
+                "id": "model",
+                "value": "model",
+                "brief": "model",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "What ends the person's turn."
         }
       ]
     },
@@ -386,85 +837,6 @@
           "type": "any",
           "stability": "development",
           "brief": "The `Usage` model's entries: one per model and kind; absent when nothing was used."
-        }
-      ]
-    },
-    {
-      "id": "registry.livekit.agents.runner",
-      "type": "attribute_group",
-      "brief": "Attributes declared in `lk_agents_abi::telemetry::runner`.",
-      "attributes": [
-        {
-          "id": "lk.productstats.runner.kind",
-          "type": {
-            "members": [
-              {
-                "id": "production",
-                "value": "production",
-                "brief": "production",
-                "stability": "development"
-              },
-              {
-                "id": "development",
-                "value": "development",
-                "brief": "development",
-                "stability": "development"
-              },
-              {
-                "id": "ci",
-                "value": "ci",
-                "brief": "ci",
-                "stability": "development"
-              },
-              {
-                "id": "unknown",
-                "value": "unknown",
-                "brief": "unknown",
-                "stability": "development"
-              }
-            ]
-          },
-          "stability": "development",
-          "brief": "Production, development, CI or unknown."
-        },
-        {
-          "id": "lk.productstats.runner.launch",
-          "type": {
-            "members": [
-              {
-                "id": "dev",
-                "value": "dev",
-                "brief": "dev",
-                "stability": "development"
-              },
-              {
-                "id": "console",
-                "value": "console",
-                "brief": "console",
-                "stability": "development"
-              },
-              {
-                "id": "simulation",
-                "value": "simulation",
-                "brief": "simulation",
-                "stability": "development"
-              },
-              {
-                "id": "start",
-                "value": "start",
-                "brief": "start",
-                "stability": "development"
-              },
-              {
-                "id": "none",
-                "value": "none",
-                "brief": "none",
-                "stability": "development"
-              }
-            ]
-          },
-          "stability": "development",
-          "brief": "The command that started the process."
         }
       ]
     },

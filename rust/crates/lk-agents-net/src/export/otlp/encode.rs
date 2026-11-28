@@ -317,5 +317,6 @@ pub(crate) fn charge(record: &Record) -> usize {
         }
         Record::Log(l) => 256 + value(&l.body) + attributes(&l.attributes),
         Record::Measurement(m) => 64 + attributes(&m.labels),
+        Record::ProductStat(_) => 0,
     }
 }

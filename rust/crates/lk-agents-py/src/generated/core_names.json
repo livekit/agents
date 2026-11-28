@@ -74,6 +74,8 @@
     "RpcHandler",
     "Run",
     "RunEvents",
+    "RunnerCmd",
+    "Runtime",
     "SearchDocument",
     "ServerConfig",
     "ServerRuntime",

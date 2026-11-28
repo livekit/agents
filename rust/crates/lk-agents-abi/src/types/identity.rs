@@ -12,6 +12,21 @@ pub struct ProviderId {
     pub model: String,
     /// The provider name; `"unknown"` until a plugin overrides it.
     pub provider: String,
+    /// The id of the plugin whose code runs the model, which every host's base class declares
+    /// from its own packaging and no plugin writes: the last part of the package name
+    /// (`livekit.plugins.deepgram` in Python, `@livekit/agents-plugin-deepgram` in Node, are
+    /// both `deepgram`), `livekit-inference` for the LiveKit Inference models, `custom` for a
+    /// class outside a LiveKit plugin. A Rust-native provider declares its own.
+    #[host(default = "custom")]
+    pub plugin: String,
+    /// Behind a gateway (LiveKit Inference), the vendor whose model runs; blank when `provider`
+    /// is that vendor. `provider` stays what the customer's metrics and usage name.
+    #[host(default = "")]
+    pub upstream_provider: String,
+    /// Behind a gateway, the vendor's own id for the model, without the gateway's vendor prefix
+    /// or options; blank when `model` is that id.
+    #[host(default = "")]
+    pub upstream_model: String,
 }
 
 impl ProviderId {
@@ -21,6 +36,8 @@ impl ProviderId {
             label: label.into(),
             model: "unknown".to_owned(),
             provider: "unknown".to_owned(),
+            plugin: "custom".to_owned(),
+            ..ProviderId::default()
         }
     }
 

@@ -31,6 +31,10 @@ livekit-protocol.workspace = true
 prost.workspace = true
 pbjson-types.workspace = true
 
+[dev-dependencies]
+# The zeroed metrics records a test fills in field by field.
+lk-agents-abi = { path = "../lk-agents-abi", features = ["serde", "testkit"] }
+
 [features]
 # Decodes the checked-in Opus replies of the transcript sync accuracy test.
 ffmpeg = ["lk-agents-media/ffmpeg"]

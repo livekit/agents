@@ -203,19 +203,30 @@ async fn eventually(what: &str, check: impl Fn() -> bool) {
 
 // Catches: framing by network chunk: a character, a CRLF or a field split across chunks, a
 // chunk boundary inside `[DONE]`, or events delivered before their blank line.
-// Catches: a direct endpoint's host reported as the provider, or an endpoint that names no
-// vendor reported as the gateway.
+// Catches: a direct endpoint's host reported as the provider, an endpoint that names no
+// vendor reported as the gateway, or a LiveKit Inference model counted under the gateway
+// instead of the vendor and model it runs.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_direct_endpoint_reports_its_declared_vendor_never_its_host() {
     use lk_agents_abi::Llm as _;
-    let llm = llm(&Peer { url: "https://llm.internal/v1".into(), ..Default::default() });
+    use lk_agents_abi::productstats::models::{ModelId, ModelKind};
+    let counted = |llm: &GatewayLlm| {
+        let id = ModelId::of(ModelKind::Llm, &llm.id());
+        [id.plugin.as_str(), id.provider.as_str(), id.name.as_str()].map(str::to_owned)
+    };
+    let mut llm = llm(&Peer { url: "https://llm.internal/v1".into(), ..Default::default() });
     assert_eq!(llm.id().provider, "livekit");
+    assert_eq!(llm.id().model, "openai/gpt-4o");
+    assert_eq!(counted(&llm), ["livekit-inference", "openai", "gpt-4o"]);
     let direct = |vendor: Option<&str>| Auth::ProviderKey {
         key: "sk".into(),
         vendor: vendor.map(str::to_owned),
     };
     llm.update_options(|opts| opts.auth = direct(Some("cerebras")));
     assert_eq!(llm.id().provider, "cerebras");
+    // A plugin class that runs this client is the code that runs; the model is as given.
+    llm.plugin = "openai".into();
+    assert_eq!(counted(&llm), ["openai", "cerebras", "openai/gpt-4o"]);
     llm.update_options(|opts| opts.auth = direct(None));
     assert_eq!(llm.id().provider, "unknown");
 }

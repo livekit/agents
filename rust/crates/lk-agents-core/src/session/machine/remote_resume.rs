@@ -145,6 +145,7 @@ impl Session {
             origin: self.live.as_ref().and_then(|live| live.origin().cloned()),
             frame_id: frame.id.clone(),
             agent_name: frame.agent_name.clone(),
+            agent_tool: false,
             invocation_id: invocation_id.clone(),
             execution_id: self.state.execution_id.clone(),
             history,

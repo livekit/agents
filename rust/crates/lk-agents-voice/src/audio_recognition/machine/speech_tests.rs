@@ -25,8 +25,18 @@ impl Turns {
     /// The STT stream's first frame was heard at `input_started_at`.
     fn stt_only(input_started_at: Ts) -> Turns {
         let legs = SessionLegs { stt: true, ..SessionLegs::none() };
+        Turns::new(legs, TurnDetectionMode::Stt, input_started_at)
+    }
+
+    /// An STT and the session's own VAD, which detects the turns.
+    fn with_vad() -> Turns {
+        let legs = SessionLegs { stt: true, vad: true, ..SessionLegs::none() };
+        Turns::new(legs, TurnDetectionMode::Vad, Ts::ZERO)
+    }
+
+    fn new(legs: SessionLegs, mode: TurnDetectionMode, input_started_at: Ts) -> Turns {
         let mut r = AudioRecognition::new(&ConfigStack::default().resolve(&legs), &legs);
-        let eff = r.set_turn_detection_mode(Ts::ZERO, TurnDetectionMode::Stt);
+        let eff = r.set_turn_detection_mode(Ts::ZERO, mode);
         r.input_started_at = Some(input_started_at);
         r.wall_anchor = Some(WallAnchor { wall: 1_000.0, at: Ts::ZERO });
         let mut turns = Turns {
@@ -118,6 +128,13 @@ impl Turns {
             ev.alternatives.push(alt);
         }
         self.stt(at, ev);
+    }
+
+    /// The session's VAD: speech that started `speech` seconds ago, or ended `silence` ago.
+    fn vad(&mut self, at: Ts, kind: VadEventType, speech: f64, silence: f64) {
+        self.at(at);
+        let eff = self.r.on_vad_event(at, &VadEvent::new(kind, 0, 0.0, speech, silence));
+        self.apply(eff);
     }
 
     /// The driver gives the withheld verdicts: each turn replied to.
@@ -335,4 +352,52 @@ fn an_owed_final_deadline_does_not_commit_a_manual_turn() {
     t.at(ms(5_000));
     assert!(t.committed().is_empty());
     assert_eq!(t.r.current_transcript(), "book");
+}
+
+// Catches: a transcription delay recorded as zero when the final came before the end of speech,
+// one measured from an end neither the VAD nor the STT detected (a detached microphone), or a
+// delay from the STT's own end of speech reported as the VAD's (their silence windows differ, so
+// the two are never compared).
+#[test]
+fn a_transcription_delay_is_measured_from_the_end_of_speech_and_names_what_detected_it() {
+    use lk_agents_abi::productstats::models::EndpointedBy;
+    let measured = |t: &Turns| {
+        let [turn] = t.ended.as_slice() else { panic!("{:?}", t.committed()) };
+        turn.transcription_after_endpoint()
+    };
+
+    // The STT ends the speech at its last word, 1.0 s in; its final arrives at 1.3 s.
+    let mut t = Turns::stt_only(Ts::ZERO);
+    t.start(ms(200), None);
+    t.final_(ms(1_300), "book a table", 1.0);
+    t.end(ms(1_600), Some(1.0));
+    t.at(ms(10_000));
+    assert_eq!(measured(&t), Some((Duration::from_millis(300), EndpointedBy::Stt)));
+
+    // The final arrives at 1.3 s, before the STT's end of speech at 1.6 s: nothing to measure.
+    let mut t = Turns::stt_only(Ts::ZERO);
+    t.start(ms(200), None);
+    t.final_(ms(1_300), "book a table", 0.0);
+    t.end(ms(1_600), None);
+    t.at(ms(10_000));
+    assert_eq!(measured(&t), None);
+
+    // The VAD ends the speech at 1.0 s (reported at 1.5 s, after its silence window); the STT's
+    // final arrives at 1.4 s and does not move that end.
+    let mut t = Turns::with_vad();
+    t.vad(ms(300), VadEventType::StartOfSpeech, 0.1, 0.0);
+    t.final_(ms(1_400), "book a table", 1.2);
+    t.vad(ms(1_500), VadEventType::EndOfSpeech, 0.8, 0.5);
+    t.at(ms(10_000));
+    assert_eq!(measured(&t), Some((Duration::from_millis(400), EndpointedBy::Vad)));
+
+    // The microphone is detached at 1.0 s under a speaking person: no end of speech was detected.
+    let mut t = Turns::with_vad();
+    t.vad(ms(300), VadEventType::StartOfSpeech, 0.1, 0.0);
+    t.at(ms(1_000));
+    let eff = t.r.on_host_end_of_speech(ms(1_000));
+    t.apply(eff);
+    t.final_(ms(1_400), "book a table", 0.0);
+    t.at(ms(10_000));
+    assert_eq!(measured(&t), None);
 }

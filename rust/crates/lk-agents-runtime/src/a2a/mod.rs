@@ -8,6 +8,7 @@ use crate::telemetry;
 use handler::{Handler, Read};
 use lk_agents_abi::a2a::metadata::REASON_KEY;
 use lk_agents_abi::a2a::turn::Turn as TurnContract;
+use lk_agents_abi::productstats::sessions::{Entrypoint, Sessions};
 use lk_agents_abi::storage::thread::{TaskReason, TaskWrite};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT, Spawner};
 use lk_agents_core::a2a::task::{
@@ -195,6 +196,8 @@ pub struct Turn {
     host_context: Option<lk_agents_abi::HostRef>,
     /// The span the handler runs in: the request's `a2a_request`.
     span: Option<telemetry::SpanContext>,
+    /// The request's context, which records its product statistics when it ends.
+    cx: telemetry::Cx,
     /// The cancels of tasks turns left unanswered, owned by the door.
     cancels: Arc<TaskSet>,
     /// The executor each run's background work spawns on, read when the run starts.
@@ -224,6 +227,7 @@ impl Turn {
             publisher: None,
             host_context: None,
             span: None,
+            cx: telemetry::Cx::NONE,
             cancels: Arc::default(),
             spawner,
         }
@@ -329,6 +333,9 @@ impl Turn {
                         log::warn!(target: lk_agents_abi::LOG_TARGET,
                             "the managed text execution ended without its cleanup receipt");
                     }
+                    // One text request is one session, however it ended.
+                    let ended = Sessions { entrypoint: Entrypoint::A2aSession };
+                    telemetry::measure(&self.cx, &ended, 1u64);
                     let now = elapsed();
                     let Call { holder, run, lease, mut submitted, .. } = call;
                     if let (Ok(_), Some(submitted)) = (&answer, submitted.as_mut()) {

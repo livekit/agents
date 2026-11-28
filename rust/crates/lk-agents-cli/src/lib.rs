@@ -22,13 +22,8 @@ pub use remote_cli::dev_channel;
 pub struct Commands;
 
 impl lk_agents_abi::cli::Cli for Commands {
-    /// A command parsed is the one that started the process: its runner reads it.
     fn parse_cli(argv: Vec<String>) -> lk_agents_abi::cli::CliParseResult {
-        let parsed = parse_cli(argv);
-        if let lk_agents_abi::cli::CliParseResult::Parsed { args } = &parsed {
-            lk_agents_net::env::serve_launch(args.launch());
-        }
-        parsed
+        parse_cli(argv)
     }
 
     fn host_log_level(level: lk_agents_abi::cli::LogLevel) -> u32 {

@@ -6,6 +6,7 @@ use lk_agents_abi::telemetry::record::{JobKey, KeyValues, LogRecord, Record, Spa
 
 use super::config::{AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SessionIdentity};
 use super::metrics::Aggregator;
+use super::product_stats::{ProductStatsDestination, Window};
 
 /// Spans one undecided job holds in the exporter before its recording decision.
 pub(super) const HELD_SPANS: usize = 1024;
@@ -105,6 +106,8 @@ pub(crate) enum Batch {
         config: Arc<AppConfig>,
         payload: App,
     },
+    /// One window of LiveKit's product statistics, for its own collector.
+    ProductStats(Window),
 }
 
 /// A Cloud request: one job's spans, report records or metrics.
@@ -126,6 +129,8 @@ pub(crate) struct Take<'a> {
     /// Only this job's Cloud records, and no application records.
     pub job: Option<&'a JobKey>,
     pub metrics: bool,
+    /// The product statistics window, which has its own interval.
+    pub product_stats: bool,
     /// Everything queued, not only full batches.
     pub all: bool,
 }
@@ -139,12 +144,19 @@ pub(crate) struct State {
     pub app: Option<AppDestination>,
     /// Replaced application destinations, exported once more and then dropped.
     retired: Vec<AppDestination>,
+    /// LiveKit's product statistics; `None` when the process opted out of them.
+    pub product_stats: Option<ProductStatsDestination>,
     pub closed: bool,
 }
 
 impl State {
-    pub fn new(process: ProcessIdentity, limits: Limits) -> Self {
+    pub fn new(
+        process: ProcessIdentity,
+        limits: Limits,
+        product_stats: Option<ProductStatsDestination>,
+    ) -> Self {
         State {
+            product_stats,
             process,
             limits,
             cloud: None,
@@ -241,10 +253,22 @@ impl State {
         if self.closed {
             return false;
         }
+        // A product statistic belongs to no job and to one destination: it takes only those,
+        // and no customer destination below ever sees one.
+        let record = match record {
+            Record::ProductStat(stat) => {
+                if let Some(product_stats) = &mut self.product_stats {
+                    product_stats.record(stat);
+                }
+                return false;
+            }
+            record => record,
+        };
         let job = match &record {
             Record::Span(s) => s.job.as_ref(),
             Record::Log(l) => l.job.as_ref(),
             Record::Measurement(m) => m.job.as_ref(),
+            Record::ProductStat(_) => return false,
         };
         let cloud = self.cloud_action(job, &record);
         let identity = job.and_then(|k| self.jobs.get(k)).map(|j| j.identity.clone());
@@ -308,6 +332,7 @@ impl State {
             (Decision::Recording(r), Record::Span(_)) => (true, r.traces),
             (Decision::Recording(r), Record::Log(_)) => (true, r.logs),
             (Decision::Recording(r), Record::Measurement(_)) => (true, r.metrics),
+            (Decision::Recording(_), Record::ProductStat(_)) => return None,
             (Decision::Disabled, _) => return Some(Action::Disabled),
         };
         let held = if matches!(record, Record::Span(_)) { job.held.len() } else { 0 };
@@ -356,6 +381,11 @@ impl State {
         }
         if take.job.is_some() {
             return batches;
+        }
+        if take.product_stats
+            && let Some(window) = self.product_stats.as_mut().and_then(|stats| stats.take(now))
+        {
+            batches.push(Batch::ProductStats(window));
         }
         let retired = std::mem::take(&mut self.retired);
         if let Some(app) = &mut self.app {

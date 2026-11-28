@@ -217,6 +217,7 @@ impl VoiceDriver {
     /// `session_close`), then the session. The sweep after it finds nothing.
     pub(crate) fn close_spans(&mut self) {
         let Some(root) = self.session.span.take() else { return };
+        self.count_session_end();
         self.close_activity();
         self.keyterm_span_ended(None);
         if let Some(start) = self.session.starting.take() {

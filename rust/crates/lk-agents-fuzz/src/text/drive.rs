@@ -227,7 +227,7 @@ impl Env {
             history: Vec::new(),
             delegated: false,
             mode: Mode::Text,
-            llm: Some(LlmRef { id: ResourceId(0), provider: llm.id() }),
+            llm: Some(LlmRef { adapter: false, id: ResourceId(0), provider: llm.id() }),
             wall: WallAnchor::of(&*self.clock),
             cleanup_timeout: lk_agents_abi::HOST_TEARDOWN_TIMEOUT,
         };

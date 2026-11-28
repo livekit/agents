@@ -106,6 +106,8 @@ pub struct GatewayStt {
     conn_options: Option<ApiConnectOptions>,
     /// The name logs and metrics give it: its host class's when its host built it.
     label: String,
+    /// The plugin its host class belongs to; LiveKit Inference's without one.
+    plugin: String,
     /// The host object it was built as, which hears each failure the core reports.
     events: Option<Arc<dyn ProviderEvents>>,
 }
@@ -160,6 +162,7 @@ impl GatewayStt {
             shared: Arc::new(shared),
             conn_options: None,
             label: NativeLabel::InferenceStt.as_str().into(),
+            plugin: crate::INFERENCE_PLUGIN.into(),
             events: None,
         }
     }
@@ -417,6 +420,7 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
     fn new(
         env: &ProcessEnv,
         label: String,
+        plugin: String,
         events: Arc<dyn ProviderEvents>,
         vad_models: Arc<dyn VadModels>,
         model: Option<String>,
@@ -481,7 +485,7 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
         });
         let _ = stt.shared.default_vad.set(default_vad);
         stt.resolve_vad(vad);
-        Ok(GatewayStt { label, events: Some(events), ..stt })
+        Ok(GatewayStt { label, plugin, events: Some(events), ..stt })
     }
 
     fn model(&self) -> String {
@@ -546,11 +550,7 @@ impl Stt for GatewayStt {
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
-        lk_agents_abi::ProviderId {
-            label: Stt::label(self),
-            model: self.model(),
-            provider: "livekit".into(),
-        }
+        crate::inference_id(Stt::label(self), self.plugin.clone(), self.model())
     }
 
     /// `_update_session_keyterms`: a warning once for a model without keyterm prompting, else the

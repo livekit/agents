@@ -2,6 +2,9 @@
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::{LlmMetrics, Metadata, TtsMetrics};
+use lk_agents_abi::productstats::models::{
+    ModelId, ModelKind, ModelRequests, ModelTtfb, ModelTtft, ModelUsage,
+};
 use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
     GenAiInputTokens, GenAiLabels, GenAiOperationDuration, GenAiOutputTokens, ModelLabels,
@@ -40,6 +43,12 @@ pub fn provider_name(id: &ProviderId) -> String {
 /// A model's `M` labels: its declared provider and its name.
 pub fn model_labels(id: &ProviderId) -> ModelLabels {
     ModelLabels::of(Some(&provider_name(id)), Some(&id.model))
+}
+
+/// One request made to `id`'s model, as product statistics count it: counted when it is made,
+/// so a request that fails or is dropped is still one.
+pub(crate) fn model_request(cx: &Cx, kind: ModelKind, id: &ProviderId) {
+    measure(cx, &ModelRequests { model: ModelId::of(kind, id) }, 1u64);
 }
 
 fn seconds(from: u64, to: u64) -> f64 {
@@ -116,6 +125,9 @@ impl LlmTrace {
                 },
             )
         });
+        if span.is_some() {
+            model_request(cx, ModelKind::Llm, &id);
+        }
         let cx = span.as_ref().map_or_else(|| cx.clone(), |span| span.cx().clone());
         let started = cx.now_nanos();
         LlmTrace {
@@ -244,6 +256,11 @@ impl LlmTrace {
         let Some(span) = self.span.take() else { return metrics };
         let cx = span.cx();
         let usage = self.usage.clone().unwrap_or_default();
+        let model = ModelId::of(ModelKind::Llm, &self.id);
+        ModelUsage::tokens(&usage).measure(&model, cx);
+        if let Some(at) = self.first_chunk {
+            measure(cx, &ModelTtft { model }, seconds(self.started, at));
+        }
         let provider = provider_name(&self.id);
         let labels = || GenAiLabels {
             operation: GenAiOperation::Chat,
@@ -386,6 +403,7 @@ impl TtsTrace {
         use lk_agents_telemetry::start;
         let span = match tts.request_span() {
             RequestSpan::Request => {
+                model_request(cx, ModelKind::Tts, &id);
                 Some(TtsRequestSpan::Request(start(cx, TtsRequest { target, recovery: None })))
             }
             RequestSpan::FallbackAdapter => {
@@ -456,6 +474,20 @@ impl TtsTrace {
 
     /// Ends the request with the text synthesized and its metrics.
     pub fn end(mut self, text: String, metrics: Option<&TtsMetrics>) {
+        // An adapter's request carries the metrics of the member that served it, which its
+        // identity names; the member's own request carries none.
+        if let (Some(_), Some(metrics)) = (&self.span, metrics) {
+            let model = ModelId::of(ModelKind::Tts, &self.id);
+            let usage = ModelUsage {
+                characters: metrics.characters_count.into(),
+                audio_duration: metrics.audio_duration,
+                ..ModelUsage::tokens(&metrics.tokens)
+            };
+            usage.measure(&model, &self.cx);
+            if let Some(ttfb) = metrics.ttfb.filter(|ttfb| *ttfb >= 0.0) {
+                measure(&self.cx, &ModelTtfb { model }, ttfb);
+            }
+        }
         let end = TtsRequestEnd {
             input_text: Some(Content(text)),
             metrics: metrics.map(|m| Json(TtsMetricsSummary::from(m))),

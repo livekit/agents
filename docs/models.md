@@ -203,6 +203,14 @@ model given a `base_url` or a client without a vendor reports `"unknown"`. Telem
 that id as declared: `gen_ai.provider.name` and the `model_provider` label are the model's
 `provider`, with no translation.
 
+A model's identity also names its plugin, the code that runs. A plugin author writes nothing:
+the base class declares it from the class's package (`livekit.plugins.deepgram` is `deepgram`,
+`livekit.plugins.boson_avatar` is `boson-avatar`), a LiveKit Inference class is
+`livekit-inference`, and a class outside `livekit.plugins` is `custom`. A Node base class
+declares the same id from its package name. A LiveKit Inference model keeps `provider`
+`livekit` and its model string (what metrics and usage name) and declares beside them the
+vendor and model it runs. [Product statistics](telemetry.md#what-is-collected) copy these.
+
 An STT or TTS declares every fact fixed at construction in its `STTCapabilities` or
 `TTSCapabilities`, passed to the base constructor (`super().__init__(capabilities=...)`);
 `update_options` never changes one. An LLM has no such facts: everything it does is chosen

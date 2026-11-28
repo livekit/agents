@@ -295,3 +295,31 @@ fn threaded_jobs_get_their_own_job_root_span() {
     jobs.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
     assert_eq!(jobs, [Some(JobKey("AJ_one".into())), Some(JobKey("AJ_two".into()))]);
 }
+
+// Catches: `measure` sending a metric to the other audience's destination (a product statistic
+// as a customer measurement, a customer instrument as a product statistic): the declared
+// audience alone chooses the record.
+#[test]
+fn measure_routes_each_metric_by_its_declared_audience() {
+    use lk_agents_abi::productstats::testkit::TestDuration;
+    use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
+    let recorded = crate::testkit::Recorded::default();
+    crate::measure(&recorded.cx(), &WorkerProcessReadyDuration, 1.0);
+    crate::measure(&recorded.cx(), &TestDuration, 2.0);
+    let routed: Vec<(&str, &str)> = recorded
+        .records()
+        .into_iter()
+        .map(|record| match record {
+            Record::Measurement(m) => ("customer", m.instrument),
+            Record::ProductStat(stat) => ("product", stat.into_measurement().instrument),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        routed,
+        [
+            ("customer", "lk.agents.worker.process_ready.duration"),
+            ("product", "lk.product.agents.test.duration"),
+        ]
+    );
+}

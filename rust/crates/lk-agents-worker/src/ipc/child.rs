@@ -213,10 +213,9 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             }
         });
         lk_agents_net::env::serve_http_proxy(hello.http_proxy.clone());
-        lk_agents_net::env::serve_launch(hello.launch);
         // The host's preloads are ready before readiness.
         let initialized =
-            initialize.initialize(hello.http_proxy.clone()).map_err(WorkerError::Host);
+            initialize.initialize(hello.http_proxy.clone(), hello.cmd).map_err(WorkerError::Host);
         let error = initialized.as_ref().err().map(|error| match error {
             WorkerError::Host(error) => bounded(error.message.clone()),
             error => bounded(error.to_string()),

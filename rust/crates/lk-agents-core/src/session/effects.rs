@@ -30,6 +30,8 @@ pub enum SessionEffect {
         origin: Option<lk_agents_abi::text_session::LiveTurnOrigin>,
         frame_id: FrameId,
         agent_name: String,
+        /// The invocation starts a local agent called as a tool: a child's first.
+        agent_tool: bool,
         invocation_id: String,
         execution_id: String,
         history: Vec<ChatItem>,

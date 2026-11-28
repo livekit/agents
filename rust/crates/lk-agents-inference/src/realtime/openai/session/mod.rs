@@ -112,6 +112,8 @@ pub struct OpenAIRealtime {
     turn_detection_given: bool,
     /// The host class's `label`, stamped on errors and metrics; `None` names the dialect.
     label: Option<String>,
+    /// The plugin the host class belongs to, as its host declares it; `None` without a host.
+    pub(super) plugin: Option<String>,
     /// `self._sessions`: the live sessions an `update_options` reaches.
     sessions: parking_lot::Mutex<Vec<Weak<super::queue::Ingress>>>,
 }
@@ -138,6 +140,7 @@ impl OpenAIRealtime {
             ids: Arc::new(RandomIds),
             turn_detection_given: false,
             label: None,
+            plugin: None,
             sessions: parking_lot::Mutex::new(Vec::new()),
         }
     }
@@ -951,10 +954,27 @@ impl lk_agents_abi::Realtime for OpenAIRealtime {
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
-        lk_agents_abi::ProviderId {
-            label: OpenAIRealtime::label(self),
-            model: self.model(),
-            provider: self.provider(),
+        let (label, model) = (OpenAIRealtime::label(self), self.model());
+        match &self.connect.auth {
+            // Through LiveKit Inference: the vendor is the one the gateway routes to.
+            Auth::Inference { provider, .. } => {
+                let plugin = self.plugin.clone().unwrap_or_else(|| crate::INFERENCE_PLUGIN.into());
+                let id = crate::inference_id(label, plugin, model);
+                let vendor = provider.clone().filter(|_| id.upstream_provider.is_empty());
+                lk_agents_abi::ProviderId {
+                    provider: self.provider(),
+                    upstream_provider: vendor.unwrap_or(id.upstream_provider.clone()),
+                    ..id
+                }
+            }
+            Auth::Bearer(_) | Auth::Azure { .. } => lk_agents_abi::ProviderId {
+                label,
+                model,
+                provider: self.provider(),
+                // Without a host class, the protocol's own vendor names the code that runs.
+                plugin: self.plugin.clone().unwrap_or_else(|| self.dialect.vendor.to_owned()),
+                ..Default::default()
+            },
         }
     }
 

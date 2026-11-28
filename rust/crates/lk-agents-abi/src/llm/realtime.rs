@@ -870,6 +870,7 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = None)] dialect: Option<RealtimeProvider>,
         #[host(default = None)] label: Option<String>,
+        #[host(default = None)] plugin: Option<String>,
         #[host(default = None)] gateway: Option<InferenceGateway>,
     ) -> Result<Self, RealtimeConfigurationError>;
     #[host(getter)]
@@ -900,7 +901,8 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
 
 /// A realtime model over the OpenAI Realtime protocol, whose sessions run in the core: OpenAI,
 /// Azure OpenAI and every provider speaking it. A provider subclass sets `_dialect`,
-/// `_provider_label` (the name logs and metrics give it) and, for LiveKit Inference, `_gateway`.
+/// `_provider_label` (the name logs and metrics give it) and, for LiveKit Inference, `_gateway`;
+/// the host base derives `_plugin`, the plugin id its identity declares, from that label.
 #[crate::host(facade(
     path = "livekit.agents.llm.openai_protocol",
     extended,
@@ -910,7 +912,12 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     refuse(session),
     node = "session.llm_node",
     base_args(capabilities),
-    host_args(dialect = "self._dialect", label = "self._provider_label", gateway = "self._gateway")
+    host_args(
+        dialect = "self._dialect",
+        label = "self._provider_label",
+        plugin = "self._plugin",
+        gateway = "self._gateway"
+    )
 ))]
 pub trait OpenAIRealtimeModelFacade {
     /// A realtime model over the OpenAI Realtime protocol.

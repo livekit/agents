@@ -3,6 +3,7 @@ use crate::recording::SessionRecorder;
 use crate::telemetry;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
+use lk_agents_abi::productstats::features::{FeatureOverrideOptions, FeatureUpdateOptions};
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure, SessionRecorder as _};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
@@ -699,6 +700,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
         };
         validate_session_update(&update)?;
+        telemetry::measure(&self.0.env.tracer.root(), &FeatureUpdateOptions, 1u64);
         if let Some(session) = self.0.session.get() {
             session.update_turn_options(update)?;
         } else {
@@ -721,6 +723,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             ..UpdateKwargs::default()
         };
         validate_session_update(&update)?;
+        telemetry::measure(&self.0.env.tracer.root(), &FeatureOverrideOptions, 1u64);
         let layer = match self.0.session.get() {
             Some(session) => session.override_options(update)?,
             None => self.0.options.override_options(update),

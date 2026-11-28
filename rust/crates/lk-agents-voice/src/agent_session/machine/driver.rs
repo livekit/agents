@@ -265,6 +265,7 @@ impl VoiceDriver {
                 self.attach_recorder(now, recorder);
             }
             self.issue_on_enter(now);
+            self.count_voice_session();
             self.session_opened();
             self.settle_step()
         }
@@ -890,6 +891,7 @@ impl VoiceDriver {
         let mut session =
             VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
         session.expressive = initial.expressive;
+        session.installed.realtime(activity.realtime());
         let input = crate::agent_session::machine::activity::io::AgentInput::new(
             initial.sinks,
             initial.video_instance,
@@ -999,6 +1001,7 @@ impl VoiceDriver {
                     self.flush_turn_detector(reason)
                 }
                 AudioRecognitionEffect::EndOfTurn(info) => {
+                    self.count_transcription_delay(&info);
                     self.record_trace(Step::Decided(RecognitionObservation::EndOfTurn(
                         info.clone(),
                     )));

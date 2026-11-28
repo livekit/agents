@@ -1,5 +1,5 @@
 pub use super::record::{InstrumentKind, KeyValues, Number, SpanContext, SpanKind, Value};
-pub use lk_agents_host_derive::{Attrs, SpanValue, event, metric, record, span};
+pub use lk_agents_host_derive::{Attrs, Bounded, SpanValue, event, metric, record, span};
 
 use super::record::Key;
 
@@ -52,9 +52,16 @@ mod sealed {
     pub trait Sealed {}
 }
 
-/// Who a declaration's data is for. Each pipeline records only its own audience's declarations,
-/// so one recorded into the other's does not compile.
-pub trait Audience: sealed::Sealed {}
+/// Who a declaration's data is for: the customer's observability, or LiveKit's product
+/// statistics. A measurement's audience is its declaration's and chooses the record it becomes,
+/// so nothing a caller passes can send one audience's data to the other's destination. Sealed:
+/// there are these two audiences and no other.
+pub trait Audience: sealed::Sealed {
+    /// Whether this is LiveKit's product statistics.
+    const PRODUCT_STATS: bool;
+    /// The record `measurement` travels as.
+    fn record(measurement: super::record::Measurement) -> super::record::Record;
+}
 
 /// The customer's observability: spans, events and metrics exported to the customer's project.
 pub enum Observability {}
@@ -63,9 +70,139 @@ pub enum Observability {}
 pub enum ProductStats {}
 
 impl sealed::Sealed for Observability {}
-impl Audience for Observability {}
+impl Audience for Observability {
+    const PRODUCT_STATS: bool = false;
+    fn record(measurement: super::record::Measurement) -> super::record::Record {
+        super::record::Record::Measurement(measurement)
+    }
+}
 impl sealed::Sealed for ProductStats {}
-impl Audience for ProductStats {}
+impl Audience for ProductStats {
+    const PRODUCT_STATS: bool = true;
+    /// A product statistic belongs to no job.
+    fn record(measurement: super::record::Measurement) -> super::record::Record {
+        let stat = crate::productstats::ProductStat::new(super::record::Measurement {
+            job: None,
+            ..measurement
+        });
+        super::record::Record::ProductStat(stat)
+    }
+}
+
+/// The prefix of every name and key product statistics own, and of no other declaration's.
+pub const PRODUCT_STATS_PREFIX: &str = "lk.product.agents.";
+/// The module product statistics are declared in, with its children.
+const PRODUCT_STATS_MODULE: &str = "lk_agents_abi::productstats";
+
+const fn starts_with(text: &str, prefix: &str) -> bool {
+    let (text, prefix) = (text.as_bytes(), prefix.as_bytes());
+    if text.len() < prefix.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < prefix.len() {
+        if text[i] != prefix[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `module` (a `module_path!()`) is the product statistics module or one of its children.
+const fn in_product_stats(module: &str) -> bool {
+    let at = PRODUCT_STATS_MODULE.len();
+    starts_with(module, PRODUCT_STATS_MODULE)
+        && (module.len() == at || module.as_bytes()[at] == b':')
+}
+
+/// What `#[span]`, `#[event]` and `#[metric]` assert of the declaration they expand, at compile
+/// time: a declaration is for product statistics exactly when its name has their prefix, and
+/// exactly when it is declared in their module. So the audience, the name and the place of a
+/// declaration always agree, and none can be changed alone.
+pub const fn declared<A: Audience>(name: &str, module: &str) {
+    assert!(
+        starts_with(name, PRODUCT_STATS_PREFIX) == A::PRODUCT_STATS,
+        "`lk.product.agents.*` names the product statistics declarations (`audience = \
+         ProductStats`), all of them and no other"
+    );
+    assert!(
+        in_product_stats(module) == A::PRODUCT_STATS,
+        "an `audience = ProductStats` declaration lives in `abi::productstats`, and no other does"
+    );
+}
+
+/// What `#[derive(Attrs)]` asserts of each `#[attr]` key, at compile time: a key the agents
+/// registry owns (a literal) has the product statistics prefix exactly when it is declared in
+/// their module; a dependency registry's key (a `semconv` constant) never has it.
+pub const fn key_declared(key: &str, module: &str, owned: bool) {
+    let product = starts_with(key, PRODUCT_STATS_PREFIX);
+    assert!(
+        !product || in_product_stats(module),
+        "`lk.product.agents.*` keys are declared in `abi::productstats`"
+    );
+    assert!(
+        product || !owned || !in_product_stats(module),
+        "a product statistics key starts with `lk.product.agents.`"
+    );
+}
+
+pub(crate) mod bounded {
+    pub trait Sealed {}
+}
+
+/// A value a product statistic may carry: a closed enum or a bounded label, never content, free
+/// text or an id. Sealed: only ABI's own closed vocabularies and label groups are, by their
+/// derives, so a `String`, a `Label`, a `Content` or a `GenAiContent` cannot appear in a product
+/// statistic.
+pub trait Bounded: bounded::Sealed {}
+
+impl bounded::Sealed for BoundedLabel {}
+impl Bounded for BoundedLabel {}
+impl bounded::Sealed for BoolString {}
+impl Bounded for BoolString {}
+impl<T: Bounded> bounded::Sealed for Option<T> {}
+impl<T: Bounded> Bounded for Option<T> {}
+impl<T: Bounded> bounded::Sealed for Vec<T> {}
+impl<T: Bounded> Bounded for Vec<T> {}
+
+/// What `#[metric(audience = ProductStats)]` and `#[derive(Bounded)]` require of each field.
+pub const fn bounded<T: Bounded>() {}
+
+/// One measurement of the declared instrument `M` under `labels`, as the record its audience
+/// makes it: the one way a measurement becomes a record.
+pub fn record_of<M: MetricDecl>(
+    labels: &M,
+    value: Number,
+    job: Option<super::record::JobKey>,
+) -> super::record::Record {
+    let mut out = KeyValues::new();
+    labels.write(&mut out);
+    M::Audience::record(super::record::Measurement {
+        instrument: M::NAME,
+        kind: M::KIND,
+        unit: M::UNIT,
+        bounds: M::BOUNDS,
+        value,
+        labels: out,
+        job,
+    })
+}
+
+/// What measures a declared instrument of either audience: a context (`&Cx`, async code) or a
+/// machine's trace (`&mut Trace`). The emitters both kinds of code share take one.
+pub trait Measure {
+    fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number);
+}
+
+/// A context records through its recorder, for its job; under `Cx::NONE` nothing is recorded.
+impl Measure for &super::Cx {
+    fn measure<M: MetricDecl>(&mut self, metric: &M, value: Number) {
+        if let Some(recorder) = self.recorder() {
+            recorder.record(record_of(metric, value, self.job().cloned()));
+        }
+    }
+}
 
 /// A span: its start attributes are the struct, its end attributes `End`.
 pub trait SpanDecl: Attrs {
@@ -517,6 +654,39 @@ pub fn json(v: &serde_json::Value) -> Option<Value> {
 pub struct Label(pub String);
 
 impl SpanValue for Label {
+    fn value(&self) -> Option<Value> {
+        Some(Value::String(self.0.clone()))
+    }
+}
+
+/// A product statistics label, safe by construction: a short identifier of ASCII letters,
+/// digits and `.-_/:+`, or `unknown`. Free text, a sentence, a query string or anything long
+/// cannot be one, whatever a model or a host declares. It alone among strings is `Bounded`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedLabel(String);
+
+impl BoundedLabel {
+    /// The longest value kept.
+    pub const MAX_BYTES: usize = 64;
+    /// What a blank, long or otherwise unfit value becomes.
+    pub const UNKNOWN: &'static str = "unknown";
+
+    /// `value`, trimmed, when it is at most [`Self::MAX_BYTES`] of the allowed characters;
+    /// `unknown` otherwise.
+    pub fn new(value: &str) -> Self {
+        let value = value.trim();
+        let allowed = |b: u8| b.is_ascii_alphanumeric() || b".-_/:+".contains(&b);
+        let fits = !value.is_empty() && value.len() <= Self::MAX_BYTES;
+        let kept = if fits && value.bytes().all(allowed) { value } else { Self::UNKNOWN };
+        BoundedLabel(kept.to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl SpanValue for BoundedLabel {
     fn value(&self) -> Option<Value> {
         Some(Value::String(self.0.clone()))
     }

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
+    from livekit.agents._core import RunnerCmd
+
     from .worker_options import ProcessOptions, ServerOptions
 
 LogLevel: TypeAlias = Literal["trace", "debug", "info", "warn", "error", "fatal", "off"]
@@ -25,6 +27,10 @@ class CliArgsStart:
     dev: bool
     cli_addr: str | None
     simulation: bool
+    runner_cmd: RunnerCmd
+    """The command as product statistics name it: `simulation` for a simulation, else `dev`
+    with `--dev`, else `start`. The parser derives it; nothing else does.
+    """
     options: ServerOptions
     """The server options the command line gives (`--url`, `--api-key`, `--api-secret`,
     `--shutdown-timeout`, `--drain-timeout`), over the `AgentServer`'s own.

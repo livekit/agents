@@ -204,6 +204,7 @@ impl VoiceDriver {
             }
             Event::HostError(_) | Event::ServerGeneration(_) => {}
             Event::Metrics(rt::RealtimeMetrics { metrics }) => {
+                self.count_realtime_response(&metrics);
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {
                     metrics,
                     speech: None,

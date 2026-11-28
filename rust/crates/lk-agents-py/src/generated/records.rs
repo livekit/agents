@@ -5289,6 +5289,9 @@ pub mod cli {
                 simulation: crate::py_values::attr_with(obj, "CliArgsStart", "simulation", |v| {
                     v.extract::<bool>()
                 })?,
+                runner_cmd: crate::py_values::attr_with(obj, "CliArgsStart", "runner_cmd", |v| {
+                    crate::generated::native_enums::runner_cmd_from_py(v)
+                })?,
                 options: crate::py_values::attr_with(obj, "CliArgsStart", "options", |v| {
                     (crate::generated::records::worker_options::server_options_from_py(v))
                         .map(::std::boxed::Box::new)
@@ -5329,6 +5332,7 @@ pub mod cli {
                 dev,
                 cli_addr,
                 simulation,
+                runner_cmd,
                 options,
                 process,
             } => {
@@ -5348,6 +5352,10 @@ pub mod cli {
                 kwargs.set_item(
                     "simulation",
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(simulation, py)?,
+                )?;
+                kwargs.set_item(
+                    "runner_cmd",
+                    crate::generated::native_enums::runner_cmd_to_py(py, runner_cmd)?,
                 )?;
                 kwargs.set_item("options", {
                     let value = *options;
@@ -27349,6 +27357,24 @@ pub mod types {
                     ::pyo3::exceptions::PyKeyError::new_err("ProviderId.provider")
                 })?;
                 (v.as_any().extract::<::std::string::String>())?
+            },
+            plugin: match obj.get_item("plugin")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => {
+                    (v.as_any().extract::<::std::string::String>())?
+                }
+                _ => "custom".to_owned(),
+            },
+            upstream_provider: match obj.get_item("upstream_provider")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => {
+                    (v.as_any().extract::<::std::string::String>())?
+                }
+                _ => "".to_owned(),
+            },
+            upstream_model: match obj.get_item("upstream_model")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => {
+                    (v.as_any().extract::<::std::string::String>())?
+                }
+                _ => "".to_owned(),
             },
         })
     }

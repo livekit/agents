@@ -84,10 +84,12 @@ impl Resolver<'_> {
             matches!(inner, syn::TraitItem::Fn(f) if voc::read(&f.attrs).is_ok_and(|e| voc::find(&e, "init").is_some()))
         });
         for m in &methods {
-            let filled = m
-                .params
-                .iter()
-                .any(|p| matches!(p.ty, Ty::ClassLabel | Ty::Proxy { self_events: true, .. }));
+            let filled = m.params.iter().any(|p| {
+                matches!(
+                    p.ty,
+                    Ty::ClassLabel | Ty::ClassPlugin | Ty::Proxy { self_events: true, .. }
+                )
+            });
             if filled && !(init && m.kind == MethodKind::New) {
                 return Err(format!(
                     "{at}::{}: a label or a `self_events` proxy is filled from the object an `init` constructor builds",

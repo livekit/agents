@@ -1113,3 +1113,19 @@ mod attachments {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+// Catches: a text request not counted as one session when it ends, counted as a call, or a
+// request whose handler failed not counted.
+#[tokio::test]
+async fn each_text_request_is_one_session_when_it_ends() {
+    let stats = lk_agents_telemetry::testkit::Recorded::default();
+    let fx = Backend::Sqlite.fixture(None).await;
+    let thread = fx.thread().await;
+    let label = ("lk.product.agents.session.entrypoint".to_owned(), "a2a_session".to_owned());
+    for (n, behavior) in [Behavior::Echo, Behavior::Raise].into_iter().enumerate() {
+        let message = a2a("hello", &format!("m{n}"), None, None);
+        let turn = Turn { cx: stats.cx(), ..turn(&thread, Fake::new(behavior), None) };
+        let _ = turn.run(message, None).await;
+        assert_eq!(stats.take(), [("lk.product.agents.sessions", vec![label.clone()], 1.0)]);
+    }
+}

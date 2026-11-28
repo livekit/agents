@@ -156,3 +156,16 @@ async fn release_stops_a_recovery_and_settles_its_listing() {
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(host.lists.load(Ordering::SeqCst), 2);
 }
+
+// Catches: an MCP toolset's setup not counted, or counted only the first time it lists.
+#[tokio::test(start_paused = true)]
+async fn each_setup_of_an_mcp_toolset_counts_the_feature() {
+    let stats = lk_agents_telemetry::testkit::Recorded::default();
+    let host = Arc::new(Host::default());
+    let lifecycle = lifecycle(&host);
+    for _ in 0..2 {
+        lifecycle.0.setup(lifecycle.1.clone(), CallContext::default(), stats.cx()).await;
+    }
+    let counted: Vec<_> = stats.take().into_iter().map(|(metric, ..)| metric).collect();
+    assert_eq!(counted, ["lk.product.agents.feature.mcp"; 2]);
+}

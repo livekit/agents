@@ -370,7 +370,11 @@ impl JobTask for Settles {
 }
 
 impl lk_agents_abi::worker::ipc_host::ChildInitialize for JobThread {
-    fn initialize(&self, _: Option<String>) -> Result<(), HostError> {
+    fn initialize(
+        &self,
+        _: Option<String>,
+        _: lk_agents_abi::productstats::runner::RunnerCmd,
+    ) -> Result<(), HostError> {
         Ok(())
     }
 }

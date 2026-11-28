@@ -20,8 +20,8 @@ use lk_agents_abi::telemetry::record::Key;
 use lk_agents_abi::telemetry::spans::agent_turn::FunctionToolEnd;
 pub use lk_agents_abi::telemetry::{host, policy, record};
 use lk_agents_net::export::ExporterSlot;
+use lk_agents_net::export::otlp::product_stats;
 use lk_agents_net::export::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
-use lk_agents_net::export::productstats::{self, ProductStats};
 pub use lk_agents_net::export::profile;
 pub use lk_agents_net::export::stall::stall_message;
 pub(crate) use lk_agents_net::export::stall::{Blocked, event_loop_blocked};
@@ -136,7 +136,6 @@ pub fn tracer() -> Tracer {
 /// A forked child abandons its parent's exporter and draws its own ids.
 pub(crate) fn reinit() {
     PROCESS.slot.forget();
-    productstats::forget();
     PROCESS.tracer.reseed(seed());
 }
 
@@ -146,13 +145,7 @@ pub async fn shutdown() {
     if let Some(exporter) = PROCESS.slot.take() {
         exporter.shutdown(SHUTDOWN_TIMEOUT).await;
     }
-    if let Some(stats) = productstats::take() {
-        stats.shutdown(PRODUCT_STATS_SHUTDOWN_TIMEOUT).await;
-    }
 }
-
-/// How long the process-exit flush of product statistics may take.
-const PRODUCT_STATS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn allow_pii_from_env() -> bool {
     std::env::var("LIVEKIT_TELEMETRY_ALLOW_PII").is_ok_and(|v| {
@@ -172,7 +165,12 @@ fn env_app() -> Option<AppConfig> {
 pub struct Telemetry;
 
 impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
-    fn _core_telemetry_install(sdk_version: String, python_version: Option<String>) {
+    fn _core_telemetry_install(
+        sdk_version: String,
+        runtime: lk_agents_abi::productstats::RuntimeName,
+        runtime_version: String,
+        runner_cmd: lk_agents_abi::productstats::runner::RunnerCmd,
+    ) {
         let process = &*PROCESS;
         if process.slot.get().is_some() {
             return;
@@ -183,13 +181,14 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
                 return log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry not started: {error}");
             }
         };
-        productstats::install(|| {
-            let resource = productstats::resource(&sdk_version, python_version.as_deref());
-            ProductStats::start(&*spawner, crate::process::host_clock(), resource)
-        });
         let exporter = process.slot.install(|| {
+            // LiveKit's product statistics, unless the process opted out of them.
+            let stats = lk_agents_net::env::product_stats_enabled().then(|| {
+                product_stats::resource(&sdk_version, runtime, &runtime_version, runner_cmd)
+            });
             let identity = ProcessIdentity::from_env(SdkName::Python, sdk_version);
-            Exporter::start(&*spawner, crate::process::host_clock(), identity, Limits::default())
+            let clock = crate::process::host_clock();
+            Exporter::start(&*spawner, clock, identity, Limits::default(), stats)
         });
         exporter.configure_app(process.app.lock().clone().or_else(env_app));
     }

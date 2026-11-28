@@ -269,7 +269,12 @@ class TTS(
         return self.capabilities
 
     def _core_id(self) -> ProviderId:
-        return {"label": self.label, "model": self.model, "provider": self.provider}
+        return {
+            "label": self.label,
+            "model": self.model,
+            "provider": self.provider,
+            "plugin": _bindings.plugin_id(type(self)),
+        }
 
     def _core_prewarm(self) -> None:
         self.prewarm()

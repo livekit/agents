@@ -1,5 +1,6 @@
 use crate::telemetry;
 use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::productstats::features::FeatureBackgroundAudio;
 use lk_agents_abi::voice::rtc::{
     AudioSource, LocalParticipant, RtcError, TrackPublication, TrackPublishOptions, TrackSource,
 };
@@ -723,8 +724,9 @@ impl lk_agents_abi::voice::background_audio::PlayState for PlayState {
     }
 }
 
-/// Native class execution over the ABI-owned room capability.
-pub struct BackgroundAudio(pub Arc<BackgroundAudioPlayer>);
+/// Native class execution over the ABI-owned room capability, and the context its start is
+/// counted under in the product statistics.
+pub struct BackgroundAudio(pub Arc<BackgroundAudioPlayer>, pub telemetry::Cx);
 
 impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for BackgroundAudio {
     type State = PlayState;
@@ -743,14 +745,15 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
                 e.to_string(),
             )
         })?;
-        Ok(Self(Arc::new(BackgroundAudioPlayer::new(
+        let player = BackgroundAudioPlayer::new(
             sample_rate,
             num_channels,
             blocksize,
             stream_timeout_ms,
             env.clock.clone(),
             spawner,
-        ))))
+        );
+        Ok(Self(Arc::new(player), env.tracer.root()))
     }
 
     /// `start(room)`: publishes the track on the room's local participant, starts the `ambient`
@@ -767,7 +770,7 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         let participant = room.rtc().ok_or(RtcError::NotConnected)?.local().clone();
         // Publish the track and own the pump. If the caller cancels, close waits and releases the
         // track.
-        let this = self.0.clone();
+        let (this, cx) = (self.0.clone(), self.1.clone());
         spawn_owned((&self.0.tasks, self.0.spawner.as_ref()), async move {
             let mut output = this.output.lock().await;
             if this.closed.load(Ordering::Acquire) {
@@ -805,6 +808,8 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
                 pump,
             });
             this.started.store(true, Ordering::Release);
+            // Each player started is one use of background audio, with or without a session.
+            lk_agents_telemetry::measure(&cx, &FeatureBackgroundAudio, 1u64);
             let (sounds, choose) = ambient.map_or((Vec::new(), false), Sounds::candidates);
             if !sounds.is_empty() {
                 // Open and started: `play` cannot refuse.

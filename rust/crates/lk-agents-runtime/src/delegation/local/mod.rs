@@ -93,6 +93,7 @@ impl Port for LocalInteraction {
         if let Err(refused) = agent_tool::admit(self.depth) {
             return Ok(refused);
         }
+        telemetry::measure(&cx, &lk_agents_abi::productstats::features::FeatureAgentAsTool, 1u64);
         let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
         let stop = CancellationToken::new();
         let (done, settled) = signal::once();
@@ -303,7 +304,7 @@ impl Delegate {
             history,
             delegated: true,
             mode: Mode::Text,
-            llm: Some(LlmRef { id: ResourceId(0), provider: self.child.llm.id() }),
+            llm: Some(LlmRef { adapter: false, id: ResourceId(0), provider: self.child.llm.id() }),
             wall: WallAnchor::of(&*self.clock),
             cleanup_timeout: HOST_TEARDOWN_TIMEOUT,
         };

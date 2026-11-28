@@ -9,6 +9,7 @@ license.workspace = true
 # The shared async transport: owned tasks, server-sent events, HTTPS with phase deadlines, the
 # WebSocket seam, LiveKit token signing, the delegation A2A client and telemetry's export.
 [lib]
+
 doctest = false
 
 [dependencies]

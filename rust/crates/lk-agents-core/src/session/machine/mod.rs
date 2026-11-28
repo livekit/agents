@@ -436,6 +436,8 @@ impl Session {
     ) {
         let active = self.state.active_frame_id.clone();
         let frame = &self.state.frames[&active];
+        // A child frame's first invocation, with its task: a local agent called as a tool.
+        let agent_tool = message.is_some() && frame.parent.is_some();
         if frame.history.iter().any(|item| {
             matches!(item, ChatItem::FunctionCall(call)
             if crate::tool_calls::provisional(call)
@@ -572,6 +574,7 @@ impl Session {
             origin: self.live.as_ref().and_then(|live| live.origin().cloned()),
             frame_id: frame.id.clone(),
             agent_name: frame.agent_name.clone(),
+            agent_tool,
             invocation_id: invocation_id.clone(),
             execution_id: self.live.as_ref().and_then(|live| live.origin()).map_or_else(
                 || self.state.execution_id.clone(),

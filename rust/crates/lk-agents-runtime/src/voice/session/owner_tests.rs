@@ -627,3 +627,24 @@ async fn the_report_belongs_to_the_starting_job_and_a_redacted_one_keeps_no_cont
     assert!(!owner.accepts_event("user_input_transcribed".into()));
     assert!(owner.accepts_event("error".into()) && owner.accepts_event("close".into()));
 }
+
+// Catches: `update_options` or `override_options` not counted at each use, before the session
+// starts too, or one counted as the other.
+#[tokio::test]
+async fn each_options_call_counts_its_feature() {
+    let stats = lk_agents_telemetry::testkit::Recorded::default();
+    let env = ProcessEnv { tracer: stats.tracer(), ..ProcessEnv::current_runtime() };
+    let options = crate::voice::session::tests::option_kwargs();
+    let owner = SessionOwner::new(&env, SessionOptions::new(options, Default::default()));
+    let counted = || stats.take().into_iter().map(|(metric, ..)| metric).collect::<Vec<_>>();
+    use Maybe::NotGiven as N;
+    for _ in 0..3 {
+        owner.update_options(Maybe::Given(None), N, N, N, N, N, N).unwrap();
+    }
+    assert_eq!(counted(), ["lk.product.agents.feature.update_options"; 3]);
+    for _ in 0..2 {
+        let layer = owner.override_options(N, Maybe::Given(None), N, N, N).unwrap();
+        owner.release_override(layer).unwrap();
+    }
+    assert_eq!(counted(), ["lk.product.agents.feature.override_options"; 2]);
+}

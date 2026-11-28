@@ -202,7 +202,9 @@ def _run_worker(server: AgentServer, args: CliArgsStart, *, unregistered: bool =
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.slow_callback_duration = 0.1
-    serve = _serve(server, devmode, args.cli_addr, unregistered=unregistered)
+    serve = _serve(
+        server, devmode, args.cli_addr, unregistered=unregistered, runner_cmd=args.runner_cmd
+    )
     try:
         loop.run_until_complete(_run_until_exit(server, shutdown, serve, drain=not devmode))
     except Exception as error:
@@ -232,7 +234,12 @@ async def _run_until_exit(
 
 
 async def _serve(
-    server: AgentServer, devmode: bool, cli_addr: str | None, *, unregistered: bool = False
+    server: AgentServer,
+    devmode: bool,
+    cli_addr: str | None,
+    *,
+    unregistered: bool = False,
+    runner_cmd: _core.RunnerCmd,
 ) -> None:
     channel = None
     if cli_addr:
@@ -248,7 +255,7 @@ async def _serve(
     async with TaskSet() as tasks:
         if channel is not None:
             tasks.spawn(channel, name="dev_channel")
-        await server._run(devmode=devmode, unregistered=unregistered)
+        await server._run(devmode=devmode, unregistered=unregistered, runner_cmd=runner_cmd)
 
 
 async def _finish_server(server: AgentServer, shutdown: _core.Shutdown, *, drain: bool) -> None:
@@ -303,7 +310,7 @@ def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     )
 
     shutdown.listen()
-    serve = server._run(devmode=True, unregistered=True)
+    serve = server._run(devmode=True, unregistered=True, runner_cmd=_core.RunnerCmd.Console)
     try:
         loop.run_until_complete(_run_until_exit(server, shutdown, serve, drain=False))
     finally:

@@ -378,7 +378,7 @@ fn hello() -> Hello {
         asyncio_debug: false,
         http_proxy: None,
         health_timeout_ms: None,
-        launch: lk_agents_abi::telemetry::runner::Launch::None,
+        cmd: lk_agents_abi::productstats::runner::RunnerCmd::NoCommand,
     }
 }
 

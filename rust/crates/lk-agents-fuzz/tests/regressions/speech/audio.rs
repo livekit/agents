@@ -29,14 +29,61 @@ mod background_audio {
     }
 
     fn player(time: &Timebase) -> BackgroundAudio {
-        BackgroundAudio(Arc::new(BackgroundAudioPlayer::new(
+        player_under(time, lk_agents_abi::telemetry::Cx::NONE)
+    }
+
+    fn player_under(time: &Timebase, cx: lk_agents_abi::telemetry::Cx) -> BackgroundAudio {
+        let player = BackgroundAudioPlayer::new(
             48_000,
             1,
             4_800,
             200,
             time.clock(),
             Arc::new(TokioSpawner::current()),
-        )))
+        );
+        BackgroundAudio(Arc::new(player), cx)
+    }
+
+    #[derive(Default)]
+    struct Records(Mutex<Vec<lk_agents_abi::telemetry::record::Record>>);
+
+    impl lk_agents_abi::telemetry::record::RecordSink for Records {
+        fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+            self.0.lock().unwrap().push(record);
+        }
+    }
+
+    // Catches: a background audio player started without a session not counted, counted only
+    // when its session ends, a second start of one player counted again, or two players
+    // counted as one.
+    #[tokio::test(start_paused = true)]
+    async fn each_player_started_counts_background_audio_once_with_no_session() {
+        use lk_agents_abi::telemetry::record::Record;
+        let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
+        let time = Timebase::from_virtual(clock.clone());
+        let records = Arc::new(Records::default());
+        let tracer = lk_agents_telemetry::Tracer::new(records.clone(), clock, 1);
+        let counted = || {
+            let records = std::mem::take(&mut *records.0.lock().unwrap());
+            let stats = records.into_iter().map(|record| match record {
+                Record::ProductStat(stat) => stat.into_measurement().instrument,
+                other => panic!("{other:?}"),
+            });
+            stats.collect::<Vec<_>>()
+        };
+        let start = |player: &BackgroundAudio| {
+            let room = FixedRoom::new(Some(rtc.room("call")), time.clone(), None);
+            let player = BackgroundAudio(player.0.clone(), player.1.clone());
+            async move { player.start(Arc::new(room), 0.5, None, None).await.unwrap() }
+        };
+        let first = player_under(&time, tracer.root());
+        start(&first).await;
+        assert_eq!(counted(), ["lk.product.agents.feature.background_audio"]);
+        start(&first).await;
+        assert_eq!(counted(), [""; 0], "one player started twice is one player");
+        start(&player_under(&time, tracer.root())).await;
+        assert_eq!(counted(), ["lk.product.agents.feature.background_audio"]);
+        std::mem::forget(rtc);
     }
 
     /// A player started on a fake room with no ambient sound, and the room.

@@ -7,11 +7,11 @@ use std::time::SystemTime;
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, EventDecl, HasEvent, Instrument, KeyValues, MetricDecl, Number, Observability, Parent,
-    SpanDecl, finish_span,
+    Attrs, EventDecl, HasEvent, Instrument, KeyValues, Measure, MetricDecl, Number, Observability,
+    Parent, SpanDecl, finish_span,
 };
 use lk_agents_abi::telemetry::record::{
-    EventRecord, FRAMEWORK, Key, Measurement, Record, RecordSink, SpanRecord, Status,
+    EventRecord, FRAMEWORK, Key, Record, RecordSink, SpanRecord, Status,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception, GENAI_CONTENT};
 use parking_lot::Mutex;
@@ -173,7 +173,13 @@ fn debug_check_parent<D: SpanDecl>(cx: &Cx) {
     );
 }
 
-/// Opens a child of `cx`'s current span.
+/// Opens a child of `cx`'s current span. Spans are the customer's observability only: product
+/// statistics are metrics, and a span declared for them does not open.
+///
+/// ```compile_fail,E0271
+/// use lk_agents_abi::productstats::testkit::TestSpan;
+/// lk_agents_telemetry::start(&lk_agents_telemetry::Cx::NONE, TestSpan);
+/// ```
 pub fn start<D: SpanDecl<Audience = Observability>>(cx: &Cx, decl: D) -> ScopedSpan<D> {
     start_at(cx, decl, cx.now_nanos())
 }
@@ -214,12 +220,16 @@ pub fn end<D: SpanDecl>(span: ScopedSpan<D>, outcome: impl SpanEnd<D>) {
 }
 
 /// Adds a declared event to `span` at the current time.
-pub fn event<D: SpanDecl + HasEvent<E>, E: EventDecl>(span: &ScopedSpan<D>, event: E) {
+pub fn event<D, E>(span: &ScopedSpan<D>, event: E)
+where
+    D: SpanDecl + HasEvent<E>,
+    E: EventDecl<Audience = Observability>,
+{
     event_at(span, event, span.cx.now_nanos());
 }
 
 /// Adds a declared event to `span` that happened at `time` (unix nanoseconds).
-pub fn event_at<D: SpanDecl + HasEvent<E>, E: EventDecl>(
+pub fn event_at<D: SpanDecl + HasEvent<E>, E: EventDecl<Audience = Observability>>(
     span: &ScopedSpan<D>,
     event: E,
     time: u64,
@@ -235,37 +245,43 @@ pub fn event_at<D: SpanDecl + HasEvent<E>, E: EventDecl>(
     }
 }
 
-/// Records one measurement of a declared instrument, for `cx`'s job. Only a customer instrument
-/// records here:
+/// Records one measurement of a declared instrument of either audience. The instrument's
+/// declared audience chooses where it goes, and nothing here can: a customer instrument is
+/// recorded for `cx`'s job and exported to the customer, a product statistic belongs to no job
+/// and goes to LiveKit's collector.
 ///
 /// ```
-/// use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
-/// lk_agents_telemetry::measure(&lk_agents_telemetry::Cx::NONE, &WorkerProcessReadyDuration, 1.0);
-/// ```
-///
-/// A product statistic does not compile:
-///
-/// ```compile_fail,E0271
 /// use lk_agents_abi::productstats::testkit::TestDuration;
-/// lk_agents_telemetry::measure(&lk_agents_telemetry::Cx::NONE, &TestDuration, 1.0);
+/// use lk_agents_abi::telemetry::instruments::WorkerProcessReadyDuration;
+/// use lk_agents_telemetry::{Cx, measure};
+/// measure(&Cx::NONE, &WorkerProcessReadyDuration, 1.0);
+/// measure(&Cx::NONE, &TestDuration, 1.0);
 /// ```
-pub fn measure<M: MetricDecl<Audience = Observability>>(
-    cx: &Cx,
-    labels: &M,
-    value: impl Into<Number>,
-) {
-    let mut out = KeyValues::new();
-    labels.write(&mut out);
-    let Some(recorder) = cx.recorder() else { return };
-    recorder.record(Record::Measurement(Measurement {
-        instrument: M::NAME,
-        kind: M::KIND,
-        unit: M::UNIT,
-        bounds: M::BOUNDS,
-        value: value.into(),
-        labels: out,
-        job: cx.job().cloned(),
-    }));
+///
+/// There are two audiences and no way to add one: `Audience` is sealed.
+///
+/// ```compile_fail,E0277
+/// use lk_agents_abi::telemetry::decl::Audience;
+/// use lk_agents_abi::telemetry::record::{Measurement, Record};
+/// enum Third {}
+/// impl Audience for Third {
+///     fn record(measurement: Measurement) -> Record {
+///         Record::Measurement(measurement)
+///     }
+/// }
+/// ```
+///
+/// A product statistic's record is made by its audience only, never by hand:
+///
+/// ```compile_fail,E0423
+/// use lk_agents_abi::telemetry::record::{Measurement, Record};
+/// fn forged(customer: Measurement) -> Record {
+///     Record::ProductStat(lk_agents_abi::productstats::ProductStat(customer))
+/// }
+/// ```
+pub fn measure<M: MetricDecl>(cx: &Cx, labels: &M, value: impl Into<Number>) {
+    let mut cx = cx;
+    Measure::measure(&mut cx, labels, value.into());
 }
 
 /// A child of `cx`'s current span that a voice core opens later, starting now: startup work runs

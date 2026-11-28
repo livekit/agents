@@ -172,7 +172,14 @@ class RealtimeModel(ABC, rtc.EventEmitter[TEvent], Generic[TEvent]):
         return self.capabilities
 
     def _core_id(self) -> ProviderId:
-        return {"label": self.label, "model": self.model, "provider": self.provider}
+        from .._bindings import plugin_id
+
+        return {
+            "label": self.label,
+            "model": self.model,
+            "provider": self.provider,
+            "plugin": plugin_id(type(self)),
+        }
 
     async def _core_session(
         self,

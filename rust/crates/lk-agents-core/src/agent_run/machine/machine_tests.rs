@@ -70,7 +70,7 @@ pub(super) fn input(opening: Opening, history: Vec<ChatItem>) -> RunInput {
         history,
         delegated: false,
         mode: crate::tool_outcome::Mode::Text,
-        llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
+        llm: Some(LlmRef { adapter: false, id: LLM, provider: ProviderId::of_label("fake") }),
         wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
         cleanup_timeout: Duration::from_secs(5),
     }

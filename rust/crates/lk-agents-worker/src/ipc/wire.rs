@@ -52,7 +52,7 @@ pub struct Hello {
     /// Silence from the worker past this long means it is gone: the child stops.
     pub health_timeout_ms: Option<u64>,
     /// The command that started the worker, which the job's runner reads.
-    pub launch: lk_agents_abi::telemetry::runner::Launch,
+    pub cmd: lk_agents_abi::productstats::runner::RunnerCmd,
 }
 
 pub use lk_agents_abi::worker::job::StartJob;

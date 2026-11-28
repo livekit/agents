@@ -183,6 +183,7 @@ impl VoiceDriver {
         if ev.kind == SpeechEventType::RecognitionUsage {
             let usage = ev.recognition_usage.unwrap_or_default();
             let id = self.stt_identity().unwrap_or_default();
+            self.count_stt_usage(&usage);
             let record = lk_agents_abi::metrics::base::SttMetrics {
                 label: id.label.clone(),
                 request_id: ev.request_id.clone(),
@@ -225,7 +226,9 @@ impl VoiceDriver {
         if self.hear_promoted(now, stream, &ev) {
             return;
         }
+        let language = self.activity.heard_language();
         let eff = self.activity.audio_recognition.on_stt_event(now, stream, &ev);
+        self.count_language(language);
         self.apply_recognition_effects(eff);
         // A waiting commit follows this final.
         if ev.kind == SpeechEventType::FinalTranscript
