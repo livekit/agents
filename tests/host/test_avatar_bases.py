@@ -4,6 +4,7 @@ and the forwarding loop of an avatar fed in process."""
 from __future__ import annotations
 
 import asyncio
+import json
 
 import jwt
 import pytest
@@ -155,19 +156,7 @@ async def test_a_receive_failure_closes_the_avatar() -> None:
     await asyncio.wait_for(avatar.closed.wait(), 2)
 
 
-class _TokenModeJob:
-    """A fake token mode job. It records the claims of each participant token it is asked
-    for."""
-
-    def __init__(self) -> None:
-        self.asked: list[dict[str, object]] = []
-
-    async def create_participant_token(self, **claims: object) -> str:
-        self.asked.append(claims)
-        return f"server-token-{len(self.asked)}"
-
-
-def _start(job: _TokenModeJob, *, key: str = "", secret: str = "") -> AvatarStart:
+def _start(*, key: str = "", secret: str = "", job_id: str | None = None) -> AvatarStart:
     from types import SimpleNamespace
 
     return AvatarStart(
@@ -180,32 +169,43 @@ def _start(job: _TokenModeJob, *, key: str = "", secret: str = "") -> AvatarStar
         avatar_name="Avatar",
         _api_key=key,
         _api_secret=secret,
-        _job=job,  # type: ignore[arg-type]
+        _job_id=job_id,
     )
 
 
-# Starts an avatar in a token mode job, and again with a plugin key and secret. Catches an avatar
-# token that is signed with no secret instead of created by the server, or a token that loses its
-# claims (publish on behalf of the agent, kind, room). Also catches a plugin key and secret that
-# do not sign the token locally.
-async def test_avatar_tokens_come_from_the_job_in_token_mode_and_a_key_signs_locally() -> None:
-    job = _TokenModeJob()
-    start = _start(job)
-    assert await start.livekit_token() == "server-token-1"
-    assert await start.participant_token(identity="listener") == "server-token-2"
-    avatar, listener = job.asked
+# A token mode avatar, and one with a plugin key and secret. Catches avatar claims that lose the
+# publish on behalf of the agent, the kind or the room, a token mode request without its job, and
+# a plugin key and secret that do not sign the token. The listener token keeps its six hours.
+async def test_avatar_tokens_carry_their_claims_to_the_job_or_the_plugin_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import _core
+
+    asked: list[tuple[dict[str, object], str | None]] = []
+
+    async def issue(claims: str, key: str, secret: str, job_id: str | None, ttl: object) -> str:
+        assert (key, secret) == ("", "")
+        asked.append((json.loads(claims), job_id))
+        return "server-token"
+
+    monkeypatch.setattr(_core, "participant_token", issue)
+    assert await _start(job_id="AJ_1").livekit_token() == "server-token"
+    [(avatar, job_id)] = asked
+    assert job_id == "AJ_1"
     assert (avatar["identity"], avatar["name"], avatar["kind"]) == (
         "fake-avatar",
         "Avatar",
         "agent",
     )
     assert avatar["attributes"] == {"lk.publish_on_behalf": "agent-1"}
-    grants = avatar["grants"]
-    assert (grants.room_join, grants.room) == (True, "call")  # type: ignore[attr-defined]
-    assert (listener["identity"], listener["kind"]) == ("listener", None)
+    video = avatar["video"]
+    assert (video["roomJoin"], video["room"]) == (True, "call")  # type: ignore[index]
+    monkeypatch.undo()
 
-    keyed = _start(job, key="plugin-key", secret="plugin-secret-plugin-secret-plugin")
-    token = await keyed.livekit_token()
-    claims = jwt.decode(token, "plugin-secret-plugin-secret-plugin", algorithms=["HS256"])
+    keyed = _start(key="plugin-key", secret="plugin-secret-plugin-secret-plugin", job_id="AJ_1")
+    secret = "plugin-secret-plugin-secret-plugin"
+    claims = jwt.decode(await keyed.livekit_token(), secret, algorithms=["HS256"])
     assert (claims["iss"], claims["sub"], claims["kind"]) == ("plugin-key", "fake-avatar", "agent")
-    assert len(job.asked) == 2, "a key and secret sign locally"
+    assert claims["exp"] - claims["nbf"] == 60 * 60
+    listener = jwt.decode(await keyed.participant_token(identity="l"), secret, algorithms=["HS256"])
+    assert listener["exp"] - listener["nbf"] == 6 * 60 * 60

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import timedelta
 
 from pydantic import BaseModel
 
@@ -77,9 +76,8 @@ class AvatarSession(BaseAvatarSession):
         return "avatartalk"
 
     async def create_session(self, ctx: AvatarStart) -> str | None:
-        # The listener token lives six hours, as before. The helper's default is one hour.
         listener_token = await ctx.participant_token(
-            identity=_LISTENER_IDENTITY, name=_LISTENER_IDENTITY, ttl=timedelta(hours=6)
+            identity=_LISTENER_IDENTITY, name=_LISTENER_IDENTITY
         )
         async with http.http_session().post(
             f"{self._api_url}/livekit/create-session",

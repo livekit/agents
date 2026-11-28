@@ -133,19 +133,16 @@ async def reloaded(
 
     ``request.param`` selects the setup:
 
-    - ``False``: key mode.
     - ``True``: token mode, with a worker token and no key.
-    - ``"held"``: token mode, and the server does not answer the registration.
     - ``"refused"``: token mode with two kept jobs. The server refuses the token of the first
-      job, ``AJ_refused``. It never answers the token request of the second job, ``AJ_kept``.
+      job, ``AJ_refused``.
     """
     token_mode = bool(request.param)
-    async with FakeLiveKit(KEY, SECRET, hold_registration=request.param == "held") as livekit:
+    async with FakeLiveKit(KEY, SECRET) as livekit:
         channel = DevChannel(kept_job())
         if request.param == "refused":
             channel.others.append(kept_job(REFUSED))
             livekit.refused_job_tokens.add(REFUSED.id)
-            livekit.held_job_tokens.add(KEPT.id)
         server = await asyncio.start_server(channel.serve, "127.0.0.1", 0)
         channel.addr = f"127.0.0.1:{server.sockets[0].getsockname()[1]}"
         credentials = (
@@ -168,31 +165,6 @@ async def reloaded(
         args = ("start", "--dev", "--cli-addr", channel.addr, "--drain-timeout=0.1")
         async with server, child_process(sys.executable, app, *args, log=tmp_path / "log", env=env):
             yield livekit, channel, tmp_path
-
-
-@pytest.mark.parametrize("reloaded", [False], indirect=True)
-async def test_a_kept_job_is_reported_and_held_after_a_reload(
-    reloaded: tuple[FakeLiveKit, DevChannel, Path],
-) -> None:
-    """Key mode reload, then the server ends the kept job.
-
-    Catches a kept job that resumes without a `MigrateJobRequest`, or that the worker does not
-    hold. Then the worker ignores the server's termination and refuses the job's status.
-    """
-    livekit, _, agent_dir = reloaded
-    await until((agent_dir / "job.json").exists, "the kept job resumed", STARTUP_SECONDS)
-    await until(lambda: livekit.migrations, "the kept job reported", STARTUP_SECONDS)
-    [job] = livekit.migrations[0].jobs
-    assert (job.id, job.state.participant_identity) == (KEPT.id, "agent-7")
-
-    await livekit.terminate(KEPT.id)
-    ended = {agent.JobStatus.JS_SUCCESS, agent.JobStatus.JS_FAILED}
-    await until(
-        lambda: ended & set(livekit.job_statuses.get(KEPT.id, [])),
-        "the kept job ended and its status reached the server",
-        STARTUP_SECONDS,
-    )
-    assert "job status for a job this worker does not have" not in (agent_dir / "log").read_text()
 
 
 @pytest.mark.parametrize("reloaded", [True], indirect=True)
@@ -231,43 +203,17 @@ async def test_a_token_mode_reload_asks_the_server_for_the_jobs_new_token(
     ]
 
 
-@pytest.mark.parametrize("reloaded", ["held"], indirect=True)
-async def test_a_job_still_restoring_is_reported_to_the_next_reload(
+@pytest.mark.parametrize("reloaded", ["refused"], indirect=True)
+async def test_a_job_the_server_refuses_ends_on_reload_and_the_others_resume(
     reloaded: tuple[FakeLiveKit, DevChannel, Path],
 ) -> None:
-    """Token mode reload while the server holds the registration, so the kept job waits.
+    """Two kept jobs, and the server refuses the first job's token, as a self-hosted server does.
 
-    Catches a capture that reports no job while the kept job is restoring. The CLI would then drop
-    the job at the next reload.
+    Catches a refused job that launches anyway or is reported to the next reload, a refusal that
+    stops the other job, and a refusal without the reload warning.
     """
     livekit, channel, agent_dir = reloaded
-    # Wait until the agent asked for the kept jobs. The answer is already on the channel, so
-    # the agent reads it before the capture request.
-    await until(
-        lambda: any(m.HasField("get_running_jobs_request") for m in channel.seen),
-        "the agent asked for the kept jobs",
-        STARTUP_SECONDS,
-    )
-    assert await channel.capture() == [KEPT.id]
-    assert not (agent_dir / "job.json").exists(), "restored before the registration"
-    livekit.answer_registration()
-    await until((agent_dir / "job.json").exists, "the kept job resumed", STARTUP_SECONDS)
-    assert await channel.capture() == [KEPT.id]
-
-
-@pytest.mark.parametrize("reloaded", ["refused"], indirect=True)
-async def test_a_job_that_ended_on_reload_is_not_reported_to_the_next_reload(
-    reloaded: tuple[FakeLiveKit, DevChannel, Path],
-) -> None:
-    """Two kept jobs. The server refuses the first job's token and does not answer the second.
-
-    The first job must not be in the next capture. Otherwise the CLI keeps a job that ended.
-    """
-    livekit, channel, _ = reloaded
-    failed = agent.JobStatus.JS_FAILED
-    await until(
-        lambda: failed in livekit.job_statuses.get(REFUSED.id, []),
-        "the refused job ended",
-        STARTUP_SECONDS,
-    )
+    await until((agent_dir / "job.json").exists, "the other kept job resumed", STARTUP_SECONDS)
+    log = (agent_dir / "log").read_text()
+    assert "job ended on reload. reload is only supported when LiveKit API key and secret" in log
     assert await channel.capture() == [KEPT.id]

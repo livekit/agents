@@ -983,8 +983,7 @@ class FakeLiveKit:
 
     Token mode: the fake answers each ``CreateJobTokenRequest`` with a new token and records it
     in ``issued``. The server API's ``DeleteRoom`` at ``url`` records each bearer in
-    ``api_bearers``. A request for a job in ``refused_job_tokens`` is refused, and a request for
-    a job in ``held_job_tokens`` gets no answer.
+    ``api_bearers``. A request for a job in ``refused_job_tokens`` is refused.
     """
 
     def __init__(
@@ -1009,9 +1008,8 @@ class FakeLiveKit:
         # Token mode: each job token request, the token issued for each request, and each bearer
         # that called the server API.
         self.job_token_requests: list[agent.CreateJobTokenRequest] = []
-        # Job ids whose token requests the fake refuses, or never answers.
+        # Job ids whose token requests the fake refuses.
         self.refused_job_tokens: set[str] = set()
-        self.held_job_tokens: set[str] = set()
         self.issued: dict[str, str] = {}
         self.api_bearers: list[str] = []
         self._registration = asyncio.Event()
@@ -1117,8 +1115,6 @@ class FakeLiveKit:
         elif kind == "create_job_token":
             request = msg.create_job_token
             self.job_token_requests.append(request)
-            if request.job_id in self.held_job_tokens:
-                return
             if request.job_id in self.refused_job_tokens:
                 refusal = agent.CreateJobTokenResponse(
                     request_id=request.request_id, error="refused"
