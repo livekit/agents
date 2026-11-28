@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import time
+from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -60,6 +63,7 @@ def _make_stream(
     stream._utterance_speech_end_audio_pos = None
     stream._utterance_speech_end_wall = None
     stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    stream._input_clock = stt_streaming._InputClock()
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._manual_speech_started = False
@@ -2193,3 +2197,385 @@ async def test_keepalive_stays_quiet_while_audio_flows() -> None:
     assert bytes(1600) * 6 == b"".join(audio)  # only the pushed audio, no extra silence
     stream._input_ch.close()
     await asyncio.wait_for(task, timeout=1.0)
+
+
+class _ClockWS:
+    """Scripted Sarvam socket whose clock is the seconds of audio it has received."""
+
+    def __init__(self, send_delay: float = 0.0) -> None:
+        self.closed = False
+        self.close_code: int | None = None
+        self.received = 0.0
+        self._send_delay = send_delay
+        self._inbox: asyncio.Queue[Any] = asyncio.Queue()
+
+    async def send_bytes(self, payload: bytes) -> None:
+        if self._send_delay:
+            await asyncio.sleep(self._send_delay)
+        self.received += len(payload) / 2 / 16000
+
+    async def send_str(self, payload: str) -> None:
+        return None
+
+    async def receive(self) -> Any:
+        return await self._inbox.get()
+
+    async def ping(self, *_: object) -> None:
+        self._inbox.put_nowait(
+            stt_streaming.aiohttp.WSMessage(stt_streaming.aiohttp.WSMsgType.PONG, b"", None)
+        )
+
+    async def pong(self, *_: object) -> None:
+        return None
+
+    async def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self._inbox.put_nowait(
+                stt_streaming.aiohttp.WSMessage(stt_streaming.aiohttp.WSMsgType.CLOSED, None, None)
+            )
+
+    def emit(self, **event: Any) -> None:
+        self._inbox.put_nowait(
+            stt_streaming.aiohttp.WSMessage(
+                stt_streaming.aiohttp.WSMsgType.TEXT, json.dumps(event), None
+            )
+        )
+
+    def emit_utterance(
+        self, start_s: float | None, end_s: float | None, *, final_first: bool = False
+    ) -> None:
+        """Script one utterance, with Sarvam's times when given."""
+        final: dict[str, Any] = {"event": "transcript.final", "utterance_idx": 0, "text": "हाँ"}
+        if start_s is not None and end_s is not None:
+            final.update(start_s=start_s, end_s=end_s)
+        self.emit(event="vad.speech_start", utterance_idx=0)
+        if final_first:
+            self.emit(**final)
+        self.emit(event="vad.speech_end", utterance_idx=0)
+        if not final_first:
+            self.emit(**final)
+
+
+class _ClockSession:
+    def __init__(self, send_delay: float = 0.0, connect_delay: float = 0.0) -> None:
+        self.sockets: list[_ClockWS] = []
+        self._send_delay = send_delay
+        self._connect_delay = connect_delay
+
+    async def ws_connect(self, *_: object, **__: object) -> _ClockWS:
+        await asyncio.sleep(self._connect_delay)
+        ws = _ClockWS(self._send_delay)
+        self.sockets.append(ws)
+        return ws
+
+
+def _speech_frame(ms: int = 20) -> stt_streaming.rtc.AudioFrame:
+    samples = 16 * ms
+    return stt_streaming.rtc.AudioFrame(
+        data=np.full(samples, 1000, dtype=np.int16).tobytes(),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def _speak(stream: stt_streaming.RealtimeSpeechStream, seconds: float) -> None:
+    """Push audio the way a live track does: each 20 ms frame right after it is captured."""
+    for _ in range(round(seconds / 0.02)):
+        await asyncio.sleep(0.02)
+        stream.push_frame(_speech_frame())
+
+
+async def _until(predicate: Callable[[], bool]) -> None:
+    for _ in range(100_000):
+        if predicate():
+            return
+        await asyncio.sleep(0.001)
+    raise AssertionError("condition never became true")
+
+
+@contextlib.asynccontextmanager
+async def _clock_stream(
+    session: _ClockSession, *, stt: stt_streaming.STTRealtime | None = None
+) -> AsyncIterator[tuple[stt_streaming.RealtimeSpeechStream, list[Any]]]:
+    if stt is None:
+        stt = stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v4", language="hi-IN")
+        stt._session = session  # type: ignore[assignment]
+    stream = stt.stream()
+    events: list[Any] = []
+
+    async def _collect() -> None:
+        async for ev in stream:
+            events.append(ev)
+
+    collector = asyncio.create_task(_collect())
+    try:
+        yield stream, events
+    finally:
+        await stream.aclose()
+        collector.cancel()
+        with contextlib.suppress(BaseException):
+            await collector
+
+
+async def _final_speech(events: list[Any]) -> Any:
+    def _finals() -> list[Any]:
+        return [e for e in events if e.type == stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT]
+
+    await _until(lambda: bool(_finals()))
+    return _finals()[0].alternatives[0]
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("server_times", [True, False], ids=["server_times", "speech_end"])
+@pytest.mark.parametrize("final_first", [False, True], ids=["eos_first", "final_first"])
+async def test_speech_times_stay_on_the_input_clock_across_a_mute(
+    server_times: bool, final_first: bool
+) -> None:
+    """A 4 s pause in the input must not pull later speech times 4 s early.
+
+    Sarvam counts the audio it has received, so its clock stands still while the caller
+    is muted; the caller's clock does not. Both Sarvam's own times and the speech-end
+    position the plugin falls back on are on Sarvam's clock.
+    """
+    session = _ClockSession()
+    async with _clock_stream(session) as (stream, events):
+        await _speak(stream, 1.0)
+        await asyncio.sleep(4.0)  # muted: no frames at all
+        await _speak(stream, 1.0)
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.0 - 1e-9)
+
+        if server_times:
+            ws.emit_utterance(1.0, 2.0, final_first=final_first)
+        else:
+            ws.emit_utterance(None, None, final_first=final_first)
+        speech = await _final_speech(events)
+
+        # the input clock's truth: the second stretch of speech ran from 5 s to 6 s
+        assert speech.end_time == pytest.approx(6.0, abs=0.03)
+        if server_times:
+            assert speech.start_time == pytest.approx(5.0, abs=0.03)
+
+
+@pytest.mark.virtual_time
+async def test_speech_that_ends_before_a_mute_keeps_its_end() -> None:
+    session = _ClockSession()
+    async with _clock_stream(session) as (stream, events):
+        await _speak(stream, 1.0)
+        await asyncio.sleep(4.0)
+        await _speak(stream, 1.0)
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.0 - 1e-9)
+
+        ws.emit_utterance(0.2, 1.0)  # Sarvam's end lands exactly where the mute began
+        speech = await _final_speech(events)
+
+        assert speech.start_time == pytest.approx(0.2, abs=0.03)
+        assert speech.end_time == pytest.approx(1.0, abs=0.03)
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize(
+    ("start_s", "end_s", "start", "end"),
+    [
+        # after the mute: keepalive silence counts on Sarvam's clock, not the caller's
+        (1.1, 2.1, 71.0, 72.0),
+        # speech whose end Sarvam places inside the keepalive silence ended before it
+        (0.5, 1.05, 0.5, 1.0),
+        # speech whose start Sarvam places inside it (VAD pre-roll) starts after the mute
+        (1.07, 2.1, 71.0, 72.0),
+    ],
+    ids=["after_mute", "end_in_keepalive", "start_in_keepalive"],
+)
+async def test_keepalive_silence_is_not_on_the_input_clock(
+    start_s: float, end_s: float, start: float, end: float
+) -> None:
+    session = _ClockSession()
+    async with _clock_stream(session) as (stream, events):
+        await _speak(stream, 1.0)
+        await asyncio.sleep(70.0)  # two keepalives go out during the mute
+        await _speak(stream, 1.0)
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.1 - 1e-9)
+        assert ws.received == pytest.approx(2.1)
+
+        ws.emit_utterance(start_s, end_s)
+        speech = await _final_speech(events)
+
+        assert speech.start_time == pytest.approx(start, abs=0.03)
+        assert speech.end_time == pytest.approx(end, abs=0.03)
+
+
+@pytest.mark.virtual_time
+async def test_a_recreated_stream_keeps_times_on_the_session_timeline() -> None:
+    """A new stream's Sarvam clock restarts at 0; its times must not."""
+    session = _ClockSession()
+    stt = stt_streaming.STTRealtime(api_key="sk_test", model="saaras:v4", language="hi-IN")
+    stt._session = session  # type: ignore[assignment]
+    session_started_at = time.time()
+
+    async with _clock_stream(session, stt=stt) as (stream, _):
+        stream.start_time_offset = time.time() - session_started_at
+        await _speak(stream, 1.0)
+        await asyncio.sleep(60.0)  # the caller goes quiet and the stream is replaced
+
+    async with _clock_stream(session, stt=stt) as (stream, events):
+        # what AgentSession does for each new stream
+        stream.start_time_offset = time.time() - session_started_at
+        await asyncio.sleep(5.0)
+        await _speak(stream, 1.0)
+        ws = session.sockets[1]
+        await _until(lambda: ws.received >= 1.0 - 1e-9)
+
+        ws.emit_utterance(0.0, 1.0)
+        speech = await _final_speech(events)
+
+        assert speech.start_time == pytest.approx(66.0, abs=0.03)
+        assert speech.end_time == pytest.approx(67.0, abs=0.03)
+
+
+@pytest.mark.virtual_time
+async def test_a_send_backlog_does_not_move_speech_times() -> None:
+    """Audio reaching Sarvam late is still placed when it was captured."""
+    session = _ClockSession(send_delay=0.2)  # each 50 ms chunk takes 200 ms to send
+    async with _clock_stream(session) as (stream, events):
+        await _speak(stream, 1.0)
+        await asyncio.sleep(4.0)
+        await _speak(stream, 1.0)
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.0 - 1e-9)
+
+        ws.emit_utterance(1.0, 2.0)
+        speech = await _final_speech(events)
+
+        assert speech.start_time == pytest.approx(5.0, abs=0.03)
+        assert speech.end_time == pytest.approx(6.0, abs=0.03)
+
+
+@pytest.mark.virtual_time
+async def test_audio_buffered_while_connecting_is_not_a_gap() -> None:
+    """Frames queued during a slow connect arrive in a burst; that is no pause."""
+    session = _ClockSession(connect_delay=1.5)
+    async with _clock_stream(session) as (stream, events):
+        await _speak(stream, 2.0)
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.0 - 1e-9)
+
+        ws.emit_utterance(0.5, 2.0)
+        speech = await _final_speech(events)
+
+        assert speech.start_time == pytest.approx(0.5, abs=0.03)
+        assert speech.end_time == pytest.approx(2.0, abs=0.03)
+
+
+@pytest.mark.virtual_time
+async def test_input_pushed_faster_than_real_time_is_not_a_gap() -> None:
+    """A burst of frames pushed at once (file playback) stays contiguous."""
+    session = _ClockSession()
+    async with _clock_stream(session) as (stream, events):
+        for _ in range(50):
+            stream.push_frame(_speech_frame())
+        await asyncio.sleep(1.0)
+        for _ in range(50):
+            stream.push_frame(_speech_frame())
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.0 - 1e-9)
+
+        ws.emit_utterance(0.5, 2.0)
+        speech = await _final_speech(events)
+
+        # the second burst's audio was captured before its push, right after the first
+        assert speech.start_time == pytest.approx(0.5, abs=0.03)
+        assert speech.end_time == pytest.approx(2.0, abs=0.03)
+
+
+def test_input_clock_skips_keepalive_sent_before_the_first_frame() -> None:
+    clock = stt_streaming._InputClock()
+    clock.append_padding(0.05)
+    clock.append_input(1.0, (0.0, 0.0))
+    assert clock.input_time(0.05, is_start=True) == pytest.approx(0.0)
+    assert clock.input_time(1.05) == pytest.approx(1.0)
+
+
+def test_input_clock_ignores_delivery_jitter() -> None:
+    clock = stt_streaming._InputClock()
+    clock.append_input(0.02, (0.0, 0.0))
+    clock.append_input(0.02, (0.03, 0.03))  # 10 ms late: jitter, not a pause
+    clock.append_input(0.02, (0.04, 0.04))
+    assert clock.input_time(0.06) == pytest.approx(0.06)
+
+
+@pytest.mark.virtual_time
+async def test_a_late_manual_flush_keeps_the_resampler_tail_with_the_speech() -> None:
+    """Audio the resampler held until flush() was captured with the speech, not at the flush."""
+    session = _ClockSession()
+    stt = stt_streaming.STTRealtime(
+        api_key="sk_test", model="saaras:v4", language="hi-IN", endpointing="manual"
+    )
+    stt._session = session  # type: ignore[assignment]
+    async with _clock_stream(session, stt=stt) as (stream, events):
+        for _ in range(50):  # 1 s of 24 kHz room audio, resampled to 16 kHz
+            await asyncio.sleep(0.02)
+            stream.push_frame(
+                stt_streaming.rtc.AudioFrame(
+                    data=np.full(480, 1000, dtype=np.int16).tobytes(),
+                    sample_rate=24000,
+                    num_channels=1,
+                    samples_per_channel=480,
+                )
+            )
+        await asyncio.sleep(4.0)  # the caller stops sending, then the turn is committed
+        stream.flush()
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 1.0 - 0.03)
+        await asyncio.sleep(0.1)
+
+        ws.emit(event="transcript.final", utterance_idx=0, text="हाँ")  # no Sarvam times
+        speech = await _final_speech(events)
+
+        assert speech.end_time == pytest.approx(1.0, abs=0.03)
+
+
+@pytest.mark.virtual_time
+async def test_audio_delivered_late_frame_by_frame_is_not_a_gap() -> None:
+    """A stall upstream delays frames, then hands them over one at a time.
+
+    The first late frame looks like the end of a pause, but the frames behind it arrive
+    faster than real time, which only audio captured earlier can do, so the timeline
+    must not stay shifted by the stall.
+    """
+    session = _ClockSession()
+    async with _clock_stream(session) as (stream, events):
+        await _speak(stream, 1.0)
+        await asyncio.sleep(0.5)  # a stall: the next 0.5 s of audio is held upstream
+        for _ in range(25):
+            stream.push_frame(_speech_frame())
+            for _ in range(5):  # let the stream read each frame before the next arrives
+                await asyncio.sleep(0)
+        await _speak(stream, 1.0)
+        ws = session.sockets[0]
+        await _until(lambda: ws.received >= 2.5 - 1e-9)
+
+        ws.emit_utterance(1.5, 2.5)
+        speech = await _final_speech(events)
+
+        # the audio was continuous: 2.5 s of it, captured from 0 s to 2.5 s
+        assert speech.start_time == pytest.approx(1.5, abs=0.03)
+        assert speech.end_time == pytest.approx(2.5, abs=0.03)
+
+
+def test_input_clock_takes_back_a_gap_when_audio_catches_up() -> None:
+    clock = stt_streaming._InputClock()
+    clock.append_input(1.0, (0.0, 0.0))
+    # a frame pushed 0.5 s late opens what looks like a gap ...
+    clock.append_input(0.02, (1.48, 1.48))
+    # ... but the next frames arrive with it, so they started no later than 1.48 s
+    for _ in range(24):
+        clock.append_input(0.02, (1.48, 1.48))
+    assert clock.input_time(1.5) == pytest.approx(1.5)
+    # a real pause is kept: these frames arrive in real time after it
+    for i in range(10):
+        clock.append_input(0.02, (5.5 + 0.02 * i, 5.5 + 0.02 * i))
+    assert clock.input_time(1.7) == pytest.approx(5.7)
