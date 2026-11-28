@@ -708,6 +708,64 @@ async def test_the_vad_stops_committing_once_the_server_endpoints() -> None:
     await collector
 
 
+class _OpenAtEndVAD(_OneShotVAD):
+    """A VAD that closes its only segment when the input ends."""
+
+    def stream(self) -> vad.VADStream:
+        return _OpenAtEndVADStream(self)
+
+
+class _OpenAtEndVADStream(vad.VADStream):
+    async def _main_task(self) -> None:
+        async for _ in self._input_ch:
+            pass
+        for type in (vad.VADEventType.START_OF_SPEECH, vad.VADEventType.END_OF_SPEECH):
+            self._event_ch.send_nowait(
+                vad.VADEvent(
+                    type=type,
+                    samples_index=0,
+                    timestamp=0.0,
+                    speech_duration=0.0,
+                    silence_duration=0.0,
+                )
+            )
+
+
+@pytest.mark.parametrize("queued", [False, True])
+@pytest.mark.parametrize("ms,commits", [(90, 0), (100, 1)])
+async def test_input_ending_in_speech_commits_only_what_openai_accepts(
+    ms: int, commits: int, queued: bool
+) -> None:
+    # OpenAI rejects a commit of less than 100ms of audio, which would fail the stream
+    instance = _offline_stt(model="gpt-live-transcribe", vad=_OpenAtEndVAD())
+    ws = instance._session.ws  # type: ignore[union-attr]
+    # what a pooled socket carries: the float sum of earlier frames, not exactly 2s
+    instance._audio_duration_by_ws[ws] = sum([0.05] * 40)
+    stream = instance.stream()
+    if not queued:
+        await _connected(stream)
+    ends = 0
+
+    async def collect() -> None:
+        nonlocal ends
+        async for ev in stream:
+            if ev.type == SpeechEventType.END_OF_SPEECH:
+                ends += 1
+
+    collector = asyncio.create_task(collect())
+
+    samples = 24 * ms
+    stream.push_frame(rtc.AudioFrame(b"\x00\x00" * samples, 24000, 1, samples))
+    stream.end_input()
+    await _wait_for("the end of speech", lambda: ends == 1)
+    await asyncio.sleep(0.05)  # a commit would follow the segment straight away
+    assert len(_of_type(ws, "input_audio_buffer.append")) == 2
+    assert len(_of_type(ws, "input_audio_buffer.commit")) == commits
+
+    await stream.aclose()
+    await collector
+
+
 async def test_an_update_during_connection_setup_is_not_lost() -> None:
     instance = _offline_stt(model="gpt-live-transcribe")
     session = _FakeSession()

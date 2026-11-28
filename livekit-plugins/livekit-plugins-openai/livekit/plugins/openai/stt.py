@@ -842,6 +842,7 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def vad_task(ws: aiohttp.ClientWebSocketResponse, vad_stream: vad.VADStream) -> None:
+            committed = connection_audio_offset  # send_task may already have sent audio
             try:
                 async for ev in vad_stream:
                     if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -859,6 +860,11 @@ class SpeechStream(stt.SpeechStream):
                         self._stop_speaking(speech_end_time=speech_end_time)
                         # a server-endpointed model closes the segment itself; this would cut it twice
                         if _is_realtime_only(self._opts.model):
+                            sent = self._audio_duration_by_ws.get(ws, 0.0)
+                            # input can end sooner than the 100ms of audio OpenAI requires
+                            if closing_ws and round((sent - committed) * 1000) < 100:
+                                continue
+                            committed = sent
                             await ws.send_json({"type": "input_audio_buffer.commit"})
             except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws:

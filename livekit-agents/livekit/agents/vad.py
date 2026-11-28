@@ -169,6 +169,16 @@ class VADStream(ABC):
         self.flush()
         self._input_ch.close()
 
+    def _end_adapter_input(self) -> None:
+        """Called by the STT `StreamAdapter` once its own input has ended.
+
+        Some streams emit a pending segment on `flush()` and only close in `end_input()`.
+        A stream that emits it in `end_input()` overrides this to skip the flush, which
+        would drop the segment first.
+        """
+        self.flush()
+        self.end_input()
+
     async def aclose(self) -> None:
         """Close the stream immediately"""
         self._input_ch.close()
