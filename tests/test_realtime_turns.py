@@ -840,6 +840,9 @@ class _ReplyTaskActivity(SimpleNamespace):
             _authorization_allowed=authorization_allowed,
             _wait_authorization_allowed=lambda speech_handle: authorization_allowed.wait(),
             _user_silence_event=user_silence,
+            # mirrors the real method with hold_reply_while_user_speaking at its default:
+            # an interruptible speech waits for the caller to stop before it is authorized
+            _waits_for_user_silence=lambda speech_handle: speech_handle.allow_interruptions,
             _rt_overlapping_speech_enabled=False,
             tools=[],
             _on_enter_ignored_tools=lambda tool_ctx: [],
