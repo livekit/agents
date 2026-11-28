@@ -824,6 +824,33 @@ async def test_fails_open(case: str, lines_expected: int, caplog: pytest.LogCapt
     assert len(lines) == lines_expected, lines
 
 
+@pytest.mark.parametrize("has_ws_timeout", [True, False], ids=["aiohttp-3.11", "aiohttp-3.10"])
+@pytest.mark.usefixtures("four_early_starts")
+async def test_the_close_timeout_is_given_as_the_installed_aiohttp_takes_it(
+    monkeypatch: pytest.MonkeyPatch, has_ws_timeout: bool
+) -> None:
+    # livekit-agents allows aiohttp 3.10, which has no ClientWSTimeout and takes the close
+    # handshake's wait as a number of seconds
+    want: Any = aiohttp.ClientWSTimeout(ws_close=2.0) if has_ws_timeout else 2.0
+    if not has_ws_timeout:
+        monkeypatch.delattr(aiohttp, "ClientWSTimeout")
+    seen: list[Any] = []
+
+    class Recording(FakeSession):
+        async def ws_connect(self, url: str, **kw: Any) -> FakeWS:
+            seen.append(kw.get("timeout"))
+            return await super().ws_connect(url, **kw)
+
+    w = rabel.STT(
+        ScriptedSTT(TURN),
+        api_key="test",
+        base_url="https://api.example",
+        http_session=Recording(FakeAPI(answers=AT_CHECK)),  # type: ignore[arg-type]
+    )
+    assert await collect(w) != await plain_run(TURN)  # Bell's guess was sent
+    assert seen == [want]
+
+
 @pytest.mark.usefixtures("four_early_starts")
 async def test_reopens_after_503_with_backoff_and_not_after_400() -> None:
     api = FakeAPI(plan=["refuse", "ok"], status=503, error="waking", retry_after=0)
