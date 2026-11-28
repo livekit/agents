@@ -64,7 +64,7 @@ import os
 import re
 import time
 import weakref
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
@@ -297,6 +297,52 @@ def _host_limits() -> _HostLimits:
             f"Bell: the session's settings could not be read ({e!r}); LiveKit's defaults are used"
         )
         return _DEFAULT_LIMITS
+
+
+def _session_stt(session: Any) -> Any:
+    """The speech-to-text the session's running agent uses, as LiveKit picks it (agent_activity:
+    the agent's own, else the session's)."""
+    try:
+        agent = session.current_agent
+    except RuntimeError:  # the session is not running an agent yet
+        agent = None
+    own = getattr(agent, "stt", NOT_GIVEN) if agent is not None else NOT_GIVEN
+    return own if utils.is_given(own) else session.stt
+
+
+def _watch_commits(wrapper: Any, on_item: Callable[[Any], None]) -> Callable[[], None] | None:
+    """LiveKit's commit, where LiveKit does not hand it to the speech-to-text.
+
+    Rules 6 and 8 see LiveKit's commit by the caller's message added to the conversation, which
+    LiveKit forwards to the speech-to-text only with the session's
+    `stt_context_options["forward_chat_context"]` on, its default (agent_activity). With it off,
+    `on_item` listens to the session's own `conversation_item_added`, which LiveKit emits either
+    way. The job's primary session is the only one the plugin can reach, so it listens only when
+    that session's speech-to-text is `wrapper`: in a job with two sessions another session's commit
+    would start this stream's count again, and a guess could take the early start its final needs.
+    Returns how to stop listening, or None when nothing listens (forwarded, no session, or another
+    session's speech-to-text; LiveKit's count is then never seen to start again: fewer guesses,
+    none later)."""
+    try:
+        ctx = get_job_context(required=False)
+        if ctx is None:
+            return None
+        session = ctx.primary_session
+        forward = session.options.stt_context_options.get("forward_chat_context", True)
+        if forward is not False or _session_stt(session) is not wrapper:
+            return None
+    except Exception:  # noqa: BLE001 -- no session started for this job
+        return None
+    try:
+        session.on("conversation_item_added", on_item)
+    except Exception as e:  # noqa: BLE001
+        # LiveKit's count is then never seen to start again: fewer guesses, none later
+        logger.warning(
+            f"Bell: LiveKit's commits cannot be seen ({e!r}); "
+            "Bell guesses only while the turn's count allows"
+        )
+        return None
+    return lambda: session.off("conversation_item_added", on_item)
 
 
 class STT(stt.STT):
@@ -645,6 +691,9 @@ class SpeechStream(stt.RecognizeStream):
                     f"Bell: could not start ({e!r}); the speech-to-text passes through unchanged"
                 )
                 self._bell = None
+        unwatch = (
+            _watch_commits(self._rstt, self._on_session_item) if self._bell is not None else None
+        )
         tasks = [
             asyncio.create_task(_forward_input(stream), name="rabel.SpeechStream.forward_input"),
             asyncio.create_task(_forward_output(stream), name="rabel.SpeechStream.forward_output"),
@@ -653,6 +702,9 @@ class SpeechStream(stt.RecognizeStream):
             await asyncio.gather(*tasks)
         finally:
             await utils.aio.cancel_and_wait(*tasks)
+            if unwatch is not None:
+                with contextlib.suppress(Exception):
+                    unwatch()
             if self._bell is not None:
                 self._log_summary()
                 await self._bell.aclose()
@@ -1024,6 +1076,13 @@ class SpeechStream(stt.RecognizeStream):
             )
 
     # -------------------------------------------------- LiveKit's commit (rule 8)
+
+    def _on_session_item(self, ev: ConversationItemAddedEvent) -> None:
+        """An item the session added to the conversation, heard on the session itself (the
+        conversation not forwarded to the speech-to-text, `_watch_commits`): the caller's message
+        is LiveKit's commit."""
+        if getattr(getattr(ev, "item", None), "role", None) == "user":
+            self._on_livekit_commit()
 
     def _on_livekit_commit(self) -> None:
         """LiveKit has added the caller's message to the conversation: it has committed a turn and
