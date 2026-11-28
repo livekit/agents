@@ -63,6 +63,9 @@ MAX_STREAM_AGE = 90.0  # seconds
 # (https://soniox.com/docs/api-reference/tts/get_tts_models). Newer models are
 # assumed to support reduce_silence; the server still rejects unknown models.
 MODELS_WITHOUT_SILENCE_REDUCTION = frozenset({"tts-rt-v1", "tts-rt-v1-preview"})
+# Audio tags ([laughs], [warm], [pause], ...) arrived with tts-rt-v2
+# (https://docs.soniox.com/tts/concepts/emotion-and-tone); older models would read them aloud.
+MODELS_WITHOUT_AUDIO_TAGS = frozenset({"tts-rt-v1", "tts-rt-v1-preview"})
 
 
 def _validate_reduce_silence(model: str, reduce_silence: bool) -> None:
@@ -181,6 +184,13 @@ class TTS(tts.TTS):
         self.__current_connection: _Connection | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
         self.__conn_lock = asyncio.Lock()
+
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key(); only a
+        # model that reads audio tags declares the dialect
+        def _provider_key(self) -> str:
+            assert isinstance(self._tts, TTS)
+            return "" if self._tts._opts.model in MODELS_WITHOUT_AUDIO_TAGS else "soniox"
 
     @property
     def model(self) -> str:

@@ -13,6 +13,7 @@ Provider docs:
 - xAI: https://docs.x.ai/developers/model-capabilities/audio/voice
 - Fish Audio: https://docs.fish.audio/developer-guide/core-features/emotions
 - Fish Audio: https://docs.fish.audio/features/text-to-speech/drama-3
+- Soniox: https://docs.soniox.com/tts/concepts/emotion-and-tone
 """
 
 from __future__ import annotations
@@ -283,6 +284,101 @@ _GEMINI_SOUND_ALIASES = {
     "crying": "cry",
     "sob": "cry",
     "sobbing": "cry",
+}
+
+
+# Soniox TTS audio tags (tts-rt-v2), from the Soniox docs
+# (https://docs.soniox.com/tts/concepts/emotion-and-tone).
+#
+# Every tag is an English word in square brackets, written inline before the words it
+# should affect: the words after it inherit that delivery. Soniox warns that an
+# unrecognized tag may be read aloud, so the conversion keeps only the documented
+# vocabulary below and drops any other label instead of passing it through.
+_SONIOX_EMOTIONS = [
+    # emotion
+    "happy",
+    "sad",
+    "angry",
+    "excited",
+    "nervous",
+    "fearful",
+    "surprised",
+    "annoyed",
+    "relieved",
+    "disappointed",
+    "curious",
+    "delighted",
+    "calm",
+    # tone
+    "warm",
+    "stern",
+    "serious",
+    "playful",
+    "sarcastic",
+    "flirty",
+    "deadpan",
+    "sincerely",
+    "reassuringly",
+    "dramatically",
+    "mockingly",
+]
+_SONIOX_SOUNDS = [
+    "laughs",
+    "chuckles",
+    "giggles",
+    "sighs",
+    "exhales",
+    "gasps",
+    "groans",
+    "grunts",
+    "sobs",
+    "sniffles",
+    "whimpers",
+    "clears throat",
+    "coughs",
+    "yawns",
+]
+# volume/pace controls: prefix tags like the rest, so a wrapped span lowers to a tag
+# before it (the delivery carries on past the span, as it does on Soniox itself)
+_SONIOX_TONES = ["whispering", "softly", "loudly", "shouting", "slowly", "quickly", "hesitantly"]
+_SONIOX_TAGS = ["expression", "sound", "break"]
+
+# expr sound labels other providers advertise -> Soniox's tag for the same sound
+_SONIOX_SOUND_ALIASES = {
+    "laugh": "laughs",
+    "laughing": "laughs",
+    "chuckle": "chuckles",
+    "chuckling": "chuckles",
+    "giggle": "giggles",
+    "giggling": "giggles",
+    "sigh": "sighs",
+    "sighing": "sighs",
+    "exhale": "exhales",
+    "breathe": "exhales",
+    "breath": "exhales",
+    "gasp": "gasps",
+    "gasping": "gasps",
+    "groan": "groans",
+    "groaning": "groans",
+    "argh": "groans",
+    "grunt": "grunts",
+    "sob": "sobs",
+    "sobbing": "sobs",
+    "cry": "sobs",
+    "crying": "sobs",
+    "sniffle": "sniffles",
+    "whimper": "whimpers",
+    "clear throat": "clears throat",
+    "cough": "coughs",
+    "yawn": "yawns",
+    "yawning": "yawns",
+}
+_SONIOX_TONE_ALIASES = {
+    "whisper": "whispering",
+    "soft": "softly",
+    "loud": "loudly",
+    "slow": "slowly",
+    "fast": "quickly",
 }
 
 
@@ -893,6 +989,67 @@ delivery label instead.""")
     )
 
 
+_SONIOX_EXAMPLES = [
+    '<expr type="expression" label="playful"/> Okay, why did the burger go to the gym? <expr type="expression" label="delighted"/> Because it wanted better buns! <expr type="sound" label="laughs"/>',  # noqa: E501
+    '<expr type="sound" label="sighs"/> <expr type="expression" label="sincerely"/> I know it\'s been a rough week. <expr type="expression" label="reassuringly"/> We\'ll sort it out together.',  # noqa: E501
+    '<expr type="expression" label="warm"/> Hey, good to hear from you. <expr type="expression" label="curious"/> What can I help you with today?',  # noqa: E501
+    # sound-free, so at least one example survives any steering filter
+    '<expr type="expression" label="calm"/> You\'re all set for <expr type="break" label="500ms"/> Thursday the ninth. <expr type="expression" label="calm"/> <expr type="prosody" label="slowly">Your code is B 4 J 7.</expr>',  # noqa: E501
+    '<expr type="expression" label="excited"/> <expr type="prosody" label="whispering">Okay, don\'t tell anyone yet</expr> but I think we actually pulled it off!',  # noqa: E501
+]
+
+
+def _soniox_expr_llm_instructions(sounds: list[str]) -> str:
+    sections = [
+        f"""Emotion - sets how the words after it sound. Self-closing; place at the START of \
+a sentence.
+   <expr type="expression" label="EMOTION"/>
+   Labels are a fixed vocabulary, NOT free-form descriptions: {", ".join(_SONIOX_EMOTIONS)}.
+   Give every sentence its own emotion marker — each sentence is synthesized on its own, \
+so repeat the same label to carry a feeling across sentences, or switch labels when the \
+feeling shifts."""
+    ]
+    if sounds:
+        sections.append(
+            f"""Sounds - a single non-verbal sound at the exact point it happens. Self-closing.
+   <expr type="sound" label="{sounds[0]}"/>
+   Labels are a fixed vocabulary: {", ".join(sounds)}.
+   Keep it clear of punctuation: put it after the mark that ends a sentence, never \
+between a word and that mark.
+   {_sound_guidance(sounds)}"""
+        )
+    sections.append(
+        """Pauses - insert silence when appropriate. Self-closing.
+   <expr type="break" label="500ms"/> or <expr type="break" label="2s"/> (2s or longer \
+is a long, dramatic pause; use it rarely).
+   A comma, period or ellipsis already pauses, so never put a break marker next to one. \
+Most replies need no break markers at all."""
+    )
+    sections.append(
+        f"""Tone - volume or pace for the words it wraps.
+   <expr type="prosody" label="whispering">don't tell anyone yet</expr>
+   Labels are a fixed vocabulary: {", ".join(_SONIOX_TONES)}.
+   Use a tone only where the moment clearly calls for one — most sentences need none. \
+Never nest tone markers, and always close the tag with </expr>."""
+    )
+
+    parts = [
+        _EXPR_PREAMBLE,
+        _numbered_sections(sections),
+        "There are no other marker types for this voice — no spell and no emphasis marker. "
+        "Don't invent one.",
+        "Write for the EAR, not the page: no em or en dashes anywhere in spoken text — use a "
+        "comma or a period for a short beat, or a break marker for a real pause. Avoid "
+        "semicolons, mid-sentence colons, and parenthetical asides; rewrite them as separate "
+        "sentences or commas.",
+        "When the conversation is in another language, still write every marker label in "
+        "English — the labels are a fixed vocabulary and are never translated.",
+    ]
+    if examples := _sound_examples(_SONIOX_EXAMPLES, sounds, _SONIOX_SOUNDS):
+        parts.append("Examples:\n" + "\n".join(f"  {ex}" for ex in examples))
+    return "\n\n".join(parts)
+
+
 # Every provider's full expr sound vocabulary (the advertised labels before any
 # speech_steering filtering). Providers absent here have no non-verbal sounds.
 _PROVIDER_SOUNDS: dict[str, list[str]] = {
@@ -901,6 +1058,7 @@ _PROVIDER_SOUNDS: dict[str, list[str]] = {
     "fishaudio": _FISHAUDIO_SOUNDS,
     "fishaudio_drama": _FISHAUDIO_SOUNDS,
     "gemini": _GEMINI_SOUNDS,
+    "soniox": _SONIOX_SOUNDS,
 }
 
 
@@ -992,6 +1150,15 @@ _NONVERBAL_SOUND_LABELS: dict[str, dict[str, list[str]]] = {
         "mouth_sounds": [],
         "reflex_sounds": ["cough"],
     },
+    "soniox": {
+        "laughing": ["laughs", "chuckles", "giggles"],
+        "breathing": ["exhales", "gasps"],
+        "sighing": ["sighs"],
+        "crying": ["sobs", "sniffles", "whimpers"],
+        "vocalizing": ["groans", "grunts"],
+        "mouth_sounds": [],
+        "reflex_sounds": ["clears throat", "coughs", "yawns"],
+    },
 }
 
 # NonverbalOptions field -> the provider's wrapping-prosody labels it governs.
@@ -1046,6 +1213,16 @@ _SOUND_USAGE_HINTS: dict[str, str] = {
     "cry": "a sob reserved for real heartbreak",
     "yawning": "a yawn when tiredness itself is the topic",
     "sobbing": "a sob reserved for real heartbreak",
+    "laughs": "a laugh at something obviously funny",
+    "chuckles": "a chuckle at something subtly humorous",
+    "giggles": "a chuckle at something subtly humorous",
+    "sighs": "a sigh when commiserating",
+    "gasps": "a gasp at a sudden shock or reveal",
+    "groans": "a groan at a groan-worthy pun or an unwelcome chore",
+    "clears throat": "a clear-throat when shifting to a new step or topic",
+    "coughs": "a cough only when a cough is the point",
+    "yawns": "a yawn when tiredness itself is the topic",
+    "sobs": "a sob reserved for real heartbreak",
 }
 
 
@@ -1261,6 +1438,70 @@ def _convert_gemini_expr(text: str) -> str:
     return text
 
 
+_SONIOX_NATIVE_RE = re.compile(
+    LEADING_WS + r'<(?P<tag>expression|sound)\s+value="(?P<value>[^"]*)"\s*/?>'
+)
+_SONIOX_BREAK_RE = re.compile(LEADING_WS + r'<break\s+time="(?P<value>[^"]*)"\s*/?>')
+
+
+def _soniox_tag(kind: str, label: str) -> str:
+    """The Soniox bracket tag for one marker, or "" when Soniox has no such tag.
+
+    Only documented tags go through: Soniox may read an unknown one aloud.
+    """
+    label = " ".join(label.strip().lower().split())
+    if kind == "sound":
+        label = _SONIOX_SOUND_ALIASES.get(label, label)
+        return f"[{label}]" if label in _SONIOX_SOUNDS else ""
+    if kind == "expression":
+        return f"[{label}]" if label in _SONIOX_EMOTIONS else ""
+    if kind == "prosody":
+        label = _SONIOX_TONE_ALIASES.get(label, label)
+        return f"[{label}]" if label in _SONIOX_TONES else ""
+    if kind == "break":
+        try:
+            secs = float(label[:-2]) / 1000 if label.endswith("ms") else float(label.rstrip("s"))
+        except ValueError:
+            secs = 0.0
+        return "[long pause]" if secs >= 2.0 else "[pause]"
+    return ""
+
+
+def _convert_soniox(text: str) -> str:
+    """Lower expr markers (and hallucinated native XML) onto Soniox's bracket tags.
+
+    Tags are prefixes — the words after one inherit its delivery — so a wrapped tone
+    lowers to a tag in front of its words. Spell and emphasis have no Soniox tag: the
+    words stay, the marker goes.
+    """
+    if "<" not in text:
+        return text
+
+    def _wrap(m: re.Match[str]) -> str:
+        attrs = _expr_attrs(m.group("attrs"))
+        inner = m.group("inner")
+        tag = _soniox_tag(attrs.get("type", ""), attrs.get("label", ""))
+        return _dedup_removal_space(m, f"{tag} {inner}" if tag else inner)
+
+    text = _EXPR_WRAP_RE.sub(_wrap, text)
+
+    def _self(m: re.Match[str]) -> str:
+        attrs = _expr_attrs(m.group("attrs"))
+        return _dedup_removal_space(m, _soniox_tag(attrs.get("type", ""), attrs.get("label", "")))
+
+    text = _EXPR_SELF_RE.sub(_self, text)
+    text = _SONIOX_NATIVE_RE.sub(
+        lambda m: _dedup_removal_space(m, _soniox_tag(m.group("tag"), m.group("value"))), text
+    )
+    text = _SONIOX_BREAK_RE.sub(
+        lambda m: _dedup_removal_space(m, _soniox_tag("break", m.group("value"))), text
+    )
+    # a stray unpaired expr tag (split across stream chunks) must never reach the TTS
+    text = _EXPR_OPEN_RE.sub(lambda m: _dedup_removal_space(m, ""), text)
+    text = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), text)
+    return text
+
+
 def _convert_expr(provider: str, text: str) -> str:
     """Lower expr markers to the framework-standard / native tags for *provider*.
 
@@ -1377,6 +1618,8 @@ def llm_instructions(provider: str, steering: SpeechSteeringOptions | None = Non
         return _fishaudio_expr_llm_instructions(sounds, disfluencies=disfluencies)
     if provider == "gemini":
         return _gemini_expr_llm_instructions(_allowed_sounds(provider, steering))
+    if provider == "soniox":
+        return _soniox_expr_llm_instructions(_allowed_sounds(provider, steering))
     return None
 
 
@@ -1395,6 +1638,9 @@ _PROVIDER_MARKUP: dict[str, list[str]] = {
     # of the request); membership here is what marks it markup-capable for
     # normalize_markup, and what tells convert_markup to leave its markers in place
     "gemini": _GEMINI_TAGS,
+    # soniox's native dialect is square brackets, produced only by convert_markup; these
+    # names exist to catch hallucinated XML natives in transcripts
+    "soniox": _SONIOX_TAGS,
 }
 
 # Union of every provider's XML tag names — used by the transcript sinks to strip markup
@@ -1651,6 +1897,7 @@ _SELF_CLOSING_TAGS: dict[str, list[str]] = {
     "inworld": ["expression", "sound", "break"],
     "fishaudio": ["expression", "sound", "break"],
     "fishaudio_drama": ["expression", "sound", "break"],
+    "soniox": ["expression", "sound", "break"],
 }
 
 
@@ -1674,6 +1921,8 @@ def convert_markup(provider: str, text: str) -> str:
     """Convert framework-standard markup to a provider's native syntax."""
     if provider == "gemini":
         return _convert_gemini_expr(text)
+    if provider == "soniox":
+        return _convert_soniox(text)
     if provider in _PROVIDER_MARKUP:
         # lower expr markers first; the per-provider conversions below then
         # handle the intermediate framework-standard tags they produce
