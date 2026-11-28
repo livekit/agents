@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -10,12 +11,21 @@ import jwt
 import pytest
 
 from livekit import api, rtc
+from livekit.agents import JobContext
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.plugins.anam import AnamException, PersonaConfig, SessionOptions, avatar
 from livekit.plugins.anam.api import AnamAPI
 
 pytestmark = pytest.mark.unit
+
+
+def _job_context() -> SimpleNamespace:
+    """A job context whose create_participant_token signs locally, as outside token mode."""
+    ctx = SimpleNamespace(local_participant_identity="agent", _job_token_client=None)
+    ctx.create_participant_token = functools.partial(JobContext.create_participant_token, ctx)
+    return ctx
+
 
 LIVEKIT_API_KEY = "test-key"
 LIVEKIT_API_SECRET = "test-secret-long-enough-for-hs256-signing"
@@ -48,9 +58,7 @@ def output_cls(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr(BaseAvatarSession, "start", AsyncMock())
     monkeypatch.setattr(avatar, "AnamAPI", _FakeAnamAPI)
     monkeypatch.setattr(avatar, "DataStreamAudioOutput", output_cls)
-    monkeypatch.setattr(
-        avatar, "get_job_context", lambda: SimpleNamespace(local_participant_identity="agent")
-    )
+    monkeypatch.setattr(avatar, "get_job_context", _job_context)
     return output_cls
 
 

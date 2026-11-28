@@ -15,6 +15,7 @@ from livekit import rtc
 
 from ... import inference, llm, stt
 from ..._exceptions import APIError
+from ..._token_mode import token_mode_token
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given
@@ -298,8 +299,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv(
                 "LIVEKIT_API_SECRET"
             )
-            auto_select = (
-                is_cloud(os.getenv("LIVEKIT_URL", "")) and bool(api_key) and bool(api_secret)
+            auto_select = is_cloud(os.getenv("LIVEKIT_URL", "")) and (
+                (bool(api_key) and bool(api_secret)) or token_mode_token() is not None
             )
             if not is_given(llm):
                 llm = self._DEFAULT_LLM_MODEL if auto_select else None

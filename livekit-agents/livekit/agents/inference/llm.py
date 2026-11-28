@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -40,7 +41,9 @@ from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
     _resolve_provider,
+    access_token_available,
     create_access_token,
+    create_client_access_token,
     extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
@@ -458,7 +461,7 @@ class LLM(llm.LLM):
         )
         self._check_reasoning()
         self._client = openai.AsyncClient(
-            api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
+            api_key=create_client_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
             max_retries=0,
             http_client=httpx.AsyncClient(
@@ -470,7 +473,14 @@ class LLM(llm.LLM):
             ),
         )
 
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        # prewarm runs once: without a token yet (token mode, before the job) leave it
+        # for the call that the job makes
+        if access_token_available(self._opts.api_key, self._opts.api_secret):
+            super().prewarm(loop=loop)
+
     async def _prewarm_impl(self) -> None:
+        self._client.api_key = create_access_token(self._opts.api_key, self._opts.api_secret)
         await self._client.models.list()
 
     async def aclose(self) -> None:

@@ -11,6 +11,7 @@ import aiohttp
 from livekit import api
 
 from .._exceptions import APIStatusError, create_api_error_from_http
+from .._token_mode import INFERENCE_CLAIMS, token_mode_token
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given, shortuuid
@@ -123,7 +124,7 @@ def resolve_credentials(
     resolved_api_key = api_key or os.getenv(
         "LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", "")
     )
-    if not resolved_api_key:
+    if not resolved_api_key and token_mode_token() is None:
         raise ValueError(
             "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
         )
@@ -131,12 +132,13 @@ def resolve_credentials(
     resolved_api_secret = api_secret or os.getenv(
         "LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", "")
     )
-    if not resolved_api_secret:
+    if not resolved_api_secret and token_mode_token() is None:
         raise ValueError(
             "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
         )
 
-    return resolved_api_key, resolved_api_secret
+    # both are empty in token mode, where create_access_token returns the job's token
+    return resolved_api_key or "", resolved_api_secret or ""
 
 
 def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:
@@ -199,7 +201,45 @@ def create_inference_request_id(
     return shortuuid(prefix)
 
 
+_NO_JOB_TOKEN = "no-job-token"
+
+
+def create_client_access_token(api_key: str | None, api_secret: str | None) -> str:
+    """The token an inference client is constructed with. A client can be made before its
+    job runs (process setup), where token mode has no token yet: there it is a placeholder,
+    and the client gets the job's token before each request."""
+    if (not api_key or not api_secret) and token_mode_token() is not None:
+        return _NO_JOB_TOKEN  # the client refuses an empty key
+    return create_access_token(api_key, api_secret)
+
+
+def _job_inference_token() -> str | None:
+    from ..job import get_job_context
+
+    try:
+        return get_job_context()._job_token(INFERENCE_CLAIMS)
+    except RuntimeError:
+        return None
+
+
+def access_token_available(api_key: str | None, api_secret: str | None) -> bool:
+    """False in token mode outside a running job, where ``create_access_token`` raises."""
+    if (not api_key or not api_secret) and token_mode_token() is not None:
+        return _job_inference_token() is not None
+    return True
+
+
 def create_access_token(api_key: str | None, api_secret: str | None, ttl: float = 600) -> str:
+    if (not api_key or not api_secret) and token_mode_token() is not None:
+        # token mode: no secret to sign with, the job keeps a token from the server current
+        token = _job_inference_token()
+        if token is None:
+            raise RuntimeError(
+                "LiveKit Inference in token mode (LIVEKIT_TOKEN without an API key and secret) "
+                "needs a running job: the job gets its inference token from the LiveKit server"
+            )
+        return token
+
     grant = api.access_token.InferenceGrants(perform=True)
     return (
         api.AccessToken(api_key, api_secret)

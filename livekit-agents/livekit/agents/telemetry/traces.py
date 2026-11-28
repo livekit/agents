@@ -67,6 +67,7 @@ from livekit.protocol import metrics as proto_metrics
 
 from .._hosted_logs import logs_handed_off
 from .._proto import encode_chat_item
+from .._token_mode import token_mode_token
 from ..log import TRACE_LEVEL, logger
 from ..types import (
     ATTRIBUTE_REDACTION_ENABLED,
@@ -704,6 +705,42 @@ def set_tracer_provider(
 _TOKEN_TTL = timedelta(hours=6)
 _TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
+# token mode: job id -> its observability token, None when it has none (not fetched yet,
+# or expired). The pipeline is one per process, and so is the job, but for jobs that run
+# in threads: those share it.
+_job_token_sources: dict[str, Callable[[], str | None]] = {}
+_ended_token_jobs: set[str] = set()
+
+
+def _set_job_token_source(job_id: str, source: Callable[[], str | None]) -> None:
+    # a job that ended is not removed at once: its token serves the last exports. Drop it
+    # here, once the token has expired. A job that still runs is kept: it can be without
+    # a token for a moment, while it waits to ask again
+    # jobs in threads call this at the same time: iterate a copy
+    for ended in list(_ended_token_jobs):
+        ended_source = _job_token_sources.get(ended)
+        if ended_source is None or ended_source() is None:
+            _job_token_sources.pop(ended, None)
+            _ended_token_jobs.discard(ended)
+    _job_token_sources[job_id] = source
+
+
+def _end_job_token_source(job_id: str) -> None:
+    """The job ``job_id`` ended: its token is used until it expires, and no longer renewed."""
+    if job_id in _job_token_sources:
+        _ended_token_jobs.add(job_id)
+
+
+def _job_observability_token(job_id: str | None = None) -> str:
+    """The token of the job ``job_id`` if it has one, else of the newest job that does."""
+    sources = list(_job_token_sources.values())
+    if job_id in _job_token_sources:
+        sources.append(_job_token_sources[job_id])
+    for source in reversed(sources):
+        if (token := source()) is not None:
+            return token
+    raise RuntimeError("no observability token: in token mode the job gets it from the server")
+
 
 class _AuthHeaderProvider:
     def __init__(self) -> None:
@@ -713,6 +750,9 @@ class _AuthHeaderProvider:
         self._refresh()
 
     def _refresh(self) -> None:
+        if token_mode_token() is not None:
+            return  # no secret to sign with: __call__ sends the job's token
+
         access_token = (
             api.AccessToken()
             .with_observability_grants(api.ObservabilityGrants(write=True))
@@ -722,6 +762,10 @@ class _AuthHeaderProvider:
         self._expires_at = datetime.now(timezone.utc) + _TOKEN_TTL
 
     def __call__(self) -> dict[str, str]:
+        if token_mode_token() is not None:
+            # the job renews its token in the background: send the current one
+            return {"Authorization": f"Bearer {_job_observability_token()}"}
+
         now = datetime.now(timezone.utc)
         if now >= self._expires_at - _TOKEN_REFRESH_MARGIN:
             with self._lock:
@@ -1417,12 +1461,16 @@ async def _upload_session_report(
         return
 
     # emit recording
-    access_token = (
-        api.AccessToken()
-        .with_observability_grants(api.ObservabilityGrants(write=True))
-        .with_ttl(timedelta(hours=6))
-    )
-    jwt = access_token.to_jwt()
+    if token_mode_token() is not None:
+        # token mode: no secret to sign with, the job keeps a token from the server current
+        jwt = _job_observability_token(report.job_id)
+    else:
+        jwt = (
+            api.AccessToken()
+            .with_observability_grants(api.ObservabilityGrants(write=True))
+            .with_ttl(timedelta(hours=6))
+            .to_jwt()
+        )
 
     header_msg = proto_metrics.MetricsRecordingHeader(
         room_id=report.room_id,

@@ -7,6 +7,7 @@ import struct
 from livekit.protocol.agent_pb import agent_dev
 
 from .. import utils
+from ..job import RunningJobInfo
 from ..log import logger
 from ..worker import AgentServer
 from . import proto
@@ -37,6 +38,7 @@ class WatchClient:
         self._worker = worker
         self._cli_addr = cli_addr
         self._main_task: asyncio.Task | None = None
+        self._reload_task: asyncio.Task | None = None
 
     def start(self) -> None:
         self._main_task = self._loop.create_task(self._run())
@@ -47,34 +49,26 @@ class WatchClient:
         reader, writer = await asyncio.open_connection(host, int(port_str))
 
         try:
-            # On startup: tell the CLI about this agent server (agent name + URL) so
-            # it can surface things like a Cloud console link, then sync running jobs.
+            # On startup: tell the CLI about this agent server (agent name + URL, and that
+            # it supports token mode) so it can surface things like a Cloud console link,
+            # then sync running jobs.
             info = agent_dev.AgentDevMessage(
                 server_info=agent_dev.ServerInfo(
                     agent_name=self._worker._agent_name,
                     url=self._worker._ws_url,
+                    supports_token_mode=True,
                 )
             )
             await _send_proto(writer, info.SerializeToString())
 
-            # send GetRunningJobsRequest to Go, recv response, reload jobs
+            # send GetRunningJobsRequest to Go; the response reloads the jobs
             req = agent_dev.AgentDevMessage(
                 get_running_jobs_request=agent_dev.GetRunningAgentJobsRequest()
             )
             await _send_proto(writer, req.SerializeToString())
 
-            data = await _recv_proto(reader)
-            resp = agent_dev.AgentDevMessage()
-            resp.ParseFromString(data)
-
-            if resp.HasField("get_running_jobs_response"):
-                jobs_resp = resp.get_running_jobs_response
-                if jobs_resp.jobs:
-                    running_jobs = [proto.running_job_from_proto(j) for j in jobs_resp.jobs]
-                    logger.info(f"reloading {len(running_jobs)} job(s)")
-                    await self._worker._reload_jobs(running_jobs)
-
-            # Listen for GetRunningJobsRequest from Go (capture before restart)
+            # Handle messages from Go: the jobs to reload, GetRunningJobsRequest (capture
+            # before restart), and Credentials (a refreshed worker token in token mode)
             while True:
                 try:
                     data = await _recv_proto(reader)
@@ -84,7 +78,15 @@ class WatchClient:
                 msg = agent_dev.AgentDevMessage()
                 msg.ParseFromString(data)
 
-                if msg.HasField("get_running_jobs_request"):
+                if msg.HasField("get_running_jobs_response"):
+                    jobs_resp = msg.get_running_jobs_response
+                    if jobs_resp.jobs:
+                        running_jobs = [proto.running_job_from_proto(j) for j in jobs_resp.jobs]
+                        logger.info(f"reloading {len(running_jobs)} job(s)")
+                        # not awaited here: in token mode the reload waits for registration,
+                        # which can need a token that comes later on this channel (Credentials)
+                        self._reload_task = self._loop.create_task(self._reload_jobs(running_jobs))
+                elif msg.HasField("get_running_jobs_request"):
                     jobs = self._worker.active_jobs
                     job_protos = [proto.running_job_to_proto(j) for j in jobs]
                     resp = agent_dev.AgentDevMessage(
@@ -93,12 +95,18 @@ class WatchClient:
                         )
                     )
                     await _send_proto(writer, resp.SerializeToString())
+                elif msg.HasField("credentials"):
+                    await self._worker._update_token(msg.credentials.token)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
         finally:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
+
+    @utils.log_exceptions(logger=logger)
+    async def _reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
+        await self._worker._reload_jobs(jobs)
 
     async def aclose(self) -> None:
         if not self._main_task:
@@ -107,3 +115,6 @@ class WatchClient:
         self._main_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_task
+
+        if self._reload_task:
+            await utils.aio.cancel_and_wait(self._reload_task)

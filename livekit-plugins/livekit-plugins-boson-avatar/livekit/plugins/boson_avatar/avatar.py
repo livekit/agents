@@ -154,7 +154,10 @@ class AvatarSession(BaseAvatarSession):
         livekit_url_value = _resolve_env_or_value(livekit_url, "LIVEKIT_URL")
         livekit_api_key_value = _resolve_env_or_value(livekit_api_key, "LIVEKIT_API_KEY")
         livekit_api_secret_value = _resolve_env_or_value(livekit_api_secret, "LIVEKIT_API_SECRET")
-        if not livekit_url_value or not livekit_api_key_value or not livekit_api_secret_value:
+        if not livekit_url_value or (
+            get_job_context(required=False) is None
+            and (not livekit_api_key_value or not livekit_api_secret_value)
+        ):
             raise BosonAvatarException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
                 "by arguments or environment variables"
@@ -165,7 +168,7 @@ class AvatarSession(BaseAvatarSession):
             raise BosonAvatarException(
                 "avatar_participant_identity must differ from the local agent participant identity"
             )
-        livekit_token = self._mint_avatar_token(
+        livekit_token = await self._mint_avatar_token(
             room=room,
             publisher_identity=publisher_identity,
             livekit_api_key=livekit_api_key_value,
@@ -399,13 +402,13 @@ class AvatarSession(BaseAvatarSession):
             self._tracked_agent_session.off("close", self._on_agent_session_close)
             self._tracked_agent_session = None
 
-    def _mint_avatar_token(
+    async def _mint_avatar_token(
         self,
         *,
         room: rtc.Room,
         publisher_identity: str,
-        livekit_api_key: str,
-        livekit_api_secret: str,
+        livekit_api_key: str | None,
+        livekit_api_secret: str | None,
     ) -> str:
         grants = api.VideoGrants(
             room_join=True,
@@ -419,13 +422,27 @@ class AvatarSession(BaseAvatarSession):
             if self._max_duration_seconds is not None
             else 4 * 60 * 60
         )
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: publisher_identity}
+        job_ctx = get_job_context(required=False)
+        if job_ctx is not None:
+            return await job_ctx.create_participant_token(
+                kind="agent",
+                identity=self._avatar_identity,
+                name=self._avatar_name,
+                grants=grants,
+                attributes=attributes,
+                ttl=ttl,
+                api_key=livekit_api_key or None,
+                api_secret=livekit_api_secret or None,
+            )
+
         return (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
             .with_identity(self._avatar_identity)
             .with_name(self._avatar_name)
             .with_grants(grants)
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: publisher_identity})
+            .with_attributes(attributes)
             .with_ttl(ttl)
             .to_jwt()
         )

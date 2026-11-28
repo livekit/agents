@@ -51,6 +51,8 @@ class ThreadJobExecutor:
         http_proxy: str | None,
         loop: asyncio.AbstractEventLoop,
         on_join_timing: Callable[[agent.JobJoinTiming], None] | None = None,
+        create_job_token: Callable[[str, str], Awaitable[agent.CreateJobTokenResponse]]
+        | None = None,
     ) -> None:
         self._loop = loop
         self._opts = _ProcOpts(
@@ -81,6 +83,8 @@ class ThreadJobExecutor:
         self._thread: threading.Thread | None = None
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
+        self._create_job_token = create_job_token
+        self._job_token_tasks: set[asyncio.Task[None]] = set()
         self._id = utils.shortuuid("THEXEC_")
 
     @property
@@ -264,6 +268,19 @@ class ThreadJobExecutor:
                 proto.InferenceResponse(request_id=inf_req.request_id, error=str(e)),
             )
 
+    async def _do_create_job_token(self, req: proto.CreateJobTokenRequest) -> None:
+        resp = proto.CreateJobTokenResponse(request_id=req.request_id)
+        try:
+            if self._create_job_token is None or self._running_job is None:
+                raise RuntimeError("cannot create a job token: no running job")
+
+            res = await self._create_job_token(self._running_job.job.id, req.claims)
+            resp.token, resp.expires_at = res.token, res.expires_at
+        except Exception as e:
+            resp.error = str(e)
+
+        await channel.asend_message(self._pch, resp)
+
     async def launch_job(self, info: RunningJobInfo) -> None:
         """start/assign a job to the executor"""
         if self._running_job is not None:
@@ -302,7 +319,7 @@ class ThreadJobExecutor:
             await asyncio.wait_for(asyncio.shield(monitor_task), timeout=1.0)
 
         await utils.aio.cancel_and_wait(ping_task, monitor_task)
-        await utils.aio.cancel_and_wait(*self._inference_tasks)
+        await utils.aio.cancel_and_wait(*self._inference_tasks, *self._job_token_tasks)
 
         with contextlib.suppress(duplex_unix.DuplexClosed):
             await self._pch.aclose()
@@ -346,6 +363,11 @@ class ThreadJobExecutor:
 
                 if isinstance(msg, proto.JoinTiming) and self._on_join_timing:
                     self._on_join_timing(msg.timing)
+
+                if isinstance(msg, proto.CreateJobTokenRequest):
+                    token_task = asyncio.create_task(self._do_create_job_token(msg))
+                    self._job_token_tasks.add(token_task)
+                    token_task.add_done_callback(self._job_token_tasks.discard)
         finally:
             # this task is the sole reader of the IPC channel; once it ends, the thread is gone
             # (channel closed) or being torn down (cancelled). resolve the shutdown futures here

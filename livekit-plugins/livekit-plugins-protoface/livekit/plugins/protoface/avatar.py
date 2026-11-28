@@ -124,13 +124,12 @@ class AvatarSession(BaseAvatarSession):
             livekit_api_secret,
             "LIVEKIT_API_SECRET",
         )
-        if not livekit_url_value or not livekit_api_key_value or not livekit_api_secret_value:
+        if not livekit_url_value:
             raise ProtofaceException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
+                "livekit_url must be set by arguments or environment variables"
             )
 
-        worker_token = self._mint_worker_token(
+        worker_token = await self._mint_worker_token(
             room=room,
             livekit_api_key=livekit_api_key_value,
             livekit_api_secret=livekit_api_secret_value,
@@ -183,12 +182,12 @@ class AvatarSession(BaseAvatarSession):
         finally:
             await super().aclose()
 
-    def _mint_worker_token(
+    async def _mint_worker_token(
         self,
         *,
         room: rtc.Room,
-        livekit_api_key: str,
-        livekit_api_secret: str,
+        livekit_api_key: str | None,
+        livekit_api_secret: str | None,
     ) -> str:
         job_ctx = get_job_context(required=False)
         if job_ctx is not None:
@@ -208,13 +207,30 @@ class AvatarSession(BaseAvatarSession):
             can_subscribe=True,
             can_publish_data=True,
         )
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity}
+        if job_ctx is not None:
+            return await job_ctx.create_participant_token(
+                kind="agent",
+                identity=self._avatar_participant_identity,
+                name=self._avatar_participant_name,
+                grants=grants,
+                attributes=attributes,
+                api_key=livekit_api_key,
+                api_secret=livekit_api_secret,
+            )
+
+        if not livekit_api_key or not livekit_api_secret:
+            raise ProtofaceException(
+                "livekit_api_key and livekit_api_secret must be set "
+                "by arguments or environment variables"
+            )
         return (
             api.AccessToken(api_key=livekit_api_key, api_secret=livekit_api_secret)
             .with_kind("agent")
             .with_identity(self._avatar_participant_identity)
             .with_name(self._avatar_participant_name)
             .with_grants(grants)
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
+            .with_attributes(attributes)
             .to_jwt()
         )
 

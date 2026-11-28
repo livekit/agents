@@ -112,31 +112,44 @@ class AvatarSession(BaseAvatarSession):
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
-        if not livekit_url or not livekit_api_key or not livekit_api_secret:
-            raise LiveAvatarException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set"
-            )
+        if not livekit_url:
+            raise LiveAvatarException("livekit_url must be set")
 
-        try:
-            job_ctx = get_job_context()
+        job_ctx = get_job_context(required=False)
+        if job_ctx is not None:
             self._local_participant_identity = job_ctx.token_claims().identity
-        except RuntimeError as e:
-            if not room.isconnected():
-                raise LiveAvatarException("failed to get local participant identity") from e
+        elif not room.isconnected():
+            raise LiveAvatarException("failed to get local participant identity")
+        else:
             self._local_participant_identity = room.local_participant.identity
 
-        livekit_token = (
-            api.AccessToken(
-                api_key=livekit_api_key,
-                api_secret=livekit_api_secret,
+        grants = api.VideoGrants(room_join=True, room=self._room.name)
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity}
+        if job_ctx is not None:
+            livekit_token = await job_ctx.create_participant_token(
+                kind="agent",
+                identity=self._avatar_participant_identity,
+                name=self._avatar_participant_name,
+                grants=grants,
+                attributes=attributes,
+                api_key=livekit_api_key or None,
+                api_secret=livekit_api_secret or None,
             )
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=self._room.name))
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: self._local_participant_identity})
-            .to_jwt()
-        )
+        else:
+            if not livekit_api_key or not livekit_api_secret:
+                raise LiveAvatarException("livekit_api_key and livekit_api_secret must be set")
+            livekit_token = (
+                api.AccessToken(
+                    api_key=livekit_api_key,
+                    api_secret=livekit_api_secret,
+                )
+                .with_kind("agent")
+                .with_identity(self._avatar_participant_identity)
+                .with_name(self._avatar_participant_name)
+                .with_grants(grants)
+                .with_attributes(attributes)
+                .to_jwt()
+            )
 
         logger.debug("starting avatar session")
 

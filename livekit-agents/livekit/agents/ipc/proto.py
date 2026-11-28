@@ -262,6 +262,47 @@ class JoinTiming:
         self.timing.ParseFromString(channel.read_bytes(b))
 
 
+@dataclass
+class CreateJobTokenRequest:
+    """sent by the subprocess to the main process to get a token for its job with the
+    given claims (JSON); the main process asks the server with CreateJobTokenRequest"""
+
+    MSG_ID: ClassVar[int] = 13
+    request_id: str = ""
+    claims: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.request_id)
+        channel.write_string(b, self.claims)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.request_id = channel.read_string(b)
+        self.claims = channel.read_string(b)
+
+
+@dataclass
+class CreateJobTokenResponse:
+    """response to a CreateJobTokenRequest; error is set when no token was created"""
+
+    MSG_ID: ClassVar[int] = 14
+    request_id: str = ""
+    token: str = ""
+    expires_at: int = 0  # unix seconds
+    error: str = ""
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_string(b, self.request_id)
+        channel.write_string(b, self.token)
+        channel.write_long(b, self.expires_at)
+        channel.write_string(b, self.error)
+
+    def read(self, b: io.BytesIO) -> None:
+        self.request_id = channel.read_string(b)
+        self.token = channel.read_string(b)
+        self.expires_at = channel.read_long(b)
+        self.error = channel.read_string(b)
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -276,4 +317,6 @@ IPC_MESSAGES = {
     ShutdownRequestAck.MSG_ID: ShutdownRequestAck,
     ShuttingDown.MSG_ID: ShuttingDown,
     JoinTiming.MSG_ID: JoinTiming,
+    CreateJobTokenRequest.MSG_ID: CreateJobTokenRequest,
+    CreateJobTokenResponse.MSG_ID: CreateJobTokenResponse,
 }

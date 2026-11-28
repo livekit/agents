@@ -20,6 +20,7 @@ from .._exceptions import (
     APIStatusError,
     APITimeoutError,
 )
+from .._token_mode import token_mode_token
 from ..language import LanguageCode
 from ..log import logger
 from ..tts._provider_format import drop_bracket_cues
@@ -572,7 +573,7 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
             if is_given(api_key)
             else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
         )
-        if not lk_api_key:
+        if not lk_api_key and token_mode_token() is None:
             raise ValueError(
                 "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
             )
@@ -582,7 +583,7 @@ class TTS(tts.TTS[Literal["fallback_activated"]]):
             if is_given(api_secret)
             else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
         )
-        if not lk_api_secret:
+        if not lk_api_secret and token_mode_token() is None:
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )

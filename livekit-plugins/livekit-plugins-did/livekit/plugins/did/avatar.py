@@ -99,22 +99,19 @@ class AvatarSession(BaseAvatarSession):
             if utils.is_given(livekit_api_secret)
             else os.getenv("LIVEKIT_API_SECRET")
         )
-        if not _livekit_url or not _livekit_api_key or not _livekit_api_secret:
-            raise DIDException(
-                "livekit_url, livekit_api_key, and livekit_api_secret must be set "
-                "by arguments or environment variables"
-            )
+        if not _livekit_url:
+            raise DIDException("livekit_url must be set by arguments or environment variables")
 
         job_ctx = get_job_context()
         local_participant_identity = job_ctx.local_participant_identity
-        livekit_token = (
-            api.AccessToken(api_key=_livekit_api_key, api_secret=_livekit_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_participant_identity)
-            .with_name(self._avatar_participant_name)
-            .with_grants(api.VideoGrants(room_join=True, room=room.name))
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity})
-            .to_jwt()
+        livekit_token = await job_ctx.create_participant_token(
+            kind="agent",
+            identity=self._avatar_participant_identity,
+            name=self._avatar_participant_name,
+            grants=api.VideoGrants(room_join=True, room=room.name),
+            attributes={ATTRIBUTE_PUBLISH_ON_BEHALF: local_participant_identity},
+            api_key=_livekit_api_key or None,
+            api_secret=_livekit_api_secret or None,
         )
 
         logger.debug("starting avatar session")

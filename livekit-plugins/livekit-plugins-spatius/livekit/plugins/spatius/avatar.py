@@ -189,7 +189,8 @@ class AvatarSession(BaseAvatarSession):
         lk_url = _optional(livekit_url, "LIVEKIT_URL", "")
         lk_api_key = _optional(livekit_api_key, "LIVEKIT_API_KEY", "")
         lk_api_secret = _optional(livekit_api_secret, "LIVEKIT_API_SECRET", "")
-        if not lk_url or not lk_api_key or not lk_api_secret:
+        job_ctx = get_job_context(required=False)
+        if not lk_url or (job_ctx is None and (not lk_api_key or not lk_api_secret)):
             raise SpatiusException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set "
                 "by arguments or environment variables"
@@ -214,25 +215,37 @@ class AvatarSession(BaseAvatarSession):
 
         # the egress token joins the room as an agent, publishes the avatar tracks,
         # and publishes data so the worker can send the playback lifecycle RPCs
-        egress_token = (
-            api.AccessToken(api_key=lk_api_key, api_secret=lk_api_secret)
-            .with_kind("agent")
-            .with_identity(self._avatar_identity)
-            .with_name(self._avatar_name)
-            .with_ttl(DEFAULT_SESSION_TTL)
-            .with_attributes({ATTRIBUTE_PUBLISH_ON_BEHALF: agent_identity})
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=room_name,
-                    can_subscribe=False,
-                    can_publish_data=True,
-                    # the worker publishes exactly one avatar video and one audio track
-                    can_publish_sources=["camera", "microphone"],
-                )
-            )
-            .to_jwt()
+        grants = api.VideoGrants(
+            room_join=True,
+            room=room_name,
+            can_subscribe=False,
+            can_publish_data=True,
+            # the worker publishes exactly one avatar video and one audio track
+            can_publish_sources=["camera", "microphone"],
         )
+        attributes = {ATTRIBUTE_PUBLISH_ON_BEHALF: agent_identity}
+        if job_ctx is not None:
+            egress_token = await job_ctx.create_participant_token(
+                kind="agent",
+                identity=self._avatar_identity,
+                name=self._avatar_name,
+                ttl=DEFAULT_SESSION_TTL,
+                attributes=attributes,
+                grants=grants,
+                api_key=lk_api_key or None,
+                api_secret=lk_api_secret or None,
+            )
+        else:
+            egress_token = (
+                api.AccessToken(api_key=lk_api_key, api_secret=lk_api_secret)
+                .with_kind("agent")
+                .with_identity(self._avatar_identity)
+                .with_name(self._avatar_name)
+                .with_ttl(DEFAULT_SESSION_TTL)
+                .with_attributes(attributes)
+                .with_grants(grants)
+                .to_jwt()
+            )
         livekit_egress = LiveKitEgressConfig(
             url=lk_url,
             api_token=egress_token,

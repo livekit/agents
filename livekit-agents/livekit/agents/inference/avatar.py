@@ -15,6 +15,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from .._token_mode import token_mode_token
 from ..job import get_job_context
 from ..log import logger
 from ..types import (
@@ -185,7 +186,7 @@ class AvatarSession(BaseAvatarSession):
             if is_given(api_key)
             else os.getenv("LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", ""))
         )
-        if not self._api_key:
+        if not self._api_key and token_mode_token() is None:
             raise ValueError(
                 "api_key is required, either as argument or set LIVEKIT_API_KEY environment variable"
             )
@@ -194,7 +195,7 @@ class AvatarSession(BaseAvatarSession):
             if is_given(api_secret)
             else os.getenv("LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", ""))
         )
-        if not self._api_secret:
+        if not self._api_secret and token_mode_token() is None:
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environment variable"
             )
