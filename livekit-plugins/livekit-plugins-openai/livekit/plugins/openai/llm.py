@@ -978,6 +978,61 @@ class LLM(llm.LLM):
             tool_choice=NOT_GIVEN,
         )
 
+    @staticmethod
+    def with_modal(
+        *,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of a Modal LLM.
+
+        ``model`` is the endpoint hostname, e.g. ``my-endpoint.us-west.modal.direct``.
+        ``base_url`` defaults to the shared inference gateway in the hostname's region
+        and can be set to a dedicated Endpoint or self-hosted server URL.
+
+        ``api_key`` must be set to your Modal proxy token, either using the argument or
+        by setting the ``MODAL_PROXY_TOKEN`` environmental variable (or the
+        ``MODAL_PROXY_TOKEN_ID`` and ``MODAL_PROXY_TOKEN_SECRET`` pair).
+        """
+
+        if not api_key:
+            api_key = os.environ.get("MODAL_PROXY_TOKEN")
+        if not api_key:
+            token_id = os.environ.get("MODAL_PROXY_TOKEN_ID")
+            token_secret = os.environ.get("MODAL_PROXY_TOKEN_SECRET")
+            if token_id and token_secret:
+                api_key = f"{token_id}.{token_secret}"
+
+        if base_url is None:
+            region = model.split(".")[-3] if model.endswith(".modal.direct") else "us-west"
+            base_url = f"https://inference.{region}.modal.direct/v1"
+
+        return LLM(
+            model=model,
+            api_key=api_key or "modal",
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+        )
+
     def chat(
         self,
         *,
