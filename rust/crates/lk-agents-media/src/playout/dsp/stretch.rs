@@ -33,24 +33,15 @@ struct Match {
     passive: bool,
 }
 
-#[derive(Clone, Copy)]
-enum Preference {
-    Correlation,
-    Longest,
-}
-
 impl Match {
-    // Every search path uses the same ordering: quiet first, then its own ranking.
-    fn prefer(self, candidate: Self, preference: Preference) -> Self {
-        let better = if self.passive != candidate.passive {
-            candidate.passive
-        } else {
-            match preference {
-                Preference::Correlation => candidate.score > self.score + 1e-9,
-                Preference::Longest => candidate.period > self.period,
-            }
+    // Ranking only breaks ties within the same class; voiced audio never replaces quiet.
+    fn prefer(self, candidate: Self, better: impl FnOnce(Self, Self) -> bool) -> Self {
+        let replace = match (self.passive, candidate.passive) {
+            (false, true) => true,
+            (true, false) => false,
+            _ => better(candidate, self),
         };
-        if better { candidate } else { self }
+        if replace { candidate } else { self }
     }
 }
 
@@ -130,7 +121,9 @@ pub(in crate::playout) fn stretch(
         let Some(candidate) = evaluate(period) else {
             continue;
         };
-        best = Some(best.map_or(candidate, |old| old.prefer(candidate, Preference::Correlation)));
+        best = Some(best.map_or(candidate, |old| {
+            old.prefer(candidate, |candidate, old| candidate.score > old.score + 1e-9)
+        }));
         if candidate.passive {
             break;
         }
@@ -140,7 +133,7 @@ pub(in crate::playout) fn stretch(
         let period = best.period;
         for multiple in 2..=rate.period_max().min(maximum_change) / period {
             if let Some(candidate) = evaluate(period * multiple) {
-                best = best.prefer(candidate, Preference::Longest);
+                best = best.prefer(candidate, |candidate, old| candidate.period > old.period);
             }
         }
     }

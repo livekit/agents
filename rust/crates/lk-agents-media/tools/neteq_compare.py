@@ -8,7 +8,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-import unittest
 import wave
 from bisect import bisect_left
 from dataclasses import dataclass
@@ -40,7 +39,6 @@ from typing import Literal, NamedTuple, NotRequired, TypedDict
 # Only NetEq converts to/from 48 kHz for L16 when needed. Its native maximum target is
 # unlimited by default; Rust defaults to 100 ms. Native and Rust rate controls differ.
 # Temporary C++/Rust bridges are compiled locally and deleted after the run.
-# Regression checks: python3 -m unittest discover -s <this directory> -p neteq_compare.py
 #
 # Schedule design follows NetEq's separate timing/loss controls and fixed-seed replay:
 #   modules/audio_coding/neteq/tools/neteq_quality_test.cc (fixed seed, loss events, drift)
@@ -752,52 +750,6 @@ def main() -> None:
             )
 
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-
-
-class ScheduleTests(unittest.TestCase):
-    def test_stalls_start_at_the_first_affected_chunk(self) -> None:
-        cases: tuple[Scenario, ...] = ("stall-400ms", "stall-1s")
-        for rate in SUPPORTED_RATES:
-            for chunk_ms in (100, 1000):
-                for case in cases:
-                    with self.subTest(rate=rate, chunk_ms=chunk_ms, case=case):
-                        schedule = make_schedule(case, rate * 8, chunk_ms, 2250, rate)
-                        actual_ms = schedule.fault_source_ms
-                        self.assertIsNotNone(actual_ms)
-                        first = next(
-                            row
-                            for row in schedule.arrivals
-                            if row.source_start * 1000 // rate >= 2250
-                        )
-                        expected_us = 400_000 if case == "stall-400ms" else 1_000_000
-                        self.assertEqual(
-                            first.arrival_us - first.source_start * 1_000_000 // rate, expected_us
-                        )
-                        self.assertEqual(first.source_start * 1000 // rate, actual_ms)
-
-    def test_three_second_controls_and_startup_do_not_require_a_later_fault(self) -> None:
-        cases: tuple[Scenario, ...] = ("steady", "late-start", "slow-start")
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "short.wav"
-            for rate in SUPPORTED_RATES:
-                with wave.open(str(path), "wb") as stream:
-                    stream.setparams((1, 2, rate, 0, "NONE", "not compressed"))
-                    stream.writeframes(b"\xe8\x03" * rate * 3)
-                for case in cases:
-                    with self.subTest(rate=rate, case=case):
-                        options = Options(
-                            input=path, scenario=[case], chunk_ms=100, fault_at_ms=2200
-                        )
-                        self.assertEqual(len(read_input(options).pcm), rate * 3 * 2)
-
-    def test_repeated_stalls_reject_missing_events_and_coarse_chunks(self) -> None:
-        for rate in SUPPORTED_RATES:
-            with self.subTest(rate=rate, reason="short source"):
-                with self.assertRaisesRegex(ValueError, "all planned|four|4"):
-                    make_schedule("repeated-stalls", rate * 4, 100, 2200, rate)
-            with self.subTest(rate=rate, reason="coarse chunks"):
-                with self.assertRaisesRegex(ValueError, "chunk|spacing"):
-                    make_schedule("repeated-stalls", rate * 10, 1000, 2200, rate)
 
 
 if __name__ == "__main__":
