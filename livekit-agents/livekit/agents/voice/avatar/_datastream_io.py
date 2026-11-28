@@ -188,6 +188,16 @@ class DataStreamAudioOutput(AudioOutput):
             _CaptureCancelledEvent(playback_position=0, interrupted=True)
         )
 
+    async def _aclose_writer(self, writer: rtc.ByteStreamWriter) -> None:
+        """Close an avatar audio stream and log failures without propagating them."""
+        try:
+            await writer.aclose()
+        except Exception as e:
+            if self._room.isconnected():
+                logger.warning("failed to close the avatar audio stream", exc_info=e)
+            else:
+                logger.debug("failed to close the avatar audio stream", exc_info=e)
+
     def flush(self) -> None:
         """Mark end of current audio segment"""
         super().flush()
@@ -195,7 +205,7 @@ class DataStreamAudioOutput(AudioOutput):
             return
 
         # close the stream marking the end of the segment
-        task = asyncio.create_task(self._stream_writer.aclose())
+        task = asyncio.create_task(self._aclose_writer(self._stream_writer))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 

@@ -715,3 +715,17 @@ async def test_queued_trailer_still_wins_over_the_superseded_signal():
         assert isinstance(await _next(receiver), AudioSegmentEnd)
     finally:
         await receiver.aclose()
+
+
+async def test_flush_close_failure_is_handled(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock], caplog: pytest.LogCaptureFixture
+) -> None:
+    output, room = sink
+    writer = room.local_participant.stream_bytes.return_value
+    writer.aclose.side_effect = rtc.StreamError("handle not found")
+
+    await output.capture_frame(_frame())
+    output.flush()
+    await asyncio.gather(*output._tasks)
+    writer.aclose.assert_awaited_once()
+    assert "failed to close the avatar audio stream" in caplog.text
