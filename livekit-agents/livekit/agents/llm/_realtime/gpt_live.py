@@ -488,6 +488,7 @@ class GPTLiveSession(
 
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
+        self._restart_requested = asyncio.Event()
         # the mute state the app asked for, re-applied to each session a reconnect opens
         self._input_muted = False
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
@@ -676,6 +677,7 @@ class GPTLiveSession(
                     finally:
                         # what arrives now is history for the next connection, not an append
                         self._session_start_sent = False
+                        self._restart_requested.clear()
                 except APIError as e:
                     if max_retries == 0 or not e.retryable:
                         self._emit_error(e, recoverable=False)
@@ -852,7 +854,8 @@ class GPTLiveSession(
                     )
 
         send_task = asyncio.create_task(_send_task(), name="_send_task")
-        tasks = [asyncio.create_task(_recv_task(), name="_recv_task"), send_task]
+        restart_task = asyncio.create_task(self._restart_requested.wait(), name="_restart_task")
+        tasks = [asyncio.create_task(_recv_task(), name="_recv_task"), send_task, restart_task]
         wait_reconnect_task: asyncio.Task | None = None
         if self._opts.max_session_duration is not None:
             wait_reconnect_task = asyncio.create_task(
@@ -864,7 +867,7 @@ class GPTLiveSession(
             for task in done:
                 if task != wait_reconnect_task:
                     task.result()
-            if wait_reconnect_task in done:
+            if restart_task in done or wait_reconnect_task in done:
                 await utils.aio.cancel_and_wait(send_task)
                 await _close_ws()
         finally:
@@ -1531,6 +1534,24 @@ class GPTLiveSession(
     def unmute_input(self) -> None:
         self._input_muted = False
         self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
+
+    def restart(self) -> None:
+        """Request a new connection after gracefully closing the active one.
+
+        The new session starts with the existing conversation history and emits
+        ``session_reconnected``. Call at an idle turn boundary: backend responses
+        still running on the old connection do not continue on the new one.
+        Repeated requests during the same rollover are coalesced. There is no
+        effect before the initial handshake or after shutdown starts.
+        """
+        if (
+            not self._closing
+            and self._session_start_sent
+            and self._session_started_fut.done()
+            and not self._session_started_fut.cancelled()
+            and not self._session_closed_fut.done()
+        ):
+            self._restart_requested.set()
 
     async def aclose(self) -> None:
         closed = await self._release_and_close()

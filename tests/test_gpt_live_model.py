@@ -264,10 +264,10 @@ async def test_startup_failures_exhaust_retries(
         await model.aclose()
 
 
-@pytest.mark.parametrize("timed", [False, True])
+@pytest.mark.parametrize("trigger", ["disconnect", "timer", "manual"])
 @pytest.mark.parametrize("reason", ["expired", "connection_lost"])
 async def test_reconnect_drains_and_waits_for_each_sessions_close(
-    monkeypatch: pytest.MonkeyPatch, timed: bool, reason: str
+    monkeypatch: pytest.MonkeyPatch, trigger: str, reason: str
 ) -> None:
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = 0
@@ -280,7 +280,9 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
 
     monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
     monkeypatch.setattr(gpt_live_model, "_SESSION_CLOSE_TIMEOUT", 0.5)
-    model = GPTLiveModel(api_key="sk-test", max_session_duration=0.1 if timed else None)
+    model = GPTLiveModel(
+        api_key="sk-test", max_session_duration=0.1 if trigger == "timer" else None
+    )
     session = model.session()
     metrics: list[RealtimeModelMetrics] = []
     session.on("metrics_collected", metrics.append)
@@ -301,7 +303,10 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
                 )
             ]
         )
-        if timed:
+        if trigger == "manual":
+            session.restart()
+            session.restart()
+        if trigger != "disconnect":
             await asyncio.wait_for(sockets[0].close_requested.wait(), timeout=1)
             assert not sockets[0].closed.is_set()
             sockets[0].emit(
@@ -313,12 +318,13 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
             audio = await asyncio.wait_for(anext(session.audio_stream.__aiter__()), timeout=1)
             assert audio.frame.duration == pytest.approx(0.1)
         sockets[0].emit({"type": "session.closed", "reason": reason, "usage": {"seconds": 5}})
-        if not timed:
+        if trigger == "disconnect":
             await sockets[0].close()
         await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
         await session._session_started_fut
         assert [m.session_duration for m in metrics] == [5]
         assert not errors
+        assert not sockets[1].close_requested.is_set()
         restored = sockets[1].sent[0]["session"]
         responses = restored["delegation"]["responses"]
         assert responses["tool_choice"] == "none"
