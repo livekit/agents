@@ -119,7 +119,14 @@ def get_tool_results_for_realtime(
 
 
 def to_response_format(response_format: type | dict) -> types.SchemaUnion:
-    _, json_schema_type = llm_utils.to_response_format_param(response_format)
+    if isinstance(response_format, types.Schema):
+        return response_format
+    if isinstance(response_format, dict):
+        return _GeminiJsonSchema(response_format).simplify()
+    try:
+        _, json_schema_type = llm_utils.to_response_format_param(response_format)
+    except TypeError:
+        json_schema_type = TypeAdapter(response_format)
     if isinstance(json_schema_type, TypeAdapter):
         schema = json_schema_type.json_schema()
     else:
