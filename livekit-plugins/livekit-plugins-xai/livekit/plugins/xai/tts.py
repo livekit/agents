@@ -33,7 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
 from .log import logger
@@ -46,6 +46,19 @@ XAI_WEBSOCKET_URL = "wss://api.x.ai/v1/tts"
 DEFAULT_VOICE = "ara"
 
 
+def _timed_chars(data: dict) -> list[TimedString]:
+    """Per-character timings of an `audio.delta` frame, or [] if absent or malformed."""
+    try:
+        ts = data["audio_timestamps"]
+        chars = [
+            TimedString(text=c, start_time=float(start), end_time=float(end))
+            for c, (start, end) in zip(ts["graph_chars"], ts["graph_times"], strict=True)
+        ]
+    except (KeyError, TypeError, ValueError):
+        return []
+    return chars if all(isinstance(c, str) for c in ts["graph_chars"]) else []
+
+
 @dataclass
 class _TTSOptions:
     voice: GrokVoices | str
@@ -54,6 +67,7 @@ class _TTSOptions:
     optimize_streaming_latency: NotGivenOr[int]
     speed: NotGivenOr[float]
     text_normalization: NotGivenOr[bool]
+    word_timestamps: bool
 
 
 class TTS(tts.TTS):
@@ -66,6 +80,7 @@ class TTS(tts.TTS):
         optimize_streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         text_normalization: NotGivenOr[bool] = NOT_GIVEN,
+        word_timestamps: bool = True,
         tokenizer: tokenize.WordTokenizer | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -80,11 +95,12 @@ class TTS(tts.TTS):
             optimize_streaming_latency (int, optional): Latency optimization level for the xAI TTS websocket.
             speed (float, optional): Speaking-rate multiplier for the generated audio.
             text_normalization (bool, optional): Whether to normalize text before synthesis.
+            word_timestamps (bool, optional): Request per-character timings from xAI and emit them as aligned transcripts. Defaults to True.
             api_key (str | None, optional): The xAI API key. If not provided, it will be read from the xAI environment variable.
             http_session (aiohttp.ClientSession | None, optional): An existing aiohttp ClientSession to use. If not provided, a new session will be created.
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=word_timestamps),
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
         )
@@ -105,6 +121,7 @@ class TTS(tts.TTS):
             optimize_streaming_latency=optimize_streaming_latency,
             speed=speed,
             text_normalization=text_normalization,
+            word_timestamps=word_timestamps,
         )
 
         self._session = http_session
@@ -146,6 +163,8 @@ class TTS(tts.TTS):
             params["speed"] = opts.speed
         if is_given(opts.text_normalization):
             params["text_normalization"] = str(opts.text_normalization).lower()
+        if opts.word_timestamps:
+            params["with_timestamps"] = "true"
 
         url = f"{XAI_WEBSOCKET_URL}?{urlencode(params)}"
         try:
@@ -329,7 +348,8 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             async for word in input_stream:
                 self._mark_started()
-                await ws.send_str(json.dumps({"type": "text.delta", "delta": word.token}))
+                # xAI joins deltas verbatim, so each word carries its own space
+                await ws.send_str(json.dumps({"type": "text.delta", "delta": f"{word.token} "}))
             await ws.send_str(json.dumps({"type": "text.done"}))
             input_ended = True
 
@@ -354,6 +374,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 data = json.loads(msg.data)
                 msg_type = data.get("type")
                 if msg_type == "audio.delta":
+                    # timings go first so they ride this chunk's first frame, not the next one
+                    if self._opts.word_timestamps and (chars := _timed_chars(data)):
+                        output_emitter.push_timed_transcript(chars)
                     output_emitter.push(base64.b64decode(data["delta"]))
                 elif msg_type == "audio.done":
                     if input_ended:
