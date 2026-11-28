@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections.abc import Callable
 
 import pytest
@@ -141,6 +142,86 @@ async def test_next_task_speech_is_recorded_in_the_run(entry: type[Agent]) -> No
         assert [e.item.text_content for e in result.events if e.type == "message"] == [
             "thank you, transferring you now."
         ]
+
+
+@pytest.mark.parametrize(
+    ("task_ids", "invalid_id"),
+    [
+        pytest.param(["phone"], "phone", id="active"),
+        pytest.param(["email", "phone"], "phone", id="previous-and-active"),
+        pytest.param(["address"], "address", id="unvisited"),
+        pytest.param(["missing"], "missing", id="unknown"),
+        pytest.param(["email"], None, id="previous"),
+    ],
+)
+async def test_task_group_validates_regression_targets(
+    task_ids: list[str], invalid_id: str | None
+) -> None:
+    entered: list[str] = []
+    ready = asyncio.Event()
+    completed = asyncio.Event()
+
+    class Step(AgentTask[None]):
+        def __init__(self, name: str) -> None:
+            super().__init__(instructions=f"collect {name}")
+            self.name = name
+
+        async def on_enter(self) -> None:
+            entered.append(self.name)
+            await self.session.say(f"{self.name} ready")
+            ready.set()
+
+        @function_tool
+        async def finish(self) -> str:
+            """Complete this step."""
+            self.complete(None)
+            return "done"
+
+    class Parent(Agent):
+        async def on_enter(self) -> None:
+            result = await (
+                TaskGroup(summarize_chat_ctx=False)
+                .add(lambda: Step("email"), id="email", description="collect email")
+                .add(lambda: Step("phone"), id="phone", description="collect phone")
+                .add(lambda: Step("address"), id="address", description="collect address")
+            )
+            assert list(result.task_results) == ["email", "phone", "address"]
+            completed.set()
+
+    llm = FakeLLM(
+        fake_responses=[
+            _reply("finish email", "", _tool_call("finish", "c1")),
+            _reply(
+                "go back",
+                "",
+                _tool_call("out_of_scope", "c2", json.dumps({"task_ids": task_ids})),
+            ),
+            _reply("finish phone", "", _tool_call("finish", "c3")),
+            _reply("finish address", "", _tool_call("finish", "c4")),
+        ]
+    )
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(Parent(instructions="collect contact details"))
+        await asyncio.wait_for(ready.wait(), timeout=5)
+        await asyncio.wait_for(sess.run(user_input="finish email"), timeout=5)
+        assert entered == ["email", "phone"]
+
+        result = await asyncio.wait_for(sess.run(user_input="go back"), timeout=5)
+
+        if invalid_id is not None:
+            result.expect.contains_function_call_output(
+                output=f"unable to regress, invalid task id {invalid_id}", is_error=True
+            )
+            assert entered == ["email", "phone"]
+        else:
+            assert entered == ["email", "phone", "email"]
+            await asyncio.wait_for(sess.run(user_input="finish email"), timeout=5)
+            assert entered == ["email", "phone", "email", "phone"]
+
+        await asyncio.wait_for(sess.run(user_input="finish phone"), timeout=5)
+        await asyncio.wait_for(sess.run(user_input="finish address"), timeout=5)
+        await asyncio.wait_for(completed.wait(), timeout=5)
+        assert entered[-1] == "address"
 
 
 async def test_tool_resumes_in_the_run_after_task_completes_in_on_enter() -> None:
