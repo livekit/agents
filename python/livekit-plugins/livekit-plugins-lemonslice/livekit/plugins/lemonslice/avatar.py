@@ -165,7 +165,7 @@ class AvatarSession(BaseAvatarSession):
         job = get_job_context(required=False)
         properties: dict[str, JsonValue] = {
             "livekit_url": ctx.livekit_url,
-            "livekit_token": ctx.livekit_token(),
+            "livekit_token": await ctx.livekit_token(),
             "livekit_session_id": (job.job.room.sid if job else "") or await ctx.room.sid,
         }
         payload = {"properties": properties} | self._payload
@@ -239,21 +239,17 @@ class AvatarSession(BaseAvatarSession):
         if self._meeting_bot_id is not None:
             raise LemonSliceException("already joined a meeting; call leave_meeting() first")
 
-        broadcast_token = (
-            ctx.access_token()
-            .with_identity(_MEETING_BROADCAST_IDENTITY)
-            .with_name(_MEETING_BROADCAST_IDENTITY)
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=ctx.room.name,
-                    can_subscribe=True,
-                    can_publish=False,
-                    can_publish_data=False,
-                )
-            )
-            .with_ttl(timedelta(hours=4))
-            .to_jwt()
+        broadcast_token = await ctx.participant_token(
+            identity=_MEETING_BROADCAST_IDENTITY,
+            name=_MEETING_BROADCAST_IDENTITY,
+            grants=api.VideoGrants(
+                room_join=True,
+                room=ctx.room.name,
+                can_subscribe=True,
+                can_publish=False,
+                can_publish_data=False,
+            ),
+            ttl=timedelta(hours=4),
         )
         payload: dict[str, JsonValue] = {
             "session_id": self._session_id,

@@ -58,6 +58,9 @@ pub trait SessionJob: Send + Sync {
     fn server_env(
         &self,
     ) -> Result<std::collections::BTreeMap<String, String>, crate::errors::HostError>;
+    /// The job's id. In token mode, the job's API calls use this job's tokens.
+    #[host(call, getter = "job.id")]
+    fn job_id(&self) -> Result<String, crate::errors::HostError>;
 }
 
 // Public data contracts. Python behavior remains in its adapters.

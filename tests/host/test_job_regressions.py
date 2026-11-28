@@ -115,6 +115,44 @@ async def test_the_job_api_signs_with_the_servers_credentials_not_the_environmen
     assert deleted == [(KEY, "assigned")]
 
 
+async def test_a_key_and_secret_sign_the_jobs_tokens_over_a_worker_token(
+    run_job: RunJob,
+    livekit_api: tuple[str, list[tuple[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key mode job, with `LIVEKIT_TOKEN` also set in the environment and the settings.
+
+    Catches a job that sends the worker token as its API credential, or that asks the server for
+    a participant token that it can sign itself.
+    """
+    url, deleted = livekit_api
+    monkeypatch.setenv("LIVEKIT_TOKEN", "worker-token")
+    participant: list[str] = []
+
+    async def entrypoint(ctx: JobContext) -> None:
+        await ctx.api.room.delete_room(api.DeleteRoomRequest(room="assigned"))
+        participant.append(await ctx.create_participant_token(identity="avatar", kind="agent"))
+        ctx.shutdown("done")
+
+    server_env = {
+        "LIVEKIT_URL": url,
+        "LIVEKIT_API_KEY": KEY,
+        "LIVEKIT_API_SECRET": SECRET,
+        "LIVEKIT_TOKEN": "worker-token",
+    }
+    job = agent.Job(id="AJ_keyed", room=models.Room(name="assigned"))
+    await run_job(entrypoint, job, env=server_env, fake_job=False)
+
+    assert deleted == [(KEY, "assigned")]
+    [token] = participant
+    claims = jwt.decode(token, SECRET, algorithms=["HS256"], issuer=KEY)
+    assert (claims["sub"], claims["kind"], claims["video"]["room"]) == (
+        "avatar",
+        "agent",
+        "assigned",
+    )
+
+
 async def test_a_console_job_connects_and_finds_its_user_without_a_server(run_job: RunJob) -> None:
     """A console job's concurrent `connect()` calls both complete and `wait_for_participant`
     returns the console's user, with no LiveKit server behind the job."""

@@ -83,12 +83,12 @@ pub trait TransferHost: Send + Sync {
     fn io_state(&self) -> Result<IoEnableState, HostError>;
     #[host(notify, name = "_core_set_io")]
     fn set_io(&self, state: IoEnableState);
+    /// Connects the human agent's room with `token`, which joins it as the transfer's agent.
     #[host(await, name = "_core_connect_human")]
     fn connect_human(
         &self,
         cx: &crate::telemetry::Cx,
-        room_name: String,
-        identity: String,
+        token: String,
     ) -> crate::BoxFuture<
         '_,
         Result<std::sync::Arc<dyn crate::voice::room_owner::SessionRoom>, HostError>,
@@ -107,6 +107,10 @@ pub trait TransferHost: Send + Sync {
     /// its `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
     #[host(call, getter = "_job._server_env")]
     fn server_env(&self) -> Result<BTreeMap<String, String>, HostError>;
+    /// The caller's job: without a key pair (token mode), the transfer's LiveKit requests use its
+    /// tokens.
+    #[host(call, getter = "_job.job.id")]
+    fn job_id(&self) -> Result<String, HostError>;
 }
 
 /// A transfer plan and the runtime ownership of its current dial.

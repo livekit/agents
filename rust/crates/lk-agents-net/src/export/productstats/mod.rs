@@ -46,7 +46,7 @@ impl Destination {
 
     /// The export's bearer: the same `write` grant as the customer's observability export.
     fn bearer(&self) -> Result<String, ApiError> {
-        crate::token::observability_bearer(&self.api_key, &self.api_secret)
+        crate::token::observability_key_bearer(&self.api_key, &self.api_secret)
     }
 
     async fn post(&self, body: encode::Body) -> Result<(), PostError> {

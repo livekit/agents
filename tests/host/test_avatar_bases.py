@@ -4,6 +4,7 @@ and the forwarding loop of an avatar fed in process."""
 from __future__ import annotations
 
 import asyncio
+import json
 
 import jwt
 import pytest
@@ -37,7 +38,7 @@ class _Avatar(AvatarSession):
         return "fake"
 
     async def create_session(self, ctx: AvatarStart) -> str:
-        self.tokens.append(ctx.livekit_token())
+        self.tokens.append(await ctx.livekit_token())
         await self.answering.wait()
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
@@ -153,3 +154,58 @@ async def test_a_receive_failure_closes_the_avatar() -> None:
     await avatar.start(VoiceSession(vad=None), AgentRoom())
     avatar.hung_up.set()
     await asyncio.wait_for(avatar.closed.wait(), 2)
+
+
+def _start(*, key: str = "", secret: str = "", job_id: str | None = None) -> AvatarStart:
+    from types import SimpleNamespace
+
+    return AvatarStart(
+        room=SimpleNamespace(name="call"),  # type: ignore[arg-type]
+        agent_session=None,  # type: ignore[arg-type]
+        agent_identity="agent-1",
+        livekit_url="wss://x",
+        conn_options=RETRY_ONCE,
+        avatar_identity="fake-avatar",
+        avatar_name="Avatar",
+        _api_key=key,
+        _api_secret=secret,
+        _job_id=job_id,
+    )
+
+
+# A token mode avatar, and one with a plugin key and secret. Catches avatar claims that lose the
+# publish on behalf of the agent, the kind or the room, a token mode request without its job, and
+# a plugin key and secret that do not sign the token. The listener token keeps its six hours.
+async def test_avatar_tokens_carry_their_claims_to_the_job_or_the_plugin_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import _core
+
+    asked: list[tuple[dict[str, object], str | None]] = []
+
+    async def issue(claims: str, key: str, secret: str, job_id: str | None, ttl: object) -> str:
+        assert (key, secret) == ("", "")
+        asked.append((json.loads(claims), job_id))
+        return "server-token"
+
+    monkeypatch.setattr(_core, "participant_token", issue)
+    assert await _start(job_id="AJ_1").livekit_token() == "server-token"
+    [(avatar, job_id)] = asked
+    assert job_id == "AJ_1"
+    assert (avatar["identity"], avatar["name"], avatar["kind"]) == (
+        "fake-avatar",
+        "Avatar",
+        "agent",
+    )
+    assert avatar["attributes"] == {"lk.publish_on_behalf": "agent-1"}
+    video = avatar["video"]
+    assert (video["roomJoin"], video["room"]) == (True, "call")  # type: ignore[index]
+    monkeypatch.undo()
+
+    keyed = _start(key="plugin-key", secret="plugin-secret-plugin-secret-plugin", job_id="AJ_1")
+    secret = "plugin-secret-plugin-secret-plugin"
+    claims = jwt.decode(await keyed.livekit_token(), secret, algorithms=["HS256"])
+    assert (claims["iss"], claims["sub"], claims["kind"]) == ("plugin-key", "fake-avatar", "agent")
+    assert claims["exp"] - claims["nbf"] == 60 * 60
+    listener = jwt.decode(await keyed.participant_token(identity="l"), secret, algorithms=["HS256"])
+    assert listener["exp"] - listener["nbf"] == 6 * 60 * 60

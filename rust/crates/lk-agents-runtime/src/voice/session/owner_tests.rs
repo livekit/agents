@@ -476,6 +476,9 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
     fn server_env(&self) -> Result<std::collections::BTreeMap<String, String>, HostError> {
         unreachable!("only an avatar calls the job's RoomService")
     }
+    fn job_id(&self) -> Result<String, HostError> {
+        unreachable!("only an avatar calls the job's RoomService")
+    }
 }
 
 /// The job's run, recording the closes registered on its shutdown.

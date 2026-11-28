@@ -3,17 +3,20 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::BoxFuture;
+use lk_agents_abi::errors::{ApiError, ErrorKind, HostError};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc::{JobCompletion, JobRunnerOptions, JobStatus};
 use lk_agents_abi::worker::ipc_host::{
     self, JobLauncher, LaunchReport, SupervisedJob, WorkerError,
 };
 use lk_agents_abi::worker::job::{RunningJobInfo, StartJob};
+use lk_agents_net::job_token::JobToken;
 use lk_agents_net::signal;
 
 use super::executor::{RunnerExecutor, ThreadExecutor};
 use super::process::{ProcessExecutor, ProcessReceipt};
+use super::process_pool::JobTokenIssuer;
 use super::{
     HEALTH_CHECK_GRACE, Hello, InitError, RunnerFields, RunnerSupervisor, SupervisorCallbacks, secs,
 };
@@ -79,6 +82,12 @@ impl JobSupervisor {
         &self.logger
     }
 
+    /// Token mode: the job's token requests go to `issuer`.
+    pub(crate) fn with_job_tokens(mut self, issuer: Option<JobTokenIssuer>) -> Self {
+        self.logger.job_tokens = issuer;
+        self
+    }
+
     /// Whether a launched runner ended; an error when none was started.
     pub(crate) async fn wait_exit(&self) -> Result<bool, HostError> {
         let sup = self.sup().ok_or_else(|| HostError::new("process not started"))?;
@@ -102,7 +111,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             options.memory_limit_mb = 0.0;
         }
         let state = Arc::new(Mutex::new(RunnerState::default()));
-        let logger = JobLogger { state: state.clone() };
+        let logger = JobLogger { state: state.clone(), job_tokens: None };
         let failed =
             |error: lk_agents_net::env::ProcessError| WorkerError::Failed(error.to_string());
         Ok(Self {
@@ -341,10 +350,12 @@ impl ipc_host::ThreadLaunch for ThreadLaunch {
     }
 }
 
-/// What the runner's diagnostics name: its process and its job.
+/// What the runner's diagnostics name: its process and its job. In token mode, also where the
+/// job's token requests go.
 #[derive(Clone, Default)]
 pub(crate) struct JobLogger {
     pub(crate) state: Arc<Mutex<RunnerState>>,
+    pub(crate) job_tokens: Option<JobTokenIssuer>,
 }
 
 impl SupervisorCallbacks for JobLogger {
@@ -358,6 +369,20 @@ impl SupervisorCallbacks for JobLogger {
             room: room.map(|room| room.name.clone()),
             // empty until the job joins the room
             room_id: room.map(|room| room.sid.clone()).filter(|sid| !sid.is_empty()),
+        }
+    }
+
+    fn create_job_token(
+        &self,
+        job_id: String,
+        claims: String,
+    ) -> BoxFuture<'static, Result<JobToken, ApiError>> {
+        match &self.job_tokens {
+            Some(issuer) => issuer(job_id, claims),
+            None => {
+                let refused = ApiError::new(ErrorKind::Auth, "the worker is not in token mode");
+                Box::pin(std::future::ready(Err(refused)))
+            }
         }
     }
 }

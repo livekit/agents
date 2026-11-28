@@ -71,6 +71,7 @@ async fn serve(endpoint: i64, launch: Arc<dyn LaunchReport>, child: Child) {
                 }
                 continue;
             }
+            ToChild::JobToken { .. } => continue,
             ToChild::Shutdown { .. } => {
                 channel.send(ToParent::ShutdownAck).await.unwrap();
                 channel.send(ToParent::ShuttingDown).await.unwrap();

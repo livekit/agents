@@ -96,7 +96,7 @@ impl GatewayLlm {
         let opts = self.options();
         // The host serialized every image onto its item already.
         let images = PreResolved::from_pairs(Vec::<(String, _)>::new());
-        let bearer = opts.auth.bearer()?;
+        let bearer = opts.auth.bearer(cx)?;
         let request = build_request(&opts, cx, &images, chat_ctx, tools, args, &bearer)?;
         let (tx, rx) = mpsc::channel(OBSERVATION_QUEUE);
         Ok(LlmChunks {
@@ -263,7 +263,7 @@ impl Llm for GatewayLlm {
     /// Opens a connection in the background so the first request finds it pooled.
     fn prewarm(&self, cx: &telemetry::Cx) {
         let opts = self.options();
-        let Ok(bearer) = opts.auth.bearer() else {
+        let Ok(bearer) = opts.auth.bearer(cx) else {
             return;
         };
         let headers = match opts.auth {

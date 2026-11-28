@@ -89,7 +89,7 @@ impl Connect {
                 h
             }
             Auth::Inference { api_key, api_secret, provider, inference_class } => {
-                let token = lk_agents_net::token::inference_bearer(api_key, api_secret)?;
+                let token = lk_agents_net::token::inference_bearer(cx.job(), api_key, api_secret)?;
                 gateway_headers(cx, inference_class.as_deref(), provider.as_deref(), &token)
             }
         })

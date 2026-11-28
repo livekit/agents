@@ -112,11 +112,15 @@ pub trait ServerHost: Send + Sync {
 pub trait ServerJobs: Any + Send + Sync {
     /// The jobs running now.
     fn running_jobs(&self) -> Vec<RunningJobInfo>;
-    /// Launch jobs kept from before a reload, once the job processes started.
+    /// Launch jobs kept from before a reload, once the job processes started. In token mode,
+    /// each first gets a new join token from the server; a job it refuses ends with a warning.
     fn reload_jobs(
         &self,
         jobs: Vec<RunningJobInfo>,
     ) -> crate::BoxFuture<'_, Result<(), WorkerError>>;
+    /// Token mode: a new worker token from the CLI's `Credentials` message, for the next
+    /// registration.
+    fn update_token(&self, token: String);
 }
 
 #[crate::host(class(name = "ServerRuntime", native = ServerJobs))]

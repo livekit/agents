@@ -260,6 +260,7 @@
     "normalize_phone_number",
     "parse_cli",
     "parse_function_arguments",
+    "participant_token",
     "receive_dtmf",
     "remove_instructions",
     "replace_words",

@@ -692,6 +692,7 @@ async fn connect_ws(ctx: &StreamContext) -> Result<Socket, StreamError> {
     };
 
     let token = inference_bearer_with_ttl(
+        ctx.cx.job(),
         &api_key,
         &api_secret,
         Duration::from_secs(ctx.config.token_ttl_secs),

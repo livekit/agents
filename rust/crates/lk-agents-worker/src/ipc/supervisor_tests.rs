@@ -913,3 +913,65 @@ async fn repeated_initialize_callers_are_refused_without_replacing_the_first_wai
 fn blocking_io() -> lk_agents_net::blocking_io::BlockingIo {
     lk_agents_net::blocking_io::BlockingIo::with_limits("lk-test-io", 4, &[4]).unwrap()
 }
+
+/// A fake token mode worker: it answers a token request with a token that names the job and the
+/// claims.
+struct IssuingHost(Arc<FakeHost>);
+
+impl SupervisorCallbacks for IssuingHost {
+    fn release(&self) {
+        self.0.release();
+    }
+
+    fn create_job_token(
+        &self,
+        job_id: String,
+        claims: String,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<JobToken, lk_agents_abi::errors::ApiError>> {
+        let token = JobToken { token: format!("{job_id}:{claims}"), expires_at: 1 };
+        Box::pin(std::future::ready(Ok(token)))
+    }
+}
+
+// A runner asks for a token before it has a job, and again after. Catches a request that goes to
+// the worker for the wrong job, an answer with the wrong request id, or a request without a job
+// that reaches the worker.
+#[tokio::test(start_paused = true)]
+async fn a_runners_token_request_is_answered_for_its_job() {
+    let host = Arc::new(FakeHost::default());
+    let (parent, child) = memory(&crate::test_rt());
+    let sup = RunnerSupervisor::new(
+        Arc::new(executor(parent, &host)),
+        IssuingHost(host.clone()),
+        opts(),
+        blocking_io(),
+        &crate::test_rt(),
+    );
+    let init = waits(&sup).await;
+    assert_eq!(recv(&child).await, ToChild::Hello(hello()));
+    write(&child, &ToParent::Ready { error: None }).await.unwrap();
+    init.await.unwrap().unwrap();
+
+    write(&child, &ToParent::CreateJobToken { request_id: 1, claims: "{}".into() }).await.unwrap();
+    let refused = Err("the runner has no job".to_owned());
+    assert_eq!(
+        recv_skipping_pings(&child).await,
+        ToChild::JobToken { request_id: 1, result: refused }
+    );
+
+    let starting = sup.clone();
+    let started = tokio::spawn(async move { starting.start_job(job()).await });
+    let ToChild::StartJob { request_id, .. } = recv_skipping_pings(&child).await else {
+        panic!("no start-job request")
+    };
+    write(&child, &ToParent::JobAccepted { request_id, error: None }).await.unwrap();
+    started.await.unwrap().unwrap();
+    let claims = r#"{"video":{"roomAdmin":true}}"#;
+    let request = ToParent::CreateJobToken { request_id: 7, claims: claims.into() };
+    write(&child, &request).await.unwrap();
+    let issued = Ok(JobToken { token: format!("AJ_123:{claims}"), expires_at: 1 });
+    assert_eq!(
+        recv_skipping_pings(&child).await,
+        ToChild::JobToken { request_id: 7, result: issued }
+    );
+}

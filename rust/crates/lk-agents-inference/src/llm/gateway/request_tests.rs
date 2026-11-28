@@ -125,7 +125,7 @@ fn a_provider_key_request_is_plain_chat_completions() {
         &ChatContext::default(),
         &[tool],
         ChatArgs::default(),
-        &opts.auth.bearer().unwrap(),
+        &opts.auth.bearer(&cx).unwrap(),
     )
     .unwrap();
     assert_eq!(request.url, "https://api.example.com/v1/chat/completions?api-version=1");

@@ -1,6 +1,7 @@
 use crate::voice::session::owner::SessionOwner;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AvatarMetrics, Metadata};
+use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::voice::avatar::{self, AvatarHost, AvatarJoinError};
 use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::voice::session::VoiceSession as _;
@@ -259,12 +260,8 @@ impl Inner {
         let removed = async {
             let room = self.room.name().map_err(|error| error.to_string())?;
             let env = job.server_env().map_err(|error| error.to_string())?;
-            let setting = |name: &str| env.get(name).map_or("", String::as_str).to_owned();
-            let service = RoomService::new(
-                &setting("LIVEKIT_URL"),
-                &setting("LIVEKIT_API_KEY"),
-                &setting("LIVEKIT_API_SECRET"),
-            );
+            let job_id = job.job_id().map_err(|error| error.to_string())?;
+            let service = RoomService::of_server(&env, JobKey(job_id));
             service.remove_participant(&room, identity).await.map_err(|error| error.to_string())
         };
         match removed.await {

@@ -83,10 +83,12 @@ impl InterruptionOptions {
                 )));
             }
         }
-        if api_key.is_empty() {
+        // Token mode has no key and no secret. The requests use the job's inference token.
+        let token_mode = lk_agents_net::token::uses_job_token(&api_key, &api_secret);
+        if api_key.is_empty() && !token_mode {
             return Err(Invalid("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable".into()));
         }
-        if api_secret.is_empty() {
+        if api_secret.is_empty() && !token_mode {
             return Err(Invalid("api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable".into()));
         }
         Ok(InterruptionOptions {

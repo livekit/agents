@@ -70,7 +70,7 @@ class AvatarSession(BaseAvatarSession):
                 "transport": {
                     "provider": "livekit",
                     "server_url": ctx.livekit_url,
-                    "token": ctx.livekit_token(),
+                    "token": await ctx.livekit_token(),
                     "room_name": ctx.room.name,
                 },
                 "audio_config": {"sample_rate": self.sample_rate},

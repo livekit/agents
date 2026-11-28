@@ -66,6 +66,8 @@ pub struct Storage(pub(crate) ::std::sync::Arc<StorageImpl>);
 
 #[pymethods]
 impl Storage {
+    /// The local thread service, which checks its callers with the key pair. `None` without one
+    /// (token mode).
     #[pyo3(signature = (api_key, api_secret, port = 0))]
     fn _core_serve_threads<'py>(
         &self,
@@ -82,7 +84,12 @@ impl Storage {
                 .await.map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
-                    super::storage::CoreThreadServer(::std::sync::Arc::new(out)),
+                    out.map(|value| {
+                        ::pyo3::PyResult::Ok(super::storage::CoreThreadServer(
+                            ::std::sync::Arc::new(value),
+                        ))
+                    })
+                    .transpose()?,
                     py,
                 )
             })

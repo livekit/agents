@@ -122,7 +122,7 @@ class AvatarSession(BaseAvatarSession):
             json={
                 "avatarIds": [public_avatar_id(a) for a in self._avatar_ids],
                 "livekitUrl": livekit_url,
-                "livekitToken": ctx.livekit_token(ttl=TOKEN_TTL, grants=grants),
+                "livekitToken": await ctx.livekit_token(ttl=TOKEN_TTL, grants=grants),
             },
             conn_options=ctx.conn_options,
         ) as resp:

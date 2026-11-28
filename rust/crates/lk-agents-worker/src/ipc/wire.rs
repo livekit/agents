@@ -1,3 +1,4 @@
+use lk_agents_net::job_token::JobToken;
 use serde::{Deserialize, Serialize};
 
 // The parent speaks first, `Hello`; the child answers `ToParent::Ready`. Everything after is
@@ -18,6 +19,8 @@ pub enum ToChild {
     /// Acked with `ShutdownAck`; the job then shuts down with `reason` (the process exits at once
     /// without one).
     Shutdown { reason: String },
+    /// Token mode: the answer to `CreateJobToken`, the token or why there is none.
+    JobToken { request_id: u64, result: Result<JobToken, String> },
 }
 
 /// A job process's messages to the worker.
@@ -41,6 +44,12 @@ pub enum ToParent {
     /// The job ended with `reason`; the process exits.
     Exiting {
         reason: String,
+    },
+    /// Token mode: asks for a token of the job, which the worker asks the server for. `claims` is
+    /// JSON, the payload of an access token.
+    CreateJobToken {
+        request_id: u64,
+        claims: String,
     },
 }
 

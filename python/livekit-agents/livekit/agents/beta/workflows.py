@@ -21,7 +21,7 @@ from .._generated.workflow_prompts import (
     ASK_EMAIL_INSTRUCTIONS,
 )
 from .._generated.workflows import IoEnableState, WorkflowInstructions as WorkflowInstructions
-from ..job import JobContext, _server_credentials, get_job_context
+from ..job import JobContext, get_job_context
 from ..llm.tool_context import (
     Completed,
     RawFunctionDescription,
@@ -415,9 +415,7 @@ class _TransferHost:
         self._session.output.set_audio_enabled(state.get("audio_output", True))
         self._session.output.set_transcription_enabled(state.get("transcription_output", True))
 
-    async def _core_connect_human(self, room_name: str, identity: str) -> _core._core_RoomSession:
-        _, api_key, api_secret = _server_credentials()
-        token = _core.room_join_token(api_key, api_secret, identity, room_name, agent=True)
+    async def _core_connect_human(self, token: str) -> _core._core_RoomSession:
         await self._room.connect(self._job._info.url, token)
         return _core._core_create_room_session(self._room)
 

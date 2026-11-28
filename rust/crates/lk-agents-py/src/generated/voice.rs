@@ -13401,8 +13401,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
     fn connect_human(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        room_name: ::std::string::String,
-        identity: ::std::string::String,
+        token: ::std::string::String,
     ) -> ::lk_agents_abi::BoxFuture<
         '_,
         ::std::result::Result<
@@ -13411,8 +13410,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
         >,
     > {
         let host = ::std::clone::Clone::clone(&self.host);
-        let room_name_arg = room_name;
-        let identity_arg = identity;
+        let token_arg = token;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
             "TransferHost._core_connect_human",
@@ -13420,10 +13418,8 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(room_name_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(identity_arg, py)?,
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(token_arg, py)?];
                 Ok((
                     host.bind(py)?.getattr("_core_connect_human")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -13593,6 +13589,41 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 },
             ))
             .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
+
+    fn job_id(
+        &self,
+    ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::clone::Clone::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py)?.getattr("_job")?.getattr("job")?,
+                    ::pyo3::types::PyString::new(py, "id").into_any(),
+                ];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.extract::<::std::string::String>()).map_err(|e| {
                 <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
                     py, &e,
                 )

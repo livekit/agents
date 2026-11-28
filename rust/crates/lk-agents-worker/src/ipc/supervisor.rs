@@ -4,14 +4,16 @@ use lk_agents_net::task::TaskSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lk_agents_abi::errors::HostError;
-use lk_agents_abi::{Clock, Ts};
+use futures_util::stream::{FuturesUnordered, StreamExt as _};
+use lk_agents_abi::errors::{ApiError, ErrorKind, HostError};
+use lk_agents_abi::{BoxFuture, Clock, Ts};
+use lk_agents_net::job_token::JobToken;
 use lk_agents_net::signal;
 use tokio::sync::{mpsc, oneshot};
 
 use super::executor::{Connection, Exit, Runner, RunnerExecutor};
 use super::ipc_channel::{ChannelError, SendError, VERSION};
-use super::wire::{Hello, StartJob, ToChild, ToParent};
+use super::wire::{Hello, StartJob, ToChild, ToParent, bounded};
 use lk_agents_abi::worker::ipc::JobRunnerOptions;
 
 #[path = "supervisor_lifecycle.rs"]
@@ -195,6 +197,17 @@ pub trait SupervisorCallbacks: Send + Sync + 'static {
     }
     /// The runner ended and its supervision is over: the host's handle can go.
     fn release(&self) {}
+    /// Token mode: asks the server for a token with `claims` for the runner's job `job_id`. A
+    /// worker in key mode refuses.
+    fn create_job_token(
+        &self,
+        job_id: String,
+        claims: String,
+    ) -> BoxFuture<'static, Result<JobToken, ApiError>> {
+        let _ = (job_id, claims);
+        let refused = ApiError::new(ErrorKind::Auth, "the worker is not in token mode");
+        Box::pin(std::future::ready(Err(refused)))
+    }
 }
 
 const QUEUE: usize = 16;
@@ -390,6 +403,10 @@ struct Driver {
     baseline_mb: Option<f64>,
     gate: WarnGate,
     protocol_failure: Option<Arc<ProtocolError>>,
+    /// The job the runner got: its token requests are for this job only.
+    job_id: Option<String>,
+    /// Token mode: the runner's token requests, each ending in the answer to send it.
+    job_tokens: FuturesUnordered<BoxFuture<'static, ToChild>>,
 }
 
 impl Driver {
@@ -423,6 +440,8 @@ impl Driver {
             baseline_mb: None,
             gate: WarnGate::default(),
             protocol_failure: None,
+            job_id: None,
+            job_tokens: FuturesUnordered::new(),
         }
     }
 
@@ -468,6 +487,9 @@ impl Driver {
                         self.input(AfterExit::Dropped, Self::end);
                     }
                 },
+                Some(answer) = self.job_tokens.next(), if !self.job_tokens.is_empty() => {
+                    self.sent(self.channel.try_send(answer));
+                }
                 sample = async { match self.sampling.as_mut() {
                     Some(sample) => sample.await,
                     None => std::future::pending().await,
@@ -685,6 +707,7 @@ impl Driver {
             self.reply_job(request_id, Err(error));
             return;
         }
+        self.job_id = Some(job.info.job.id.clone());
         let message = ToChild::StartJob { request_id, job: Box::new(job) };
         match self.channel.try_send(message) {
             Err(SendError::TooLarge(size)) => self.reply_job(
@@ -863,10 +886,29 @@ impl Driver {
                 runner_log!(self.host.runner(), log::Level::Info, reason = reason.as_str(); "{} exiting", runner_name(&self.opts));
             }
             ToParent::JobAccepted { request_id, error } => self.on_job_accepted(request_id, error),
+            ToParent::CreateJobToken { request_id, claims } => {
+                self.create_job_token(request_id, claims)
+            }
             ToParent::Ready { .. } => {
                 self.fail_protocol(Arc::new(ProtocolError::Unexpected("unsolicited Ready".into())))
             }
         }
+    }
+
+    /// Asks for a token of the runner's job; the answer goes to the runner. A runner with no job
+    /// gets a refusal.
+    fn create_job_token(&mut self, request_id: u64, claims: String) {
+        let asking = match &self.job_id {
+            Some(job_id) => self.host.create_job_token(job_id.clone(), claims),
+            None => {
+                let refused = ApiError::new(ErrorKind::Auth, "the runner has no job");
+                Box::pin(std::future::ready(Err(refused)))
+            }
+        };
+        self.job_tokens.push(Box::pin(async move {
+            let result = asking.await.map_err(|error| bounded(error.message));
+            ToChild::JobToken { request_id, result }
+        }));
     }
 
     /// The runner's answer to the initialize: a refusal or anything but `Ready` fails it.

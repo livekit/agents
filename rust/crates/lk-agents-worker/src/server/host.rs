@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::{HostError, HostResult};
+use lk_agents_abi::errors::{ApiError, ErrorKind, HostError, HostResult};
 use lk_agents_abi::worker::http::{EndpointHandler, EndpointKind};
 
 use crate::http::{EndpointServer, HttpServerLimits, TextDoors};
@@ -21,14 +21,15 @@ use lk_agents_abi::worker::types::{ProcessOptions, ProcessStartOptions, ServerOp
 use parking_lot::{Mutex, MutexGuard};
 
 use crate::ipc::ProcessPool;
-use crate::ipc::process_pool::JobObserver;
+use crate::ipc::process_pool::{JobObserver, JobTokenIssuer};
 use crate::server::{self, HealthProbe, ServerPhase, ServerSettings, ServerStart};
 use crate::transport::AgentEndpointKind;
 use crate::{
     EnvOption, HEARTBEAT_INTERVAL, IncomingRequest, JobDecision, JobId, JobRequest, RunningJobInfo,
-    TransportConfig, WorkerHost,
+    TransportConfig, WorkerCommand, WorkerHost,
 };
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::job_token;
 use lk_agents_net::task::TokioSpawner;
 
 pub struct Configuration {
@@ -186,6 +187,8 @@ pub struct PoolSetup {
     /// The context the launchers' host calls run in.
     pub context: CallContext,
     pub observer: JobObserver,
+    /// Token mode: where the job processes' token requests go.
+    pub job_tokens: Option<JobTokenIssuer>,
 }
 
 pub type PoolFactory = Arc<dyn Fn(PoolSetup) -> Result<Arc<dyn JobPool>, HostError> + Send + Sync>;
@@ -200,6 +203,7 @@ fn native_pools(env: ProcessEnv) -> PoolFactory {
             setup.options,
             setup.context,
             Some(setup.observer),
+            setup.job_tokens,
         )
         .map_err(|error| HostError::new(error.to_string()))?;
         Ok(Arc::new(pool) as Arc<dyn JobPool>)
@@ -211,6 +215,7 @@ pub(crate) struct PoolLaunch {
     pub context: CallContext,
     pub asyncio_debug: bool,
     pub observer: JobObserver,
+    pub job_tokens: Option<JobTokenIssuer>,
 }
 
 /// The host server, the job processes the runtime owns, and what the runtime decides on its own.
@@ -287,6 +292,7 @@ impl ServerCallbacks {
             options,
             context: launch.context,
             observer: launch.observer,
+            job_tokens: launch.job_tokens,
         });
         let pool = match pool {
             Ok(pool) => pool,
@@ -324,13 +330,19 @@ impl ServerCallbacks {
     }
 
     /// Jobs kept from before a reload, launched once the job processes started.
-    pub(crate) async fn reload(&self, jobs: Vec<RunningJobInfo>) -> Result<(), WorkerError> {
+    /// `launched` hears of each job once its process took it.
+    pub(crate) async fn reload(
+        &self,
+        jobs: Vec<RunningJobInfo>,
+        launched: impl Fn(RunningJobInfo),
+    ) -> Result<(), WorkerError> {
         let Some(pool) = self.pool.wait().await.clone() else {
             return Err(WorkerError::Failed("a server with no rtc_session runs no job".into()));
         };
         for info in jobs {
             log::info!(target: lk_agents_abi::LOG_TARGET, job_id = info.job.id.as_str(); "reloading job");
-            pool.launch(info).await?;
+            pool.launch(info.clone()).await?;
+            launched(info);
         }
         Ok(())
     }
@@ -441,6 +453,8 @@ pub struct AgentServerRuntime {
     rt: lk_agents_net::owned::Background,
     /// The process's span recording, for the endpoint server's `http_request` spans.
     tracer: crate::ipc::telemetry::Tracer,
+    /// Token mode: the worker token each registration sends. The CLI can replace it.
+    token: Arc<Mutex<String>>,
 }
 
 impl AgentServerRuntime {
@@ -467,6 +481,7 @@ impl ServerRuntime for AgentServerRuntime {
         let rt = env.background().map_err(failed)?;
         let host = ServerCallbacks::new(host, native_pools(env.clone()));
         let mounted = host.mounted.clone();
+        let token = Arc::new(Mutex::new(config.settings.lock().token.clone()));
         Ok(Self {
             configuration: config.clone(),
             settings: config.settings.clone(),
@@ -478,6 +493,7 @@ impl ServerRuntime for AgentServerRuntime {
             spawner,
             rt,
             tracer: env.tracer.clone(),
+            token,
         })
     }
 
@@ -525,6 +541,7 @@ impl ServerRuntime for AgentServerRuntime {
         let _ = self.mounted.set(Arc::new(server));
         let start = ServerStart {
             settings: self.settings(),
+            token: self.token.clone(),
             devmode,
             unregistered,
             has_rtc,
@@ -598,9 +615,64 @@ impl ServerJobs for AgentServerRuntime {
         &self,
         jobs: Vec<RunningJobInfo>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), WorkerError>> {
-        let host = self.host.clone();
-        Box::pin(async move { self.spawner.run(async move { host.reload(jobs).await }).await })
+        let (host, runtime) = (self.host.clone(), self.runtime.clone());
+        let token_mode = self.settings().token_mode();
+        Box::pin(async move {
+            let reload = async move {
+                let jobs = if token_mode { renew_join_tokens(&runtime, jobs).await } else { jobs };
+                // A launched kept job is the worker's like any other: it reports its status,
+                // takes the server's termination, and is re-sent after a reconnect.
+                let worker = runtime.worker().await;
+                let adopt = |info| {
+                    if let Some(worker) = &worker
+                        && worker.send(WorkerCommand::AdoptJob(Box::new(info))).is_err()
+                    {
+                        log::debug!(target: lk_agents_abi::LOG_TARGET, "the worker stopped before a kept job was adopted");
+                    }
+                };
+                host.reload(jobs, adopt).await
+            };
+            self.spawner.run(reload).await
+        })
     }
+
+    fn update_token(&self, token: String) {
+        *self.token.lock() = token;
+    }
+}
+
+/// Token mode: gets a new join token for each kept job of a reload. There is no key to extend
+/// the old one. Once registered, the worker tells the server that the kept jobs now run on it,
+/// then asks for each job's token with the claims of its old one. A job the server refuses ends
+/// with a warning: a self-hosted server, for example, keeps no job across a worker restart.
+async fn renew_join_tokens(
+    runtime: &server::ServerRuntime,
+    jobs: Vec<RunningJobInfo>,
+) -> Vec<RunningJobInfo> {
+    let worker = runtime.registered_worker().await;
+    if let Some(worker) = &worker
+        && worker.send(WorkerCommand::MigrateJobs(jobs.clone())).is_err()
+    {
+        log::debug!(target: lk_agents_abi::LOG_TARGET, "the worker stopped before the kept jobs were migrated");
+    }
+    let mut kept = Vec::new();
+    for mut info in jobs {
+        let token = match (&worker, job_token::reload_claims(&info.token)) {
+            (Some(worker), Ok(claims)) => worker.create_job_token(&info.job.id, &claims).await,
+            (None, _) => Err(ApiError::new(ErrorKind::Connection, "the worker is not registered")),
+            (_, Err(error)) => Err(error),
+        };
+        match token {
+            Ok(token) => {
+                info.token = token.token;
+                kept.push(info);
+            }
+            Err(error) => {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, job_id = info.job.id.as_str(), error:% = error; "job ended on reload. reload is only supported when LiveKit API key and secret are defined")
+            }
+        }
+    }
+    kept
 }
 
 #[cfg(test)]

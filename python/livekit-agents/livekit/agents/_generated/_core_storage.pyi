@@ -49,7 +49,10 @@ class Storage:
         api_key: str,
         api_secret: str,
         port: int = 0,
-    ) -> _core_ThreadServer: ...
+    ) -> _core_ThreadServer | None:
+        """The local thread service, which checks its callers with the key pair. `None` without one
+        (token mode).
+        """
     def __new__(
         cls,
         *,

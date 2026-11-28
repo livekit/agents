@@ -147,8 +147,12 @@ impl InferenceAvatar for GatewayAvatar {
         conn_options.validate().map_err(|e| {
             AvatarError::from(ApiError::new(ErrorKind::InvalidRequest, e.to_string()))
         })?;
-        // Signing then cannot fail when an attempt launches.
-        lk_agents_net::token::inference_bearer(&api_key, &api_secret)?;
+        // Signing then cannot fail when an attempt launches. Token mode skips this check,
+        // because the bearer is the job's token, and a model built in process setup has no job
+        // yet.
+        if !lk_agents_net::token::uses_job_token(&api_key, &api_secret) {
+            lk_agents_net::token::inference_bearer(None, &api_key, &api_secret)?;
+        }
         let opts = AvatarOptions::new(
             &model,
             avatar_identity,
@@ -794,8 +798,11 @@ impl Driver {
         if kind == Kind::Create && self.pending_create.is_none() {
             return None;
         }
-        let bearer =
-            lk_agents_net::token::inference_bearer(&self.credentials.0, &self.credentials.1);
+        let bearer = lk_agents_net::token::inference_bearer(
+            self.cx.job(),
+            &self.credentials.0,
+            &self.credentials.1,
+        );
         let exchange = match (kind, bearer) {
             (_, Err(error)) => {
                 let failure = AttemptFailure::Connection(error.message);

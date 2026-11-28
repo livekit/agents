@@ -98,7 +98,7 @@ class AvatarSession(BaseAvatarSession):
             f"{self._api_url}/integrations/livekit/agents",
             json={
                 "session_token": token,
-                "livekit_token": ctx.livekit_token(),
+                "livekit_token": await ctx.livekit_token(),
                 "livekit_url": ctx.livekit_url,
             },
             conn_options=ctx.conn_options,

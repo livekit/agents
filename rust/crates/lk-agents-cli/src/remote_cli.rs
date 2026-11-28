@@ -3,7 +3,7 @@ use prost::Message as _;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use livekit_protocol::agent::{AgentDevMessage, agent_dev_message::Message};
+use livekit_protocol::agent::{AgentDevMessage, RunningAgentJobInfo, agent_dev_message::Message};
 use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
 use lk_agents_abi::worker::server_host::ServerJobs;
 
@@ -116,37 +116,58 @@ async fn serve_dev_channel(
     let io = |e: std::io::Error| HostError::new(format!("dev channel: {e}"));
     let mut stream = tokio::net::TcpStream::connect(&cli_addr).await.map_err(io)?;
 
+    // Token mode: the CLI answers with `Credentials`, the worker token, now and on each refresh.
     send(
         &mut stream,
-        Message::ServerInfo(ServerInfo {
-            agent_name,
-            url: url.clone(),
-            supports_token_mode: false,
-        }),
+        Message::ServerInfo(ServerInfo { agent_name, url: url.clone(), supports_token_mode: true }),
     )
     .await
     .map_err(io)?;
     send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {}))
         .await
         .map_err(io)?;
-    let Some(first) = recv(&mut stream).await.map_err(io)? else { return Ok(()) };
-    if let Some(Message::GetRunningJobsResponse(kept)) = first.message
-        && !kept.jobs.is_empty()
-    {
-        log::info!(target: lk_agents_abi::LOG_TARGET, "reloading {} job(s)", kept.jobs.len());
-        let mut jobs = Vec::with_capacity(kept.jobs.len());
-        for job in kept.jobs {
-            let mut job = match from_proto(job) {
-                Ok(job) => job,
-                Err(error) => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, "cannot reload an invalid kept job: {error}");
-                    continue;
+    while let Some(message) = recv(&mut stream).await.map_err(io)? {
+        match message.message {
+            Some(Message::GetRunningJobsResponse(kept)) if !kept.jobs.is_empty() => {
+                let jobs = kept_jobs(kept.jobs, &url, &api_key, &api_secret);
+                if !jobs.is_empty() {
+                    server.reload_jobs(jobs).await.map_err(|e| HostError::new(e.to_string()))?;
                 }
-            };
+            }
+            // The CLI asks before restarting this process, to resume these jobs after the reload.
+            Some(Message::GetRunningJobsRequest(_)) => {
+                let jobs = server.running_jobs().into_iter().map(to_proto).collect();
+                let reply = Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
+                send(&mut stream, reply).await.map_err(io)?;
+            }
+            Some(Message::Credentials(credentials)) => server.update_token(credentials.token),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The jobs kept across a reload, with tokens that outlive it: extended with the key pair, or
+/// unchanged without one (token mode), where the server issues new ones.
+fn kept_jobs(
+    kept: Vec<RunningAgentJobInfo>,
+    url: &str,
+    api_key: &str,
+    api_secret: &str,
+) -> Vec<RunningJobInfo> {
+    log::info!(target: lk_agents_abi::LOG_TARGET, "reloading {} job(s)", kept.len());
+    let mut jobs = Vec::with_capacity(kept.len());
+    for job in kept {
+        let mut job = match from_proto(job) {
+            Ok(job) => job,
+            Err(error) => {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "cannot reload an invalid kept job: {error}");
+                continue;
+            }
+        };
+        if !api_key.is_empty() || !api_secret.is_empty() {
             job.token = match lk_agents_net::token::extend_job_token(
-                &job.token,
-                &api_key,
-                &api_secret,
+                &job.token, api_key, api_secret,
             ) {
                 Ok(token) => token,
                 Err(error) => {
@@ -154,22 +175,11 @@ async fn serve_dev_channel(
                     continue;
                 }
             };
-            job.url = url.clone();
-            jobs.push(job);
         }
-        if !jobs.is_empty() {
-            server.reload_jobs(jobs).await.map_err(|e| HostError::new(e.to_string()))?;
-        }
+        job.url = url.to_owned();
+        jobs.push(job);
     }
-    // The CLI asks before restarting this process, to resume these jobs after the reload.
-    while let Some(message) = recv(&mut stream).await.map_err(io)? {
-        if let Some(Message::GetRunningJobsRequest(_)) = message.message {
-            let jobs = server.running_jobs().into_iter().map(to_proto).collect();
-            let reply = Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
-            send(&mut stream, reply).await.map_err(io)?;
-        }
-    }
-    Ok(())
+    jobs
 }
 
 #[cfg(test)]

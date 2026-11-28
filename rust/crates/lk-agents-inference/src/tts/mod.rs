@@ -228,7 +228,10 @@ impl GatewayTts {
     /// synthesis.
     pub fn prewarm_for(&self, cx: &telemetry::Cx) {
         let opts = self.opts.lock().clone();
-        let Ok(token) = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)
+        // In token mode, there is no token before the job starts. The job's own prewarm runs
+        // later.
+        let Ok(token) =
+            lk_agents_net::token::inference_bearer(cx.job(), &opts.api_key, &opts.api_secret)
         else {
             return;
         };
@@ -341,7 +344,8 @@ impl GatewayTts {
         let clock = self.clock.clone();
         let accepted_at = clock.now();
 
-        let token = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
+        let token =
+            lk_agents_net::token::inference_bearer(cx.job(), &opts.api_key, &opts.api_secret)?;
         let headers = gateway_headers(cx, None, None, &token);
         let session_id = Some(crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
 

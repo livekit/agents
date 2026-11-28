@@ -132,6 +132,7 @@ fn options() -> ServerStart {
         has_rtc: true,
         has_text_doors: true,
         has_load_fnc: false,
+        token: Default::default(),
         endpoints: vec![],
         transport: crate::TransportConfig::WebSocket { heartbeat: crate::HEARTBEAT_INTERVAL },
         serving: Arc::default(),
@@ -288,7 +289,11 @@ async fn server_cleanup_deadline_returns_while_the_actor_retains_the_pool() {
     assert_eq!(runtime.close().await, Ok(()));
     let snapshot = runtime.snapshot();
     assert_eq!(snapshot.phase, ServerPhase::Closing);
-    assert_eq!(snapshot.incomplete_cleanup, vec![ServerResource::Processes]);
+    // The connection closes only after the processes, so it is still open too.
+    assert_eq!(
+        snapshot.incomplete_cleanup,
+        vec![ServerResource::Processes, ServerResource::Worker]
+    );
     assert_eq!(run.await, Ok(()));
     host.release_close.add_permits(1);
     let closed = runtime.snapshot.wait_until(|s| (s.phase == ServerPhase::Closed).then_some(()));

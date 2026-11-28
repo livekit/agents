@@ -86,16 +86,21 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
         let invalid = |error: ApiError| Invalid(error.message);
         let inference = env("LIVEKIT_INFERENCE_API_KEY");
         let server_key = server("LIVEKIT_API_KEY");
-        let key = resolve_api_key(api_key.as_deref(), inference.as_deref(), server_key.as_deref())
-            .map_err(invalid)?;
+        let key =
+            resolve_credential(api_key.as_deref(), inference.as_deref(), server_key.as_deref());
         let inference = env("LIVEKIT_INFERENCE_API_SECRET");
         let server_secret = server("LIVEKIT_API_SECRET");
-        let secret = resolve_api_secret(
+        let secret = resolve_credential(
             api_secret.as_deref(),
             inference.as_deref(),
             server_secret.as_deref(),
-        )
-        .map_err(invalid)?;
+        );
+        // In token mode, a model can be built in process setup, before its job exists, with no
+        // key and no secret. Its requests later use the job's inference token.
+        if !lk_agents_net::token::uses_job_token(&key, &secret) {
+            resolve_api_key(Some(&key), None, None).map_err(invalid)?;
+            resolve_api_secret(Some(&secret), None, None).map_err(invalid)?;
+        }
         let url = match base_url.filter(|url| !url.is_empty()) {
             Some(url) => url,
             None => Self::inference_url(),

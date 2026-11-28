@@ -71,7 +71,7 @@ class AvatarSession(BaseAvatarSession):
             "conversation_name": utils.shortuuid("lk_conversation_"),
             "properties": {
                 "livekit_ws_url": ctx.livekit_url,
-                "livekit_room_token": ctx.livekit_token(),
+                "livekit_room_token": await ctx.livekit_token(),
             },
         }
         if self._face_id:

@@ -225,6 +225,7 @@ class AgentServer(AgentHandler):
                 self._thread_server = await storage.threads._core_serve_threads(
                     self._config.api_key, self._config.api_secret, thread_api_port or 0
                 )
+            if self._thread_server is not None:
                 logger.info(
                     "local thread service",
                     extra={

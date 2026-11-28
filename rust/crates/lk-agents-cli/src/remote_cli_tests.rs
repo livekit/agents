@@ -1,4 +1,5 @@
 use super::*;
+use parking_lot::Mutex;
 
 struct Server;
 
@@ -14,6 +15,8 @@ impl ServerJobs for Server {
     {
         Box::pin(async { Ok(()) })
     }
+
+    fn update_token(&self, _: String) {}
 }
 
 #[tokio::test]
@@ -38,7 +41,7 @@ async fn receive_errors_escape_both_the_initial_reply_and_the_request_loop() {
             let message = |m: Option<AgentDevMessage>| m.unwrap().message;
             assert!(matches!(
                 message(recv(&mut socket).await.unwrap()),
-                Some(Message::ServerInfo(info)) if !info.supports_token_mode
+                Some(Message::ServerInfo(info)) if info.supports_token_mode
             ));
             assert!(matches!(
                 message(recv(&mut socket).await.unwrap()),
@@ -195,6 +198,7 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
             self.0.lock().extend(jobs);
             Box::pin(async { Ok(()) })
         }
+        fn update_token(&self, _: String) {}
     }
     let token =
         lk_agents_net::token::room_join_token("key", "secret", "agent", "room", Default::default())
@@ -252,4 +256,74 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
     let jobs = server.0.lock();
     assert_eq!(jobs.iter().map(|job| job.job.id.as_str()).collect::<Vec<_>>(), ["first", "last"]);
     assert!(jobs.iter().all(|job| job.url == "wss://new-sfu"));
+}
+
+/// A fake token mode server: it records each reload and each new worker token.
+#[derive(Default)]
+struct TokenServer {
+    reloaded: Mutex<Vec<RunningJobInfo>>,
+    updated: Mutex<Vec<String>>,
+}
+
+impl ServerJobs for TokenServer {
+    fn running_jobs(&self) -> Vec<RunningJobInfo> {
+        Vec::new()
+    }
+    fn reload_jobs(
+        &self,
+        jobs: Vec<RunningJobInfo>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), lk_agents_abi::worker::ipc_host::WorkerError>>
+    {
+        self.reloaded.lock().extend(jobs);
+        Box::pin(async { Ok(()) })
+    }
+    fn update_token(&self, token: String) {
+        self.updated.lock().push(token);
+    }
+}
+
+// Token mode: the CLI sends the worker token, then the kept job, as it does after the server
+// info. Catches a worker token that does not reach the server, a channel that reads only the
+// first message as the kept jobs, and a kept job's token extended with a key that does not exist,
+// which drops the job.
+#[tokio::test]
+async fn token_mode_takes_the_clis_worker_token_and_keeps_the_jobs_token() {
+    let server = Arc::new(TokenServer::default());
+    let token =
+        lk_agents_net::token::room_join_token("key", "secret", "agent", "room", Default::default())
+            .unwrap();
+    let kept = livekit_protocol::agent::RunningAgentJobInfo {
+        job: livekit_protocol::Job { id: "AJ_kept".into(), ..Default::default() }.encode_to_vec(),
+        token: token.clone(),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        recv(&mut socket).await.unwrap().unwrap();
+        recv(&mut socket).await.unwrap().unwrap();
+        let credentials = livekit_protocol::agent::Credentials {
+            token: "refreshed-worker-token".into(),
+            ..Default::default()
+        };
+        send(&mut socket, Message::Credentials(credentials)).await.unwrap();
+        let response = livekit_protocol::agent::GetRunningAgentJobsResponse { jobs: vec![kept] };
+        send(&mut socket, Message::GetRunningJobsResponse(response)).await.unwrap();
+    });
+    let served = serve_dev_channel(
+        addr,
+        "test".into(),
+        "wss://new-sfu".into(),
+        String::new(),
+        String::new(),
+        server.clone(),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), served).await.unwrap().unwrap();
+    peer.await.unwrap();
+    assert_eq!(*server.updated.lock(), ["refreshed-worker-token"]);
+    let reloaded = server.reloaded.lock();
+    let [job] = reloaded.as_slice() else { panic!("{reloaded:?}") };
+    assert_eq!((job.job.id.as_str(), job.url.as_str()), ("AJ_kept", "wss://new-sfu"));
+    assert_eq!(job.token, token, "the server replaces it after the worker registers");
 }

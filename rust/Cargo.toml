@@ -100,6 +100,15 @@ rmcp         = { version = "3.1", default-features = false, features = [
     "transport-child-process",
 ] }
 
+# TEMPORARY: use a local rust-sdks checkout (branch `token-mode`, commit 985adf7a).
+# It has the SDK's token provider: `LiveKitApi::with_token_provider` and `Claims::to_claims_json`.
+# That commit is not on GitHub yet. When livekit/rust-sdks#1715 is pushed or merged, remove this
+# patch and pin the new `rev` above.
+[patch."https://github.com/livekit/rust-sdks"]
+livekit-api      = { path = "../../rust-sdks/livekit-api" }
+livekit-protocol = { path = "../../rust-sdks/livekit-protocol" }
+livekit-token    = { path = "../../rust-sdks/livekit-token" }
+
 [profile.dev]
 debug = 1
 # The repository-root .cargo/config.toml selects the symbol format per target.

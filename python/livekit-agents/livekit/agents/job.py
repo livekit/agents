@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import datetime
 import functools
 import inspect
+import json
 import logging
 import multiprocessing as mp
 import os
 import tempfile
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -50,6 +52,7 @@ _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")
 
 if TYPE_CHECKING:
     from livekit import api
+    from livekit.api import TokenGrants, VideoGrants
     from livekit.api.access_token import Claims
 
     from .evals import SimulationContext
@@ -102,6 +105,34 @@ def _server_credentials(
         url or _server_setting("LIVEKIT_URL") or "",
         api_key or _server_setting("LIVEKIT_API_KEY") or "",
         api_secret or _server_setting("LIVEKIT_API_SECRET") or "",
+    )
+
+
+_ParticipantKind = Literal["standard", "egress", "ingress", "sip", "agent"]
+
+
+async def _participant_token(
+    *,
+    api_key: str,
+    api_secret: str,
+    job_id: str | None,
+    identity: str,
+    name: str,
+    kind: _ParticipantKind | None,
+    attributes: Mapping[str, str] | None,
+    grants: VideoGrants,
+    ttl: datetime.timedelta | None,
+) -> str:
+    from livekit import api
+
+    claims = api.AccessToken().with_identity(identity).with_name(name).with_grants(grants)
+    if kind is not None:
+        claims.with_kind(kind)
+    if attributes:
+        claims.with_attributes(dict(attributes))
+    seconds = ttl.total_seconds() if ttl is not None else None
+    return await _core.participant_token(
+        claims.to_claims_json(), api_key, api_secret, job_id, seconds
     )
 
 
@@ -287,17 +318,56 @@ class JobContext:
         """A LiveKitAPI client using the server's URL and credentials.
 
         Those are the values passed to `AgentServer`, else LIVEKIT_URL, LIVEKIT_API_KEY and
-        LIVEKIT_API_SECRET.
+        LIVEKIT_API_SECRET. Without a key and secret (token mode, LIVEKIT_TOKEN), each call gets a
+        token with the grants it needs from the LiveKit server.
         """
         from livekit import api
 
         env = self._server_env
+        # livekit-api only accepts an aiohttp session.
+        session = http_client.http_session()._pool.client()
+        if env.get("LIVEKIT_API_KEY") or env.get("LIVEKIT_API_SECRET"):
+            return api.LiveKitAPI(
+                env.get("LIVEKIT_URL"),
+                env.get("LIVEKIT_API_KEY"),
+                env.get("LIVEKIT_API_SECRET"),
+                session=session,
+            )
         return api.LiveKitAPI(
-            env.get("LIVEKIT_URL"),
-            env.get("LIVEKIT_API_KEY"),
-            env.get("LIVEKIT_API_SECRET"),
-            # livekit-api only accepts an aiohttp session.
-            session=http_client.http_session()._pool.client(),
+            env.get("LIVEKIT_URL"), token_provider=self._api_token, session=session
+        )
+
+    async def _api_token(self, grants: TokenGrants) -> str:
+        return await _core.participant_token(json.dumps(grants.asdict()), "", "", self.job.id)
+
+    async def create_participant_token(
+        self,
+        *,
+        identity: str,
+        name: str = "",
+        kind: _ParticipantKind | None = None,
+        attributes: Mapping[str, str] | None = None,
+        grants: VideoGrants | None = None,
+        ttl: datetime.timedelta | None = None,
+    ) -> str:
+        """A token for another participant to join the room, such as an avatar worker.
+
+        With the server's API key and secret, the job signs it (``ttl`` defaults to six hours).
+        Without them (token mode, LIVEKIT_TOKEN), the LiveKit server issues it and sets its
+        lifetime. ``grants`` defaults to joining the job's room.
+        """
+        from livekit import api
+
+        return await _participant_token(
+            api_key=self._server_env.get("LIVEKIT_API_KEY") or "",
+            api_secret=self._server_env.get("LIVEKIT_API_SECRET") or "",
+            job_id=self.job.id,
+            identity=identity,
+            name=name,
+            kind=kind,
+            attributes=attributes,
+            grants=grants or api.VideoGrants(room_join=True, room=self.job.room.name),
+            ttl=ttl,
         )
 
     @property

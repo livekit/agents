@@ -11,10 +11,14 @@ use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnord
 use livekit_protocol::{
     self as proto, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage,
 };
+use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::{Clock, Spawner, TimerSet, Ts, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
+use lk_agents_net::job_token::JobToken;
 use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
+use parking_lot::Mutex;
+use tokio::sync::oneshot;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -56,6 +60,7 @@ mod jobs;
 use jobs::{ConnState, Pending, WorkerTimer};
 mod decision;
 mod load_driver;
+use jobs::JOB_TOKEN_TIMEOUT;
 pub use jobs::{Slot, retry_delay};
 #[cfg(test)]
 mod host_failure_tests;
@@ -64,11 +69,27 @@ mod host_failure_tests;
 mod tests;
 
 /// What a client asks of a running worker.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum WorkerCommand {
-    Drain { timeout: Option<Duration> },
+    Drain {
+        timeout: Option<Duration>,
+    },
     Close,
-    JobStatus { job_id: JobId, status: JobStatus },
+    JobStatus {
+        job_id: JobId,
+        status: JobStatus,
+    },
+    /// Token mode: asks the server for a token with `claims` for the job `job_id`.
+    CreateJobToken {
+        job_id: JobId,
+        claims: String,
+        reply: oneshot::Sender<Result<JobToken, ApiError>>,
+    },
+    /// Token mode, on a reload: tells the server that these kept jobs now run on this worker, so
+    /// that it issues their tokens.
+    MigrateJobs(Vec<RunningJobInfo>),
+    /// A job kept across a reload was launched: the worker holds it like a job it launched.
+    AdoptJob(Box<RunningJobInfo>),
 }
 
 /// What the worker tells its server as it happens: its registrations, a lost connection, a
@@ -119,6 +140,8 @@ pub struct WorkerClient {
     control: Arc<signal::Shared<WorkerControl>>,
     snapshot: Arc<parking_lot::Mutex<Snapshot>>,
     notifications: tokio::sync::broadcast::Sender<WorkerNotification>,
+    /// Times out a job token request.
+    clock: Arc<dyn Clock>,
 }
 
 impl WorkerClient {
@@ -144,6 +167,31 @@ impl WorkerClient {
 
     pub fn snapshot(&self) -> Snapshot {
         self.snapshot.lock().clone()
+    }
+
+    /// Token mode: asks the server for a token with `claims` (JSON, the payload of an access
+    /// token) for the job `job_id`, which runs on this worker.
+    pub async fn create_job_token(&self, job_id: &str, claims: &str) -> Result<JobToken, ApiError> {
+        let (reply, answer) = oneshot::channel();
+        let (job_id, claims) = (job_id.to_owned(), claims.to_owned());
+        if self.send(WorkerCommand::CreateJobToken { job_id, claims, reply }).is_err() {
+            return Err(ApiError::new(ErrorKind::Connection, "the worker stopped"));
+        }
+        match lk_agents_abi::timeout(&*self.clock, JOB_TOKEN_TIMEOUT, answer).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(ApiError::new(
+                ErrorKind::Connection,
+                "the connection to the LiveKit server closed before it answered the job token \
+                 request",
+            )),
+            Err(_) => Err(ApiError::new(
+                ErrorKind::Timeout,
+                format!(
+                    "the LiveKit server did not answer the job token request within {}s",
+                    JOB_TOKEN_TIMEOUT.as_secs()
+                ),
+            )),
+        }
     }
 
     /// Holds 128 notifications; a lagging receiver gets `RecvError::Lagged`.
@@ -187,9 +235,13 @@ pub struct RuntimeConfig {
     pub worker_token: Option<String>,
     /// Authorization is minted separately for each connection attempt.
     pub headers: Vec<(String, String)>,
-    /// Both empty means "send `headers` alone".
+    /// When both are empty, the worker uses `token` if it is set. Otherwise it sends only
+    /// `headers`.
     pub api_key: String,
     pub api_secret: String,
+    /// Token mode: the worker token (`LIVEKIT_TOKEN`), sent as is when no key and no secret are
+    /// set. Read at each connection attempt, because the CLI can replace it.
+    pub token: Arc<Mutex<String>>,
     pub max_retry: u32,
     /// Bounds dialing, registration, writes and graceful transport shutdown.
     pub connection_timeout: Duration,
@@ -250,6 +302,8 @@ pub struct Worker {
     previous_status: Option<crate::WorkerStatus>,
     /// Places the dispatch timeline in unix time.
     wall: WallAnchor,
+    /// Token mode: the job token requests the server has not answered yet, by request id.
+    job_token_requests: HashMap<String, oneshot::Sender<Result<JobToken, ApiError>>>,
 }
 
 impl Drop for Worker {
@@ -502,6 +556,12 @@ fn dial(
         let jwt = lk_agents_net::token::worker_token(&config.api_key, &config.api_secret)
             .map_err(|e| RuntimeError::Configuration(e.to_string()))?;
         headers.push(("Authorization".to_owned(), format!("Bearer {jwt}")));
+    } else if config.api_key.is_empty() && config.api_secret.is_empty() {
+        // Token mode: send the worker token unchanged.
+        let token = config.token.lock().clone();
+        if !token.is_empty() {
+            headers.push(("Authorization".to_owned(), format!("Bearer {token}")));
+        }
     }
     Ok(async move {
         let connecting = transport.connect(&url, token.as_deref(), headers);
@@ -707,6 +767,7 @@ impl Worker {
             control: control.clone(),
             snapshot: snapshot.clone(),
             notifications: notifications.clone(),
+            clock: clock.clone(),
         };
         (
             Self {
@@ -753,6 +814,7 @@ impl Worker {
                 draining: false,
                 drain_reported: false,
                 previous_status: None,
+                job_token_requests: HashMap::new(),
             },
             handle,
         )
@@ -859,12 +921,14 @@ impl Worker {
                     self.complete(completion, &mut connection.outbox);
                     Ok(())
                 }
-                event = connection.next_event(self.transport.clone(), &self.runtime_cfg) => event.map(|event| {
+                event = connection.next_event(self.transport.clone(), &self.runtime_cfg) => event.and_then(|event| {
                     // A registration ends the reconnect attempts.
-                    if matches!(event, ConnectionEvent::Registered(_)) {
+                    if let ConnectionEvent::Registered(response) = &event {
+                        self.check_token_mode_server(response)?;
                         retries = 0;
                     }
-                    self.handle_connection_event(event, &mut connection.outbox)
+                    self.handle_connection_event(event, &mut connection.outbox);
+                    Ok(())
                 }),
                 () = clock.wait_until(wake) => Ok(()),
             };
@@ -901,6 +965,15 @@ impl Worker {
             WorkerCommand::JobStatus { job_id, status } => {
                 self.on_job_status(job_id, status, outbox)
             }
+            WorkerCommand::CreateJobToken { job_id, claims, reply } => {
+                self.request_job_token(job_id, claims, reply, outbox)
+            }
+            WorkerCommand::MigrateJobs(jobs) => {
+                if self.conn == ConnState::Registered {
+                    self.queue(jobs::migrate_jobs(&jobs), outbox);
+                }
+            }
+            WorkerCommand::AdoptJob(info) => self.adopt_job(*info, outbox),
         }
     }
 

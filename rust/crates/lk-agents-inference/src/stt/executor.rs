@@ -311,8 +311,11 @@ impl SttStreamExecutor {
 
     /// Gateway headers and the client's request identity, independent of gateway correlation.
     fn connection_headers(&self) -> Result<(Headers, String), ApiError> {
-        let token =
-            lk_agents_net::token::inference_bearer(&self.opts.api_key, &self.opts.api_secret)?;
+        let token = lk_agents_net::token::inference_bearer(
+            self.cx.job(),
+            &self.opts.api_key,
+            &self.opts.api_secret,
+        )?;
         let headers = gateway_headers(&self.cx, None, None, &token);
         let request_id = crate::ids::shortuuid(crate::ids::STT_REQUEST_ID_PREFIX);
         Ok((headers, request_id))

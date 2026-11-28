@@ -34,6 +34,21 @@ def room_join_token(
     metadata; `agent` joins as an agent. `ttl` in seconds; the signer's default when `None`.
     """
 
+async def participant_token(
+    claims: str,
+    api_key: str,
+    api_secret: str,
+    job_id: str | None,
+    ttl: float | None = None,
+) -> str:
+    """A token for a participant other than the agent, such as an avatar. `claims` is JSON, the
+    payload of an access token with the identity in `identity`.
+
+    With `api_key` and `api_secret`, the token is signed here and lives `ttl` seconds (six
+    hours when `None`). Without them, in token mode, the server issues it for the job
+    `job_id` and sets its lifetime.
+    """
+
 class HttpExchange:
     """One request and its response, or one WebSocket connection. The worker owns parsing, framing,
     limits, deadlines and closing; the binding reads events and sends messages.

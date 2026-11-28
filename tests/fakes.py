@@ -980,6 +980,10 @@ class FakeLiveKit:
     ``hold_registration=True`` (or ``hold_registration()`` later, before a reconnection) leaves
     registrations unanswered until ``answer_registration()``.
     An assigned job's room URL has no server behind it: its job never connects to the room.
+
+    Token mode: the fake answers each ``CreateJobTokenRequest`` with a new token and records it
+    in ``issued``. The server API's ``DeleteRoom`` at ``url`` records each bearer in
+    ``api_bearers``. A request for a job in ``refused_job_tokens`` is refused.
     """
 
     def __init__(
@@ -1001,6 +1005,13 @@ class FakeLiveKit:
         self.job_statuses: dict[str, list[agent.JobStatus]] = {}
         # the jobs a worker reported holding after it registered again
         self.migrations: list[agent.MigrateJobRequest] = []
+        # Token mode: each job token request, the token issued for each request, and each bearer
+        # that called the server API.
+        self.job_token_requests: list[agent.CreateJobTokenRequest] = []
+        # Job ids whose token requests the fake refuses.
+        self.refused_job_tokens: set[str] = set()
+        self.issued: dict[str, str] = {}
+        self.api_bearers: list[str] = []
         self._registration = asyncio.Event()
         if not hold_registration:
             self._registration.set()
@@ -1013,6 +1024,7 @@ class FakeLiveKit:
     async def __aenter__(self) -> FakeLiveKit:
         app = web.Application()
         app.router.add_get("/agent", self._serve)
+        app.router.add_post("/twirp/livekit.RoomService/DeleteRoom", self._delete_room)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
@@ -1084,7 +1096,7 @@ class FakeLiveKit:
         )
         await self._registration.wait()
         self._ws, self._transport = ws, request.transport
-        server_info = models.ServerInfo(protocol=16, region=self.region)
+        server_info = models.ServerInfo(protocol=16, agent_protocol=2, region=self.region)
         response = agent.RegisterWorkerResponse(worker_id="AW_fake", server_info=server_info)
         await self._send(agent.ServerMessage(register=response))
         async for raw in ws:
@@ -1100,6 +1112,20 @@ class FakeLiveKit:
             self.job_statuses.setdefault(msg.update_job.job_id, []).append(msg.update_job.status)
         elif kind == "migrate_job":
             self.migrations.append(msg.migrate_job)
+        elif kind == "create_job_token":
+            request = msg.create_job_token
+            self.job_token_requests.append(request)
+            if request.job_id in self.refused_job_tokens:
+                refusal = agent.CreateJobTokenResponse(
+                    request_id=request.request_id, error="refused"
+                )
+                await self._send(agent.ServerMessage(create_job_token=refusal))
+                return
+            token = self.issued[request.request_id] = f"job-token-{len(self.issued) + 1}"
+            response = agent.CreateJobTokenResponse(
+                request_id=request.request_id, token=token, expires_at=int(time.time()) + 600
+            )
+            await self._send(agent.ServerMessage(create_job_token=response))
         elif kind == "ping":
             pong = agent.WorkerPong(
                 last_timestamp=msg.ping.timestamp, timestamp=int(time.time() * 1000)
@@ -1124,6 +1150,11 @@ class FakeLiveKit:
     async def _send(self, msg: agent.ServerMessage) -> None:
         assert self._ws is not None, "no worker connected"
         await self._ws.send_bytes(msg.SerializeToString())
+
+    async def _delete_room(self, request: web.Request) -> web.Response:
+        self.api_bearers.append(request.headers.get("Authorization", "").removeprefix("Bearer "))
+        body = api.DeleteRoomResponse().SerializeToString()
+        return web.Response(body=body, content_type="application/protobuf")
 
 
 class ReplyTimer(asyncio.TimerHandle):

@@ -371,7 +371,7 @@ class AvatarSession(ForwardingAvatarSession):
 
         # the egress token joins the room as an agent, publishes the avatar tracks, and
         # publishes data so the worker can send the playback lifecycle RPCs
-        egress_token = ctx.livekit_token(
+        egress_token = await ctx.livekit_token(
             ttl=DEFAULT_SESSION_TTL,
             grants=api.VideoGrants(
                 room_join=True,

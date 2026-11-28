@@ -39,20 +39,24 @@ impl From<std::io::Error> for ServerError {
 const MAX_DISCOVERED_IDLE_PROCESSES: u32 = 4;
 
 pub mod host;
+use crate::ipc::process_pool::JobTokenIssuer;
 use crate::ipc::telemetry;
 use crate::{DrainError, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use host::ServerCallbacks;
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::errors::{ApiError, ErrorKind, HostError};
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::owned::Background;
 use lk_agents_net::signal;
+use parking_lot::Mutex;
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 mod health;
 mod http;
@@ -209,6 +213,8 @@ pub struct ServerStart {
     pub context: lk_agents_abi::invoke::CallContext,
     /// The job runners' loops run in debug mode.
     pub asyncio_debug: bool,
+    /// Token mode: the worker token each registration sends. The CLI can replace it.
+    pub token: Arc<Mutex<String>>,
 }
 
 #[derive(Clone)]
@@ -300,6 +306,37 @@ impl ServerRuntime {
         self.snapshot.with(|snapshot| snapshot.clone())
     }
 
+    /// Waits until the worker connection exists. `None` when the server runs unregistered.
+    pub async fn worker(&self) -> Option<WorkerClient> {
+        self.snapshot
+            .wait_until(|snapshot| match (&snapshot.worker, snapshot.phase) {
+                (Some(worker), _) => Some(Some(worker.clone())),
+                (None, ServerPhase::Idle | ServerPhase::Starting) => None,
+                (None, _) => Some(None),
+            })
+            .await
+    }
+
+    /// Token mode: waits until the worker connection is registered. `None` when the server runs
+    /// unregistered or the worker stops first.
+    pub async fn registered_worker(&self) -> Option<WorkerClient> {
+        let worker = self.worker().await?;
+        let mut notifications = worker.subscribe();
+        loop {
+            let state = worker.snapshot();
+            if state.registered {
+                return Some(worker);
+            }
+            if state.finished.is_some() {
+                return None;
+            }
+            match notifications.recv().await {
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
+
     pub async fn run(&self, start: ServerStart) -> Result<(), ServerError> {
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
@@ -307,7 +344,8 @@ impl ServerRuntime {
         let process_cleanup = timeout * 3;
         let connection_cleanup =
             if start.unregistered { Duration::ZERO } else { crate::config::CONNECTION_TIMEOUT };
-        let cleanup_timeout = process_cleanup.max(connection_cleanup);
+        // The connection closes after the job processes, see `Resources::close`.
+        let cleanup_timeout = process_cleanup + connection_cleanup;
         self.snapshot.modify(|snapshot| {
             snapshot.phase = ServerPhase::Starting;
             snapshot.has_rtc = start.has_rtc;
@@ -528,6 +566,7 @@ impl ServerRuntime {
             context: start.context.clone(),
             asyncio_debug: start.asyncio_debug,
             observer: Box::new(move |job, status| send_job_status(&snapshot, &job.job.id, status)),
+            job_tokens: settings.token_mode().then(|| job_token_issuer(Arc::clone(&self.snapshot))),
         };
         resources.server_settings = Some(lk_agents_net::env::serve_settings(settings.child_env()));
         host.start(settings.clone(), start.devmode, start.has_rtc, launch).await?;
@@ -853,7 +892,8 @@ fn new_worker(
     blocking_io: &lk_agents_net::blocking_io::BlockingIo,
     rt: &Background,
 ) -> (Worker, WorkerClient) {
-    let (config, connection) = settings.worker(start.devmode, start.endpoints.clone());
+    let (config, connection) =
+        settings.worker(start.devmode, start.endpoints.clone(), start.token.clone());
     let transport = match &start.transport {
         crate::TransportConfig::WebSocket { heartbeat } => {
             crate::TransportConfig::WebSocket { heartbeat: *heartbeat }
@@ -951,6 +991,20 @@ impl LoadReporter {
     }
 }
 
+/// Token mode: sends the job processes' token requests on the worker connection.
+fn job_token_issuer(snapshot: Arc<signal::Shared<ServerSnapshot>>) -> JobTokenIssuer {
+    Arc::new(move |job_id, claims| {
+        let worker = snapshot.with(|snapshot| snapshot.worker.clone());
+        Box::pin(async move {
+            let Some(worker) = worker else {
+                let error = "the worker is not connected to the LiveKit server";
+                return Err(ApiError::new(ErrorKind::Connection, error));
+            };
+            worker.create_job_token(&job_id, &claims).await
+        })
+    })
+}
+
 /// A job's status to the worker connection, when one is up.
 fn send_job_status(
     snapshot: &signal::Shared<ServerSnapshot>,
@@ -1039,10 +1093,20 @@ impl Resources {
     ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), ServerError>)>> {
         let closing = FuturesUnordered::new();
         let settings = self.server_settings;
+        // The connection stays up until the job processes are closed: a job's shutdown can still
+        // ask it for tokens (token mode). It takes no new job meanwhile.
+        let (processes_closed, pool_closed) = oneshot::channel::<()>();
+        if let Some(worker) = &self.worker
+            && worker.send(WorkerCommand::Drain { timeout: Some(Duration::ZERO) }).is_err()
+        {
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "the worker stopped before the server closed");
+        }
         closing.push(
             async move {
                 host.close_pool().await;
                 drop(settings);
+                // The receiver goes only with the whole close.
+                let _ = processes_closed.send(());
                 (ServerResource::Processes, Ok(()))
             }
             .boxed(),
@@ -1057,19 +1121,18 @@ impl Resources {
             }
             .boxed(),
         );
-        let close_admission = self
-            .worker
-            .map(|worker| {
-                worker.send(WorkerCommand::Close).map_err(|_| {
-                    ServerError(
-                        worker
-                            .snapshot()
-                            .finished
-                            .unwrap_or_else(|| "worker close admission failed".into()),
-                    )
-                })
+        let worker = self.worker;
+        let close_admission = async move {
+            match pool_closed.await {
+                Ok(()) | Err(_) => {}
+            }
+            let Some(worker) = worker else { return Ok(()) };
+            worker.send(WorkerCommand::Close).map_err(|_| {
+                let finished = worker.snapshot().finished;
+                ServerError(finished.unwrap_or_else(|| "worker close admission failed".into()))
             })
-            .unwrap_or(Ok(()));
+        };
+        let mut close_admission = Some(close_admission.boxed());
         for (resource, task) in [
             (ServerResource::Worker, self.connection),
             (ServerResource::Load, self.load),
@@ -1078,7 +1141,7 @@ impl Resources {
             (ServerResource::Metrics, self.metrics),
         ] {
             let admission =
-                if resource == ServerResource::Worker { close_admission.clone() } else { Ok(()) };
+                if resource == ServerResource::Worker { close_admission.take() } else { None };
             if resource == ServerResource::Load
                 && let Some(task) = &task
             {
@@ -1086,6 +1149,10 @@ impl Resources {
             }
             closing.push(
                 async move {
+                    let admission = match admission {
+                        Some(admission) => admission.await,
+                        None => Ok(()),
+                    };
                     let result = match task {
                         Some(task) => match task.await {
                             Ok(result) => result,

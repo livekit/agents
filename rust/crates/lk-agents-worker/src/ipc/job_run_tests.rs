@@ -589,3 +589,75 @@ async fn a_job_shut_down_by_its_worker_states_why_and_succeeds() {
     assert_eq!(*reasons.lock(), [Some("parent process shutdown".to_owned())]);
     assert_eq!(sup.status(), Some(JobStatus::Success));
 }
+
+// A token mode job starts before its parent channel is set, gets its first tokens, and then its
+// run is cancelled, as a thread runner does when its parent's channel closes. Catches a job that
+// never gets tokens because it started first, and a job whose tokens stay in the registry, where
+// other code could find them until they expire.
+#[tokio::test]
+async fn a_token_mode_job_waits_for_its_parent_and_a_cancelled_run_removes_its_tokens() {
+    use lk_agents_net::job_token::{self, INFERENCE_CLAIMS, JobToken};
+    let host = Arc::new(Host {
+        objects: Arc::default(),
+        segment: Duration::ZERO,
+        reporting: tokio::sync::Notify::new(),
+        cancelled: Arc::default(),
+        events: Mutex::new(Vec::new()),
+        calls: Mutex::new(Vec::new()),
+    });
+    let mut run = JobRun::new(
+        &ProcessEnv::current_runtime(),
+        false,
+        5.0,
+        false,
+        "ws://localhost".into(),
+        None,
+        5.0,
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    Arc::get_mut(&mut run.inner).unwrap().token_mode = true;
+    let info = lk_agents_abi::worker::job::RunningJobInfo {
+        accept_arguments: Default::default(),
+        job: livekit_protocol::Job { id: "AJ_cancelled".into(), ..Default::default() },
+        url: "ws://localhost".into(),
+        token: "join".into(),
+        worker_id: "AW_1".into(),
+        fake_job: false,
+        received_at: None,
+        accepted_at: None,
+        assigned_at: None,
+        launched_at: 0.0,
+    };
+    run.start_trace(StartJob { info, traceparent: None }, None);
+    let key = run.job().unwrap();
+    let run = Arc::new(run);
+    let running = tokio::spawn({
+        let (run, host) = (run.clone(), host.clone());
+        async move { run.run(host, CallContext::default()).await }
+    });
+    tokio::task::yield_now().await;
+    let (parent, child) = crate::ipc::ipc_channel::memory::<ToChild, ToParent>(&crate::test_rt());
+    run.report_to(Arc::new(child));
+    // The parent answers the job's first two token requests: inference and telemetry.
+    let expires_at = lk_agents_net::clock::unix_now() as i64 + 600;
+    for _ in 0..2 {
+        let ToParent::CreateJobToken { request_id, .. } = parent.recv().await.unwrap() else {
+            panic!("expected a job token request");
+        };
+        let token = JobToken { token: "job-token".into(), expires_at };
+        run.job_token_answer(request_id, Ok(token));
+    }
+    let limit = Duration::from_secs(5);
+    let held = async {
+        while job_token::cached(Some(&key), INFERENCE_CLAIMS).is_err() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(limit, held).await.expect("the running job holds its tokens");
+
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+    assert!(job_token::cached(Some(&key), INFERENCE_CLAIMS).is_err(), "the tokens stayed");
+}

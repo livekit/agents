@@ -4,6 +4,7 @@ use futures_util::{StreamExt as _, stream};
 use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::{ApiError, ErrorKind};
+use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::report::RecordingHeader;
 use lk_agents_core::request::{Policy, Request, Step};
 use lk_agents_core::telemetry::report::RecordingUpload;
@@ -32,6 +33,7 @@ const ATTEMPTS: Policy = Policy {
 /// failures; the last failure when it gives up. A missing audio file uploads the rest.
 pub(crate) async fn upload(
     cloud: &CloudEndpoint,
+    job: &JobKey,
     recording: &RecordingUpload,
     profile: Option<&[u8]>,
     clock: &dyn Clock,
@@ -61,7 +63,7 @@ pub(crate) async fn upload(
         };
         let body = Multipart::new(recording, profile).await;
         let result = cloud
-            .post("recordings/v0", |request| {
+            .post(job, "recordings/v0", |request| {
                 request
                     .header(reqwest::header::CONTENT_TYPE, body.content_type())
                     .header(reqwest::header::CONTENT_LENGTH, body.len)

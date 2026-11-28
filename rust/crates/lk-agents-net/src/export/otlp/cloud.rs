@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
+use lk_agents_abi::telemetry::record::JobKey;
 use tokio::sync::OnceCell;
 
 use super::CloudEndpoint;
@@ -79,14 +80,15 @@ fn is_disabled(status: u16, body: &[u8]) -> bool {
 }
 
 impl CloudEndpoint {
-    /// Posts to `/observability/{path}` with the job's bearer; `request` adds the body.
+    /// Posts to `/observability/{path}` with the bearer of `job`. `request` adds the body.
     pub(crate) async fn post(
         &self,
+        job: &JobKey,
         path: &str,
         request: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<(), PostError> {
         let client = client().await.map_err(|error| PostError::Setup(error.to_string()))?;
-        let bearer = crate::token::observability_bearer(&self.api_key, &self.api_secret)
+        let bearer = crate::token::observability_bearer(job, &self.api_key, &self.api_secret)
             .map_err(|error| PostError::Setup(error.to_string()))?;
         let url = format!("{}/observability/{path}", self.base_url.trim_end_matches('/'));
         let response = request(client.post(url).bearer_auth(bearer)).send().await?;

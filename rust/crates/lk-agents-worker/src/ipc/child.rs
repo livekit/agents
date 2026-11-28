@@ -144,6 +144,12 @@ impl ChildChannel {
                 Ok(true)
             }
             ToChild::Hello(_) => Ok(true),
+            ToChild::JobToken { request_id, result } => {
+                if let Some(run) = self.run.get() {
+                    run.job_token_answer(request_id, result);
+                }
+                Ok(true)
+            }
         }
     }
 

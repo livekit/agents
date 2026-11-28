@@ -115,6 +115,7 @@ pub(super) fn runtime_cfg(max_retry: u32) -> RuntimeConfig {
         headers: vec![],
         api_key: String::new(),
         api_secret: String::new(),
+        token: Default::default(),
         max_retry,
         connection_timeout: Duration::from_secs(10),
     }
