@@ -423,6 +423,12 @@ class GetSecurityCodeTask(AgentTask[GetSecurityCodeResult]):
         return ctx.speech_handle.input_details.modality == "audio"
 
 
+def _two_digit_year(year: int) -> int:
+    # The tool asks for "35", but callers say "2035" and models often pass it through
+    # as spoken (the prompt itself lists "04/2025"), so take the full form too.
+    return year - 2000 if 2000 <= year <= 2099 else year
+
+
 class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
     def __init__(
         self,
@@ -499,6 +505,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
     async def _update_expiration_date_impl(
         self, context: RunContext, expiration_month: int, expiration_year: int
     ) -> str | None:
+        expiration_year = _two_digit_year(expiration_year)
         if not (1 <= expiration_month <= 12):
             return "The expiration month is invalid, ask the user to repeat the expiration month."
         elif not (0 <= expiration_year <= 99):
@@ -547,7 +554,7 @@ class GetExpirationDateTask(AgentTask[GetExpirationDateResult]):
             """
             if (
                 repeated_expiration_month != expiration_month
-                or repeated_expiration_year != expiration_year
+                or _two_digit_year(repeated_expiration_year) != expiration_year
             ):
                 return "The repeated expiration date does not match, ask the user to try again."
 
