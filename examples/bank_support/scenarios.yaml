@@ -1,0 +1,128 @@
+# Simulated callers for `lk agent simulate`. The fake bank is seeded per scenario from
+# userdata (see simulation.py) and the run is graded on the bank's final state through
+# `expected`; omit `expected` to grade on the conversation alone.
+#
+# Account holder on file: Dana Price, phone 415 555 0123, born 1980-04-02, card ending 4421,
+# checking ending 7781 (3,240.55) and savings ending 0092 (12,800.00).
+name: Bank card and transfer support
+scenarios:
+  - label: Lost card, block and replace
+    instructions: |-
+      You are Dana Price. You lost your wallet this morning and want the card ending in
+      four four two one blocked and a replacement sent. When asked, give your phone number
+      as "four one five, five five five, zero one two three" and your date of birth as
+      April second, nineteen eighty. Say yes when the agent asks to block the card and to
+      order the replacement. When asked whether there is anything else, say no and thank them.
+    agent_expectations: The agent verifies the caller before anything else, reads the card's
+      last four digits back, states it is about to block the card and waits for a yes, blocks
+      it, offers and orders the replacement, asks whether there is anything else, and ends.
+    tags:
+      flow: block_card
+    userdata:
+      expected:
+        card_status: blocked
+        replacement: true
+
+  - label: Caller takes the block back
+    instructions: |-
+      You are Dana Price (phone four one five five five five zero one two three, born April
+      second nineteen eighty). You think you lost your card ending four four two one and ask
+      to block it. Right after the agent confirms the block, say you just found it in your
+      coat and ask to undo the block. Decline a replacement. Say no when asked if there is
+      anything else.
+    agent_expectations: The agent blocks the card after a yes, then lifts the block when the
+      caller takes it back, confirms the card works again, and does not order a replacement.
+    tags:
+      flow: unblock_card
+    userdata:
+      expected:
+        card_status: active
+        replacement: false
+
+  - label: Dispute two transactions
+    instructions: |-
+      You are Dana Price (phone four one five five five five zero one two three, born April
+      second nineteen eighty). You do not recognise two charges on your checking account from
+      the last month: one from "Unknown merchant" for about two hundred dollars and one from
+      Blue Fern Cafe. Ask to dispute both, confirm the total when it is read back, and say
+      no to anything else.
+    agent_expectations: The agent looks up the account's recent transactions and finds the
+      two the caller described. It reads them back with their total, opens one dispute
+      covering both after a yes, and ends after asking whether there is anything else. It
+      does not need to read out transactions the caller did not mention.
+    tags:
+      flow: dispute
+    userdata:
+      expected:
+        disputes: 1
+
+  - label: Transfer within the daily limit
+    instructions: |-
+      You are Dana Price (phone four one five five five five zero one two three, born April
+      second nineteen eighty). Move five hundred dollars from checking to savings. Confirm
+      the amount when it is read back, then say no to anything else.
+    agent_expectations: The agent names both accounts, states the amount and that no fee
+      applies, waits for a yes, makes exactly one transfer of 500 dollars, and ends after the
+      closing question.
+    tags:
+      flow: transfer
+    userdata:
+      expected:
+        transfers: [500]
+
+  - label: Transfer over the daily limit
+    instructions: |-
+      You are Dana Price (phone four one five five five five zero one two three, born April
+      second nineteen eighty). Ask to move three thousand dollars from checking to savings.
+      If the agent says that is more than allowed today, agree to the largest amount it
+      offers for today. Say no to anything else.
+    agent_expectations: The agent explains the daily limit with the remaining figure, offers
+      that amount, and transfers it after a yes rather than the full 3,000.
+    tags:
+      flow: transfer
+    userdata:
+      transferred_today: 1000
+      expected:
+        transfers: [1500]
+
+  - label: Nine digits on a bad line
+    instructions: |-
+      You are Dana Price, born April second nineteen eighty. When asked for your phone
+      number, say "four one five, five five, zero one two three" (you dropped a digit). If
+      the agent reads the number back and asks for the missing part, give the full number
+      "four one five, five five five, zero one two three". Then ask to add a travel notice
+      for your card ending four four two one, from July fourth to July eighteenth twenty
+      twenty-six, for France and Italy. Say no to anything else.
+    agent_expectations: The agent does not guess the missing digit; it reads the number back
+      and asks again, verifies with the corrected number, and adds one travel notice with the
+      right dates.
+    tags:
+      flow: travel_notice
+    userdata:
+      expected:
+        travel_notices: 1
+
+  - label: Not the account holder
+    instructions: |-
+      You are Sam, calling about your mother's account. You do not know her date of birth
+      exactly; try "nineteen eighty" and then "I'm not sure". Ask the agent to move money from
+      her checking to her savings. If the agent cannot verify you, accept a hand-off to a
+      person or say goodbye.
+    agent_expectations: The agent does not read or change anything on the account without a
+      verified holder; it explains that the holder must be verified and offers a person.
+    tags:
+      flow: authority
+    userdata:
+      expected:
+        transfers: []
+        card_status: active
+
+  - label: Asks for a person halfway
+    instructions: |-
+      You are Dana Price (phone four one five five five five zero one two three, born April
+      second nineteen eighty). You want to raise the limit on your card, which this line
+      cannot do. Ask for it; when told it needs a person, say yes to the hand-off.
+    agent_expectations: The agent recognises the request has no tool here, offers a person,
+      and hands off without inventing a change.
+    tags:
+      flow: handoff
