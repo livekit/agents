@@ -73,14 +73,10 @@ class TcpAudioOutput(io.AudioOutput):
             label="TCP Console",
             next_in_chain=None,
             sample_rate=AGENT_SAMPLE_RATE,
-            capabilities=io.AudioOutputCapabilities(pause=True),
+            capabilities=io.AudioOutputCapabilities(pause=False),
         )
         self._transport = transport
-        self._resampler = rtc.AudioResampler(
-            input_rate=AGENT_SAMPLE_RATE,
-            output_rate=WIRE_SAMPLE_RATE,
-            num_channels=1,
-        )
+        self._resampler = self._new_resampler()
 
         self._pushed_duration: float = 0.0
         self._capture_start: float = 0.0
@@ -88,6 +84,25 @@ class TcpAudioOutput(io.AudioOutput):
         self._playout_done = asyncio.Event()
         self._interrupted_ev = asyncio.Event()
         self._agent_loop: asyncio.AbstractEventLoop | None = None
+
+    @staticmethod
+    def _new_resampler() -> rtc.AudioResampler:
+        return rtc.AudioResampler(
+            input_rate=AGENT_SAMPLE_RATE,
+            output_rate=WIRE_SAMPLE_RATE,
+            num_channels=1,
+        )
+
+    def _send_resampled_frames(self, frames: list[rtc.AudioFrame]) -> None:
+        for rf in frames:
+            audio_frame = agent_pb.AgentSessionMessage.ConsoleIO.AudioFrame(
+                data=bytes(rf.data),
+                sample_rate=WIRE_SAMPLE_RATE,
+                num_channels=rf.num_channels,
+                samples_per_channel=rf.samples_per_channel,
+            )
+            msg = agent_pb.AgentSessionMessage(audio_output=audio_frame)
+            self._transport.send_message_threadsafe(msg)
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await super().capture_frame(frame)
@@ -100,39 +115,34 @@ class TcpAudioOutput(io.AudioOutput):
             await self._flush_task
 
         if not self._pushed_duration:
+            self._playout_done.clear()
+            self._interrupted_ev.clear()
             self._capture_start = time.monotonic()
             self.on_playback_started(created_at=time.time())
 
         self._pushed_duration += frame.duration
-
-        resampled = self._resampler.push(frame)
-        for rf in resampled:
-            audio_frame = agent_pb.AgentSessionMessage.ConsoleIO.AudioFrame(
-                data=bytes(rf.data),
-                sample_rate=WIRE_SAMPLE_RATE,
-                num_channels=rf.num_channels,
-                samples_per_channel=rf.samples_per_channel,
-            )
-            msg = agent_pb.AgentSessionMessage(audio_output=audio_frame)
-            self._transport.send_message_threadsafe(msg)
+        self._send_resampled_frames(self._resampler.push(frame))
 
     def flush(self) -> None:
         super().flush()
-        msg = agent_pb.AgentSessionMessage(
-            audio_playback_flush=agent_pb.AgentSessionMessage.ConsoleIO.AudioPlaybackFlush()
-        )
-        self._transport.send_message_threadsafe(msg)
+        if not self._pushed_duration:
+            return
 
-        if self._pushed_duration:
-            if self._flush_task and not self._flush_task.done():
-                logger.error("flush called while previous flush is in progress")
-                self._flush_task.cancel()
+        if not self._interrupted_ev.is_set():
+            self._send_resampled_frames(self._resampler.flush())
+            msg = agent_pb.AgentSessionMessage(
+                audio_playback_flush=agent_pb.AgentSessionMessage.ConsoleIO.AudioPlaybackFlush()
+            )
+            self._transport.send_message_threadsafe(msg)
 
-            self._playout_done.clear()
-            self._interrupted_ev.clear()
-            self._flush_task = asyncio.create_task(self._wait_for_playout())
+        if self._flush_task and not self._flush_task.done():
+            logger.error("flush called while previous flush is in progress")
+            self._flush_task.cancel()
+
+        self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
+        self._resampler = self._new_resampler()
         msg = agent_pb.AgentSessionMessage(
             audio_playback_clear=agent_pb.AgentSessionMessage.ConsoleIO.AudioPlaybackClear()
         )
@@ -169,4 +179,5 @@ class TcpAudioOutput(io.AudioOutput):
         self.on_playback_finished(playback_position=played, interrupted=interrupted)
 
         self._pushed_duration = 0.0
+        self._playout_done.clear()
         self._interrupted_ev.clear()
