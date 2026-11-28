@@ -46,8 +46,8 @@ The rules the comments cite:
 6a. After the words cancel a guess, Bell may guess again. One guess is live at a time, and a new
     one that comes during rule 3's hold waits for its outcome.
 7. A final equal to a cancelled guess that LiveKit still remembers is sent first as an early start.
-8. A guess is held while LiveKit's own early reply on a final waits for its commit. It is taken if
-   the speech-to-text's early start replaces that reply, else dropped.
+8. A guess that comes while LiveKit's own early reply on a final waits for its commit is held, and
+   dropped at the turn's end or the commit.
 9. With no early start left after Bell's guess took one, the speech-to-text's early start is held
    and the reply under way runs on.
 
@@ -881,11 +881,10 @@ class SpeechStream(stt.RecognizeStream):
             else:
                 t.running = None
             self._lk_pre, self._lk_pre_stale = text, False
-            if self._lk_waiting:
-                # rule 8: the speech-to-text's own early start has replaced LiveKit's waiting reply
-                # (as without Bell); a held guess is taken now, as if it arrived after it
-                self._lk_waiting = False
-                return [ev, *self._release_held(t)]
+            # rule 8: the speech-to-text's own early start has replaced LiveKit's waiting reply (as
+            # without Bell). A held guess stays held: sent now it would cancel that start (rule 6),
+            # and it is dropped at the turn's end or LiveKit's commit
+            self._lk_waiting = False
             return [ev]
 
         # an interim
@@ -1018,7 +1017,7 @@ class SpeechStream(stt.RecognizeStream):
         self._turn = None
         if t is not None and t.held_guess is not None:
             t.held_guess = None
-            # rule 8: LiveKit's reply waited the whole turn
+            # rule 8: held to the turn's end
             self._count("held_guess_not_sent_turn_over")
         if t is None:
             return
@@ -1108,19 +1107,6 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Bell: LiveKit's commit could not be handled ({e!r})")
 
-    def _release_held(self, t: _Turn) -> list[stt.SpeechEvent]:
-        """Rule 8: the held guess, taken as if it arrived now (every check but its arrival time is
-        made again)."""
-        m, t.held_guess = t.held_guess, None
-        if m is None:
-            return []
-        try:
-            ev = self._take_guess(m, released=True)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Bell: a held guess could not be handled ({e!r})")
-            return []
-        return [ev] if ev is not None else []
-
     def _release_waiting(self, t: _Turn) -> list[stt.SpeechEvent]:
         """Rule 6a: the guess that waited on rule 3's hold, taken now that the hold has passed the
         interim (every check but its arrival time is made again)."""
@@ -1151,8 +1137,9 @@ class SpeechStream(stt.RecognizeStream):
             self._bell.log_once("wrong_data", f"Bell: {line}; not used")
 
     def _take_guess(self, m: dict[str, Any], released: bool = False) -> stt.SpeechEvent | None:
-        """A guess from the API as the early start to send, or None. `released`: a guess rule 8
-        held, taken again (it arrived in time, so its arrival time is not checked again)."""
+        """A guess from the API as the early start to send, or None. `released`: a guess that
+        waited on rule 3's hold (rule 6a), taken again (it arrived in time, so its arrival time is
+        not checked again)."""
         b = self._bell
         assert b is not None
         text, heard, chance = m.get("text"), m.get("heard"), m.get("chance")

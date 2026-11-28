@@ -717,6 +717,26 @@ async def test_guess_held_while_livekits_own_reply_waits(
         assert out == [(typ, text) for _, typ, text, _ in [*BEFORE, *AFTER]]
 
 
+@pytest.mark.usefixtures("four_early_starts")
+async def test_a_guess_held_while_livekits_reply_waits_is_not_sent_after_the_stts_early_start() -> (
+    None
+):
+    # the speech-to-text's own early start replaces LiveKit's waiting reply; a guess now would
+    # cancel that start (rule 6), so the held guess is dropped and the events pass unchanged
+    script = [
+        *BEFORE,
+        *AFTER[:2],
+        ev(0.80, T.PREFLIGHT_TRANSCRIPT, "and my", 0.95),
+        *AFTER[2:],
+    ]
+    out, counts, _, _ = await wrapped_run(
+        script, FakeAPI(answers={"and my": "and my savings please"})
+    )
+    assert out == await plain_run(script)
+    assert counts["guess_held_while_livekit_waits"] == 1 and "guess_sent" not in counts
+    assert counts["held_guess_not_sent_turn_over"] == 1
+
+
 @pytest.mark.parametrize("why", ["agent-speaking", "past-the-limit-of-speech"])
 async def test_a_final_livekit_starts_no_early_reply_on_holds_no_later_guess(
     monkeypatch: pytest.MonkeyPatch, why: str
