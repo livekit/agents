@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -213,6 +214,102 @@ def test_logs_are_filtered_for_every_destination_when_redaction_is_enabled(
         "function": "get_weather",
         trace_types.ATTR_EXCEPTION_MESSAGE: telemetry_utils.REDACTED_EXCEPTION_MESSAGE,
     }
+
+
+@pytest.mark.parametrize("redaction", [False, True])
+async def test_session_report_redacts_nested_pii_options_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+    redaction: bool,
+) -> None:
+    """_serialize_session_options aliases keyterms to lk.pii.keyterms inside session.options;
+    when redaction is enabled, _PIIFilteringLogProcessor must strip nested PII keys from the
+    exported session report log record."""
+    from livekit.agents.observability import Tagger
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.voice.report import SessionReport
+
+    ctx = SimpleNamespace(_redaction_enabled=redaction, simulation_context=lambda: None)
+    monkeypatch.setattr("livekit.agents.job.get_job_context", lambda **_: ctx)
+
+    provider = LoggerProvider()
+    traces_mod._prepend_log_processor(provider, pii._PIIFilteringLogProcessor())
+    exporter = InMemoryLogRecordExporter()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    monkeypatch.setattr(traces_mod._cloud, "_logger_provider", provider)
+
+    session = AgentSession(
+        stt_context_options={
+            "keyterms": ["PatientJaneDoe", "ProjectNightfall"],
+            "keyterm_detection": {"enabled": True},
+        }
+    )
+    session.options.recording_options = {
+        "audio": False,
+        "traces": True,
+        "logs": True,
+        "transcript": False,
+        "redaction": redaction,
+    }
+    report = SessionReport(
+        job_id="AJ_redact_opts",
+        room_id="RM_redact_opts",
+        room="room-redact",
+        options=session.options,
+        events=[],
+        chat_history=llm.ChatContext(),
+    )
+
+    await traces_mod._upload_session_report(
+        agent_name="support",
+        observability_url="https://example.livekit.cloud",
+        report=report,
+        tagger=Tagger(),
+        http_session=MagicMock(),
+        metadata={ATTRIBUTE_REDACTION_ENABLED: True} if redaction else None,
+    )
+
+    [exported] = exporter.get_finished_logs()
+    assert exported.log_record.body == "session report"
+    opts = (exported.log_record.attributes or {})["session.options"]
+    assert isinstance(opts, Mapping)
+    stt_opts = opts["stt_context_options"]
+    assert stt_opts["keyterm_detection"]["enabled"] is True
+
+    encoded_wire = encode_logs([exported]).SerializeToString()
+    if redaction:
+        assert "lk.pii.keyterms" not in stt_opts
+        assert b"PatientJaneDoe" not in encoded_wire
+        assert b"ProjectNightfall" not in encoded_wire
+    else:
+        assert list(stt_opts["lk.pii.keyterms"]) == ["PatientJaneDoe", "ProjectNightfall"]
+        assert b"PatientJaneDoe" in encoded_wire
+
+
+def test_filter_attributes_strips_nested_mappings_and_sequences() -> None:
+    filtered = pii.filter_attributes(
+        {
+            "safe": "ok",
+            "lk.pii.top": "drop",
+            "nested": {
+                "lk.pii.keyterms": ["secret"],
+                "keep": 42,
+                "items": (
+                    {"lk.pii.token": "tok", "id": "1"},
+                    "plain",
+                ),
+            },
+        }
+    )
+    assert filtered == {
+        "safe": "ok",
+        "nested": {
+            "keep": 42,
+            "items": ({"id": "1"}, "plain"),
+        },
+    }
+    assert pii._contains_pii({"nested": {"lk.pii.keyterms": ("secret",)}}) is True
+    assert pii._contains_pii({"nested": {"items": ({"lk.pii.token": "tok"},)}}) is True
+    assert pii._contains_pii({"nested": {"keep": 42, "items": ("plain",)}}) is False
 
 
 @pytest.mark.parametrize("redaction", [False, True])
