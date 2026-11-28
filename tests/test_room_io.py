@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
+from typing import TypeVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +18,7 @@ from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
     _ParticipantInputStream,
+    _ParticipantVideoInputStream,
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
@@ -31,7 +35,33 @@ from livekit.agents.voice.room_io.types import (
 )
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
+_T = TypeVar("_T")
+
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
+
+@pytest.fixture(autouse=True)
+def _inline_to_thread(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Run asyncio.to_thread inline for virtual-time tests.
+
+    The autojump loop races real worker threads: while a to_thread job is pending the
+    clock jumps straight to the next timer, so any wait_for around it expires before
+    the thread is even scheduled. Tests that exercise the off-loop path itself opt out
+    with the real_time marker (see test_audio_stream_created_off_event_loop_and_bound_to_it).
+    """
+    if request.node.get_closest_marker("real_time"):
+        yield
+        return
+
+    async def _inline(func: Callable[..., _T], /, *args: object, **kwargs: object) -> _T:
+        await asyncio.sleep(0)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline)
+    yield
+
 
 # -- helpers ------------------------------------------------------------------
 
@@ -139,7 +169,7 @@ class _NoopAudioInputStream(_ParticipantInputStream[rtc.AudioFrame]):
     def __init__(self, room: _FakeRoom) -> None:
         super().__init__(room, track_source=rtc.TrackSource.SOURCE_MICROPHONE)
 
-    def _create_stream(
+    async def _create_stream(
         self, track: rtc.RemoteTrack, participant: rtc.Participant
     ) -> rtc.AudioStream:
         raise AssertionError("_create_stream should not be called in teardown tests")
@@ -230,6 +260,17 @@ def _make_audio_input_stream(
         auto_gain_control=False,
         pre_connect_audio_handler=None,
     )
+
+
+def _make_video_track(sid: str, source: rtc.TrackSource.ValueType) -> tuple[MagicMock, MagicMock]:
+    track = MagicMock()
+    track.sid = sid
+    publication = MagicMock()
+    publication.source = source
+    publication.sid = sid
+    publication.track = track
+    publication.subscribed = True
+    return track, publication
 
 
 # -- teardown tests -----------------------------------------------------------
@@ -824,6 +865,486 @@ async def test_audio_input_ignores_duplicate_event_for_active_track() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_creation_retry_installs_the_replacement_stream() -> None:
+    """A transient creation failure retries the current subscription and starts it."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    retry_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[RuntimeError("transient native failure"), retry_stream],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        failed_task = audio_input._create_task
+        assert failed_task is not None
+
+        await asyncio.sleep(1.0)
+
+        retry_task = audio_input._create_task
+        assert retry_task is not None
+        assert retry_task is not failed_task
+        await asyncio.wait_for(retry_task, timeout=1)
+
+    assert create_stream.call_count == 2
+    assert audio_input._stream is retry_stream
+    assert retry_stream.started.is_set()
+    assert audio_input._track is track
+    assert audio_input._publication is publication
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_creation_retry_is_bounded() -> None:
+    """A permanently failing track is retried only the configured number of times."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=RuntimeError("native creation failed"),
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.sleep(2.0)
+
+    assert create_stream.call_count == 3
+    # the failed subscription stays selected so a later removal can still fall back
+    assert audio_input._track is track
+    assert audio_input._publication is publication
+    assert audio_input._create_exhausted is True
+    assert not audio_input._create_tasks
+    assert not audio_input._retry_tasks
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exhausted_creation_still_falls_back_to_another_track() -> None:
+    """A screen share that never opens must not block the camera fallback.
+
+    When the screen share's creation exhausts its retries, the subscription stays
+    selected. Otherwise the later removal of that screen share would not match and
+    the camera would never attach.
+    """
+    room = _FakeRoom()
+    video_input = _ParticipantVideoInputStream(room)
+    video_input.set_participant("test-user")
+
+    camera_track, camera_publication = _make_video_track("TR_CAM", rtc.TrackSource.SOURCE_CAMERA)
+    screen_track, screen_publication = _make_video_track(
+        "TR_SCREEN", rtc.TrackSource.SOURCE_SCREENSHARE
+    )
+    participant = MagicMock()
+    participant.identity = "test-user"
+    participant.track_publications = {
+        camera_publication.sid: camera_publication,
+        screen_publication.sid: screen_publication,
+    }
+
+    camera_stream = _MockAudioStream()
+    fallback_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.VideoStream.from_track",
+        side_effect=[
+            camera_stream,
+            RuntimeError("screen share creation failed"),
+            RuntimeError("screen share creation failed"),
+            RuntimeError("screen share creation failed"),
+            fallback_stream,
+        ],
+    ) as create_stream:
+        # the camera is selected first
+        assert video_input._on_track_available(camera_track, camera_publication, participant)
+        await asyncio.wait_for(camera_stream.started.wait(), timeout=1)
+
+        # the participant starts sharing their screen, but its stream never opens
+        assert video_input._on_track_available(screen_track, screen_publication, participant)
+        await asyncio.sleep(2.0)
+
+        assert create_stream.call_count == 4  # one camera + three screen share attempts
+        assert video_input._create_exhausted is True
+        # the failed screen share is still selected so its removal can be matched
+        assert video_input._track is screen_track
+        assert video_input._publication is screen_publication
+
+        # the participant stops sharing: the camera must be picked up again
+        screen_publication.subscribed = False
+        screen_publication.track = None
+        video_input._on_track_unsubscribed(screen_track, screen_publication, participant)
+        await asyncio.wait_for(fallback_stream.started.wait(), timeout=1)
+
+    assert video_input._publication is camera_publication
+    assert video_input._stream is fallback_stream
+    assert video_input._create_exhausted is False
+
+    await video_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_exhausted_creation_accepts_a_fresh_subscription() -> None:
+    """A re-subscribed failed track starts a new generation and retries."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    retry_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[
+            RuntimeError("native creation failed"),
+            RuntimeError("native creation failed"),
+            RuntimeError("native creation failed"),
+            retry_stream,
+        ],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.sleep(2.0)
+        assert create_stream.call_count == 3
+        assert audio_input._create_exhausted is True
+
+        # the same track is subscribed again: that is a fresh attempt, not a duplicate
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(retry_stream.started.wait(), timeout=1)
+
+    assert create_stream.call_count == 4
+    assert audio_input._stream is retry_stream
+    assert audio_input._create_exhausted is False
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_creation_retry_is_cancelled_on_unsubscribe() -> None:
+    """A pending retry must not create a stream after the subscription is gone."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[RuntimeError("transient native failure")],
+    ) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await audio_input._create_task
+        assert audio_input._retry_tasks
+
+        publication.subscribed = False
+        publication.track = None
+        audio_input._on_track_unsubscribed(track, publication, participant)
+
+        await asyncio.sleep(1.0)
+
+    assert create_stream.call_count == 1
+    assert audio_input._stream is None
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_creation_retry_closes_the_failed_processor_once() -> None:
+    """A selector processor from a failed attempt is released; the retry owns the next one."""
+    room = _FakeRoom()
+    processors: list[_MockFrameProcessor] = []
+
+    def selector(_params: NoiseCancellationParams) -> _MockFrameProcessor:
+        processor = _MockFrameProcessor()
+        processors.append(processor)
+        return processor
+
+    audio_input = _make_audio_input_stream(room, noise_cancellation=selector)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    retry_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[RuntimeError("transient native failure"), retry_stream],
+    ):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.sleep(1.0)
+        await audio_input._create_task
+
+    assert len(processors) == 2
+    assert processors[0].close_calls == 1
+    assert processors[1].close_calls == 0
+    assert audio_input._processor is processors[1]
+    assert audio_input._stream is retry_stream
+
+    await audio_input.aclose()
+    assert processors[1].close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_cancelled_aclose_completes_blocked_stream_teardown() -> None:
+    """Cancellation after creator settling cannot leave stream cleanup half done."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    release = threading.Event()
+
+    class _BlockingCloseStream(_MockAudioStream):
+        async def aclose(self) -> None:
+            await asyncio.to_thread(release.wait, timeout=5)
+            await super().aclose()
+
+    stream = _BlockingCloseStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=stream):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(stream.started.wait(), timeout=5)
+
+        aclose_task = asyncio.create_task(audio_input.aclose())
+        await asyncio.sleep(0.02)
+        assert not aclose_task.done()
+        aclose_task.cancel()
+        await asyncio.sleep(0.01)
+        aclose_task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await aclose_task
+
+    assert stream.ended.is_set()
+    assert room.listener_count("track_subscribed") == 0
+    assert room.listener_count("track_unsubscribed") == 0
+    assert room.listener_count("track_unpublished") == 0
+    await audio_input.aclose()
+    assert room.listener_count("track_subscribed") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_failed_superseded_creation_closes_its_owned_processor() -> None:
+    """A processor installed before a failed creation is released even if the track vanished."""
+    room = _FakeRoom()
+    processor = _MockFrameProcessor()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=lambda _params: processor)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    creation_started = threading.Event()
+
+    def fail_from_track(**_kwargs: object) -> _MockAudioStream:
+        creation_started.set()
+        time.sleep(0.05)
+        raise RuntimeError("native creation failed")
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=fail_from_track):
+        assert audio_input._on_track_available(track, publication, participant)
+        create_task = audio_input._create_task
+        assert create_task is not None
+
+        for _ in range(500):
+            if creation_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert creation_started.is_set()
+
+        # The subscription disappears while native creation is still pending.
+        publication.track = None
+        audio_input._on_track_unavailable(publication, participant)
+        await asyncio.wait_for(create_task, timeout=5)
+
+    assert processor.close_calls == 1
+    assert audio_input._processor is None
+    assert audio_input._stream is None
+
+    await audio_input.aclose()
+    assert processor.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_audio_stream_created_off_event_loop_and_bound_to_it() -> None:
+    """Regression test for #7441: FFI stream creation must not block the event loop,
+    and the created stream must dispatch frames onto the running loop."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    loop = asyncio.get_running_loop()
+    loop_thread_ident = threading.get_ident()
+    seen: dict[str, object] = {}
+
+    def fake_from_track(**kwargs: object) -> _MockAudioStream:
+        seen["thread_ident"] = threading.get_ident()
+        seen["loop"] = kwargs.get("loop")
+        time.sleep(0.15)  # simulate a blocking FFI request
+        return rtc_stream
+
+    ticks = 0
+    ticking = True
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while ticking:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker_task = asyncio.create_task(ticker())
+    try:
+        with patch("livekit.rtc.AudioStream.from_track", side_effect=fake_from_track):
+            assert audio_input._on_track_available(track, publication, participant)
+            assert audio_input._create_task is not None
+            await asyncio.wait_for(audio_input._create_task, timeout=5)
+    finally:
+        ticking = False
+        await ticker_task
+
+    assert seen["loop"] is loop
+    assert seen["thread_ident"] != loop_thread_ident
+    # the loop kept scheduling callbacks while creation blocked in the worker thread
+    assert ticks >= 3
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_stream_create_discarded_when_superseded() -> None:
+    """A creation overtaken by a newer track event discards its stream instead of
+    installing it (generation guard)."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    new_track = MagicMock()
+
+    first_stream = _MockAudioStream()
+    second_stream = _MockAudioStream()
+    first_in_flight = threading.Event()
+    release_first = threading.Event()
+
+    def fake_from_track(**kwargs: object) -> _MockAudioStream:
+        if kwargs["track"] is old_track:
+            first_in_flight.set()
+            release_first.wait(timeout=5)
+            return first_stream
+        return second_stream
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=fake_from_track):
+        assert audio_input._on_track_available(old_track, publication, participant)
+        for _ in range(500):
+            if first_in_flight.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert first_in_flight.is_set()
+
+        first_task = audio_input._create_task
+        assert first_task is not None
+
+        publication.track = new_track
+        assert audio_input._on_track_available(new_track, publication, participant)
+        release_first.set()
+
+        # the superseded creation settles without installing its stream
+        await asyncio.wait_for(first_task, timeout=5)
+        assert first_stream.ended.is_set()
+
+        assert audio_input._create_task is not None
+        await asyncio.wait_for(audio_input._create_task, timeout=5)
+
+    assert audio_input._stream is second_stream
+    assert not second_stream.ended.is_set()
+
+    await audio_input.aclose()
+    assert second_stream.ended.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_cancelled_aclose_disposes_inflight_created_stream() -> None:
+    """Cancelling aclose() while a creation is inside the worker thread must not orphan
+    the stream the worker returns: the creators settle (and discard it) first."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+    creation_in_flight = threading.Event()
+
+    def fake_from_track(**kwargs: object) -> _MockAudioStream:
+        creation_in_flight.set()
+        time.sleep(0.15)
+        return rtc_stream
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=fake_from_track):
+        assert audio_input._on_track_available(track, publication, participant)
+        create_task = audio_input._create_task
+        assert create_task is not None
+
+        for _ in range(500):
+            if creation_in_flight.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert creation_in_flight.is_set()
+
+        aclose_task = asyncio.create_task(audio_input.aclose())
+        await asyncio.sleep(0.05)
+        assert not aclose_task.done()
+        aclose_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await aclose_task
+
+        await asyncio.wait_for(create_task, timeout=5)
+        assert rtc_stream.ended.is_set()
+        assert audio_input._stream is None
+        assert not audio_input._create_tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_repeatedly_cancelled_aclose_still_disposes_created_stream() -> None:
+    """A second cancellation arriving during teardown must not reach the creators:
+    they still discard the stream their worker returns."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+    creation_in_flight = threading.Event()
+
+    def fake_from_track(**kwargs: object) -> _MockAudioStream:
+        creation_in_flight.set()
+        time.sleep(0.15)
+        return rtc_stream
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=fake_from_track):
+        assert audio_input._on_track_available(track, publication, participant)
+        create_task = audio_input._create_task
+        assert create_task is not None
+
+        for _ in range(500):
+            if creation_in_flight.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert creation_in_flight.is_set()
+
+        aclose_task = asyncio.create_task(audio_input.aclose())
+        await asyncio.sleep(0.05)
+        assert not aclose_task.done()
+        aclose_task.cancel()
+        await asyncio.sleep(0.01)  # let the first cancellation land
+        aclose_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await aclose_task
+
+        await asyncio.wait_for(create_task, timeout=5)
+        assert rtc_stream.ended.is_set()
+        assert audio_input._stream is None
+        assert not audio_input._create_tasks
+
+
+@pytest.mark.asyncio
 async def test_stale_track_unsubscribe_does_not_close_replacement() -> None:
     room = _FakeRoom()
     audio_input = _make_audio_input_stream(room, noise_cancellation=None)
@@ -1098,12 +1619,16 @@ async def test_direct_processor_lifecycle() -> None:
     with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         # first track subscription
         stream._on_track_available(track1, pub1, participant)
+        assert stream._create_task is not None
+        await asyncio.wait_for(stream._create_task, timeout=1)
 
         assert stream._processor is processor
         assert processor.close_calls == 0
 
         # track switch — processor must survive
         stream._on_track_available(track2, pub2, participant)
+        assert stream._create_task is not None
+        await asyncio.wait_for(stream._create_task, timeout=1)
 
         assert stream._processor is processor
         assert processor.close_calls == 0
@@ -1135,12 +1660,17 @@ async def test_selector_processor_lifecycle() -> None:
     with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         # first track
         stream._on_track_available(track1, pub1, participant)
+        assert stream._create_task is not None
+        await asyncio.wait_for(stream._create_task, timeout=1)
 
         assert len(processors) == 1
         assert stream._processor is processors[0]
 
         # track switch — old processor closed, new one receives lifecycle calls
         stream._on_track_available(track2, pub2, participant)
+        assert processors[0].close_calls == 1
+        assert stream._create_task is not None
+        await asyncio.wait_for(stream._create_task, timeout=1)
 
     assert len(processors) == 2
     assert processors[0].close_calls == 1
@@ -1163,6 +1693,8 @@ async def test_selector_processor_track_disappears() -> None:
 
     with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track, publication, participant)
+        assert stream._create_task is not None
+        await asyncio.wait_for(stream._create_task, timeout=1)
 
     assert stream._processor is processor
 
@@ -1189,6 +1721,8 @@ async def test_selector_returns_noise_cancellation_options() -> None:
 
     with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track, publication, participant)
+        assert stream._create_task is not None
+        await asyncio.wait_for(stream._create_task, timeout=1)
 
     assert stream._processor is None
 
@@ -1214,6 +1748,9 @@ async def test_warns_on_double_noise_cancellation(
 
     with patch("livekit.rtc.AudioStream.from_track", side_effect=lambda **kw: _MockAudioStream()):
         stream._on_track_available(track, publication, participant)
+        # stream creation runs in a task, so it must settle inside the patch context
+        if stream._create_tasks:
+            await asyncio.gather(*list(stream._create_tasks), return_exceptions=True)
 
     assert ("enhanced noise cancellation" in caplog.text) is warns
 
