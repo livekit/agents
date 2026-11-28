@@ -33,6 +33,52 @@ struct Match {
     passive: bool,
 }
 
+#[derive(Clone, Copy)]
+enum Preference {
+    Correlation,
+    Longest,
+}
+
+impl Match {
+    // Every search path uses the same ordering: quiet first, then its own ranking.
+    fn prefer(self, candidate: Self, preference: Preference) -> Self {
+        let better = if self.passive != candidate.passive {
+            candidate.passive
+        } else {
+            match preference {
+                Preference::Correlation => candidate.score > self.score + 1e-9,
+                Preference::Longest => candidate.period > self.period,
+            }
+        };
+        if better { candidate } else { self }
+    }
+}
+
+fn matching_seams(
+    rate: Rate,
+    left: impl Fn(usize) -> i16,
+    right: impl Fn(usize) -> i16,
+    period: usize,
+    threshold: f64,
+    passive_level: f64,
+) -> bool {
+    // Check local matches independently of the crossfade length: full-period correlation
+    // can mask a brief mismatched transient inside a long vowel.
+    let window = rate.overlap().min(period);
+    for start in (0..period).step_by(window) {
+        let start = start.min(period - window);
+        let a = |i| left(start + i);
+        let b = |i| right(start + i);
+        if rms(a, window) < passive_level && rms(b, window) < passive_level {
+            continue;
+        }
+        if correlation(a, b, window) < threshold {
+            return false;
+        }
+    }
+    true
+}
+
 /// Match adjacent periods in NetEq's 30ms window and crossfade over the whole period.
 /// Prefer a low-energy splice and preserve the onset before it. Return the actual produced
 /// length: expansion adds one period, acceleration removes it.
@@ -63,10 +109,18 @@ pub(in crate::playout) fn stretch(
         if !passive && (after < before * 0.8 || after > before * 1.25) {
             return None;
         }
-        let other = if expand { splice - period } else { splice + period };
-        let score = correlation(|i| queue[anchor - period + i], |i| queue[anchor + i], period)
-            .min(correlation(|i| queue[splice + i], |i| queue[other + i], overlap));
-        if !passive && score < threshold {
+        let score = correlation(|i| queue[anchor - period + i], |i| queue[anchor + i], period);
+        if !passive
+            && (score < threshold
+                || !matching_seams(
+                    rate,
+                    |i| queue[anchor - period + i],
+                    |i| queue[anchor + i],
+                    period,
+                    threshold,
+                    passive_level,
+                ))
+        {
             return None;
         }
         Some(Match { period, splice, overlap, score, passive })
@@ -76,22 +130,17 @@ pub(in crate::playout) fn stretch(
         let Some(candidate) = evaluate(period) else {
             continue;
         };
-        if best.is_none_or(|old| {
-            candidate.passive && !old.passive
-                || candidate.passive == old.passive && candidate.score > old.score + 1e-9
-        }) {
-            best = Some(candidate);
-        }
+        best = Some(best.map_or(candidate, |old| old.prefer(candidate, Preference::Correlation)));
         if candidate.passive {
             break;
         }
     }
     let mut best = best?;
     if operation == Stretch::FastAccelerate {
-        for multiple in (2..=rate.period_max().min(maximum_change) / best.period).rev() {
-            if let Some(candidate) = evaluate(best.period * multiple) {
-                best = candidate;
-                break;
+        let period = best.period;
+        for multiple in 2..=rate.period_max().min(maximum_change) / period {
+            if let Some(candidate) = evaluate(period * multiple) {
+                best = best.prefer(candidate, Preference::Longest);
             }
         }
     }
@@ -150,6 +199,28 @@ pub(in crate::playout) fn preemptive(
         let past = correlation(|i| history[end - lag + i], |i| history[end - 2 * lag + i], lag);
         let upcoming = correlation(|i| history[end - lag + i], |i| queue[i], lag);
         let score = past.min(upcoming);
+        if !passive && score <= best + 1e-9 {
+            continue;
+        }
+        if !passive
+            && (!matching_seams(
+                rate,
+                |i| history[end - lag + i],
+                |i| history[end - 2 * lag + i],
+                lag,
+                CORRELATION,
+                passive_level,
+            ) || !matching_seams(
+                rate,
+                |i| history[end - lag + i],
+                |i| queue[i],
+                lag,
+                CORRELATION,
+                passive_level,
+            ))
+        {
+            continue;
+        }
         if passive || score > best + 1e-9 {
             best = score;
             period = lag;

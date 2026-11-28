@@ -8,7 +8,10 @@ import struct
 import subprocess
 import sys
 import tempfile
+import unittest
 import wave
+from bisect import bisect_left
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, NamedTuple, NotRequired, TypedDict
 
@@ -37,6 +40,7 @@ from typing import Literal, NamedTuple, NotRequired, TypedDict
 # Only NetEq converts to/from 48 kHz for L16 when needed. Its native maximum target is
 # unlimited by default; Rust defaults to 100 ms. Native and Rust rate controls differ.
 # Temporary C++/Rust bridges are compiled locally and deleted after the run.
+# Regression checks: python3 -m unittest discover -s <this directory> -p neteq_compare.py
 #
 # Schedule design follows NetEq's separate timing/loss controls and fixed-seed replay:
 #   modules/audio_coding/neteq/tools/neteq_quality_test.cc (fixed seed, loss events, drift)
@@ -315,6 +319,65 @@ class Arrival(NamedTuple):
     samples: int
 
 
+@dataclass(frozen=True)
+class Schedule:
+    name: Scenario
+    sample_rate: int
+    source_samples: int
+    arrivals: tuple[Arrival, ...]
+    fault_sources: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if self.sample_rate not in SUPPORTED_RATES:
+            raise ValueError("schedule sample rate must be 16/24/48 kHz")
+        expected_faults = 0 if self.name == "steady" else 4 if self.name == "repeated-stalls" else 1
+        if len(self.fault_sources) != expected_faults:
+            raise ValueError(f"{self.name}: schedule must contain all {expected_faults} faults")
+        expected_source = previous_arrival = 0
+        starts: set[int] = set()
+        for chunk in self.arrivals:
+            if chunk.source_start != expected_source or chunk.samples <= 0:
+                raise ValueError("schedule must cover source contiguously")
+            if chunk.arrival_us < previous_arrival:
+                raise ValueError("schedule arrivals must remain ordered")
+            starts.add(chunk.source_start)
+            expected_source += chunk.samples
+            previous_arrival = chunk.arrival_us
+        if not self.arrivals or expected_source != self.source_samples:
+            raise ValueError("schedule must deliver the complete source")
+        if len(set(self.fault_sources)) != len(self.fault_sources):
+            raise ValueError(f"{self.name}: chunk spacing merges distinct faults")
+        if any(start not in starts for start in self.fault_sources):
+            raise ValueError("fault events must reference actual source chunks")
+
+    @property
+    def fault_source_ms(self) -> int | None:
+        return self.fault_sources[0] * 1000 // self.sample_rate if self.fault_sources else None
+
+    def validate_audio(self, pcm: bytes) -> None:
+        if len(pcm) != self.source_samples * 2:
+            raise ValueError("audio and schedule must describe the same source")
+        if not self.fault_sources:
+            return
+        samples_per_ms = self.sample_rate // 1000
+        tail_ms = 50 if self.name in ("late-start", "slow-start") else 1500
+        minimum = self.fault_sources[0] + tail_ms * samples_per_ms
+        minimum = max(minimum, self.fault_sources[-1] + 50 * samples_per_ms)
+        if self.name == "slow-start":
+            minimum = max(minimum, 450 * samples_per_ms)
+        if self.source_samples < minimum:
+            raise ValueError(f"{self.name}: source is too short for the complete fault window")
+        for start in self.fault_sources:
+            check_active_speech(pcm, self.name, start // samples_per_ms, self.sample_rate)
+
+
+@dataclass(frozen=True)
+class InputAudio:
+    pcm: bytes
+    sample_rate: int
+    schedules: tuple[Schedule, ...]
+
+
 class TrackMetrics(TypedDict):
     pcm_sha256: str
     added_startup_ms: int | None
@@ -324,6 +387,7 @@ class TrackMetrics(TypedDict):
 class ScenarioMetrics(TypedDict):
     description: str
     fault_source_ms: int | None
+    fault_sources_ms: list[int]
     schedule_sha256: str
     tracks: dict[Track, TrackMetrics]
 
@@ -332,6 +396,7 @@ class Report(TypedDict):
     settings: dict[str, object]
     reference_api: str
     jitter_seed: int
+    sample_rate: int
     archive_sha256: str
     source_pcm_sha256: str
     scenarios: dict[Scenario, ScenarioMetrics]
@@ -339,7 +404,6 @@ class Report(TypedDict):
 
 class Options(argparse.Namespace):
     input: Path
-    sample_rate: int
     no_time_stretching: bool
     webrtc: Path
     crate: Path
@@ -383,24 +447,48 @@ def onset_ms(pcm: bytes, sample_rate: int) -> int | None:
 
 def make_schedule(
     name: Scenario, sample_count: int, chunk_ms: int, fault_ms: int, sample_rate: int = 24_000
-) -> list[Arrival]:
+) -> Schedule:
+    if sample_rate not in SUPPORTED_RATES or chunk_ms < 10 or chunk_ms % 10 or fault_ms < 0:
+        raise ValueError("invalid sample rate, chunk duration or fault time")
     samples_per_ms = sample_rate // 1000
-    schedule: list[Arrival] = []
+    chunks: list[tuple[int, int]] = []
+    start = variable_index = 0
+    while start < sample_count:
+        duration_ms = chunk_ms
+        if name == "variable-chunks" and start >= fault_ms * samples_per_ms:
+            duration_ms = (20, 100, 40, 200, 60)[variable_index % 5]
+            variable_index += 1
+        count = min(duration_ms * samples_per_ms, sample_count - start)
+        chunks.append((start, count))
+        start += count
+    if len(chunks) < 2:
+        raise ValueError("input must contain at least two chunks")
+    starts = [start for start, _ in chunks]
+
+    def event_at_or_after(requested: int) -> int:
+        index = bisect_left(starts, requested)
+        if index == len(starts):
+            raise ValueError(f"{name}: source is too short for all planned fault events")
+        return starts[index]
+
+    if name == "steady":
+        faults: tuple[int, ...] = ()
+    elif name in ("late-start", "slow-start"):
+        faults = (starts[1],)
+    else:
+        first = event_at_or_after(fault_ms * samples_per_ms)
+        offsets_ms = (0, 600, 1200, 1800) if name == "repeated-stalls" else (0,)
+        faults = tuple(event_at_or_after(first + offset * samples_per_ms) for offset in offsets_ms)
+    origin_us = faults[0] * 1_000_000 // sample_rate if faults else 0
+    arrivals: list[Arrival] = []
     previous_arrival_us = 0
     seed = JITTER_SEED
-    start = 0
-    variable_index = 0
-    retained_delay_us = 0
-    next_stall_us = 0
-
-    while start < sample_count:
+    for start, count in chunks:
         nominal_us = start * 1_000_000 // sample_rate
-        elapsed_us = max(0, nominal_us - fault_ms * 1000)
-        after_onset = nominal_us >= fault_ms * 1000
+        elapsed_us = max(0, nominal_us - origin_us)
+        after_onset = bool(faults) and start >= faults[0]
         delay_us = 0
-        duration_ms = chunk_ms
-
-        if name == "late-start" and start == chunk_ms * samples_per_ms:
+        if name == "late-start" and start == faults[0]:
             delay_us = 60_000
         elif name == "slow-start":
             delay_us = min(nominal_us, 400_000) * 4 // 5
@@ -409,7 +497,6 @@ def make_schedule(
                 stall_us = 400_000 if name == "stall-400ms" else 1_000_000
                 delay_us = max(0, stall_us - elapsed_us)
             elif name in ("bounded-jitter", "slow-jitter"):
-                # Reset the local PRNG for every run; no wall clock or process randomness.
                 seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
                 if name == "slow-jitter":
                     delay_us = min(elapsed_us, 20_000_000) // 100
@@ -419,25 +506,14 @@ def make_schedule(
                 direction = 1 if name == "slow-clock" else -1
                 delay_us = direction * (elapsed_us // 1000)
             elif name == "repeated-stalls":
-                if elapsed_us >= next_stall_us and next_stall_us < 2_400_000:
-                    retained_delay_us += 80_000
-                    next_stall_us += 600_000
-                delay_us = retained_delay_us
+                delay_us = sum(80_000 for fault in faults if start >= fault)
             elif name == "catch-up":
                 progress_us = min(elapsed_us, 1_500_000)
                 delay_us = -(progress_us - progress_us // 3)
-            elif name == "variable-chunks":
-                duration_ms = (20, 100, 40, 200, 60)[variable_index % 5]
-                variable_index += 1
-
-        # A reliable transport may batch chunks but cannot reorder or discard source audio.
         arrival_us = max(previous_arrival_us, nominal_us + delay_us)
-        count = min(duration_ms * samples_per_ms, sample_count - start)
-        schedule.append(Arrival(arrival_us, start, count))
+        arrivals.append(Arrival(arrival_us, start, count))
         previous_arrival_us = arrival_us
-        start += count
-
-    return schedule
+    return Schedule(name, sample_rate, sample_count, tuple(arrivals), faults)
 
 
 def parse_arguments() -> Options:
@@ -475,21 +551,19 @@ def parse_arguments() -> Options:
     return options
 
 
-def read_input(options: Options) -> bytes:
+def read_input(options: Options) -> InputAudio:
     with wave.open(str(options.input), "rb") as stream:
-        audio_format = (stream.getframerate(), stream.getnchannels(), stream.getsampwidth())
-        if audio_format[0] not in SUPPORTED_RATES or audio_format[1:] != (1, 2):
+        rate = stream.getframerate()
+        if rate not in SUPPORTED_RATES or (stream.getnchannels(), stream.getsampwidth()) != (1, 2):
             raise ValueError("input must be mono 16/24/48 kHz PCM16 WAV")
-        options.sample_rate = stream.getframerate()
-
         pcm = stream.readframes(stream.getnframes())
-
-    if len(pcm) < (options.fault_at_ms + 1500) * (options.sample_rate // 1000 * 2):
-        raise ValueError("input must extend at least 1.5 seconds beyond the fault onset")
-    if len(pcm) <= options.chunk_ms * (options.sample_rate // 1000 * 2):
-        raise ValueError("input must contain at least two chunks")
-
-    return pcm
+    schedules = tuple(
+        make_schedule(name, len(pcm) // 2, options.chunk_ms, options.fault_at_ms, rate)
+        for name in options.scenario or SCENARIOS
+    )
+    for schedule in schedules:
+        schedule.validate_audio(pcm)
+    return InputAudio(pcm, rate, schedules)
 
 
 def build_native(root: Path, temporary: Path) -> Path:
@@ -535,8 +609,12 @@ def build_rust(crate: Path, temporary: Path) -> Path:
     (temporary / "src").mkdir()
     (temporary / "src/main.rs").write_text(RUST_SOURCE)
     manifest = temporary / "Cargo.toml"
+    # A shared Cargo target must not let concurrent replays overwrite each other's runner.
+    name = (
+        "playout-comparison-" + hashlib.sha256(str(temporary.resolve()).encode()).hexdigest()[:12]
+    )
     manifest.write_text(
-        '[package]\nname = "playout-comparison"\nversion = "0.0.0"\nedition = "2024"\n\n'
+        f'[package]\nname = "{name}"\nversion = "0.0.0"\nedition = "2024"\n\n'
         "[workspace]\n\n[dependencies]\nlk-agents-media = { path = "
         + json.dumps(str(crate.resolve()))
         + " }\n"
@@ -549,17 +627,6 @@ def build_rust(crate: Path, temporary: Path) -> Path:
             return Path(executable)
 
     raise RuntimeError("Cargo did not report the comparison executable")
-
-
-def fault_onset_ms(schedule: list[Arrival], name: Scenario, options: Options) -> int | None:
-    if name == "steady":
-        return None
-    if name in ("late-start", "slow-start"):
-        return options.chunk_ms
-
-    anchor = options.fault_at_ms * (options.sample_rate // 1000)
-    first_fault = next(chunk for chunk in schedule if chunk.source_start >= anchor)
-    return first_fault.source_start // (options.sample_rate // 1000)
 
 
 def check_active_speech(pcm: bytes, name: Scenario, fault_ms: int | None, sample_rate: int) -> None:
@@ -604,7 +671,7 @@ def collect_metrics(
 
 
 def render_scenario(
-    name: Scenario,
+    schedule: Schedule,
     options: Options,
     source: bytes,
     raw: Path,
@@ -612,36 +679,34 @@ def render_scenario(
     rust: Path,
     native: Path,
 ) -> ScenarioMetrics:
+    name = schedule.name
     directory = options.output.resolve() / name
     directory.mkdir(exist_ok=True)
-    schedule = make_schedule(
-        name, len(source) // 2, options.chunk_ms, options.fault_at_ms, options.sample_rate
-    )
-    fault_ms = fault_onset_ms(schedule, name, options)
-    check_active_speech(source, name, fault_ms, options.sample_rate)
-
     arrivals_file = directory / "arrivals.csv"
     with arrivals_file.open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(("arrival_us", "source_start", "samples"))
-        writer.writerows(schedule)
+        writer.writerows(schedule.arrivals)
 
-    source_duration_ms = len(source) // (options.sample_rate // 1000 * 2)
-    last_arrival_us = schedule[-1].arrival_us
+    source_duration_ms = len(source) // (schedule.sample_rate // 1000 * 2)
+    last_arrival_us = schedule.arrivals[-1].arrival_us
     end_ms = max(source_duration_ms, last_arrival_us / 1000) + options.maximum_ms + 2500
     render_duration_ms = math.ceil(end_ms / 10) * 10
 
     stretching = str(not options.no_time_stretching).lower()
-    run(rust, raw, arrivals_file, directory, render_duration_ms, options.minimum_ms, options.startup_ms, options.maximum_ms, options.sample_rate, stretching)  # fmt: skip
-    run(native, source48, arrivals_file, directory / "neteq48.pcm", render_duration_ms, options.minimum_ms, options.native_maximum_ms, int(not options.no_time_stretching), directory / "neteq.csv", options.sample_rate)  # fmt: skip
-    run("ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", "48000", "-ac", "1", "-i", directory / "neteq48.pcm", "-ar", options.sample_rate, "-f", "s16le", directory / "neteq.pcm")  # fmt: skip
+    run(rust, raw, arrivals_file, directory, render_duration_ms, options.minimum_ms, options.startup_ms, options.maximum_ms, schedule.sample_rate, stretching)  # fmt: skip
+    run(native, source48, arrivals_file, directory / "neteq48.pcm", render_duration_ms, options.minimum_ms, options.native_maximum_ms, int(not options.no_time_stretching), directory / "neteq.csv", schedule.sample_rate)  # fmt: skip
+    run("ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", "48000", "-ac", "1", "-i", directory / "neteq48.pcm", "-ar", schedule.sample_rate, "-f", "s16le", directory / "neteq.pcm")  # fmt: skip
 
     cutoff_us = min(20_000_000, source_duration_ms * 1000, last_arrival_us)
-    metrics = collect_metrics(directory, source, cutoff_us, options.sample_rate)
+    metrics = collect_metrics(directory, source, cutoff_us, schedule.sample_rate)
     print(f"{name}: {directory}", flush=True)
     return {
         "description": SCENARIOS[name],
-        "fault_source_ms": fault_ms,
+        "fault_source_ms": schedule.fault_source_ms,
+        "fault_sources_ms": [
+            start * 1000 // schedule.sample_rate for start in schedule.fault_sources
+        ],
         "schedule_sha256": sha256(arrivals_file),
         "tracks": metrics,
     }
@@ -649,7 +714,8 @@ def render_scenario(
 
 def main() -> None:
     options = parse_arguments()
-    source = read_input(options)
+    audio = read_input(options)
+    source = audio.pcm
     root = options.webrtc.resolve()
     library = root / "lib/libwebrtc.a"
     if not library.is_file() or not (root / "include/api/neteq/neteq.h").is_file():
@@ -667,6 +733,7 @@ def main() -> None:
         },
         "reference_api": REFERENCE_TAG,
         "jitter_seed": JITTER_SEED,
+        "sample_rate": audio.sample_rate,
         "archive_sha256": sha256(library),
         "source_pcm_sha256": sha256(raw),
         "scenarios": {},
@@ -679,12 +746,58 @@ def main() -> None:
         source48 = temporary / "source48.pcm"
         run("ffmpeg", "-v", "error", "-y", "-i", options.input.resolve(), "-ar", "48000", "-f", "s16le", source48)  # fmt: skip
 
-        for name in options.scenario or SCENARIOS:
-            report["scenarios"][name] = render_scenario(
-                name, options, source, raw, source48, rust, native
+        for schedule in audio.schedules:
+            report["scenarios"][schedule.name] = render_scenario(
+                schedule, options, source, raw, source48, rust, native
             )
 
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+class ScheduleTests(unittest.TestCase):
+    def test_stalls_start_at_the_first_affected_chunk(self) -> None:
+        cases: tuple[Scenario, ...] = ("stall-400ms", "stall-1s")
+        for rate in SUPPORTED_RATES:
+            for chunk_ms in (100, 1000):
+                for case in cases:
+                    with self.subTest(rate=rate, chunk_ms=chunk_ms, case=case):
+                        schedule = make_schedule(case, rate * 8, chunk_ms, 2250, rate)
+                        actual_ms = schedule.fault_source_ms
+                        self.assertIsNotNone(actual_ms)
+                        first = next(
+                            row
+                            for row in schedule.arrivals
+                            if row.source_start * 1000 // rate >= 2250
+                        )
+                        expected_us = 400_000 if case == "stall-400ms" else 1_000_000
+                        self.assertEqual(
+                            first.arrival_us - first.source_start * 1_000_000 // rate, expected_us
+                        )
+                        self.assertEqual(first.source_start * 1000 // rate, actual_ms)
+
+    def test_three_second_controls_and_startup_do_not_require_a_later_fault(self) -> None:
+        cases: tuple[Scenario, ...] = ("steady", "late-start", "slow-start")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "short.wav"
+            for rate in SUPPORTED_RATES:
+                with wave.open(str(path), "wb") as stream:
+                    stream.setparams((1, 2, rate, 0, "NONE", "not compressed"))
+                    stream.writeframes(b"\xe8\x03" * rate * 3)
+                for case in cases:
+                    with self.subTest(rate=rate, case=case):
+                        options = Options(
+                            input=path, scenario=[case], chunk_ms=100, fault_at_ms=2200
+                        )
+                        self.assertEqual(len(read_input(options).pcm), rate * 3 * 2)
+
+    def test_repeated_stalls_reject_missing_events_and_coarse_chunks(self) -> None:
+        for rate in SUPPORTED_RATES:
+            with self.subTest(rate=rate, reason="short source"):
+                with self.assertRaisesRegex(ValueError, "all planned|four|4"):
+                    make_schedule("repeated-stalls", rate * 4, 100, 2200, rate)
+            with self.subTest(rate=rate, reason="coarse chunks"):
+                with self.assertRaisesRegex(ValueError, "chunk|spacing"):
+                    make_schedule("repeated-stalls", rate * 10, 1000, 2200, rate)
 
 
 if __name__ == "__main__":

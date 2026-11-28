@@ -404,3 +404,54 @@ fn native_rate_room_tone_fades_over_the_same_duration() {
         assert!(!c.active());
     }
 }
+
+#[test]
+fn fast_acceleration_keeps_a_quiet_splice_instead_of_removing_voiced_audio() {
+    for hz in [16_000, 24_000, 48_000] {
+        let rate = Rate::new(hz).unwrap();
+        let period = rate.period_max();
+        let mut input = sine(rate.stretch_window(), period, 0, 12000.0);
+        for (i, sample) in input.iter_mut().enumerate() {
+            let phase = i % period;
+            if phase < rate.period_min() || phase >= period - rate.period_min() {
+                *sample = 0;
+            }
+        }
+        let queue = input.iter().copied().collect();
+        let mut output = [0; MAX_STRETCH];
+        let scale =
+            stretch(rate, &queue, Stretch::FastAccelerate, period, 40.0, &mut output).unwrap();
+        assert!(scale.passive, "rate={hz}: a voiced multiple replaced the quiet splice");
+        assert_eq!(scale.change, rate.period_min());
+        let unmodified = rate.period_max() - scale.change;
+        assert_eq!(&output[..unmodified], &input[..unmodified]);
+    }
+}
+
+#[test]
+fn expansion_rejects_a_brief_unmatched_burst_hidden_by_a_matching_vowel() {
+    for hz in [16_000, 24_000, 48_000] {
+        let rate = Rate::new(hz).unwrap();
+        let period = hz as usize / 75;
+        let mut input = sine(rate.stretch_window(), period, 0, 10000.0);
+        let mut seed = 734_u32;
+        let start = rate.period_max() + rate.scale(24);
+        for sample in &mut input[start..start + hz as usize / 1000] {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let burst = ((seed >> 16) as i16 as i32 * 7000 / 32768) as i16;
+            *sample = sample.saturating_add(burst);
+        }
+        let queue = input.clone().into();
+        let mut output = [0; MAX_STRETCH];
+        assert!(
+            stretch(rate, &queue, Stretch::Expand, rate.period_max(), 40.0, &mut output).is_none(),
+            "rate={hz}: expansion would replay an unmatched burst"
+        );
+        let history = sine(period * 2, period, 0, 10000.0).into();
+        let upcoming = input[rate.period_max()..].iter().copied().collect();
+        assert!(
+            preemptive(rate, &history, &upcoming, rate.period_max(), 40.0, &mut output).is_none(),
+            "rate={hz}: history-based expansion would replay an unmatched burst"
+        );
+    }
+}
