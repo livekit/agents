@@ -645,7 +645,12 @@ class SpeechStream(stt.SpeechStream):
 
     async def _run(self) -> None:
         """Run the streaming transcription session"""
-        closing_ws = False
+        drain_started = asyncio.Event()
+        pending_commits = 0
+        commits_completed = asyncio.Event()
+        commits_completed.set()
+        vad_turn_pending = asyncio.Event()
+        manual_commits = self._opts.resolved_commit_strategy == "manual"
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -667,7 +672,7 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal pending_commits
 
             # Buffer audio into chunks of the configured duration.
             samples_per_chunk = self._opts.sample_rate * self._opts.audio_chunk_duration_ms // 1000
@@ -691,9 +696,12 @@ class SpeechStream(stt.SpeechStream):
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif isinstance(data, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
-                        if (missing := min_commit_samples - uncommitted_samples) > 0:
+                        if (
+                            uncommitted_samples
+                            and (missing := min_commit_samples - uncommitted_samples) > 0
+                        ):
                             frames.append(rtc.AudioFrame.create(self._opts.sample_rate, 1, missing))
-                        has_ended = True
+                        has_ended = uncommitted_samples > 0
 
                     for frame in frames:
                         await self._turn_detection.push_frame(frame)
@@ -713,6 +721,10 @@ class SpeechStream(stt.SpeechStream):
                     if has_ended:
                         self._audio_duration_collector.flush()
                         self._turn_detection.on_commit_requested()
+                        pending_commits += 1
+                        commits_completed.clear()
+                        if self._input_ch.closed and self._input_ch.empty():
+                            drain_started.set()
                         await ws.send_str(
                             json.dumps(
                                 {
@@ -726,16 +738,16 @@ class SpeechStream(stt.SpeechStream):
                         uncommitted_samples = 0
                         has_ended = False
 
-                closing_ws = True
+                drain_started.set()
                 await self._turn_detection.end_input()
+                if manual_commits:
+                    await commits_completed.wait()
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing_ws or self._session.closed:
-                    return
                 raise APIConnectionError("ElevenLabs STT connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal pending_commits
 
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
@@ -748,12 +760,8 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
-                        return
-                    raise APIStatusError(
-                        message="ElevenLabs STT connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        body=f"{msg.data=} {msg.extra=}",
+                    raise APIConnectionError(
+                        "elevenlabs STT closed before its final response completed"
                     )
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -762,11 +770,22 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     parsed = json.loads(msg.data)
-                    self._process_stream_event(parsed)
-                    if parsed.get("message_type") in (
-                        "partial_transcript",
-                        "committed_transcript",
-                        "committed_transcript_with_timestamps",
+                    new_partial = self._process_stream_event(parsed)
+                    if new_partial:
+                        vad_turn_pending.set()
+                    elif parsed.get("message_type") == self._final_message_type:
+                        vad_turn_pending.clear()
+                    if manual_commits and parsed.get("message_type") == self._final_message_type:
+                        pending_commits = max(0, pending_commits - 1)
+                        if pending_commits == 0:
+                            commits_completed.set()
+                    if (
+                        parsed.get("message_type")
+                        in (
+                            "committed_transcript",
+                            "committed_transcript_with_timestamps",
+                        )
+                        or new_partial
                     ):
                         self._mark_provider_progress()
                 except APIError:
@@ -780,7 +799,12 @@ class SpeechStream(stt.SpeechStream):
             try:
                 # A replacement socket cannot deliver the previous connection's pending final.
                 self._emit_end_of_speech()
+                manual_commits = self._opts.resolved_commit_strategy == "manual"
                 ws = await self._connect_ws()
+                drain_started.clear()
+                pending_commits = 0
+                commits_completed.set()
+                vad_turn_pending.clear()
                 self._input_ch.restart_provider_clock()
                 await self._turn_detection.start()
                 self._final_alternatives = []
@@ -797,33 +821,23 @@ class SpeechStream(stt.SpeechStream):
                             }
                         )
                     )
-                tasks = [
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                    asyncio.create_task(keepalive_task(ws)),
-                    asyncio.create_task(self._turn_detection.run_vad()),
-                ]
-                tasks_group = asyncio.gather(*tasks)
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect_task),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()  # Retrieve exception to prevent it from being logged
+                    reconnect=self._reconnect_event,
+                    background=[
+                        asyncio.create_task(keepalive_task(ws)),
+                        asyncio.create_task(self._turn_detection.run_vad()),
+                    ],
+                    drain_started=drain_started,
+                    # VAD finals have no ID that ties them to a manual commit.
+                    require_completion=manual_commits or vad_turn_pending,
+                    sender_waits_for_completion=manual_commits,
+                    drain_quiet_timeout=None if manual_commits else 1.0,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 await self._turn_detection.aclose()
                 if ws is not None:
@@ -899,8 +913,12 @@ class SpeechStream(stt.SpeechStream):
 
         return ws
 
-    def _process_stream_event(self, data: dict) -> None:
-        """Process incoming WebSocket messages from ElevenLabs"""
+    def _process_stream_event(self, data: dict) -> bool:
+        """Process incoming WebSocket messages from ElevenLabs.
+
+        Returns:
+            Whether the message is a partial transcript with new text.
+        """
         message_type = data.get("message_type")
         text = data.get("text", "")
         words = data.get("words", [])
@@ -934,6 +952,7 @@ class SpeechStream(stt.SpeechStream):
             is_forced_commit = self._turn_detection.on_committed_transcript(
                 data, final_message_type=self._final_message_type
             )
+        text_changed = False
         if message_type == "partial_transcript":
             text_changed = self._turn_detection.on_partial_transcript(
                 data.get("turn_probability"), text=text, starts_turn=not self._speaking
@@ -996,6 +1015,9 @@ class SpeechStream(stt.SpeechStream):
             "quota_exceeded",
             "transcriber_error",
             "input_error",
+            "invalid_request",
+            "chunk_size_exceeded",
+            "unaccepted_terms",
             "error",
         ):
             logger.error(
@@ -1005,7 +1027,15 @@ class SpeechStream(stt.SpeechStream):
             )
             raise APIConnectionError(
                 f"ElevenLabs STT error [{message_type}]",
-                retryable=message_type not in ("auth_error", "quota_exceeded", "input_error"),
+                retryable=message_type
+                not in (
+                    "auth_error",
+                    "quota_exceeded",
+                    "input_error",
+                    "invalid_request",
+                    "chunk_size_exceeded",
+                    "unaccepted_terms",
+                ),
             ) from None
         else:
             logger.warning(
@@ -1013,6 +1043,8 @@ class SpeechStream(stt.SpeechStream):
                 message_type,
                 extra={"lk.pii.data": data},
             )
+
+        return text_changed
 
 
 def _synthesize_url(opts: STTOptions) -> str:

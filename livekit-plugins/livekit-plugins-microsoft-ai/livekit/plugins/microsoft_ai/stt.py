@@ -42,6 +42,7 @@ from livekit.agents import (
     vad,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 
 from ._http import Configuration, HTTPClient, positive_timeout, status_error
 from .log import logger
@@ -315,19 +316,18 @@ class SpeechStream(stt.RecognizeStream):
                 await asyncio.sleep(self._connect_options._interval_for_retry(attempt))
 
     async def _attempt(self) -> None:
-        tasks: list[asyncio.Task[None]] = []
+        self._drain_started = asyncio.Event()
         try:
             monitor = await asyncio.wait_for(self._handshake(), self._conn_options.timeout)
             assert self._ws is not None
             sender = asyncio.create_task(self._send(self._ws))
             receiver = asyncio.create_task(self._receive(monitor))
-            tasks = [sender, receiver]
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if sender in done:
-                await sender
-            else:
-                await receiver
-                raise APIConnectionError("Microsoft AI STT receiver stopped unexpectedly")
+            await self._run_connection_tasks(
+                sender,
+                receiver,
+                sender_waits_for_completion=True,
+                drain_started=self._drain_started,
+            )
         except aiohttp.WSServerHandshakeError as error:
             raise status_error("STT", error.status) from None
         except asyncio.TimeoutError:
@@ -335,7 +335,6 @@ class SpeechStream(stt.RecognizeStream):
         except (aiohttp.ClientError, ConnectionError, OSError):
             raise APIConnectionError("Microsoft AI STT transport failed") from None
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
             if self._commit_future is not None:
                 self._commit_future.cancel()
                 self._commit_future = None
@@ -367,12 +366,19 @@ class SpeechStream(stt.RecognizeStream):
         return monitor
 
     async def _receive_event(self, monitor: utils.aio.WebSocketMonitor) -> dict[str, object]:
-        message = await monitor.receive()
+        try:
+            message = await monitor.receive()
+        except WebSocketCloseError as error:
+            error.body = None
+            raise
+        except APIConnectionError as error:
+            raise APIConnectionError(
+                "Microsoft AI STT transport failed", retryable=error.retryable
+            ) from None
         if message.type in (
             aiohttp.WSMsgType.CLOSE,
             aiohttp.WSMsgType.CLOSED,
             aiohttp.WSMsgType.CLOSING,
-            aiohttp.WSMsgType.ERROR,
         ):
             raise APIConnectionError("Microsoft AI STT connection closed unexpectedly")
         if message.type != aiohttp.WSMsgType.TEXT or not isinstance(message.data, (str, bytes)):
@@ -409,11 +415,13 @@ class SpeechStream(stt.RecognizeStream):
             await self._append(ws, frame)
         if not self._segment_samples:
             return
+        if self._input_ch.closed and self._input_ch.empty():
+            self._drain_started.set()
         self._commit_future = asyncio.get_running_loop().create_future()
         self._committed_item_id = None
         try:
             await self._write(ws, {"type": "input_audio_buffer.commit"})
-            await asyncio.wait_for(self._commit_future, self._conn_options.timeout)
+            await asyncio.wait_for(self._commit_future, self._conn_options.final_response_timeout)
             self._segment_samples = 0
         finally:
             self._commit_future = None
@@ -561,7 +569,7 @@ class SpeechStream(stt.RecognizeStream):
             done, _ = await asyncio.wait([producer, consumer], return_when=asyncio.FIRST_COMPLETED)
             if producer in done:
                 await producer
-                await asyncio.wait_for(consumer, self._conn_options.timeout)
+                await asyncio.wait_for(consumer, self._conn_options.final_response_timeout)
             else:
                 # Live input may remain open indefinitely; surface the consumer's error now.
                 await consumer

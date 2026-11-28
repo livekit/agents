@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -14,12 +15,14 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     stt,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import STT
 
+from .stt_harness.discovery import provider_by_name
+from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+from .stt_harness.server import STTServer
 from .stt_reconnect import FakeWebSocket, ReconnectClock, wait_until
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time]
@@ -50,62 +53,30 @@ async def test_internal_reconnect_reanchors_transcript_timing(monkeypatch):
         await provider.aclose()
 
 
-_Mode = Literal["reply", "slow", "ignore", "drop", "stall"]
-
-
 class _WhisperSocket(FakeWebSocket):
-    """Answers end_audio the way a Baseten streaming Whisper runtime does in each mode."""
-
-    def __init__(self, mode: _Mode) -> None:
-        super().__init__()
-        self.mode = mode
+    """Answers end_audio the way a Baseten streaming Whisper runtime does."""
 
     async def ping(self) -> None:
         self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", ""))
 
     async def send_str(self, data: str) -> None:
         self.sent.append(data)
-        if json.loads(data).get("type") == "end_audio" and self.mode != "ignore":
-            asyncio.get_running_loop().create_task(self._finish_flush())
-
-    async def _finish_flush(self) -> None:
-        self.respond({"type": "end_audio", "body": {"status": "acknowledged"}})
-        if self.mode == "drop":
-            await self.close()
-            return
-        if self.mode == "stall":
-            return
-        if self.mode == "slow":
-            await asyncio.sleep(5.5)
-        self.respond(
-            {
-                "type": "transcription",
-                "is_final": True,
-                "segments": [{"text": "trailing words", "start_time": 0.0, "end_time": 1.0}],
-            }
-        )
-        self.respond({"type": "end_audio", "body": {"status": "finished"}})
+        if json.loads(data).get("type") == "end_audio":
+            self.respond({"type": "end_audio", "body": {"status": "acknowledged"}})
+            self.respond({"type": "end_audio", "body": {"status": "finished"}})
 
 
 async def _run_stream(
-    sockets: list[_WhisperSocket],
-    mode: _Mode,
-    samples: int = 512,
-    timeout: float = 10.0,
-    max_retry: int = 0,
-    language: NotGivenOr[str] = NOT_GIVEN,
+    sockets: list[_WhisperSocket], language: NotGivenOr[str] = NOT_GIVEN
 ) -> list[stt.SpeechEvent]:
     def ws_connect(*args: Any, **kwargs: Any) -> _WhisperSocket:
-        sockets.append(_WhisperSocket(mode))
+        sockets.append(_WhisperSocket())
         return sockets[-1]
 
     session = SimpleNamespace(closed=False, ws_connect=ws_connect)
     provider = STT(api_key="test-key", model_endpoint="wss://test.invalid/ws", http_session=session)
-    stream = provider.stream(
-        language=language,
-        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=timeout),
-    )
-    stream.push_frame(rtc.AudioFrame.create(16000, 1, samples))
+    stream = provider.stream(language=language, conn_options=APIConnectOptions(max_retry=0))
+    stream.push_frame(rtc.AudioFrame.create(16000, 1, 512))
     stream.end_input()
     try:
         async with asyncio.timeout(15):
@@ -114,56 +85,51 @@ async def _run_stream(
         await stream.aclose()
 
 
-def _final_texts(events: list[stt.SpeechEvent]) -> list[str]:
-    return [
-        ev.alternatives[0].text for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
-    ]
-
-
-async def test_end_input_flushes_buffered_audio() -> None:
-    sockets: list[_WhisperSocket] = []
-    # 1.5 buffers: the trailing 256 samples only go out when the input ends
-    events = await _run_stream(sockets, "reply", samples=768)
-
-    (ws,) = sockets
-    assert sum(len(m) for m in ws.sent if isinstance(m, bytes)) == 768 * 2
-    # after the metadata, end_audio is the only text message
-    assert [json.loads(m) for m in ws.sent if isinstance(m, str)][1:] == [{"type": "end_audio"}]
-    assert _final_texts(events) == ["trailing words"]
-
-
 async def test_stream_language_overrides_the_configured_language() -> None:
     sockets: list[_WhisperSocket] = []
-    await _run_stream(sockets, "reply", language="de")
+    await _run_stream(sockets, language="de")
 
     metadata = json.loads(sockets[0].sent[0])
     assert metadata["whisper_params"]["audio_language"] == "de"
 
 
-async def test_slow_flush_still_delivers_the_final_transcript() -> None:
-    events = await _run_stream([], "slow")
-    assert _final_texts(events) == ["trailing words"]
+@pytest.mark.real_time
+@pytest.mark.no_concurrent
+@pytest.mark.usefixtures("job_process")
+async def test_slow_flush_still_delivers_the_final_transcript(monkeypatch):
+    """An acknowledged Whisper flush can take longer than the former idle poll.
 
-
-async def test_end_input_completes_when_server_ignores_end_audio() -> None:
-    # runtimes without end_audio support never answer; the stream still has to finish
-    events = await _run_stream([], "ignore")
-    assert _final_texts(events) == []
-
-
-async def test_close_before_finished_is_an_error_and_not_retried() -> None:
-    # a retry would reconnect with the input already drained and flush nothing
-    sockets: list[_WhisperSocket] = []
-    with pytest.raises(APIStatusError):
-        await _run_stream(sockets, "drop", max_retry=3)
-    assert len(sockets) == 1
-
-
-async def test_acknowledged_flush_that_never_finishes_times_out() -> None:
-    sockets: list[_WhisperSocket] = []
-    with pytest.raises(APITimeoutError):
-        await _run_stream(sockets, "stall", timeout=1.0, max_retry=3)
-    assert len(sockets) == 1
+    The shared STT contracts cover final audio, ignored end_audio, missing completion,
+    and remote close through the same provider-owned Baseten protocol.
+    """
+    provider = replace(provider_by_name("baseten"), final_response_timeout=7)
+    server = STTServer(provider, segments=make_audio_segments(provider))
+    server.release_results.clear()
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        for segment in make_audio_segments(provider):
+            push_audio(stream, provider, segment)
+        stream.end_input()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        await asyncio.sleep(5.5)
+        assert not collector.done()
+        server.release_results.set()
+        await asyncio.wait_for(collector, 1)
+        assert (
+            " ".join(
+                event.alternatives[0].text
+                for event in events
+                if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            )
+            == "first tail"
+        )
+        assert not errors
+        assert bytes(server.received_audio) == server.expected_audio
 
 
 # Real-time transcription API v2 (model="streaming-v2")

@@ -295,25 +295,18 @@ class SpeechStream(stt.SpeechStream):
             await ws.send_str(json.dumps({"language": self._api_lang}))
             await asyncio.wait_for(self._await_ready(monitor), self._conn_options.timeout)
 
-            send_task = asyncio.create_task(self._send_task(ws))
-            recv_task = asyncio.create_task(self._recv_task(monitor))
-            try:
-                await asyncio.wait({send_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
-                if send_task.done():
-                    send_task.result()
-                    # Input has ended: the last final transcript and "done" must follow within the
-                    # timeout. A live stream waits on the caller for as long as it lasts; this
-                    # bounds only the wait for a server that stops answering after "end".
-                    await asyncio.wait_for(recv_task, self._conn_options.timeout)
-                else:
-                    recv_task.result()
-            finally:
-                await utils.aio.gracefully_cancel(send_task, recv_task)
+            drain_started = asyncio.Event()
+            # After "end" the server sends the last final, then "done", then closes; the
+            # coordinator bounds that wait with conn_options.final_response_timeout.
+            await self._run_connection_tasks(
+                asyncio.create_task(self._send_task(ws, drain_started)),
+                asyncio.create_task(self._recv_task(monitor)),
+                drain_started=drain_started,
+            )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientError as e:
-            # A send on a socket that dropped mid-stream raises before the receiver sees the close;
-            # as a connection error it is retried like any other drop.
+            # Keep only the exception type: a transport error can carry the request URL.
             raise APIConnectionError(type(e).__name__) from None
         finally:
             self._report_usage()
@@ -342,7 +335,9 @@ class SpeechStream(stt.SpeechStream):
                 self._note_language(data.get("lang"))
                 return
 
-    async def _send_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    async def _send_task(
+        self, ws: aiohttp.ClientWebSocketResponse, drain_started: asyncio.Event
+    ) -> None:
         async for data in self._input_ch:
             # A flush needs nothing here: the server ends an utterance on its own pause.
             if isinstance(data, rtc.AudioFrame):
@@ -351,6 +346,7 @@ class SpeechStream(stt.SpeechStream):
                     self._audio_sent += data.samples_per_channel / data.sample_rate
                     await ws.send_bytes(audio)
         self._input_done = True
+        drain_started.set()
         await ws.send_str(json.dumps({"type": "end"}))
 
     async def _recv_task(self, monitor: utils.aio.WebSocketMonitor) -> None:
@@ -366,8 +362,6 @@ class SpeechStream(stt.SpeechStream):
                 if self._done:
                     return
                 raise APIConnectionError("Lokutor STT closed before it finished")
-            if msg.type == aiohttp.WSMsgType.ERROR:
-                raise APIConnectionError("Lokutor STT connection failed")
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:

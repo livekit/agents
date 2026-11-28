@@ -17,11 +17,19 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt, utils, vad
+from livekit.agents import (
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    stt,
+    utils,
+    vad,
+)
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import NotGivenOr
 
@@ -40,6 +48,7 @@ class _Utterance:
     interim: stt.SpeechEvent | None = None
     final: stt.SpeechEvent | None = None
     usage: stt.SpeechEvent | None = None
+    final_deadline: asyncio.TimerHandle | None = None
 
 
 class SpeechStream(stt.RecognizeStream):
@@ -51,14 +60,16 @@ class SpeechStream(stt.RecognizeStream):
         super().__init__(
             stt=owner,
             sample_rate=16000,
-            conn_options=APIConnectOptions(timeout=options.timeout, max_retry=0),
+            # consumed utterance audio cannot be replayed on a new request
+            conn_options=replace(options, max_retry=0),
         )
         self._owner = owner
         self._vad = detector
         self._language = language
 
     async def _run(self) -> None:
-        failure: asyncio.Future[BaseException] = asyncio.get_running_loop().create_future()
+        loop = asyncio.get_running_loop()
+        failure: asyncio.Future[BaseException] = loop.create_future()
         requests: set[asyncio.Task[None]] = set()
         pending: set[_Utterance] = set()
         ordered: asyncio.Queue[_Utterance | None] = asyncio.Queue()
@@ -69,6 +80,16 @@ class SpeechStream(stt.RecognizeStream):
             while (chunk := await utterance.audio.get()) is not None:
                 pending_bytes -= len(chunk)
                 yield chunk
+            # Ending the source ends the utterance; Rime now owes its final transcript.
+            utterance.final_deadline = loop.call_later(
+                self._conn_options.final_response_timeout, final_timed_out, utterance
+            )
+
+        def final_timed_out(utterance: _Utterance) -> None:
+            if not utterance.done.is_set() and not failure.done():
+                failure.set_result(
+                    APITimeoutError("Rime final transcript timed out", retryable=False)
+                )
 
         def publish(utterance: _Utterance, event: stt.SpeechEvent) -> None:
             if utterance.publishing:
@@ -130,6 +151,9 @@ class SpeechStream(stt.RecognizeStream):
                     request_id=exc.request_id,
                     retryable=False,
                 ) from None
+            finally:
+                if utterance.final_deadline is not None:
+                    utterance.final_deadline.cancel()
 
         def finished(task: asyncio.Task[None]) -> None:
             requests.discard(task)
@@ -223,7 +247,8 @@ class SpeechStream(stt.RecognizeStream):
                             "context_terms": tuple(
                                 dict.fromkeys((*owner._context_terms, *owner._session_keyterms))
                             ),
-                            "timeout": self._conn_options.timeout,
+                            # No overall deadline: active speech is unbounded, and each
+                            # final is bounded once its source ends (see audio_source).
                         }
                         contract_type = getattr(owner._sdk, "TranscriptionOutputContract", None)
                         if contract_type is not None:
@@ -264,17 +289,21 @@ class SpeechStream(stt.RecognizeStream):
                 pass
             ordered.put_nowait(None)
 
-        tasks = [asyncio.create_task(read_audio()), asyncio.create_task(emit_results())]
-        main = asyncio.gather(*tasks)
+        async def watch_requests() -> None:
+            # one failed utterance request fails the stream
+            raise await failure
+
+        # Reading input is the sender; ordered publication is the receiver. Rime sends a
+        # final transcript after each source ends, or fails the request, so finals are
+        # required within final_response_timeout once the input has ended.
         try:
-            done, _ = await asyncio.wait((main, failure), return_when=asyncio.FIRST_COMPLETED)
-            if failure in done:
-                raise failure.result()
-            await main
+            await self._run_connection_tasks(
+                asyncio.create_task(read_audio()),
+                asyncio.create_task(emit_results()),
+                background=[asyncio.create_task(watch_requests())],
+            )
         finally:
-            main.cancel()
-            await utils.aio.cancel_and_wait(*tasks, *tuple(requests))
-            await asyncio.gather(main, return_exceptions=True)
+            await utils.aio.cancel_and_wait(*tuple(requests))
             failure.cancel()
 
     async def aclose(self) -> None:

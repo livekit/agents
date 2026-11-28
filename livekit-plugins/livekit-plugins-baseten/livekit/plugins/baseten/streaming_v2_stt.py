@@ -50,6 +50,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     stt as stt_module,
@@ -382,6 +383,37 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             pass
 
     async def _run(self) -> None:
+        while True:
+            try:
+                await self._run_connection()
+                return
+            except APIError as e:
+                # The framework stops retrying once the closed input is drained, because
+                # most streams have nothing left to send. This one keeps all audio no final
+                # has covered (`_pending`, `_chunker`), so it retries that case itself, on
+                # the same budget. While input remains, the framework retries as usual.
+                max_retry = self._conn_options.max_retry
+                if (
+                    not (self._input_ch.closed and self._input_ch.empty())
+                    or not e.retryable
+                    or max_retry == 0
+                ):
+                    raise
+                if self._num_retries >= max_retry:
+                    raise APIConnectionError(
+                        f"failed to recognize speech after {self._num_retries} attempts"
+                    ) from e
+                self._emit_error(e, recoverable=True)
+                retry_interval = self._conn_options._interval_for_retry(self._num_retries)
+                logger.warning(
+                    f"failed to recognize speech: {e}, replaying in {retry_interval}s",
+                    extra={"attempt": self._num_retries, "streamed": True},
+                )
+                await asyncio.sleep(retry_interval)
+                self._num_retries += 1
+                self._input_ch.restart_provider_clock()
+
+    async def _run_connection(self) -> None:
         try:
             ws = await asyncio.wait_for(
                 self._backend._ensure_session().ws_connect(
@@ -403,7 +435,8 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         if self._audio_read and self._session_offset_s is None:
             self._session_offset_s = self.start_time_offset
 
-        input_ended = asyncio.Event()
+        drain_started = asyncio.Event()
+        close_sent = asyncio.Event()
         # This socket's clock starts at the replayed audio, so its times are
         # placed on the stream's timeline from here.
         base = self._pending_start
@@ -433,6 +466,8 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
 
             async def flush() -> None:
                 await append(chunker.flush())
+                if self._input_ch.closed and self._input_ch.empty():
+                    drain_started.set()
                 self._buffer(None)
                 await send_item(None)
 
@@ -441,26 +476,25 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             # otherwise the trailing flush below doubles it and the server
             # answers an extra, empty turn.
             flushed = False
-            try:
-                # After a reconnect, first what the last socket never finalized.
-                for item in list(self._pending):
-                    await send_item(item)
-                    flushed = item is None
-                async for data in self._input_ch:
-                    if isinstance(data, self._FlushSentinel):
-                        await flush()
-                        flushed = True
-                    else:
-                        self._audio_read = True
-                        await append(chunker.write(data.data.tobytes()))
-                        flushed = False
-                if not flushed:
+            # After a reconnect, first what the last socket never finalized.
+            for item in list(self._pending):
+                await send_item(item)
+                flushed = item is None
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
                     await flush()
-                # The server delivers every final it still owes, then closes
-                # with 1000; that close is what ends `_recv`.
-                await ws.send_str(json.dumps({"type": "close"}))
-            finally:
-                input_ended.set()
+                    flushed = True
+                else:
+                    self._audio_read = True
+                    await append(chunker.write(data.data.tobytes()))
+                    flushed = False
+            if not flushed:
+                await flush()
+            drain_started.set()
+            # The server drains the work it still owes, then closes with 1000;
+            # that close is what ends `_recv`.
+            await ws.send_str(json.dumps({"type": "close"}))
+            close_sent.set()
 
         async def _recv() -> None:
             monitor = utils.aio.WebSocketMonitor(
@@ -474,15 +508,13 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     # The server closes with 1000 only in answer to `close`, after
-                    # delivering every final it owed. Any other close, even once the
-                    # input has ended, may have taken a final with it.
-                    if input_ended.is_set() and ws.close_code == aiohttp.WSCloseCode.OK:
+                    # draining the work it owed. Any other close, even once the
+                    # input has ended, may have taken a final with it. The monitor
+                    # raises for transport errors and failure close codes.
+                    code = msg.data if isinstance(msg.data, int) else ws.close_code
+                    if close_sent.is_set() and code == aiohttp.WSCloseCode.OK:
                         return
-                    raise APIConnectionError(
-                        f"Baseten closed the STT websocket (code {ws.close_code})"
-                    )
-                if msg.type is aiohttp.WSMsgType.ERROR:
-                    raise APIConnectionError(f"websocket error: {ws.exception()}")
+                    raise APIConnectionError(f"Baseten closed the STT websocket (code {code})")
                 if msg.type is not aiohttp.WSMsgType.TEXT:
                     continue
 
@@ -610,12 +642,13 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
 
         try:
             await ws.send_str(json.dumps(self._opts.session_update()))
-            send_task = asyncio.create_task(_send(), name="streaming-v2-stt-send")
-            recv_task = asyncio.create_task(_recv(), name="streaming-v2-stt-recv")
-            try:
-                await asyncio.gather(send_task, recv_task)
-            finally:
-                await utils.aio.gracefully_cancel(send_task, recv_task)
+            # Every flush is answered and `close` drains the rest before its 1000
+            # close, so that close is required.
+            await self._run_connection_tasks(
+                asyncio.create_task(_send(), name="streaming-v2-stt-send"),
+                asyncio.create_task(_recv(), name="streaming-v2-stt-recv"),
+                drain_started=drain_started,
+            )
         except (APIConnectionError, APIStatusError, APITimeoutError):
             raise
         except Exception as e:

@@ -7,13 +7,19 @@ import queue
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import create_autospec
 
 import grpc
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, LanguageCode
+from livekit.agents import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    LanguageCode,
+)
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions
 from livekit.plugins.nvidia import stt as nvidia_stt, tts as nvidia_tts
 from livekit.plugins.nvidia.utils import to_api_error
@@ -42,12 +48,22 @@ def _response(text="hello", *, final=True, words=(), confidence=0.9):
 
 
 def _mock_stt(monkeypatch, responses):
-    service = nvidia_stt.STT(api_key="test-key")
+    channels = []
+
+    def create_auth(**kwargs):
+        channel = SimpleNamespace(closed=False)
+        channel.close = lambda: setattr(channel, "closed", True)
+        channels.append(channel)
+        return SimpleNamespace(channel=channel)
+
+    monkeypatch.setattr(nvidia_stt.auth, "create_riva_auth", create_auth)
     monkeypatch.setattr(
-        service,
-        "_ensure_asr_service",
-        lambda: SimpleNamespace(streaming_response_generator=responses),
+        nvidia_stt.riva.client,
+        "ASRService",
+        lambda auth: SimpleNamespace(streaming_response_generator=responses),
     )
+    service = nvidia_stt.STT(api_key="test-key")
+    service.test_channels = channels
     return service
 
 
@@ -152,11 +168,23 @@ def test_offline_results_combine_hypotheses_and_zero_confidence():
     assert event.alternatives[0].confidence == pytest.approx(0.45)
 
 
+def _record_attempts(monkeypatch):
+    attempts = []
+    original_start = nvidia_stt.SpeechStream._start_recognition_attempt
+
+    def start(self, config, loop, **kwargs):
+        attempt = original_start(self, config, loop, **kwargs)
+        attempts.append(attempt)
+        return attempt
+
+    monkeypatch.setattr(nvidia_stt.SpeechStream, "_start_recognition_attempt", start)
+    return attempts
+
+
 @pytest.mark.parametrize("retry", [False, True], ids=["flush", "retry"])
 @pytest.mark.parametrize("final", [False, True], ids=["interim", "final"])
 async def test_stt_rpc_timestamps_and_replay(monkeypatch, retry, final):
     calls = []
-    offsets = []
 
     def responses(audio, config):
         calls.append(list(audio))
@@ -167,16 +195,9 @@ async def test_stt_rpc_timestamps_and_replay(monkeypatch, retry, final):
             final=final,
         )
 
+    attempts = _record_attempts(monkeypatch)
     service = _mock_stt(monkeypatch, responses)
     stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-    original_start = stream._start_recognition_attempt
-
-    def start(config, loop, **kwargs):
-        attempt = original_start(config, loop, **kwargs)
-        offsets.append(attempt.start_time_offset)
-        return attempt
-
-    monkeypatch.setattr(stream, "_start_recognition_attempt", start)
     try:
         stream.start_time_offset = 7.25
         stream.push_frame(_audio_frame(1))
@@ -192,6 +213,7 @@ async def test_stt_rpc_timestamps_and_replay(monkeypatch, retry, final):
             [_audio_frame(1).data.tobytes()],
             [_audio_frame(1 if retry else 2).data.tobytes()],
         ]
+        offsets = [attempt.start_time_offset for attempt in attempts]
         if retry:
             assert offsets[0] == offsets[1]
         else:
@@ -201,6 +223,7 @@ async def test_stt_rpc_timestamps_and_replay(monkeypatch, retry, final):
             assert speech.words[0].end_time == pytest.approx(offset + 0.5)
     finally:
         await stream.aclose()
+    assert all(channel.closed for channel in service.test_channels)
 
 
 @pytest.mark.parametrize("termination", ["error", "clean"])
@@ -239,8 +262,38 @@ async def test_stt_reconnects_without_flush(monkeypatch, termination):
         await stream.aclose()
 
 
+async def test_stt_clean_end_after_final_continues_on_a_new_rpc(monkeypatch):
+    calls = []
+    first_done = threading.Event()
+
+    def responses(audio, config):
+        chunks = [next(audio)]
+        calls.append(chunks)
+        yield _response(text=f"part {len(calls)}")
+        if len(calls) == 1:
+            first_done.set()
+            return
+        chunks.extend(audio)
+
+    attempts = _record_attempts(monkeypatch)
+    stream = _mock_stt(monkeypatch, responses).stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        stream.push_frame(_audio_frame(1))
+        assert await asyncio.to_thread(first_done.wait, 1)
+        await asyncio.sleep(0.05)
+        stream.push_frame(_audio_frame(2))
+        stream.end_input()
+        await asyncio.wait_for(stream._task, 2)
+        texts = [e.alternatives[0].text async for e in stream if e.alternatives]
+        assert texts == ["part 1", "part 2"]
+        assert calls == [[_audio_frame(1).data.tobytes()], [_audio_frame(2).data.tobytes()]]
+        assert attempts[1].start_time_offset == pytest.approx(attempts[0].start_time_offset + 0.01)
+    finally:
+        await stream.aclose()
+
+
 @pytest.mark.parametrize("termination", ["error", "clean", "flush-error"])
-async def test_stt_retry_budget_and_backoff(monkeypatch, termination):
+async def test_stt_retry_budget(monkeypatch, termination):
     calls = []
 
     def responses(audio, config):
@@ -249,20 +302,18 @@ async def test_stt_retry_budget_and_backoff(monkeypatch, termination):
             raise APIConnectionError("dropped")
         return iter(())
 
-    sleep = AsyncMock()
-    monkeypatch.setattr(nvidia_stt.asyncio, "sleep", sleep)
     stream = _mock_stt(monkeypatch, responses).stream(
-        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.25)
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
     )
     try:
         stream.push_frame(_audio_frame())
         if termination == "flush-error":
             stream.end_input()
-        with pytest.raises(APIConnectionError, match="after 3 attempts") as exc:
+        with pytest.raises(APIError):
             await asyncio.wait_for(stream._task, 2)
-        assert not exc.value.retryable
         assert len(calls) == 3
-        assert [c.args[0] for c in sleep.await_args_list] == [0.1, 0.25]
+        # every attempt replays the audio that was not transcribed
+        assert all(call == [_audio_frame().data.tobytes()] for call in calls)
     finally:
         await stream.aclose()
 
@@ -270,15 +321,8 @@ async def test_stt_retry_budget_and_backoff(monkeypatch, termination):
 @pytest.mark.parametrize("termination", ["error", "clean", "flush-error"])
 async def test_stt_replays_recent_audio_after_buffer_overflow(monkeypatch, termination):
     calls = []
-    offsets = []
     received = threading.Event()
     release = threading.Event()
-    original_start = nvidia_stt.SpeechStream._start_recognition_attempt
-
-    def start(self, config, loop, **kwargs):
-        attempt = original_start(self, config, loop, **kwargs)
-        offsets.append(attempt.start_time_offset)
-        return attempt
 
     def responses(audio, config):
         chunks = []
@@ -298,7 +342,7 @@ async def test_stt_replays_recent_audio_after_buffer_overflow(monkeypatch, termi
         chunks.extend(audio)
 
     monkeypatch.setattr(nvidia_stt, "_MAX_REPLAY_AUDIO_SECONDS", 0.02)
-    monkeypatch.setattr(nvidia_stt.SpeechStream, "_start_recognition_attempt", start)
+    attempts = _record_attempts(monkeypatch)
     stream = _mock_stt(monkeypatch, responses).stream(
         conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
     )
@@ -316,11 +360,90 @@ async def test_stt_replays_recent_audio_after_buffer_overflow(monkeypatch, termi
         await asyncio.wait_for(stream._task, 2)
         transcripts = [e async for e in stream if e.alternatives]
         assert calls[1] == [_audio_frame(2).data.tobytes(), _audio_frame(3).data.tobytes()]
+        offsets = [attempt.start_time_offset for attempt in attempts]
         assert offsets[1] == pytest.approx(offsets[0] + 0.01)
         assert transcripts[0].alternatives[0].start_time == pytest.approx(offsets[1])
     finally:
         release.set()
         await stream.aclose()
+
+
+async def test_stt_cancellation_stops_worker(monkeypatch):
+    started, finished = threading.Event(), threading.Event()
+
+    def responses(audio, config):
+        started.set()
+        list(audio)
+        finished.set()
+        return iter(())
+
+    service = _mock_stt(monkeypatch, responses)
+    stream = service.stream()
+    stream.push_frame(_audio_frame())
+    assert await asyncio.to_thread(started.wait, 1)
+    await asyncio.wait_for(stream.aclose(), 2)
+    assert await asyncio.to_thread(finished.wait, 1)
+    assert all(channel.closed for channel in service.test_channels)
+
+
+async def test_provider_result_resets_retries_without_transcript(monkeypatch):
+    stream = _mock_stt(monkeypatch, lambda audio, config: iter(())).stream()
+    try:
+        stream._num_retries = 2
+        attempt = SimpleNamespace(abandoned=False, start_time_offset=0.0)
+        stream._handle_response(
+            SimpleNamespace(
+                results=[SimpleNamespace(alternatives=[SimpleNamespace(transcript="")])]
+            ),
+            attempt,
+        )
+        assert stream._num_retries == 0
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.parametrize("is_final", [False, True])
+@pytest.mark.parametrize("offset", [0.0, 7.25])
+async def test_word_timestamps_use_seconds(monkeypatch, is_final, offset):
+    def responses(audio, config):
+        list(audio)
+        yield SimpleNamespace(
+            results=[
+                SimpleNamespace(
+                    is_final=is_final,
+                    alternatives=[
+                        SimpleNamespace(
+                            transcript="hello world",
+                            words=[
+                                SimpleNamespace(word="hello", start_time=42120, end_time=42560),
+                                SimpleNamespace(word="world", start_time=44240, end_time=44480),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        )
+
+    provider = _mock_stt(monkeypatch, responses)
+    async with provider, provider.stream() as stream:
+        stream.start_time_offset = offset
+        stream.end_input()
+        await asyncio.wait_for(stream._task, 1)
+        event_type = (
+            nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT
+            if is_final
+            else nvidia_stt.stt.SpeechEventType.INTERIM_TRANSCRIPT
+        )
+        transcripts = [event async for event in stream if event.type == event_type]
+
+    assert len(transcripts) == 1
+    speech = transcripts[0].alternatives[0]
+    assert [word.start_time for word in speech.words] == pytest.approx(
+        [42.12 + offset, 44.24 + offset]
+    )
+    assert [word.end_time for word in speech.words] == pytest.approx(
+        [42.56 + offset, 44.48 + offset]
+    )
 
 
 async def test_stt_replay_buffer_rolls_and_resets_after_final():
@@ -337,22 +460,6 @@ async def test_stt_replay_buffer_rolls_and_resets_after_final():
     assert attempt.replay_snapshot() == ([], 6, True)
     attempt.buffer_for_replay(b"abcdefgh", max_bytes=6)
     assert attempt.replay_snapshot() == ([b"cdefgh"], 7, False)
-
-
-async def test_stt_cancellation_stops_worker(monkeypatch):
-    started, finished = threading.Event(), threading.Event()
-
-    def responses(audio, config):
-        started.set()
-        list(audio)
-        finished.set()
-        return iter(())
-
-    stream = _mock_stt(monkeypatch, responses).stream()
-    stream.push_frame(_audio_frame())
-    assert await asyncio.to_thread(started.wait, 1)
-    await asyncio.wait_for(stream.aclose(), 2)
-    assert await asyncio.to_thread(finished.wait, 1)
 
 
 @pytest.mark.parametrize("api_key", [NOT_GIVEN, None, "", "explicit"])

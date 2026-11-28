@@ -114,10 +114,11 @@ def offline_stream() -> SpeechStream:
     stream._opts = STTOptions(language="en")
     stream._request_id = "req-test"
     stream._speaking = False
+    stream._final_response_required = asyncio.Event()
     stream._candidate = None
-    stream._turn_settled = asyncio.Event()
     stream._turn_ended = asyncio.Event()
     stream._input_ch = SimpleNamespace(start_time_offset=0.0)  # type: ignore[assignment]
+    stream._on_provider_progress = None
     stream._speech_duration = 0.0
     stream._event_ch = FakeChan()  # type: ignore[assignment]
     return stream
@@ -966,11 +967,13 @@ async def test_end_input_waits_for_the_final_transcript(
     assert _finals(await _drain(stream)) == ["hello world"]
 
 
-async def test_an_unanswered_flush_closes_cleanly(
+async def test_an_unanswered_flush_has_a_bounded_quiet_drain(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
     server = await reson8_server(answer_flush=[])
-    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+    stream = _stt(server.base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.2, final_response_timeout=0.2)
+    )
 
     stream.push_frame(_frame())
     stream.end_input()
@@ -1502,3 +1505,46 @@ async def test_batch_describes_the_buffer_it_actually_posts(
 
     with pytest.raises(ValueError, match="between 1 and 10"):
         await instance.recognize(_frame(num_channels=11), conn_options=NO_RETRY)
+
+
+@pytest.mark.usefixtures("job_process")
+@pytest.mark.parametrize("active_turn", [False, True])
+async def test_peer_close_during_idle_flush_requires_only_known_turns(monkeypatch, active_turn):
+    from dataclasses import replace
+
+    from .stt_harness.discovery import provider_by_name
+    from .stt_harness.drivers import make_audio_segments, open_stream, push_audio
+    from .stt_harness.server import STTServer
+
+    provider = replace(provider_by_name("reson8"), final_response_timeout=2)
+    first = make_audio_segments(provider)[0]
+    server = STTServer(provider, segments=(first,))
+    server.processing_stalled = True
+    async with open_stream(provider, monkeypatch, server=server) as (
+        stream,
+        collector,
+        _,
+        events,
+        errors,
+    ):
+        push_audio(stream, provider, first)
+        stream.end_input()
+        await asyncio.wait_for(server.final_requested.wait(), 1)
+        peer = server.connections[0]
+        if active_turn:
+            peer.send({"type": "turn_start"})
+
+            async def wait_for_start():
+                while not events:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_start(), 1)
+        await peer.ws.close()
+        if active_turn:
+            with pytest.raises(APIConnectionError, match="turn still open") as error:
+                await asyncio.wait_for(collector, 1)
+            assert not error.value.retryable
+            assert errors
+        else:
+            await asyncio.wait_for(collector, 1)
+            assert not errors

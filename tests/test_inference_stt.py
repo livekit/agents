@@ -1022,6 +1022,29 @@ async def test_socket_close_after_input_end_is_accepted(close_code: int) -> None
     assert not errors
 
 
+async def test_failure_close_before_the_finalize_answer_is_an_error() -> None:
+    """A failure close code after input end but before any final loses the transcript."""
+
+    async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
+        if event["type"] == "session.finalize":
+            ws.hang_up(1011)
+
+    gateway = _Gateway(handler)
+    stt = _gateway_stt(gateway)
+    errors: list[Exception] = []
+    stt.on("error", lambda event: errors.append(event.error))
+    stream = stt.stream(conn_options=_no_retry())
+    try:
+        stream.end_input()
+        with pytest.raises(APIError):
+            await _finals(stream)
+    finally:
+        await stream.aclose()
+
+    assert len(gateway.sockets) == 1
+    assert len(errors) == 1
+
+
 async def test_session_closed_after_input_end_finishes_without_another_close() -> None:
     async def handler(ws: _GatewaySocket, event: dict[str, Any]) -> None:
         if event["type"] == "session.finalize":
@@ -1132,16 +1155,18 @@ async def test_provider_failure_events_do_not_reset_retries(message: str) -> Non
 @pytest.mark.parametrize(
     ("events", "expected_duration"),
     [
-        ([], 30.0),
-        ([(5.0, "interim_transcript")], 35.0),
-        ([(5.0, "preflight_transcript")], 35.0),
-        ([(5.0, "session.finalized")], 30.0),
+        # without a final, the drain lasts final_response_timeout
+        ([], None),
+        ([(5.0, "interim_transcript")], None),
+        ([(5.0, "preflight_transcript")], None),
+        ([(5.0, "session.finalized")], None),
         ([(5.0, "final_transcript")], 8.0),
         # an acknowledgment may precede a trailing final
         ([(0.0, "session.finalized"), (0.025, "final_transcript")], 3.025),
         ([(5.0, "final_transcript"), (2.0, "interim_transcript")], 10.0),
         ([(5.0, "final_transcript"), (2.0, "preflight_transcript")], 10.0),
         ([(5.0, "final_transcript"), (2.0, "final_transcript")], 10.0),
+        ([(35.0, "final_transcript")], 38.0),
     ],
     ids=[
         "silent",
@@ -1153,13 +1178,20 @@ async def test_provider_failure_events_do_not_reset_retries(message: str) -> Non
         "final-interim",
         "final-preflight",
         "final-final",
+        "late-final",
     ],
 )
+@pytest.mark.parametrize("final_response_timeout", [10.0, 45.0])
 async def test_input_end_waits_for_transcript_inactivity(
-    events: list[tuple[float, str]], expected_duration: float
+    events: list[tuple[float, str]],
+    expected_duration: float | None,
+    final_response_timeout: float,
 ) -> None:
     gateway = _Gateway()
-    stream = _gateway_stt(gateway).stream(conn_options=_no_retry())
+    # the connect timeout does not bound the drain; final_response_timeout does
+    stream = _gateway_stt(gateway).stream(
+        conn_options=_no_retry(timeout=0.01, final_response_timeout=final_response_timeout)
+    )
 
     async def send_events() -> None:
         await gateway.seen["session.finalize"].wait()
@@ -1179,8 +1211,18 @@ async def test_input_end_waits_for_transcript_inactivity(
             await sender
         await stream.aclose()
 
-    assert elapsed == pytest.approx(expected_duration, abs=0.01)
-    assert len(finals) == sum(msg_type == "final_transcript" for _, msg_type in events)
+    assert elapsed == pytest.approx(
+        final_response_timeout
+        if expected_duration is None
+        else min(expected_duration, final_response_timeout),
+        abs=0.01,
+    )
+    arrival = 0.0
+    expected_finals = 0
+    for delay, msg_type in events:
+        arrival += delay
+        expected_finals += msg_type == "final_transcript" and arrival < final_response_timeout
+    assert len(finals) == expected_finals
     assert gateway.types() == ["session.create", "session.finalize", "session.close"]
     assert gateway.sockets[0].closed
 
@@ -1270,6 +1312,28 @@ async def test_half_open_socket_raises_retryable_error() -> None:
 
     assert exc_info.value.retryable is True
     assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)
+
+
+@pytest.mark.parametrize("phase", ["active", "input_ended", "session_closed"])
+async def test_websocket_error_is_not_hidden_by_shared_session_close(phase: str) -> None:
+    cause = aiohttp.ClientConnectionError("connection reset")
+    gateway = _Gateway()
+    stream = _gateway_stt(gateway).stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        await _live(stream)
+        ws = gateway.sockets[0]
+        ws.exception = lambda: cause  # type: ignore[method-assign]
+        if phase == "input_ended":
+            stream.end_input()
+            await gateway.seen["session.finalize"].wait()
+        elif phase == "session_closed":
+            gateway.closed = True
+        ws._inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, cause, None))
+        with pytest.raises(APIConnectionError) as exc_info:
+            await _finals(stream)
+        assert exc_info.value.__cause__ is cause
+    finally:
+        await stream.aclose()
 
 
 async def test_end_of_speech_finalizes_the_turn_while_input_is_open() -> None:

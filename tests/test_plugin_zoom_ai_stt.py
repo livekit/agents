@@ -19,7 +19,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError, APITimeoutError
 from livekit.agents.stt import SpeechEvent, SpeechEventType
 from livekit.plugins import zoom_ai
 from livekit.plugins.zoom_ai import stt as zoom_stt
@@ -918,6 +918,39 @@ async def test_live_reconnects_when_the_session_ends(
 
     assert len(fake.sessions) == 2
     assert fake.sessions[1].controls == [{"type": "session.close"}]
+
+
+async def test_live_missing_session_closed_fails_within_the_final_response_budget(
+    http,
+) -> None:
+    """Scribe ends a session.close with session.closed; without it the drain times out."""
+
+    async def ignore_close(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse(protocols=("live-asr",))
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT and json.loads(msg.data)["type"] == (
+                "session.update"
+            ):
+                await ws.send_json({"type": "session.updated"})
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/live", ignore_close)
+    server = TestServer(app)
+    await server.start_server()
+    try:
+        url = str(server.make_url("/live")).replace("http://", "ws://")
+        stt = make_stt(http, (url, "http://localhost/transcribe"))
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=0, timeout=5, final_response_timeout=0.2)
+        )
+        started = time.monotonic()
+        with pytest.raises(APITimeoutError):
+            await run_stream(stream, frames(0.1))
+        assert time.monotonic() - started < 2
+    finally:
+        await server.close()
 
 
 async def test_live_rejected_settings_are_not_retried(

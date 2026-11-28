@@ -266,7 +266,12 @@ async def _stream_against(ws_stt, *, timeout: float = 5.0, **stt_kwargs) -> list
     try:
         async with aiohttp.ClientSession() as session:
             s = STT(api_key="sk-test", base_url=base, http_session=session, **stt_kwargs)
-            stream = s.stream(conn_options=APIConnectOptions(max_retry=0, timeout=timeout))
+            # final_response_timeout bounds the wait for "done" after "end".
+            stream = s.stream(
+                conn_options=APIConnectOptions(
+                    max_retry=0, timeout=timeout, final_response_timeout=timeout
+                )
+            )
             stream.push_frame(_frame())
             stream.end_input()
             try:
@@ -716,6 +721,7 @@ async def test_a_retry_ends_the_utterance_the_dropped_connection_left_open():
     from livekit.plugins.lokutor import STT
 
     connections = {"n": 0}
+    reconnected = asyncio.Event()
 
     async def ws_stt(request: web.Request) -> web.WebSocketResponse:
         connections["n"] += 1
@@ -723,6 +729,8 @@ async def test_a_retry_ends_the_utterance_the_dropped_connection_left_open():
         await ws.prepare(request)
         await ws.receive()
         await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        if connections["n"] == 2:
+            reconnected.set()
         if connections["n"] == 1:
             await ws.send_str(json.dumps({"type": "transcript", "data": "hola", "isFinal": False}))
             await ws.close()
@@ -746,11 +754,16 @@ async def test_a_retry_ends_the_utterance_the_dropped_connection_left_open():
                 conn_options=APIConnectOptions(max_retry=1, retry_interval=0.01, timeout=5.0)
             )
             stream.push_frame(_frame())
-            stream.end_input()
+            collect = asyncio.create_task(_collect(stream))
             try:
-                events = [ev async for ev in stream]
+                # No retry follows a drop once the ended input is drained, so input stays
+                # open until the retry connects.
+                await asyncio.wait_for(reconnected.wait(), 5)
+                stream.end_input()
+                events = await collect
             finally:
                 await stream.aclose()
+                await asyncio.gather(collect, return_exceptions=True)
     finally:
         await runner.cleanup()
 
@@ -768,7 +781,15 @@ async def test_a_retry_ends_the_utterance_the_dropped_connection_left_open():
     assert ids[0] != ids[1]
 
 
-async def _stream_with_retry(ws_stt, frames: int = 10) -> list[stt.SpeechEvent]:
+async def _collect(stream: stt.SpeechStream) -> list[stt.SpeechEvent]:
+    return [ev async for ev in stream]
+
+
+async def _stream_with_retry(
+    ws_stt, frames: int = 10, reconnected: asyncio.Event | None = None
+) -> list[stt.SpeechEvent]:
+    """Stream ``frames``; with ``reconnected``, keep input open until the retry connects and
+    stream ``frames`` more on it (no retry follows a drop once the ended input is drained)."""
     from livekit.plugins.lokutor import STT
 
     app = web.Application()
@@ -782,11 +803,17 @@ async def _stream_with_retry(ws_stt, frames: int = 10) -> list[stt.SpeechEvent]:
             )
             for _ in range(frames):
                 stream.push_frame(_frame())
-            stream.end_input()
+            collect = asyncio.create_task(_collect(stream))
             try:
-                return [ev async for ev in stream]
+                if reconnected is not None:
+                    await asyncio.wait_for(reconnected.wait(), 5)
+                    for _ in range(frames):
+                        stream.push_frame(_frame())
+                stream.end_input()
+                return await collect
             finally:
                 await stream.aclose()
+                await asyncio.gather(collect, return_exceptions=True)
     finally:
         await runner.cleanup()
 
@@ -796,6 +823,7 @@ async def test_transcript_times_after_a_retry_count_from_the_new_connection():
     # connection carried must not be counted again in the next transcript's times.
     connections = {"n": 0}
     second_audio = {"bytes": 0}
+    reconnected = asyncio.Event()
 
     async def ws_stt(request: web.Request) -> web.WebSocketResponse:
         connections["n"] += 1
@@ -803,6 +831,8 @@ async def test_transcript_times_after_a_retry_count_from_the_new_connection():
         await ws.prepare(request)
         await ws.receive()
         await ws.send_str(json.dumps({"type": "status", "data": "ready"}))
+        if connections["n"] == 2:
+            reconnected.set()
         if connections["n"] == 1:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
@@ -820,7 +850,8 @@ async def test_transcript_times_after_a_retry_count_from_the_new_connection():
                 await ws.close()
         return ws
 
-    events = await _stream_with_retry(ws_stt)
+    events = await _stream_with_retry(ws_stt, reconnected=reconnected)
+    assert second_audio["bytes"] > 0
     final = next(e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT)
     alt = final.alternatives[0]
     assert alt.end_time - alt.start_time == pytest.approx(second_audio["bytes"] / 32000, abs=0.01)

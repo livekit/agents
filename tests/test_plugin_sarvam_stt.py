@@ -19,9 +19,9 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    APITimeoutError,
     stt,
 )
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.plugins import sarvam
 from livekit.plugins.sarvam import _utils, stt as sarvam_stt
 
@@ -146,31 +146,38 @@ async def test_non_json_text_raises() -> None:
 
 
 @pytest.mark.parametrize(
-    ("messages", "close_code", "body"),
+    ("messages", "close_code", "expected_code", "reason"),
     [
         # a 1000 close with an error reason is still a failure
         (
             [SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None, extra="invalid model")],
             1000,
-            {"msg_type": "CLOSED", "close_code": 1000, "close_reason": "invalid model"},
+            1000,
+            "invalid model",
         ),
         (
             [SimpleNamespace(type=aiohttp.WSMsgType.CLOSE, data=4000, extra="invalid model")],
             None,
-            {"msg_type": "CLOSE", "close_code": 4000, "close_reason": "invalid model"},
+            4000,
+            "invalid model",
         ),
         # the socket iterator ending on a non-graceful close code
-        ([], 4000, {"msg_type": "CLOSED", "close_code": 4000, "close_reason": None}),
+        ([], 4000, 4000, None),
     ],
     ids=["error-reason", "non-graceful", "after-loop"],
 )
 async def test_unexpected_close_raises(
-    messages: list[SimpleNamespace], close_code: int | None, body: dict[str, Any]
+    messages: list[SimpleNamespace],
+    close_code: int | None,
+    expected_code: int,
+    reason: str | None,
 ) -> None:
-    with pytest.raises(APIStatusError) as excinfo:
+    with pytest.raises(WebSocketCloseError) as excinfo:
         await _bare_stream()._process_messages(_FakeWS(messages, close_code=close_code))
 
-    assert excinfo.value.body == body
+    assert excinfo.value.close_code == expected_code
+    assert excinfo.value.body == reason
+    assert "closed unexpectedly" in excinfo.value.message
 
 
 async def test_recognize_forces_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -519,18 +526,22 @@ async def test_end_input_settles_on_an_empty_transcript(session: _Session) -> No
 
 
 @pytest.mark.virtual_time
-async def test_end_input_times_out_when_the_utterance_never_finishes(session: _Session) -> None:
+async def test_end_input_stops_waiting_when_the_utterance_never_finishes(session: _Session) -> None:
+    """The drain is best effort: final_response_timeout ends it cleanly and closes the turn."""
     async with sarvam.STT(api_key="test-key", input_audio_codec="pcm_s16le") as model:
-        stream = model.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
+        stream = model.stream(
+            conn_options=APIConnectOptions(max_retry=0, final_response_timeout=0.2)
+        )
         frame = _frame(50, 1, 16000)
         stream.push_frame(frame)
         await _expect_audio(session.ws, frame)
         await stream._handle_events({"data": {"signal_type": "START_SPEECH"}})
         stream.end_input()
 
-        with pytest.raises(APITimeoutError, match="final transcript"):
-            async for _ in stream:
-                pass
+        events = [event.type async for event in stream]
+
+        assert events == [stt.SpeechEventType.START_OF_SPEECH, stt.SpeechEventType.END_OF_SPEECH]
+        assert session.ws.closed
 
 
 @pytest.mark.virtual_time

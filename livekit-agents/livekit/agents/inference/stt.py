@@ -34,6 +34,7 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
+from ..utils.aio.websocket import WebSocketCloseError
 from ._utils import (
     HEADER_SESSION_ID,
     create_access_token,
@@ -45,10 +46,11 @@ from ._utils import (
 if TYPE_CHECKING:
     from ..voice.events import ConversationItemAddedEvent
 
-FINALIZATION_TIMEOUT = 30.0
 FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT = 3.0
 HANDOFF_TIMEOUT = 10.0
 _STT_CLOSE_TIMEOUT = 0.1
+# how long a failed finalize write waits for the gateway's own close
+_STOP_WRITE_GRACE = 0.1
 _T = TypeVar("_T")
 
 DeepgramModels = Literal[
@@ -1413,8 +1415,13 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Keep input and connection ownership in the sender; readers only report events."""
         input_ended = asyncio.Event()
-        transcript_timeout = utils.aio.sleep(FINALIZATION_TIMEOUT)
+        # finals after the last write are bounded by the stream's final_response_timeout
+        transcript_timeout = utils.aio.sleep(self._conn_options.final_response_timeout)
         session_closed: set[int] = set()
+        # a final after session.finalize means the gateway answered the end of input
+        finalize_answered = False
+        stop_write_error: BaseException | None = None
+        peer_closed = asyncio.Event()
         http_session = self._stt._ensure_session()
         vad_stream = self._vad.stream() if self._vad is not None else None
         assemblyai_external = (
@@ -1503,24 +1510,51 @@ class SpeechStream(stt.SpeechStream):
                 input_ended.set()
                 await send({"type": "session.finalize"})
             except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as exc:
-                if input_ended.is_set() or http_session.closed:
+                if http_session.closed:
                     return
+                if input_ended.is_set():
+                    # the gateway may answer the finalize and close while the write still
+                    # drains: if its close follows promptly the reader decides; a silent
+                    # peer means the finalize was lost
+                    nonlocal stop_write_error
+                    stop_write_error = exc
+                    try:
+                        await asyncio.wait_for(peer_closed.wait(), _STOP_WRITE_GRACE)
+                        return
+                    except asyncio.TimeoutError:
+                        pass
                 raise APIConnectionError(
                     "LiveKit Inference STT connection closed unexpectedly"
                 ) from exc
 
         async def recv_task(connection: _STTConnection) -> None:
+            nonlocal finalize_answered
             ws = connection.ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                msg = await monitor.receive()
+                try:
+                    msg = await monitor.receive()
+                except WebSocketCloseError:
+                    peer_closed.set()
+                    # once the gateway has answered session.finalize it may hang up with any
+                    # code; a failure close before that answer still loses transcripts
+                    if input_ended.is_set() and finalize_answered:
+                        return
+                    raise
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    peer_closed.set()
+                    if input_ended.is_set() and stop_write_error is not None:
+                        if not finalize_answered:
+                            raise APIConnectionError(
+                                "LiveKit Inference STT finalize write failed"
+                            ) from stop_write_error
+                        return
                     if input_ended.is_set() or http_session.closed:
                         return
                     raise APIStatusError(
@@ -1528,12 +1562,6 @@ class SpeechStream(stt.SpeechStream):
                         status_code=ws.close_code or -1,
                         retryable=True,
                     )
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if input_ended.is_set() or http_session.closed:
-                        return
-                    raise APIConnectionError(
-                        "LiveKit Inference STT connection lost"
-                    ) from ws.exception()
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected LiveKit Inference STT message type %s", msg.type)
                     continue
@@ -1589,6 +1617,8 @@ class SpeechStream(stt.SpeechStream):
                 elif kind == "preflight_transcript":
                     self._process_preflight_transcript(data)
                 elif kind == "final_transcript":
+                    if input_ended.is_set():
+                        finalize_answered = True
                     self._process_transcript(data, is_final=True)
                 elif kind == "session.closed":
                     session_closed.add(id(ws))
@@ -1620,7 +1650,26 @@ class SpeechStream(stt.SpeechStream):
         def start_reader(connection: _STTConnection) -> None:
             connection.reader = asyncio.create_task(recv_task(connection))
 
-        tasks: list[asyncio.Task[None]] = []
+        async def receive_until_complete() -> None:
+            # A handoff swaps self._connection and starts a new reader; a replaced reader's
+            # outcome belongs to the connection it read, so only the current one counts.
+            inactivity = asyncio.create_task(wait_for_inactivity())
+            try:
+                while True:
+                    connection = self._connection
+                    assert connection is not None and connection.reader is not None
+                    done, _ = await asyncio.wait(
+                        (connection.reader, inactivity), return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if inactivity in done:
+                        return
+                    if connection is not self._connection:
+                        continue
+                    connection.reader.result()
+                    return
+            finally:
+                await utils.aio.gracefully_cancel(inactivity)
+
         try:
             options = replace(
                 self._initial_options, extra_kwargs=dict(self._initial_options.extra_kwargs)
@@ -1632,30 +1681,20 @@ class SpeechStream(stt.SpeechStream):
             self._connection = connection = _STTConnection(ws, options)
             self._ws = ws
             start_reader(connection)
-            sender = asyncio.create_task(send_task(connection))
-            inactivity = asyncio.create_task(wait_for_inactivity())
-            tasks = [sender, inactivity]
+            background = []
             if vad_stream is not None:
-                tasks.append(asyncio.create_task(self._vad_finalize_task(vad_stream)))
-            pending = set(tasks)
-            while True:
-                connection = self._connection
-                assert connection is not None and connection.reader is not None
-                done, _ = await asyncio.wait(
-                    [*pending, connection.reader], return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in done:
-                    if task is connection.reader and connection is not self._connection:
-                        continue
-                    task.result()
-                if inactivity in done or (
-                    connection.reader in done and connection is self._connection
-                ):
-                    break
-                pending.difference_update(done)
+                background.append(asyncio.create_task(self._vad_finalize_task(vad_stream)))
+            # the gateway gives no completion guarantee after session.finalize, so the drain
+            # is best effort: it ends on transcript inactivity or final_response_timeout
+            await self._run_connection_tasks(
+                asyncio.create_task(send_task(connection)),
+                asyncio.create_task(receive_until_complete()),
+                background=background,
+                drain_started=input_ended,
+                require_completion=False,
+            )
         finally:
             transcript_timeout.cancel()
-            await utils.aio.gracefully_cancel(*tasks)
             closing_connection = self._connection
             self._connection = None
             self._ws = None

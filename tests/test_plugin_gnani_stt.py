@@ -842,14 +842,14 @@ async def test_end_input_returns_once_the_final_utterance_failed(server):
     assert asyncio.get_running_loop().time() - started < 5  # well below the 30 s timeout
 
 
-async def test_end_input_gives_up_at_the_connection_timeout_when_never_answered(server):
-    """A final utterance without speech is never answered: wait for the configured
-    timeout (not forever) and finish quietly."""
+async def test_end_input_gives_up_at_the_final_response_timeout_when_never_answered(server):
+    """A final utterance without speech is never answered: wait for the final-response
+    budget (not forever) and finish quietly."""
     server.silent = True
     errors: list[stt.STTError] = []
     stt_ = _make_stt(server, language="hi-IN")
     stt_.on("error", errors.append)
-    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1))
+    stream = stt_.stream(conn_options=APIConnectOptions(max_retry=0, final_response_timeout=1))
     stream.push_frame(FRAME)
     stream.end_input()
 

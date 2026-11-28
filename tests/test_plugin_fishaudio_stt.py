@@ -657,7 +657,8 @@ async def test_idle_session_at_maximum_duration_starts_a_new_one():
     await wait_until(lambda: len(server.sockets) == 1)
     server.sockets[0].server_close(4413)
 
-    await wait_until(lambda: len(server.sockets) == 2)
+    # the new session's sender writes the config after connecting
+    await wait_until(lambda: len(server.sockets) == 2 and bool(server.sockets[1].messages()))
     assert server.sockets[1].messages()[0]["type"] == "config"
     await stream.aclose()
 
@@ -698,7 +699,8 @@ async def test_dropped_connection_ends_the_open_turn():
     ws.server_close(1006)
 
     events = []
-    with pytest.raises(APIStatusError):
+    # an abnormal close is a retryable transport failure
+    with pytest.raises(APIConnectionError):
         async for event in stream:
             events.append(event)
 

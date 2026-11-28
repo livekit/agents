@@ -606,6 +606,30 @@ async def test_end_input_finishes_active_utterance_without_vad_end(setup):
     assert streams[0].audio == [b"aa"]
 
 
+async def test_final_deadline_starts_when_the_utterance_source_ends(
+    setup, monkeypatch, collect_events
+):
+    owner, detector, streams, _, _, _ = setup
+
+    async def stalled(self):
+        await self.read_audio()
+        await asyncio.Event().wait()
+        yield  # keep this an async generator
+
+    monkeypatch.setattr(SDKStream, "updates", stalled)
+    stream = owner.stream(conn_options=APIConnectOptions(timeout=0.1, final_response_timeout=1))
+    _, reader = collect_events(stream)
+    detector.send(VADEventType.START_OF_SPEECH, b"aa")
+    # the connect timeout does not bound active speech
+    await asyncio.sleep(5)
+    assert not reader.done()
+    assert "timeout" not in streams[0].options
+    detector.send(VADEventType.END_OF_SPEECH, b"aa")
+    with pytest.raises(APITimeoutError):
+        await asyncio.wait_for(reader, 2)
+    assert streams[0].closed
+
+
 async def test_backlog_is_bounded_in_bytes_and_does_not_finalize(setup):
     owner, detector, streams, _, _, _ = setup
     stream = owner.stream()

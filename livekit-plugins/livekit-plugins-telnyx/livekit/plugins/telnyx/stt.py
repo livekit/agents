@@ -18,7 +18,6 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
-    APIStatusError,
     LanguageCode,
     stt,
     utils,
@@ -177,11 +176,10 @@ class SpeechStream(stt.RecognizeStream):
         self._speaking = False
 
     async def _run(self) -> None:
-        closing_ws = False
+        drain_started = asyncio.Event()
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
 
             wav_header = _create_streaming_wav_header(self._stt._opts.sample_rate, NUM_CHANNELS)
             await ws.send_bytes(wav_header)
@@ -204,13 +202,13 @@ class SpeechStream(stt.RecognizeStream):
             for frame in audio_bstream.flush():
                 await ws.send_bytes(frame.data.tobytes())
 
-            # Don't close the WS here — let recv_task read the final
-            # transcript before the server closes the connection.
-            closing_ws = True
+            drain_started.set()
+            # Only the Deepgram engine has a documented CloseStream command.
+            if self._stt._opts.transcription_engine == "deepgram":
+                await ws.send_json({"type": "CloseStream"})
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -221,9 +219,7 @@ class SpeechStream(stt.RecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
-                        return
-                    raise APIStatusError(message="Telnyx STT WebSocket closed unexpectedly")
+                    return
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
@@ -238,23 +234,16 @@ class SpeechStream(stt.RecognizeStream):
                             self._mark_provider_progress()
                     except Exception:
                         logger.exception("Failed to process Telnyx STT message")
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws:
-                        return
-                    # Preserve the underlying transport error.
-                    raise APIConnectionError("Telnyx STT connection lost") from ws.exception()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
             ws = await self._connect_ws()
-            tasks = [
+            await self._run_connection_tasks(
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                drain_started=drain_started,
+                require_completion=self._stt._opts.transcription_engine == "deepgram",
+            )
         finally:
             if ws is not None:
                 await ws.close()

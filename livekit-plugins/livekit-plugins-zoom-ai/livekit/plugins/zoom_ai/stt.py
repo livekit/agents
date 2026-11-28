@@ -42,7 +42,7 @@ import time
 import uuid
 import weakref
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
 import aiohttp
@@ -722,9 +722,10 @@ class SpeechStream(stt.SpeechStream):
         self._send_lock = asyncio.Lock()
         self._tracking_id: str | None = None  # the current session's x-zm-trackingid
         self._session_updated = False  # Scribe accepted the current session's settings
-        # Time between the start of this _run attempt and the current Scribe session.
-        # The base class adds whole attempts to start_time_offset when it retries.
-        self._session_offset = 0.0
+        self._closing = False  # session.close is being sent: no more audio or reconnects
+        # Audio held back for the current session when it opened. Scribe counts it from 0,
+        # ahead of the first frame read, which start_time_offset is anchored on.
+        self._held_s = 0.0
 
     def update_options(
         self,
@@ -799,7 +800,8 @@ class SpeechStream(stt.SpeechStream):
                     self._zoom._live_url,
                     protocols=("live-asr",),
                     headers=self._zoom._headers(tracking_id),
-                    heartbeat=30.0,  # notice a dead connection; audio keeps Scribe's session alive
+                    # WebSocketMonitor probes the connection; audio keeps Scribe's session alive
+                    autoping=False,
                 ),
                 self._conn_options.timeout,
             )
@@ -880,6 +882,8 @@ class SpeechStream(stt.SpeechStream):
         next session. The reconnect then waits for every outstanding final.
         """
         async with self._send_lock:
+            if self._closing:
+                return  # input ended: this session drains instead
             self._draining = True
             if self._uncommitted:
                 await self._commit(ws, "drain")
@@ -909,16 +913,25 @@ class SpeechStream(stt.SpeechStream):
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
     async def _run(self) -> None:
-        self._session_offset = 0.0
-        closing = False
-        closed = asyncio.Event()  # Scribe confirmed our session.close
+        self._closing = False
         last_audio_at = time.monotonic()  # last audio sent, input or silence
         last_input_at = time.monotonic()  # last input audio sent
         gap_filled = False  # silence already sent for the current input gap
         session_audio_s = 0.0  # audio sent on the current Scribe session, keepalive included
+        drain_started = asyncio.Event()  # the last audio was sent; session.close follows
+        receiver_done = asyncio.Event()
+
+        async def send_failed(e: BaseException) -> NoReturn:
+            if not self._closing:
+                # A failed send usually means Scribe closed the socket. Give the receiver a
+                # moment to report the error event Scribe sent first (e.g. an unsupported
+                # language). A failed session.close fails at once.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(receiver_done.wait(), 1.0)
+            raise APIConnectionError("Zoom Scribe Live connection closed unexpectedly") from e
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing, last_audio_at, last_input_at, gap_filled, session_audio_s
+            nonlocal last_audio_at, last_input_at, gap_filled, session_audio_s
             anchored = False
 
             async def send(frame: rtc.AudioFrame | SpeechStream._FlushSentinel) -> None:
@@ -977,22 +990,16 @@ class SpeechStream(stt.SpeechStream):
                         self._held.append(frame)  # kept until sent, for a retry
                         await send_held()
                 # Input ended while a reconnect was waiting: there is no next session, so
-                # send what was held to this one.
+                # send what was held to this one. Scribe then returns any remaining final
+                # transcripts and session.closed.
                 async with self._send_lock:
                     self._draining = False
                     await send_held()
-                closing = True
-                await ws.send_str(json.dumps({"type": "session.close"}))
+                    drain_started.set()
+                    self._closing = True
+                    await ws.send_str(json.dumps({"type": "session.close"}))
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing or self._zoom._http.closed:
-                    return
-                raise APIConnectionError("Zoom Scribe Live connection closed unexpectedly") from e
-            # Wait for the remaining final transcript and session.closed, but not forever.
-            try:
-                await asyncio.wait_for(closed.wait(), self._conn_options.timeout)
-            except asyncio.TimeoutError:
-                logger.warning("Zoom Scribe Live did not confirm session.close; closing")
-                await ws.close()
+                await send_failed(e)
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # Scribe Live ends a session after 30 s without audio (e.g. the user muted), and it
@@ -1002,9 +1009,9 @@ class SpeechStream(stt.SpeechStream):
             nonlocal last_audio_at, session_audio_s, gap_filled
             keepalive = bytes(SAMPLE_RATE * 2 // 10)  # 100 ms
             try:
-                while not closing:
+                while not self._closing:
                     await asyncio.sleep(INPUT_GAP_S / 2)
-                    if closing:
+                    if self._closing:
                         break
                     now = time.monotonic()
                     silence = b""
@@ -1026,118 +1033,98 @@ class SpeechStream(stt.SpeechStream):
                         session_audio_s += len(silence) / (2 * SAMPLE_RATE)
                         last_audio_at = now
             except (aiohttp.ClientError, ConnectionError) as e:
-                if closing or self._zoom._http.closed:
-                    return
-                raise APIConnectionError("Zoom Scribe Live connection closed unexpectedly") from e
+                if self._closing:
+                    return  # the receiver reports how the session ended
+                await send_failed(e)
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            while True:
-                msg = await ws.receive()
-                if msg.type in (
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSING,
-                ):
-                    if closing:
-                        closed.set()
-                        return
-                    raise APIStatusError(
-                        "Zoom Scribe Live connection closed unexpectedly",
-                        status_code=ws.close_code or -1,
-                        request_id=self._tracking_id,
-                        body=f"{msg.data=} {msg.extra=}",
-                    )
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    continue
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
+            try:
+                while True:
+                    msg = await monitor.receive()
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                    ):
+                        if self._closing:
+                            return
+                        raise APIStatusError(
+                            "Zoom Scribe Live connection closed unexpectedly",
+                            status_code=ws.close_code or -1,
+                            request_id=self._tracking_id,
+                            body=f"{msg.data=} {msg.extra=}",
+                        )
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        continue
+                    try:
+                        ev = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        logger.warning("ignoring non-JSON message from Zoom Scribe")
+                        continue
+                    if ev.get("type") == "session.closed" and not self._closing:
+                        # Server-side end (session time limit, idle timeout): raise a
+                        # retryable error so the base class reconnects with a new session.
+                        raise APIStatusError(
+                            f"Zoom Scribe Live {ev['type']} ({ev.get('reason')})",
+                            status_code=-1,
+                            request_id=self._tracking_id,
+                            body=ev,
+                            retryable=True,
+                        )
+                    try:
+                        if self._process_event(ev):
+                            return  # session.closed after our session.close
+                    except APIStatusError:
+                        raise
+                    except Exception:
+                        logger.exception("failed to process Zoom Scribe message")
+            finally:
+                receiver_done.set()
+
+        async def reconnect_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            # Options changed: reconnect with the new config, once the turn in progress (if
+            # any) has its final transcript, or after RECONNECT_HOLD_S.
+            await self._reconnect_event.wait()
+            if self._manual_commit:
                 try:
-                    ev = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    logger.warning("ignoring non-JSON message from Zoom Scribe")
-                    continue
-                if ev.get("type") == "session.closed" and not closing:
-                    # Server-side end (session time limit, idle timeout):
-                    # raise a retryable error so the base class reconnects with a new session.
-                    raise APIStatusError(
-                        f"Zoom Scribe Live {ev['type']} ({ev.get('reason')})",
-                        status_code=-1,
-                        request_id=self._tracking_id,
-                        body=ev,
-                        retryable=True,
-                    )
-                try:
-                    if self._process_event(ev):
-                        closed.set()
-                        return  # session.closed after our session.close
-                except APIStatusError:
-                    raise
-                except Exception:
-                    logger.exception("failed to process Zoom Scribe message")
+                    await self._start_drain(ws)
+                except (aiohttp.ClientError, ConnectionError) as e:
+                    await send_failed(e)
+            await self._wait_for_turn_end()
+            if not self._closing:  # input ended meanwhile: this session drains instead
+                reconnect.set()
 
         while True:
             self._end_open_utterance()
-            connected_at = time.time()
             session_audio_s = 0.0
             self._reconnect_event.clear()  # this connect reads the current options
+            drain_started.clear()
+            receiver_done.clear()
+            reconnect = asyncio.Event()
             ws = await self._connect_ws()
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-                asyncio.create_task(keepalive_task(ws)),
-            ]
-            io_done: asyncio.Future[list[None]] = asyncio.gather(*tasks[:2])
-            wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-            hold: asyncio.Task[None] | None = None  # waits for the turn in progress to end
-            reconnect = False
+            # Scribe's audio_*_ms restart at 0 on the new session. It starts with the input
+            # held back while the previous session drained, which precedes the next frame read.
+            self._input_ch.restart_provider_clock()
+            self._held_s = sum(f.duration for f in self._held if isinstance(f, rtc.AudioFrame))
             try:
-                waiters: set[asyncio.Future[Any]] = {io_done, wait_reconnect, tasks[2]}
-                while True:
-                    done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-                    for task in done:
-                        if task is wait_reconnect or task is hold:
-                            continue
-                        if isinstance(task.exception(), APIConnectionError):
-                            # A failed send usually means Scribe closed the socket; prefer the
-                            # error event it sent first (e.g. an unsupported language).
-                            await asyncio.wait({tasks[1]}, timeout=1.0)
-                            if tasks[1].done() and isinstance(tasks[1].exception(), APIStatusError):
-                                tasks[1].result()
-                        task.result()  # surface errors from I/O and keepalive
-                    if io_done in done:
-                        break  # input ended and the session closed cleanly
-                    if hold is not None and hold in done:
-                        reconnect = True  # the turn ended: reconnect with the new config
-                        break
-                    if wait_reconnect in done:
-                        # Options changed: reconnect with the new config, once the turn in
-                        # progress (if any) has its final transcript.
-                        waiters.discard(wait_reconnect)
-                        if self._manual_commit:
-                            try:
-                                await self._start_drain(ws)
-                            except (aiohttp.ClientError, ConnectionError) as e:
-                                raise APIConnectionError(
-                                    "Zoom Scribe Live connection closed unexpectedly"
-                                ) from e
-                        if not self._turn_open():
-                            reconnect = True
-                            break
-                        hold = asyncio.create_task(self._wait_for_turn_end())
-                        waiters.add(hold)
-                        continue
-                    waiters.discard(tasks[2])  # keepalive stopped while closing; keep waiting
+                if not await self._run_connection_tasks(
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                    reconnect=reconnect,
+                    background=[
+                        asyncio.create_task(keepalive_task(ws)),
+                        asyncio.create_task(reconnect_task(ws)),
+                    ],
+                    drain_started=drain_started,
+                ):
+                    break
             finally:
-                await utils.aio.gracefully_cancel(*tasks, wait_reconnect, *([hold] if hold else []))
-                io_done.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    io_done.exception()  # retrieve it so asyncio doesn't log it at shutdown
                 await ws.close()
-            if not reconnect:
-                # Scribe closed without a final for the last turn
-                self._end_open_utterance(closing=True)
-                return
-            # Scribe's audio_*_ms restart at 0 on the new session; keep stream-relative
-            # timestamps moving forward, as the base class does when it retries.
-            self._session_offset += time.time() - connected_at
+        # Scribe closed without a final for the last turn
+        self._end_open_utterance(closing=True)
 
     def _speech_end_time(self, end_ms: int) -> float | None:
         """Wall-clock end of speech for a final ending at ``end_ms``.
@@ -1157,6 +1144,13 @@ class SpeechStream(stt.SpeechStream):
 
     def _process_event(self, ev: dict[str, Any]) -> bool:
         kind = ev.get("type")
+        if kind in (
+            "input_audio_buffer.speech_started",
+            "input_audio_buffer.speech_stopped",
+            "transcription.delta",
+            "transcription.completed",
+        ):
+            self._mark_provider_progress()
         if kind == "input_audio_buffer.speech_started":
             # With turn_detection="none", Scribe opens its next turn right after each
             # commit; LiveKit's VAD owns the user's turn.
@@ -1210,8 +1204,8 @@ class SpeechStream(stt.SpeechStream):
                     ev.get("language"), self._view.language_detection, self._opts.language
                 ),
                 text=text,
-                start_time=start_ms / 1000 + self.start_time_offset + self._session_offset,
-                end_time=end_ms / 1000 + self.start_time_offset + self._session_offset,
+                start_time=start_ms / 1000 + self.start_time_offset - self._held_s,
+                end_time=end_ms / 1000 + self.start_time_offset - self._held_s,
                 speaker_id=speaker_id,
                 metadata=metadata,
             )

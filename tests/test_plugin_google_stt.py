@@ -118,11 +118,13 @@ async def test_google_endpoint_preserves_event_offset(version: int, offset: floa
         **{field: Duration(nanos=round(offset * 1e9))},
     )
 
-    async def responses():
+    async def responses(requests):
+        async for _ in requests:
+            pass
         yield response
 
-    async def recognize(**kwargs):
-        return responses()
+    async def recognize(*, requests, **kwargs):
+        return responses(requests)
 
     options = _default_stt_options()
     options.model = "chirp_3" if version == 2 else "default"
@@ -134,6 +136,8 @@ async def test_google_endpoint_preserves_event_offset(version: int, offset: floa
         config=options,
     )
     stream.start_time_offset = 7.0
+    # the provider may end the call only after the input ends
+    stream.end_input()
     try:
         events = [event async for event in stream]
         endpoint = next(event for event in events if event.type == SpeechEventType.END_OF_SPEECH)
@@ -158,9 +162,11 @@ async def test_reconnect_endpoint_preserves_final_timing(monkeypatch, version, e
         words = [api.WordInfo(word="hello", **{end_field: Duration(nanos=round(end_time * 1e9))})]
     calls = 0
 
-    async def responses():
+    async def responses(requests):
         nonlocal calls
         calls += 1
+        async for _ in requests:
+            pass
         if calls > 1:
             return
         yield api.StreamingRecognizeResponse(
@@ -177,8 +183,8 @@ async def test_reconnect_endpoint_preserves_final_timing(monkeypatch, version, e
             ]
         )
 
-    async def recognize(**kwargs):
-        return responses()
+    async def recognize(*, requests, **kwargs):
+        return responses(requests)
 
     options = _default_stt_options()
     options.model = "chirp_3" if version == 2 else "default"
@@ -190,6 +196,7 @@ async def test_reconnect_endpoint_preserves_final_timing(monkeypatch, version, e
         config=options,
     )
     stream.start_time_offset = 7.0
+    stream.end_input()
     try:
         async with asyncio.timeout(2):
             events = [event async for event in stream]
@@ -223,7 +230,8 @@ async def test_google_stt_stream_cancel_does_not_leak_chanclosed_task():
         assert client.call is not None
         await asyncio.wait_for(client.call.awaiting_audio.wait(), timeout=1)
 
-        await asyncio.wait_for(stream._task, timeout=1)
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, timeout=1)
         await asyncio.wait_for(client.call.consumer_done.wait(), timeout=1)
 
         await stream.aclose()

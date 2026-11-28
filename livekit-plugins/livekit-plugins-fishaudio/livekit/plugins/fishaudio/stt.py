@@ -25,6 +25,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.agents.voice.events import ConversationItemAddedEvent
 from livekit.agents.voice.io import TimedString
 
@@ -322,11 +323,7 @@ class SpeechStream(stt.SpeechStream):
             self._ws = ws
             self._made_progress = False
             try:
-                try:
-                    await self._send(ws, self._config())
-                except (aiohttp.ClientError, ConnectionError):
-                    raise APIConnectionError("fish audio stt connection lost") from None
-                reconnect = await self._run_ws(ws)
+                close_code = await self._run_ws(ws)
             except Exception:
                 # the connection failed mid-turn; end the turn with what was heard
                 self._close_open_turn()
@@ -336,29 +333,39 @@ class SpeechStream(stt.SpeechStream):
                 self._report_usage()
                 await ws.close()
 
-            if not reconnect:
+            if close_code is None:
                 return
 
             # a no-op when the server committed the turn before closing, as it should
             self._close_open_turn()
-            # a session that reached its maximum duration ran its course, even an idle one;
-            # don't reopen at once a session restarted before it recognized anything
-            if not self._made_progress and ws.close_code != _MAX_DURATION_CLOSE_CODE:
-                raise APIConnectionError("fish audio stt session ended by the server")
             logger.debug(
                 "fish audio stt session ended by the server, reconnecting",
-                extra={"session_id": self._session_id, "close_code": ws.close_code},
+                extra={"session_id": self._session_id, "close_code": close_code},
             )
 
-    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
-        """Stream audio over one session. Returns True when the server asks for a new one."""
-        closing_ws = False
+    async def _run_ws(self, ws: aiohttp.ClientWebSocketResponse) -> int | None:
+        """Stream audio over one session.
+
+        Returns the close code when the server ends the session and asks for a new one.
+        """
         self._turn = None
+        drain_started = asyncio.Event()
+        configured = asyncio.Event()
+        reconnect = asyncio.Event()
+        reconnect_code: int | None = None
 
-        @utils.log_exceptions(logger=logger)
+        async def write(msg: dict[str, Any]) -> bool:
+            """Send a message; False when the server closed the session first."""
+            try:
+                await self._send(ws, msg)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if ws.close_code is not None:
+                    # the server closed the session; recv_task reports why
+                    return False
+                raise APIConnectionError("fish audio stt connection lost") from e
+            return True
+
         async def send_task() -> None:
-            nonlocal closing_ws
-
             samples_per_chunk = self._opts.sample_rate * _CHUNK_MS // 1000
             audio_bstream = utils.audio.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
@@ -366,61 +373,84 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_chunk,
             )
 
-            try:
-                async for data in self._input_ch:
-                    frames: list[rtc.AudioFrame] = []
-                    if isinstance(data, rtc.AudioFrame):
-                        frames.extend(audio_bstream.write(data.data.tobytes()))
-                    else:
-                        frames.extend(audio_bstream.flush())
-
-                    for frame in frames:
-                        await self._send(ws, {"type": "audio", "data": frame.data.tobytes()})
-                        self._add_usage(frame.duration)
-
-                    if isinstance(data, self._FlushSentinel):
-                        await self._send(ws, {"type": "finalize"})
-
-                # the server commits the open turn, then closes the session
-                closing_ws = True
-                await self._send(ws, {"type": "audio_done"})
-            except (aiohttp.ClientError, ConnectionError):
-                # the server closed the session; recv_task reports why
+            if not await write(self._config()):
                 return
+            configured.set()
 
-        @utils.log_exceptions(logger=logger)
-        async def control_task() -> None:
-            try:
-                while not closing_ws:
-                    try:
-                        msg = await asyncio.wait_for(
-                            self._control_queue.get(), timeout=_KEEPALIVE_INTERVAL
-                        )
-                    except asyncio.TimeoutError:
-                        msg = {"type": "keepalive"}
-                    if closing_ws:
+            async for data in self._input_ch:
+                frames: list[rtc.AudioFrame] = []
+                if isinstance(data, rtc.AudioFrame):
+                    frames.extend(audio_bstream.write(data.data.tobytes()))
+                else:
+                    frames.extend(audio_bstream.flush())
+
+                for frame in frames:
+                    if not await write({"type": "audio", "data": frame.data.tobytes()}):
                         return
-                    await self._send(ws, msg)
-            except (aiohttp.ClientError, ConnectionError):
-                return
+                    self._add_usage(frame.duration)
 
-        async def recv_task() -> bool:
+                if isinstance(data, self._FlushSentinel):
+                    if not await write({"type": "finalize"}):
+                        return
+
+            # the server commits the open turn, sends session_done, then closes with 1000
+            drain_started.set()
+            await write({"type": "audio_done"})
+
+        async def control_task() -> None:
+            # options queued before the config are already part of it
+            await configured.wait()
+            while not drain_started.is_set():
+                try:
+                    msg = await asyncio.wait_for(
+                        self._control_queue.get(), timeout=_KEEPALIVE_INTERVAL
+                    )
+                except asyncio.TimeoutError:
+                    msg = {"type": "keepalive"}
+                if drain_started.is_set() or not await write(msg):
+                    return
+
+        async def session_ended(close_code: int) -> None:
+            """Handle a close that asks for a new session; returns once the input is complete."""
+            nonlocal reconnect_code
+            if drain_started.is_set():
+                # the server committed the open turn before closing; nothing is left to send
+                return
+            # a session that reached its maximum duration ran its course, even an idle one;
+            # don't reopen at once a session restarted before it recognized anything
+            if not self._made_progress and close_code != _MAX_DURATION_CLOSE_CODE:
+                raise APIConnectionError("fish audio stt session ended by the server")
+            reconnect_code = close_code
+            reconnect.set()
+            # the coordinator returns on the reconnect event and cancels this task
+            await asyncio.Event().wait()
+
+        async def recv_task() -> None:
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
             while True:
-                msg = await monitor.receive()
+                try:
+                    msg = await monitor.receive()
+                except WebSocketCloseError as e:
+                    if e.close_code != _SERVER_RESTARTING_CLOSE_CODE:
+                        raise
+                    await session_ended(e.close_code)
+                    return
+
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
-                        return False
-
-                    close_code = ws.close_code or -1
+                    close_code = msg.data if isinstance(msg.data, int) else ws.close_code
+                    close_code = close_code or -1
                     if close_code in _RECONNECT_CLOSE_CODES:
-                        return True
+                        await session_ended(close_code)
+                        return
+
+                    if drain_started.is_set() and close_code == aiohttp.WSCloseCode.OK:
+                        return
 
                     raise APIStatusError(
                         message="fish audio stt connection closed unexpectedly",
@@ -428,11 +458,6 @@ class SpeechStream(stt.SpeechStream):
                         request_id=self._request_id,
                         body=f"{msg.data=} {msg.extra=}",
                     )
-
-                if msg.type == aiohttp.WSMsgType.ERROR:
-                    if closing_ws or self._session.closed:
-                        return False
-                    raise APIConnectionError("fish audio stt connection lost") from ws.exception()
 
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected fish audio stt message type %s", msg.type)
@@ -445,20 +470,21 @@ class SpeechStream(stt.SpeechStream):
                     raise
                 except Exception:
                     logger.exception("failed to process fish audio stt message")
+                    continue
 
-        send = asyncio.create_task(send_task())
-        recv = asyncio.create_task(recv_task())
-        control = asyncio.create_task(control_task())
-        try:
-            done, _ = await asyncio.wait((send, recv, control), return_when=asyncio.FIRST_COMPLETED)
-            # surface a failure to send; otherwise wait for the server to close the session
-            if send in done:
-                send.result()
-            if control in done:
-                control.result()
-            return await recv
-        finally:
-            await utils.aio.gracefully_cancel(send, recv, control)
+                if data.get("type") == "session_done" and drain_started.is_set():
+                    # the last message of a session after audio_done
+                    return
+
+        if await self._run_connection_tasks(
+            asyncio.create_task(send_task()),
+            asyncio.create_task(recv_task()),
+            reconnect=reconnect,
+            background=[asyncio.create_task(control_task())],
+            drain_started=drain_started,
+        ):
+            return reconnect_code
+        return None
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         started_at = time.perf_counter()

@@ -29,6 +29,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -94,6 +95,10 @@ class STTOptions:
     keyword_boost: float | None = None
     # Lowest level of the server's log messages to receive; None asks for none.
     log_level: LogLevel | None = None
+
+
+# how long a failed end_of_stream write waits for the server's own close
+_STOP_WRITE_GRACE = 0.1
 
 
 class STT(stt.STT):
@@ -326,12 +331,15 @@ class SpeechStream(stt.SpeechStream):
         when something went wrong.
         """
 
-        closing_ws = False
+        drain_started = asyncio.Event()
+        # whether this connection produced words; a failed end_of_stream then ends with them
+        words_received = False
+        stop_write_error: BaseException | None = None
+        peer_closed = asyncio.Event()
         # ids of the flushes the caller asked for, whose reply must always yield a final
         manual_flushes: set[int] = set()
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -367,6 +375,7 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_str(json.dumps(audio_msg))
                     except (aiohttp.ClientError, ConnectionError):
                         # the server closed first; recv_task raises the retryable error
+                        # within the final-response deadline
                         return
 
                 if flush_id is not None:
@@ -374,19 +383,26 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_str(json.dumps({"type": "flush", "flush_id": flush_id}))
                     except (aiohttp.ClientError, ConnectionError):
                         # the server closed first; recv_task raises the retryable error
+                        # within the final-response deadline
                         return
 
             # Input ended: tell the server, then let recv_task drain the model's last
             # words until the server replies with its own end_of_stream.
-            closing_ws = True
+            drain_started.set()
             try:
                 await ws.send_str(json.dumps({"type": "end_of_stream"}))
-            except (aiohttp.ClientError, ConnectionError):
-                # the server closed first; recv_task reports what it got
-                return
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # the server may have closed first with the words it had: if its close
+                # follows promptly, recv_task decides; a silent peer means the write failed
+                nonlocal stop_write_error
+                stop_write_error = e
+                try:
+                    await asyncio.wait_for(peer_closed.wait(), _STOP_WRITE_GRACE)
+                except asyncio.TimeoutError:
+                    raise APIConnectionError("Gradium STT end-of-stream send failed") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal words_received
             buffered_text: list[str] = []
             speech_end = 0.0
             speaking = False
@@ -482,9 +498,9 @@ class SpeechStream(stt.SpeechStream):
                 )
 
             while True:
-                wait = 5.0
+                wait: float | None = None
                 if flush_deadline is not None:
-                    wait = min(wait, flush_deadline - loop.time())
+                    wait = flush_deadline - loop.time()
                     if wait <= 0:
                         # the server never answered the flush: keep what the model already
                         # produced rather than hold the turn open until the stream closes
@@ -496,13 +512,9 @@ class SpeechStream(stt.SpeechStream):
                         _finalize()
                         continue
                 try:
+                    # the final-response deadline bounds the end_of_stream reply
                     msg = await asyncio.wait_for(monitor.receive(), timeout=wait)
                 except asyncio.TimeoutError:
-                    if closing_ws:
-                        # the server did not answer the end_of_stream in time: keep
-                        # what the model already produced
-                        _finalize()
-                        return
                     continue
 
                 if msg.type in (
@@ -510,9 +522,14 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws:
+                    peer_closed.set()
+                    if drain_started.is_set():
                         # a close instead of the server's end_of_stream: same thing
                         _finalize()
+                        if stop_write_error is not None and not words_received:
+                            raise APIConnectionError(
+                                "Gradium STT end-of-stream send failed"
+                            ) from stop_write_error
                         return
                     raise APIStatusError(
                         "Gradium connection closed unexpectedly",
@@ -542,7 +559,7 @@ class SpeechStream(stt.SpeechStream):
                     # The model has consumed all the audio: whatever is still buffered
                     # is the end of the last utterance.
                     _finalize()
-                    if closing_ws:
+                    if drain_started.is_set():
                         return
                     # The server ended the session while audio is still coming (a
                     # duration limit, for instance) and will close the socket; raise
@@ -556,6 +573,7 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     if type_ == "text":
+                        words_received = True
                         speech_end = 0.0
                         if flush_replied:
                             # words after the flush reply are new speech, not the words the
@@ -675,30 +693,16 @@ class SpeechStream(stt.SpeechStream):
                 ws = await self._connect_ws()
                 self._input_ch.restart_provider_clock()
                 manual_flushes.clear()
-                tasks = [
+                drain_started.clear()
+                reconnect = await self._run_connection_tasks(
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                ]
-                wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                tasks_group: asyncio.Future[Any] = asyncio.gather(*tasks)
-                try:
-                    done, _ = await asyncio.wait(
-                        [tasks_group, wait_reconnect_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task != wait_reconnect_task:
-                            task.result()
-
-                    if wait_reconnect_task not in done:
-                        break
-
-                    self._reconnect_event.clear()
-                finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
-                    tasks_group.cancel()
-                    tasks_group.exception()
+                    reconnect=self._reconnect_event,
+                    drain_started=drain_started,
+                )
+                if not reconnect:
+                    break
+                self._reconnect_event.clear()
             finally:
                 if ws is not None:
                     await ws.close()

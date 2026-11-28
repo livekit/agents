@@ -704,10 +704,10 @@ class SpeechStream(stt.SpeechStream):
             duration=5.0,
         )
 
-        self._pushed_audio_duration = 0.0
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._drain_started = asyncio.Event()
 
     def update_options(
         self,
@@ -824,57 +824,35 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     async def _run(self) -> None:
-        backoff_time = 1.0
-        max_backoff = 30.0
-
         while True:
-            try:
-                # Initialize the Gladia session
-                session_info = await self._init_live_session()
-                session_url = session_info["url"]
-                self._request_id = session_info["id"]
+            # Initialize the Gladia session
+            session_info = await self._init_live_session()
+            session_url = session_info["url"]
+            self._request_id = session_info["id"]
 
-                # Reset backoff on success
-                backoff_time = 1.0
+            # Connect to the WebSocket
+            async with self._session.ws_connect(session_url, autoping=False) as ws:
+                self._ws = ws
+                self._drain_started.clear()
+                logger.info(f"Connected to Gladia session {self._request_id}")
+                self._input_ch.restart_provider_clock()
 
-                # Connect to the WebSocket
-                async with self._session.ws_connect(session_url, autoping=False) as ws:
-                    self._input_ch.restart_provider_clock()
-                    self._ws = ws
-                    logger.info(f"Connected to Gladia session {self._request_id}")
-
-                    send_task = asyncio.create_task(self._send_audio_task())
-                    recv_task = asyncio.create_task(self._recv_messages_task())
-
-                    wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
-                    try:
-                        done, _ = await asyncio.wait(
-                            [send_task, recv_task, wait_reconnect_task],
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-
-                        for task in done:
-                            if task != wait_reconnect_task:
-                                task.result()
-
-                        if wait_reconnect_task not in done:
-                            break
-
-                        self._reconnect_event.clear()
-                        logger.info("Reconnecting Gladia session due to options change")
-                    finally:
-                        await utils.aio.gracefully_cancel(send_task, recv_task, wait_reconnect_task)
-                        self._ws = None
-            except APIStatusError as e:
-                if e.status_code == 429:
-                    logger.warning(
-                        f"Rate limited by Gladia API. Backing off for {backoff_time} seconds."
+                try:
+                    reconnect = await self._run_connection_tasks(
+                        asyncio.create_task(self._send_audio_task()),
+                        asyncio.create_task(self._recv_messages_task()),
+                        reconnect=self._reconnect_event,
+                        drain_started=self._drain_started,
                     )
-                    await asyncio.sleep(backoff_time)
-                    backoff_time = min(backoff_time * 2, max_backoff)
-                else:
-                    raise APIStatusError(f"Error in speech stream: {e}", retryable=True) from e
+                    if not reconnect:
+                        if self._input_ch.closed and self._input_ch.empty():
+                            break
+                        # A segment stop ends the provider connection, not the public stream.
+                        continue
+                    self._reconnect_event.clear()
+                    logger.info("Reconnecting Gladia session due to options change")
+                finally:
+                    self._ws = None
 
     async def _init_live_session(self) -> dict:
         """Initialize a live session with Gladia."""
@@ -896,6 +874,8 @@ class SpeechStream(stt.SpeechStream):
                 res.raise_for_status()
                 return await res.json()  # type: ignore
 
+        except aiohttp.ClientResponseError:
+            raise
         except Exception as e:
             raise APIConnectionError(f"Failed to initialize Gladia session: {str(e)}") from e
 
@@ -913,7 +893,6 @@ class SpeechStream(stt.SpeechStream):
         )
 
         has_ended = False
-        closing_ws = False
 
         try:
             async for data in self._input_ch:
@@ -934,18 +913,16 @@ class SpeechStream(stt.SpeechStream):
                     message = json.dumps({"type": "audio_chunk", "data": {"chunk": chunk_b64}})
                     await self._ws.send_str(message)
 
-                    if has_ended:
-                        self._audio_duration_collector.flush()
-                        await self._ws.send_str(json.dumps({"type": "stop_recording"}))
-                        has_ended = False
+                if has_ended:
+                    break
 
-            # Tell Gladia we're done sending audio when the stream ends
-            closing_ws = True
+            # stop_recording terminates this provider session. _run drains its final
+            # messages and opens another connection when input remains.
+            self._audio_duration_collector.flush()
+            self._drain_started.set()
             if self._ws:
                 await self._ws.send_str(json.dumps({"type": "stop_recording"}))
         except (aiohttp.ClientError, ConnectionError) as e:
-            if closing_ws or self._session.closed:
-                return
             raise APIConnectionError("Gladia connection closed unexpectedly") from e
 
     async def _recv_messages_task(self) -> None:
@@ -962,14 +939,13 @@ class SpeechStream(stt.SpeechStream):
                     self._process_gladia_message(data)
                     if data.get("type") in ("transcript", "translation"):
                         self._mark_provider_progress()
+                    if data.get("type") in (
+                        "post_final_transcript",
+                        "end_session",
+                    ):
+                        return
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-            ):
-                break
             else:
                 logger.warning(f"Unexpected message type from Gladia: {msg.type}")
 

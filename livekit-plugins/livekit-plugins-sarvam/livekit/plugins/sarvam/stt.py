@@ -47,6 +47,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
+from livekit.agents.utils.aio.websocket import WebSocketCloseError
 from livekit.agents.utils.misc import is_given
 
 from ._utils import KEYTERMS_MODELS, merge_keyterms, validate_keyterms
@@ -1027,6 +1028,8 @@ class SpeechStream(stt.SpeechStream):
             int(self._opts.sample_rate * self._CHUNK_DURATION_MS / 1000),
             1,
         )
+        # set once the final flush is due, so the receiver may end without a failure
+        self._drain_started = asyncio.Event()
         # set while no utterance is open, so end of input knows when it may close
         self._utterance_settled = asyncio.Event()
         self._utterance_settled.set()
@@ -1170,7 +1173,9 @@ class SpeechStream(stt.SpeechStream):
         async with self._connection_lock:
             self._connection_state = ConnectionState.DISCONNECTED
 
-        # Cancel running tasks first
+        await super().aclose()
+
+        # Cancel remaining auxiliary tasks
         tasks_to_cancel = []
         if self._audio_task and not self._audio_task.done():
             tasks_to_cancel.append(self._audio_task)
@@ -1198,12 +1203,6 @@ class SpeechStream(stt.SpeechStream):
             self._logger.warning(f"Error closing WebSocket: {e}", extra=self._build_log_context())
         finally:
             self._ws = None
-
-        # Call parent cleanup
-        try:
-            await super().aclose()
-        except Exception as e:
-            self._logger.warning(f"Error in parent cleanup: {e}", extra=self._build_log_context())
 
         # Close session last
         try:
@@ -1403,72 +1402,34 @@ class SpeechStream(stt.SpeechStream):
             await self._send_initial_config(ws)
 
         # Create tasks for audio processing and message handling
-        self._audio_task = asyncio.create_task(self._process_audio(ws))
-        self._message_task = asyncio.create_task(self._process_messages(ws))
+        self._drain_started.clear()
+        reconnect_ready = asyncio.Event()
+        sender = asyncio.create_task(self._send_until_reconnect(ws, reconnect_ready))
+        receiver = asyncio.create_task(self._receive_until_settled(ws))
 
-        # Wait for both tasks to complete or reconnection event
-        tasks = [self._audio_task, self._message_task]
-        reconnect_task = asyncio.create_task(self._reconnect_event.wait())
-
+        tasks = [sender, receiver]
         try:
-            done, pending = await asyncio.wait(
-                tasks + [reconnect_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            # Check if reconnection was requested
-            if reconnect_task in done:
-                self._logger.info(
-                    "Reconnection requested, closing current connection",
-                    extra=self._build_log_context(),
-                )
-                await self._settle_utterance_for_reconnect(ws)
-                # settling may queue keyterms, which the new connection picks up anyway
-                self._reconnect_event.clear()
+            # The sender settles an open utterance on this connection before a reconnect,
+            # so the helper sees the reconnect only once that is done. Sarvam ignores
+            # end-of-input and never closes the socket itself, so the end of input is a
+            # best-effort drain that final_response_timeout bounds.
+            if await self._run_connection_tasks(
+                sender,
+                receiver,
+                reconnect=reconnect_ready,
+                drain_started=self._drain_started,
+                require_completion=False,
+            ):
                 return True
-
-            # Keep listening for server-side terminal errors when audio finishes first.
-            if self._audio_task in done and self._message_task in pending:
-                audio_exc = self._audio_task.exception()
-                if audio_exc is not None:
-                    raise audio_exc
-
-                # Sarvam ignores end-of-input and never closes the socket itself, so
-                # wait only for the utterance the final flush closes, then close ours.
-                # An update_options() now doesn't reconnect: the old connection finishes
-                # what it has, and a new one would only replay it.
-                settled_task = asyncio.create_task(self._wait_for_utterance_settled())
-                tasks.append(settled_task)
-                done2, pending2 = await asyncio.wait(
-                    [self._message_task, settled_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                done |= done2
-                pending = pending2 | {reconnect_task}
-
-            # Cancel remaining tasks using LiveKit's utility
-            if pending:
-                await utils.aio.cancel_and_wait(*pending)
 
             if (self._speaking or self._pending_eos) and not self._eos_emitted_for_utterance:
                 # the socket is closing, so close the turn rather than leave it to the
                 # fallback timer that the cleanup below cancels
                 self._try_commit_utterance()
                 self._emit_end_of_speech()
-
-            # Check for exceptions in completed tasks
-            for task in done:
-                if task != reconnect_task:
-                    exc = task.exception()
-                    if exc is not None:
-                        if isinstance(exc, BaseException):
-                            raise exc
-                        else:
-                            raise RuntimeError(f"Task failed with non-BaseException: {exc}")
-
         finally:
             # Clean up tasks
-            all_tasks = tasks + [reconnect_task]
+            all_tasks = tasks
             fallback_task = self._cancel_eos_fallback()
             if fallback_task is not None:
                 all_tasks.append(fallback_task)
@@ -1485,18 +1446,55 @@ class SpeechStream(stt.SpeechStream):
                 )
         return False
 
-    async def _wait_for_utterance_settled(self) -> None:
-        # The grace is fixed discovery time, so it doesn't count against the caller's
-        # timeout; only an utterance that is actually open is bounded by it.
-        await asyncio.sleep(END_OF_INPUT_GRACE)
-        if self._utterance_settled.is_set():
-            return
+    async def _send_until_reconnect(
+        self, ws: aiohttp.ClientWebSocketResponse, reconnect_ready: asyncio.Event
+    ) -> None:
+        """Send audio until input ends, or settle the open utterance for a reconnect.
+
+        A reconnect request while audio is still flowing settles the open utterance on
+        this connection, then sets ``reconnect_ready``. Once input has ended, an
+        update_options() doesn't reconnect: the old connection finishes what it has,
+        and a new one would only replay it.
+        """
+        self._audio_task = asyncio.create_task(self._process_audio(ws))
+        reconnect_task = asyncio.create_task(self._reconnect_event.wait())
         try:
-            await asyncio.wait_for(self._utterance_settled.wait(), self._conn_options.timeout)
-        except asyncio.TimeoutError:
-            raise APITimeoutError(
-                "Timed out waiting for the final transcript after audio input ended"
-            ) from None
+            await asyncio.wait(
+                [self._audio_task, reconnect_task], return_when=asyncio.FIRST_COMPLETED
+            )
+            if self._audio_task.done():
+                self._audio_task.result()
+                return
+            self._logger.info(
+                "Reconnection requested, closing current connection",
+                extra=self._build_log_context(),
+            )
+            await self._settle_utterance_for_reconnect(ws)
+            # settling may queue keyterms, which the new connection picks up anyway
+            self._reconnect_event.clear()
+            reconnect_ready.set()
+        finally:
+            await utils.aio.cancel_and_wait(self._audio_task, reconnect_task)
+
+    async def _receive_until_settled(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Receive until the socket closes, or input has ended and its utterance settled."""
+        self._message_task = asyncio.create_task(self._process_messages(ws))
+        settled_task = asyncio.create_task(self._wait_for_input_settled())
+        try:
+            await asyncio.wait(
+                [self._message_task, settled_task], return_when=asyncio.FIRST_COMPLETED
+            )
+            if self._message_task.done():
+                self._message_task.result()
+        finally:
+            await utils.aio.cancel_and_wait(self._message_task, settled_task)
+
+    async def _wait_for_input_settled(self) -> None:
+        await self._drain_started.wait()
+        # The grace is fixed discovery time before an open utterance is waited on; only
+        # the utterance the final flush closes is waited for after it.
+        await asyncio.sleep(END_OF_INPUT_GRACE)
+        await self._utterance_settled.wait()
 
     async def _settle_utterance_for_reconnect(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Close an open utterance on the old connection before it is replaced.
@@ -1677,6 +1675,7 @@ class SpeechStream(stt.SpeechStream):
                 # a final from earlier in the utterance doesn't cover the audio sent since,
                 # so only one answering this flush settles it
                 self._utterance_settled.clear()
+            self._drain_started.set()
             if not flushed or utterance_open:
                 # Sarvam has no end-of-stream message; a flush finalizes the open utterance
                 # (with or without flush_signal), so trailing speech isn't lost.
@@ -1742,17 +1741,12 @@ class SpeechStream(stt.SpeechStream):
                             body={"raw_message": msg.data},
                         ) from e
 
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    error_msg = f"WebSocket error: {msg.data}"
-                    self._logger.error(error_msg, extra=self._build_log_context())
-                    raise APIConnectionError(error_msg)
-
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    close_code = ws.close_code if ws.close_code is not None else msg.data
+                    close_code = msg.data if isinstance(msg.data, int) else ws.close_code
                     close_reason = msg.extra
                     is_expected_close = close_code in (1000, 1001, None)
                     has_error_reason = _looks_like_error_text(close_reason)
@@ -1766,20 +1760,8 @@ class SpeechStream(stt.SpeechStream):
                                 "close_reason": close_reason,
                             },
                         )
-                        msg_type = getattr(msg.type, "name", str(msg.type))
-                        raw_close = {
-                            "msg_type": msg_type,
-                            "close_code": close_code,
-                            "close_reason": close_reason,
-                        }
-                        raise APIStatusError(
-                            message=(
-                                "Sarvam STT WebSocket closed unexpectedly: "
-                                f"{json.dumps(raw_close, ensure_ascii=False)}"
-                            ),
-                            status_code=int(close_code) if isinstance(close_code, int) else -1,
-                            body=raw_close,
-                        )
+                        raise WebSocketCloseError(close_code, close_reason)
+
                     self._logger.info(
                         f"WebSocket closed: {msg.type}",
                         extra={

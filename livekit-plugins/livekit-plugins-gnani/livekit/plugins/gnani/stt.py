@@ -508,11 +508,7 @@ class STT(stt.STT):
 
     @staticmethod
     def _single_attempt(conn_options: APIConnectOptions) -> APIConnectOptions:
-        return APIConnectOptions(
-            max_retry=0,
-            retry_interval=conn_options.retry_interval,
-            timeout=conn_options.timeout,
-        )
+        return replace(conn_options, max_retry=0)
 
     def update_options(
         self,
@@ -706,6 +702,12 @@ class SpeechStream(stt.RecognizeStream):
     # a language change needs a new handshake: reconnect once the current session closes
     _reconnect_requested: bool = False
     _last_error: str | None = None
+    # the server announced the end of the session (`session_end`) before closing it
+    _server_ended_session: bool = False
+    # set by the sender before the final commit; afterwards the server may end the session
+    _drain_started: asyncio.Event | None = None
+    # set once the input has ended and every committed utterance has been answered
+    _input_answered: asyncio.Event | None = None
 
     def __init__(
         self,
@@ -850,6 +852,7 @@ class SpeechStream(stt.RecognizeStream):
         self._commits_pending = 0
         # this session is built from the current options, so earlier requests are met
         self._reconnect_requested = False
+        self._server_ended_session = False
 
         try:
             async with websockets.connect(
@@ -859,38 +862,42 @@ class SpeechStream(stt.RecognizeStream):
                 ping_timeout=20,
                 close_timeout=10,
             ) as ws:
-                connected_msg = await asyncio.wait_for(ws.recv(), timeout=10)
-                connected_data = json.loads(connected_msg)
-                if connected_data.get("type") == "error":
-                    # e.g. an invalid header; the server closes the connection next
-                    self._handle_error(connected_data, handshake=True)
-                elif connected_data.get("type") != "connected":
-                    logger.warning(
-                        "Unexpected first message from Gnani STT",
-                        extra={"lk.pii.data": connected_data},
-                    )
-
-                self._ws = ws
-                send_task = asyncio.create_task(self._send_audio(ws), name="gnani-stt-send")
-                recv_task = asyncio.create_task(self._recv_messages(ws), name="gnani-stt-recv")
-
                 try:
-                    done, _ = await asyncio.wait(
-                        [send_task, recv_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        task.result()
+                    connected_msg = await asyncio.wait_for(ws.recv(), timeout=10)
+                    connected_data = json.loads(connected_msg)
+                    if connected_data.get("type") == "error":
+                        # e.g. an invalid header; the server closes the connection next
+                        self._handle_error(connected_data, handshake=True)
+                    elif connected_data.get("type") != "connected":
+                        logger.warning(
+                            "Unexpected first message from Gnani STT",
+                            extra={"lk.pii.data": connected_data},
+                        )
 
-                    if send_task in done:
-                        await self._drain_after_input(recv_task)
-                        self._raise_if_receiver_failed(recv_task)
-                        return True
-                    return False
+                    self._ws = ws
+                    self._drain_started = asyncio.Event()
+                    self._input_answered = asyncio.Event()
+                    session_ended = asyncio.Event()
+                    try:
+                        # The end of input is best effort: audio without speech is never
+                        # answered, so final_response_timeout ends the wait quietly.
+                        session_ended_first = await self._run_connection_tasks(
+                            asyncio.create_task(self._send_audio(ws), name="gnani-stt-send"),
+                            asyncio.create_task(
+                                self._recv_session(ws, session_ended), name="gnani-stt-recv"
+                            ),
+                            reconnect=session_ended,
+                            drain_started=self._drain_started,
+                            require_completion=False,
+                        )
+                    finally:
+                        self._ws = None
+                        await self._end_speech_if_open()
+                    return not session_ended_first
                 finally:
-                    self._ws = None
-                    await utils.aio.gracefully_cancel(send_task, recv_task)
-                    await self._end_speech_if_open()
+                    # No reader remains after the connection tasks exit. A full
+                    # SDK queue can pause reads, so do not wait for a close reply.
+                    ws.transport.abort()
 
         except websockets.exceptions.InvalidStatus as e:
             status = e.response.status_code
@@ -923,41 +930,33 @@ class SpeechStream(stt.RecognizeStream):
         except Exception as e:
             raise APIConnectionError(f"Gnani STT WebSocket error: {e}") from e
 
-    async def _drain_after_input(self, recv_task: asyncio.Task[None]) -> None:
-        """The audio input ended and its last utterance was committed: keep receiving
-        until every committed utterance has been answered (a transcript or an error), the
-        server ended the session, or the connection timeout runs out.
+    async def _recv_session(self, ws: Any, session_ended: asyncio.Event) -> None:
+        """Receive until the server ends the session, or the input has ended and every
+        committed utterance has been answered (a transcript or an error).
 
         Completion is tracked explicitly (``_commits_pending``) rather than inferred from
         speech events, because the server may take a while to answer: a short clip can
         yield ``speech_start`` and the transcript well after the ``commit`` was sent.
+
+        The server announcing the end of the session (``session_end``: idle timeout, 15
+        minute limit) while input is still open is routine, and so is our own close for a
+        new handshake: ``session_ended`` then asks ``_run`` for a new session. A bare close
+        during active input is a connection failure.
         """
-        deadline = time.monotonic() + self._conn_options.timeout
-        while self._commits_pending > 0 and not recv_task.done():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                # e.g. the last chunk held no speech, so the server never answers
-                logger.debug("Gnani STT: no reply for the final utterance before timeout")
+        assert self._drain_started is not None and self._input_answered is not None
+        drain_started = self._drain_started
+        recv = asyncio.create_task(self._recv_messages(ws))
+        answered = asyncio.create_task(self._input_answered.wait())
+        try:
+            await asyncio.wait({recv, answered}, return_when=asyncio.FIRST_COMPLETED)
+            if not recv.done():
                 return
-            await asyncio.wait({recv_task}, timeout=min(remaining, 0.05))
-
-    def _raise_if_receiver_failed(self, recv_task: asyncio.Task[None]) -> None:
-        """The receiver may have died while the end of the input was being drained (an
-        unknown server error, a 1008 close, a dropped connection). Report that instead of
-        returning success, unless every committed utterance was already answered: then the
-        result is complete and a connection that drops afterwards is not a failure."""
-        if not recv_task.done() or recv_task.cancelled():
-            return
-        error = recv_task.exception()
-        if error is None:
-            return
-        import websockets
-
-        if isinstance(error, websockets.exceptions.ConnectionClosed) and (
-            self._commits_pending == 0 and not (error.rcvd and error.rcvd.code == 1008)
-        ):
-            return
-        raise error
+            recv.result()
+        finally:
+            await utils.aio.cancel_and_wait(recv, answered)
+        if not drain_started.is_set() and (self._server_ended_session or self._reconnect_requested):
+            # otherwise the helper reports a close during active input as a failure
+            session_ended.set()
 
     def _note_reply(self) -> None:
         """A transcript or an utterance error arrived: it answers one outstanding commit,
@@ -966,6 +965,16 @@ class SpeechStream(stt.RecognizeStream):
             self._commits_pending -= 1
         else:
             self._signal_unanswered = False
+        self._mark_input_answered_if_done()
+
+    def _mark_input_answered_if_done(self) -> None:
+        if (
+            self._drain_started is not None
+            and self._drain_started.is_set()
+            and self._input_answered is not None
+            and self._commits_pending == 0
+        ):
+            self._input_answered.set()
 
     async def _send_commit(self, ws: Any) -> None:
         """Close the open utterance now instead of waiting for trailing silence."""
@@ -1002,7 +1011,11 @@ class SpeechStream(stt.RecognizeStream):
 
         if audio_buffer:
             await ws.send(bytes(audio_buffer))
+        if self._drain_started is not None:
+            self._drain_started.set()
         await commit()
+        # nothing outstanding (e.g. no speech was sent): the receiver need not wait
+        self._mark_input_answered_if_done()
 
     def _handle_error(self, data: dict[str, Any], *, handshake: bool = False) -> None:
         message = data.get("message", "Unknown error")
@@ -1098,6 +1111,7 @@ class SpeechStream(stt.RecognizeStream):
 
             elif msg_type == "session_end":
                 logger.debug(f"Gnani STT session ended: {data.get('reason')}")
+                self._server_ended_session = True
                 return
 
             elif msg_type == "error":
