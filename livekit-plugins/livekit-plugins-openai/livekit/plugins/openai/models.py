@@ -167,6 +167,16 @@ CometAPIChatModels = Literal[
     "qwen3-coder-plus-2025-07-22",
 ]
 
+MartLLMChatModels = Literal[
+    # model ids as returned by GET https://api.martllm.com/v1/models
+    "anthropic/claude-haiku-4.5",
+    "anthropic/claude-sonnet-4.5",
+    "deepseek/deepseek-v3.2",
+    "meta-llama/llama-3.3-70b-instruct",
+    "mistralai/mistral-small-4",
+    "moonshotai/kimi-k2",
+]
+
 TogetherChatModels = Literal[
     "Austism/chronos-hermes-13b",
     "Gryphe/MythoMax-L2-13b",
