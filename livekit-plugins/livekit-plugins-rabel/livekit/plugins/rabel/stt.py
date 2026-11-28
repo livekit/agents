@@ -764,21 +764,24 @@ class SpeechStream(stt.RecognizeStream):
                 # LiveKit starts its own early reply on a final that changes its text
                 # (audio_recognition: transcript_changed)
                 changed = on_final and (pre is None or text.strip() != pre.strip())
-            if changed:
-                if (
-                    lim.early_replies
-                    and not lim.agent_speaking
-                    and self._lk_starts < lim.max_starts
-                    and time.time() - t.speech_start <= lim.max_speech_s
-                ):
-                    # rule 6: LiveKit's own early start on this final (or rule 7's) counts
-                    # against its turn
-                    self._lk_starts += 1
+            started = (
+                changed
+                and lim.early_replies
+                and not lim.agent_speaking
+                and self._lk_starts < lim.max_starts
+                and time.time() - t.speech_start <= lim.max_speech_s
+            )
+            if started:
+                # rule 6: LiveKit's own early start on this final (or rule 7's) counts against its
+                # turn
+                self._lk_starts += 1
             self._lk_pre, self._lk_pre_stale = None, False
-            if changed or (t.running is not None and t.running == t.words):
+            if started or (t.running is not None and t.running == t.words):
                 # rule 8: an early reply now waits for LiveKit's commit: LiveKit's own, made on this
                 # final, or the running early start (Bell's guess, or the speech-to-text's own)
-                # whose words this final equals, which LiveKit keeps
+                # whose words this final equals, which LiveKit keeps. A final LiveKit starts no
+                # reply on (the agent speaking, past its limits) leaves none waiting, and LiveKit
+                # may never commit it (a backchannel it trims, a turn it drops by `min_words`)
                 self._lk_waiting = True
             if t.speech_ended:
                 self._end_turn()  # the final that came after the end of speech

@@ -717,6 +717,31 @@ async def test_guess_held_while_livekits_own_reply_waits(
         assert out == [(typ, text) for _, typ, text, _ in [*BEFORE, *AFTER]]
 
 
+@pytest.mark.parametrize("why", ["agent-speaking", "past-the-limit-of-speech"])
+async def test_a_final_livekit_starts_no_early_reply_on_holds_no_later_guess(
+    monkeypatch: pytest.MonkeyPatch, why: str
+) -> None:
+    # BEFORE's final comes while the agent speaks (a backchannel LiveKit trims, a turn it drops by
+    # `min_words`) or past `max_speech_duration`: LiveKit starts no early reply on it, so none
+    # waits for a commit, and some such turns are never committed. The next turn's guess is sent
+    opts: dict[str, Any] = {"max_retries": 4}
+    if why == "past-the-limit-of-speech":
+        opts["max_speech_duration"] = 0.2
+    session = session_like(session_with(preemptive_generation=opts))
+    if why == "agent-speaking":
+        session.current_speech = SimpleNamespace(interrupted=False)
+        # the agent's reply ends between the turns (0.45 s into the script, which starts 0.2 s in)
+        asyncio.get_running_loop().call_later(0.65, setattr, session, "current_speech", None)
+    in_session(monkeypatch, session)
+    out, counts, _, _ = await wrapped_run(
+        [*BEFORE, *AFTER], FakeAPI(answers={"and my": "and my savings please"})
+    )
+    assert [e for e in out if e[0] == T.PREFLIGHT_TRANSCRIPT] == [
+        (T.PREFLIGHT_TRANSCRIPT, "and my savings please.")
+    ]
+    assert "guess_held_while_livekit_waits" not in counts
+
+
 @pytest.mark.usefixtures("four_early_starts")
 async def test_no_guess_as_third_early_start_and_none_equal_to_the_running_one() -> None:
     script = [
