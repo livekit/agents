@@ -233,6 +233,12 @@
       "underruns": 0,
       "concealed_samples": 0,
       "baseline_missing_samples": 720
+    },
+    "slow_jittery": {
+      "underruns": 24,
+      "concealed_samples": 25366,
+      "baseline_missing_samples": 14640,
+      "note": "Synthetic stress case; controller is not established as preferable to baseline."
     }
   }
 }

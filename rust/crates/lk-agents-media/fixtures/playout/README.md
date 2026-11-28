@@ -112,3 +112,12 @@ Fault placement prefers five seconds (`--fault-at-ms 5000`) and selects the near
 verified active window. For this passage that is 5.1 seconds; 5.0 seconds is quiet.
 All stall cases, chunk-size changes and clock drift begin at that common source time.
 The clean row has no injected fault and is a comparison reference.
+
+## Sustained slow delivery
+
+`slow_jittery` begins at the common speech-active onset. It uses deterministic correlated
+queueing variation, active-speech stalls, ordered catch-up bursts and a sustained 2% source
+clock shortfall. It is a synthetic stress case, not a measured provider trace. The original
+fixed 40 ms delay case can underrun once and then retain that much reserve; repeated delay
+injection alone does not establish repeated audible underruns. Compare achieved latency,
+gap duration and listening quality, not just the injected delay count.

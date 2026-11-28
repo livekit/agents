@@ -26,6 +26,7 @@ SCENARIOS = (
     "late_20ms",
     "late_30ms_no_reserve",
     "repeated_stalls",
+    "slow_jittery",
     "burst_recovery",
     "no_catchup",
     "long_outage",
@@ -59,6 +60,8 @@ def schedule(
     start = 0
     previous = 0
     index = 0
+    seed = 734
+    correlated_jitter = 0
     while start < count:
         duration_ms = (
             (20, 100, 40, 200, 60)[(index - anchor) % 5]
@@ -83,6 +86,15 @@ def schedule(
             delay = 40_000
         elif name == "long_outage" and anchor <= index <= anchor + 9:
             delay = (anchor + 10 - index) * 100_000
+        elif name == "slow_jittery" and index >= anchor:
+            # Ordered delivery with correlated queueing, recurring active-speech stalls,
+            # backlog bursts and sustained 2% source-clock shortfall. This is synthetic,
+            # not a claim that TCP permanently loses individual audio chunks.
+            seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+            correlated_jitter = (correlated_jitter * 2 + seed % 90_001) // 3
+            delay = 20_000 + (nominal - anchor * 100_000) // 50 + correlated_jitter
+            if (index - anchor) % 7 in (0, 1) and (speech_chunks is None or index in speech_chunks):
+                delay += 60_000 + (seed >> 8) % 100_001
         elif name == "clock_drift":
             delay = (
                 max(0, nominal - anchor * 100_000) // 1000
@@ -182,6 +194,10 @@ def render_player(out: Path, report: dict) -> None:
         "late_30ms_no_reserve": (
             "30 ms late, no reserve",
             "Exposes short concealment and recovery during verified speech.",
+        ),
+        "slow_jittery": (
+            "Sustained slow and jittery delivery",
+            "Correlated jitter, repeated stalls, bursts and 2% clock shortfall.",
         ),
         "repeated_stalls": ("Repeated 40 ms stalls", "Tests reserve adaptation and recovery."),
         "burst_recovery": (

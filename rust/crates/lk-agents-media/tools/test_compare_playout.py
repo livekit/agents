@@ -33,6 +33,23 @@ class FaultPlacementTests(unittest.TestCase):
             else:
                 self.assertGreater(rows[52][0], rows[52][1] * 1_000_000 // 24_000)
 
+    def test_slow_jitter_is_sustained_ordered_and_reproducible(self):
+        active = set(range(300))
+        first = schedule("slow_jittery", 24_000 * 30, 51, active)
+        self.assertEqual(first, schedule("slow_jittery", 24_000 * 30, 51, active))
+        self.assertEqual(sum(row[2] for row in first), 24_000 * 30)
+        self.assertEqual([row[0] for row in first], sorted(row[0] for row in first))
+        self.assertTrue(
+            all(arrival == start * 1_000_000 // 24_000 for arrival, start, _ in first[:51])
+        )
+        intervals = [second[0] - previous[0] for previous, second in zip(first[51:], first[52:], strict=False)]
+        self.assertGreater(sum(interval > 120_000 for interval in intervals), 20)
+        self.assertGreater(sum(interval < 50_000 for interval in intervals), 10)
+        self.assertGreater(len(set(intervals)), 50)
+        # Delay keeps accumulating, rather than causing a single initial underrun and then
+        # returning to the same playout position forever.
+        self.assertGreater(first[-1][0] - first[-1][1] * 1_000_000 // 24_000, 400_000)
+
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
             speech_activity(bytes(24_000 * 10 * 2))
