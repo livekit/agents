@@ -31,6 +31,7 @@ The agents behind the livekit.io homepage demos, one directory each:
 - [`card-auth/`](./homepage/card-auth/): Kestrel Bank card verification, a yes/no identity check before the agent touches an account.
 - [`restaurant-ordering/`](./homepage/restaurant-ordering/): Zappi's Pizzeria, phone ordering against a point of sale.
 - [`vehicle-service/`](./homepage/vehicle-service/): Bayside BMW service desk, books visits and calls back about repairs.
+- [`feedback-interview/`](./homepage/feedback-interview/): Morgan, a five-minute GPT-Live interview about how someone evaluated LiveKit, with docs lookups and a call summary for the page.
 
 ### 🎙️ [Voice Agents](./voice_agents/)
 

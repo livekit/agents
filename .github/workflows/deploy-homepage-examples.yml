@@ -24,6 +24,8 @@ jobs:
             agent_id: CA_dfEVnhCfFTCY
           - example: vehicle-service
             agent_id: CA_CTSsG7YwPurk
+          - example: feedback-interview
+            agent_id: CA_BG75jPsDGDAy
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
