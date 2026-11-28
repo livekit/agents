@@ -52,6 +52,7 @@ members = [
     "livekit-plugins-deepgram",
     "livekit-plugins-did",
     "livekit-plugins-elevenlabs",
+    "livekit-plugins-facemode",
     "livekit-plugins-fal",
     "livekit-plugins-finesse",
     "livekit-plugins-fireworksai",
@@ -2228,6 +2229,9 @@ did = [
 elevenlabs = [
     { name = "livekit-plugins-elevenlabs" },
 ]
+facemode = [
+    { name = "livekit-plugins-facemode" },
+]
 fal = [
     { name = "livekit-plugins-fal" },
 ]
@@ -2461,6 +2465,7 @@ requires-dist = [
     { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
     { name = "livekit-plugins-did", marker = "extra == 'did'", editable = "livekit-plugins/livekit-plugins-did" },
     { name = "livekit-plugins-elevenlabs", marker = "extra == 'elevenlabs'", editable = "livekit-plugins/livekit-plugins-elevenlabs" },
+    { name = "livekit-plugins-facemode", marker = "extra == 'facemode'", editable = "livekit-plugins/livekit-plugins-facemode" },
     { name = "livekit-plugins-fal", marker = "extra == 'fal'", editable = "livekit-plugins/livekit-plugins-fal" },
     { name = "livekit-plugins-finesse", marker = "extra == 'finesse'", editable = "livekit-plugins/livekit-plugins-finesse" },
     { name = "livekit-plugins-fireworksai", marker = "extra == 'fireworksai'", editable = "livekit-plugins/livekit-plugins-fireworksai" },
@@ -2546,7 +2551,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "finesse", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "silma", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-ai", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "facemode", "fal", "finesse", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "lokutor", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "silma", "simli", "simplismart", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "vlmrun", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3181,6 +3186,20 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-facemode"
+source = { editable = "livekit-plugins/livekit-plugins-facemode" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "websockets", specifier = ">=14.0,<17.0" },
+]
 
 [[package]]
 name = "livekit-plugins-fal"
