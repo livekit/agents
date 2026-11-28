@@ -175,14 +175,6 @@ pub fn class_label(obj: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(format!("{}.{}", ty.module()?, ty.name()?))
 }
 
-/// The id of the plugin the class of `obj` belongs to, as the host derives it from its own
-/// packaging (`_bindings.plugin_id`): Rust never reads a class path for it.
-pub fn class_plugin(obj: &Bound<'_, PyAny>) -> PyResult<String> {
-    let py = obj.py();
-    let bindings = py.import(pyo3::intern!(py, "livekit.agents._bindings"))?;
-    bindings.call_method1(pyo3::intern!(py, "plugin_id"), (obj.get_type(),))?.extract()
-}
-
 /// Whether the class of `obj` runs the hooks it overrides in the host: the `_core_proxied`
 /// class attribute its definition set.
 fn proxied(obj: &Bound<'_, PyAny>) -> PyResult<bool> {

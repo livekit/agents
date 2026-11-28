@@ -1141,7 +1141,7 @@ impl InferenceLlm {
         }
         let env = crate::process::env();
         let label = crate::py_objects::class_label(slf.as_any())?;
-        let plugin = crate::py_objects::class_plugin(slf.as_any())?;
+        let plugin = crate::py_calls::class_plugin(slf.as_any())?;
         let events = crate::generated::types::ProviderEventsProxy::weak(slf.as_any())?;
         let extra_kwargs = extra_kwargs
             .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {

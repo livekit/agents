@@ -522,7 +522,7 @@ impl InferenceStt {
         }
         let env = crate::process::env();
         let label = crate::py_objects::class_label(slf.as_any())?;
-        let plugin = crate::py_objects::class_plugin(slf.as_any())?;
+        let plugin = crate::py_calls::class_plugin(slf.as_any())?;
         let events = crate::generated::types::ProviderEventsProxy::weak(slf.as_any())?;
         let vad_models = crate::generated::vad::VadModelsProxy::from_host(vad_models.as_any())?;
         let extra_kwargs = extra_kwargs

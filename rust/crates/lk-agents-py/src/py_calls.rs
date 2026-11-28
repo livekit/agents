@@ -472,6 +472,15 @@ where
     })
 }
 
+/// The id of the plugin the class of `obj` belongs to, as the host derives it from its own
+/// packaging (`_bindings.plugin_id`): Rust never reads a class path for it. A synchronous call
+/// made once, inside the object's own `__init__`.
+pub fn class_plugin(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    let py = obj.py();
+    let bindings = py.import(pyo3::intern!(py, "livekit.agents._bindings"))?;
+    bindings.call_method1(pyo3::intern!(py, "plugin_id"), (obj.get_type(),))?.extract()
+}
+
 /// The running loop and a copy of the current context, retained: what a host object's proxy
 /// runs its calls in when they carry no context of their own. Refused outside a running loop.
 pub fn capture_context(py: Python<'_>) -> PyResult<HostRef> {
