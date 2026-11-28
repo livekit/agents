@@ -166,8 +166,9 @@ def _opener(toks: list[str]) -> str:
 
 class CallForm:
     """How this call's speech-to-text has written its final transcripts: each word's written form,
-    whether a sentence opens with a capital, and how a turn closes (its last marks, by the
-    sentence's opening word and over all)."""
+    whether a sentence opens with a capital, how a turn closes (its last marks, by the sentence's
+    opening word and over all), and whether a space stands where a script written without spaces
+    meets a spaced one."""
 
     def __init__(self) -> None:
         self._surface: dict[str, str] = {}
@@ -175,6 +176,9 @@ class CallForm:
         self._ends_after: dict[str, Counter[str]] = {}
         # final transcripts that opened with a capital, less those that opened without
         self._capital = 0
+        # meetings of a script without spaces and a spaced one written with a space, less those
+        # written without
+        self._script_gap = 0
 
     def final(self, text: str) -> None:
         """A final transcript, as the speech-to-text wrote it."""
@@ -201,6 +205,17 @@ class CallForm:
                     b -= 1
                 self._surface[w[0]] = tok[a:b]
             opens = tok.endswith(_ANY_ENDS)
+        prev, gap = "", False
+        for c in text:
+            if c.isspace():
+                gap = True
+                continue
+            if not c.isalnum():  # a mark between them: no meeting of the two scripts
+                prev, gap = "", False
+                continue
+            if prev and _unspaced(prev) != _unspaced(c):
+                self._script_gap += 1 if gap else -1
+            prev, gap = c, False
 
     def end_after(self, opener: str) -> str | None:
         """How a turn has closed after this opening word, else how most turns have closed.
@@ -217,6 +232,12 @@ class CallForm:
     def capitals(self) -> bool:
         return self._capital >= 0
 
+    @property
+    def spaces_scripts(self) -> bool:
+        """A space where a script without spaces meets a spaced one, as most of this call's finals
+        have written it; none before any final has shown one."""
+        return self._script_gap > 0
+
 
 def _unspaced(c: str) -> bool:
     """A character of a script written without spaces between words, which LiveKit's comparison
@@ -224,15 +245,18 @@ def _unspaced(c: str) -> bool:
     return not c.isspace() and len(split_words(c + c, split_character=True)) == 2
 
 
-def _join(toks: list[str], n_added: int) -> str:
+def _join(toks: list[str], n_added: int, spaces_scripts: bool = False) -> str:
     """The tokens joined as the speech-to-text writes them: the shown ones with a space between,
-    as before, and each of the last `n_added` (Bell's added words) after a space unless the text
-    before it or the word itself is in a script written without spaces."""
+    as before, and each of the last `n_added` (Bell's added words) after a space between two words
+    of spaced scripts, none between two of a script written without spaces, and where the two
+    meet as `spaces_scripts` says."""
     shown = " ".join(toks[: len(toks) - n_added])
     out = shown
     for w in toks[len(toks) - n_added :]:
-        if out and not (_unspaced(out[-1]) or _unspaced(w[:1])):
-            out += " "
+        if out:
+            before, after = _unspaced(out[-1]), _unspaced(w[:1])
+            if spaces_scripts if before != after else not before:
+                out += " "
         out += w
     return out
 
@@ -251,4 +275,4 @@ def written(shown: str, added: tuple[str, ...], form: CallForm) -> str:
         return final_form(shown, added)  # no final transcript in this call yet: nothing to copy
     if form.capitals and (not shown or shown.endswith(_ANY_ENDS)):
         toks[len(toks) - len(words)] = _cap(words[0])
-    return _join(toks, len(words)) + end
+    return _join(toks, len(words), form.spaces_scripts) + end

@@ -1275,6 +1275,24 @@ def test_a_script_without_spaces_gets_none_between_the_added_words() -> None:
     assert written("Je voudrais", ("un", "billet"), fr) == "Je voudrais un billet."
 
 
+@pytest.mark.parametrize("gap", [" ", ""], ids=["spaced", "unspaced"])
+def test_where_two_scripts_meet_the_space_is_written_as_the_calls_finals_write_it(
+    gap: str,
+) -> None:
+    from livekit.plugins.rabel._form import CallForm, written
+
+    # a speech-to-text may or may not put a space where a script without spaces meets a spaced one
+    # ("\u6211\u5728\u7528 iphone" or "\u6211\u5728\u7528iphone"); LiveKit compares the final's
+    # string, so the guess has the space exactly where this call's finals have had it
+    zh = CallForm()
+    zh.final(f"\u6211\u5728\u7528{gap}iphone\u3002")
+    shown = "\u6211\u60f3\u7528"
+    assert written(shown, ("chatgpt",), zh) == f"{shown}{gap}chatgpt\u3002"
+    # and from the spaced script back to the one without spaces
+    said = f"{shown}{gap}chatgpt{gap}\u5199\u3002"
+    assert written(f"{shown}{gap}chatgpt", ("\u5199",), zh) == said
+
+
 # -------------------------------------------------- the wrapped stream's flush
 
 
