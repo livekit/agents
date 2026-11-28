@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 import logging
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
@@ -41,14 +42,14 @@ from livekit.agents.inference.stt import (
 from livekit.agents.llm import AgentHandoff, ChatMessage
 from livekit.agents.stt import FallbackAdapter, RecognizeStream, SpeechEvent, SpeechEventType
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils.aio.channel import Chan, ChanEmpty
+from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.agents.vad import VADEvent, VADEventType, VADStream
 from livekit.agents.voice import audio_recognition
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import ConversationItemAddedEvent
 
 from .fake_llm import FakeLLM
-from .fake_stt import FakeUserSpeech
+from .fake_stt import FakeUserSpeech, attach_provider_audio_channels
 from .fake_tts import FakeTTS
 from .fake_turn_stt import ScriptedTurn, TurnScriptedSTT
 from .fake_vad import FakeVAD
@@ -227,7 +228,6 @@ def test_inference_and_plugin_agree_about_ink2(monkeypatch: pytest.MonkeyPatch) 
 
 def test_gateway_ink2_payload_carries_no_word_alignment() -> None:
     stream = SpeechStream.__new__(SpeechStream)
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._connection = None
     stream._opts = SimpleNamespace(language="en")
 
@@ -439,11 +439,10 @@ def test_openai_keyterms_map_to_keywords() -> None:
 
 def _bare_stream() -> SpeechStream:
     stream = SpeechStream.__new__(SpeechStream)
-    stream._event_ch = Chan()  # type: ignore[assignment]
     stream._speaking = False
     stream._request_id = "req-1"
     stream._speech_duration = 0.0
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    attach_provider_audio_channels(stream)
     stream._connection = None
     stream._pending_extra = None
     stream._opts = SimpleNamespace(language="en", model="auto")
@@ -541,14 +540,68 @@ def test_eos_reports_provider_speech_end_time(
     final = stream._event_ch.recv_nowait()
     endpoint = stream._event_ch.recv_nowait()
     assert final.type == SpeechEventType.FINAL_TRANSCRIPT
+    # a transcript without timing has no end time: the offset is not a time of speech
+    provider_end = timing.get("start", 0) + timing.get("duration", 0)
     assert final.alternatives[0].end_time == pytest.approx(
-        8.5 + timing.get("start", 0) + timing.get("duration", 0)
+        8.5 + provider_end if provider_end else 0.0
     )
     assert endpoint.type == SpeechEventType.END_OF_SPEECH
     if end_time is None:
         assert endpoint.alternatives == []
     else:
         assert endpoint.alternatives[0].end_time == pytest.approx(end_time)
+
+
+def test_transcript_times_follow_the_audio_across_an_input_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve gateway segment and word bounds on both sides of an input gap."""
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
+    stream = _bare_stream()
+    stream.start_time_offset = 30.0
+    frame = rtc.AudioFrame.create(16000, 1, 1600)
+    # ten 100 ms frames add up to 0.9999999999999999
+    for captured_from in (1000.0, 1006.0):  # the input paused for 5s
+        for i in range(10):
+            now = captured_from + (i + 1) * frame.duration
+            stream._input_ch.send_nowait(frame)
+            stream._input_ch.recv_nowait()
+
+    stream._process_transcript(
+        {
+            "transcript": "bye",
+            "start": 0.7,
+            "duration": 0.3,
+            "words": [{"word": "bye", "start": 0.7, "end": 1.0}],
+        },
+        is_final=True,
+    )
+    stream._process_transcript(
+        {
+            "transcript": "hello",
+            "start": 1.0,
+            "duration": 0.3,
+            "words": [{"word": "hello", "start": 1.0, "end": 1.003}],
+        },
+        is_final=True,
+    )
+
+    events = []
+    with contextlib.suppress(ChanEmpty):
+        while True:
+            events.append(stream._event_ch.recv_nowait())
+    finals = [e.alternatives[0] for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    ends = [e.alternatives[0] for e in events if e.type == SpeechEventType.END_OF_SPEECH]
+    before, after = finals
+    assert (before.start_time, before.end_time) == pytest.approx((30.7, 31.0))
+    assert (after.start_time, after.end_time) == pytest.approx((36.0, 36.3))
+    assert (before.words[0].start_time, before.words[0].end_time) == pytest.approx((30.7, 31.0))
+    assert (after.words[0].start_time, after.words[0].end_time) == pytest.approx((36.0, 36.003))
+    # the end of speech is the end of the last word
+    assert [end.end_time for end in ends] == pytest.approx([31.0, 36.003])
 
 
 @pytest.mark.parametrize("timed", [True, False], ids=["utterance-timing", "arrival-time"])
@@ -558,6 +611,7 @@ async def test_eos_sets_the_last_speaking_time(
     """Provider timing anchors the end of speech; without it the arrival time does."""
     now = 1_700_000_010.0
     monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
+    monkeypatch.setattr(audio_recognition.time, "perf_counter", lambda: now)
     stream = _bare_stream()
     if timed:
         stream._opts.model = "deepgram/nova-3"

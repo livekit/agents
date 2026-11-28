@@ -992,7 +992,6 @@ class SpeechStream(stt.SpeechStream):
 
         self._ws: aiohttp.ClientWebSocketResponse | None = None
 
-        self._utterance_speech_start_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
@@ -1015,9 +1014,6 @@ class SpeechStream(stt.SpeechStream):
         self._release_at_end_speech = False
         # PCM sent that no finished utterance covers, up to RECONNECT_REPLAY_S
         self._recent_audio = bytearray()
-        # stream-timeline position of the current connection's first sample when it opened
-        # with carried audio; None leaves it to the base class's anchor
-        self._connection_offset: float | None = None
 
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
@@ -1071,19 +1067,12 @@ class SpeechStream(stt.SpeechStream):
             return None
         if value <= 0:
             return None
-        # Map connection-relative timestamps onto the caller's audio timeline.
-        return float(value) + self._timeline_offset()
-
-    def _timeline_offset(self) -> float:
-        if self._connection_offset is not None:
-            return self._connection_offset
-        return self.start_time_offset
+        return float(value)
 
     def _reset_utterance_state(self) -> None:
         self._cancel_eos_fallback()
         self._pending_final_data = None
         self._pending_eos = False
-        self._utterance_speech_start_wall = time.time()
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
         self._utterance_resolved.clear()
@@ -1328,9 +1317,9 @@ class SpeechStream(stt.SpeechStream):
             # update_options() and keyterm updates end a connection to reopen it with the
             # new options; the input channel carries on into the next connection
             while await self._run_connection():
-                # Sarvam times each connection from zero, so re-anchor on its first audio
-                self._input_ch.restart_provider_clock()
-                self._carry_audio_into_next_connection()
+                # Sarvam times each connection from zero, starting with the audio carried into it
+                carried = self._carry_audio_into_next_connection()
+                self._restart_connection_clock(replayed_duration=carried)
                 self.start_time = time.time()
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             async with self._connection_lock:
@@ -1553,25 +1542,23 @@ class SpeechStream(stt.SpeechStream):
                 extra=self._build_log_context(),
             )
 
-    def _carry_audio_into_next_connection(self) -> None:
+    def _carry_audio_into_next_connection(self) -> float:
         """Queue audio the previous connection may not have transcribed for the next one.
 
         That is the sent audio no finished utterance covers (speech may have started in it
-        before Sarvam's VAD reported it) plus samples never sent. It continues the previous
-        connection's timeline, so the new connection is anchored where it starts there
-        rather than on the next frame read, which may come later or not at all.
+        before Sarvam's VAD reported it) plus samples never sent. Return its duration in
+        seconds: the new connection's clock starts that far before the next frame read,
+        which may come later or not at all.
         """
         replay_samples = len(self._recent_audio) // 2
-        if replay_samples or self._audio_buffer:
-            start = self._sent_samples - replay_samples
-            self._connection_offset = self._timeline_offset() + start / self._opts.sample_rate
+        if replay_samples:
             self._audio_buffer[:0] = memoryview(bytes(self._recent_audio)).cast("h").tolist()
             self._recent_audio.clear()
-        else:
-            self._connection_offset = None
+        carried = len(self._audio_buffer) / self._opts.sample_rate
         self._sent_samples = 0
         self._end_speech_sample = None
         self._release_at_end_speech = False
+        return carried
 
     async def _send_pcm(self, ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:
         """Send 16-bit PCM samples in Sarvam's audio message and keep them for replay."""
@@ -1979,7 +1966,6 @@ class SpeechStream(stt.SpeechStream):
                     start_event = stt.SpeechEvent(
                         type=stt.SpeechEventType.START_OF_SPEECH,
                         request_id=self._server_request_id or "",
-                        speech_start_time=self._utterance_speech_start_wall,
                     )
                     self._event_ch.send_nowait(start_event)
                     self._logger.debug("Speech started", extra=self._build_log_context())

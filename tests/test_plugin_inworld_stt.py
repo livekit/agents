@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
 from livekit.agents import stt
 from livekit.plugins.inworld import stt as inworld_stt
+
+from .fake_stt import attach_provider_audio_channels
 
 pytestmark = pytest.mark.plugin("inworld")
 
@@ -19,9 +20,7 @@ def test_endpoint_preserves_word_timing(end_ms, text):
     stream._language = "en"
     stream._speaking = False
     stream._request_id = "test"
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
-    events = []
-    stream._event_ch = SimpleNamespace(send_nowait=events.append)
+    events = attach_provider_audio_channels(stream, start_time_offset=7.0)
     assert stream._build_transcribe_config()["includeWordTimestamps"] is True
     stream._process_stream_event({"result": {"speechStarted": {}}})
     transcript = {"transcript": text, "isFinal": True}

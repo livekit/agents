@@ -33,6 +33,8 @@ from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._turn_detection import TurnDetection
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
 
+from .fake_stt import attach_provider_audio_channels
+
 pytestmark = pytest.mark.plugin("elevenlabs")
 
 
@@ -75,7 +77,6 @@ def _new_stream(
         previous_text=None,
     )
     stream._language = LanguageCode(language) if language else None
-    stream._event_ch = _EventSink()
     stream._speaking = False
     stream._final_alternatives = []
     stream._vad = None
@@ -86,7 +87,7 @@ def _new_stream(
     stream._turn_detection = TurnDetection(
         opts=stream._opts, vad=None, on_end_of_speech=stream._emit_end_of_speech
     )
-    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
+    attach_provider_audio_channels(stream)
     return stream
 
 

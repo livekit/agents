@@ -45,7 +45,6 @@ def _bare_stream(**conn: Any) -> sarvam_stt.SpeechStream:
     stream._sent_samples = 0
     stream._end_speech_sample = None
     stream._release_at_end_speech = False
-    stream._connection_offset = None
     return stream
 
 
@@ -1039,26 +1038,24 @@ async def test_reconnect_replays_at_most_half_a_second(
     new = session.sockets[1]
     await _wait_until(lambda: len(new.audio()) > 0)
     assert new.audio() == audio.data.tobytes()[-8000 * 2 :]
-    assert stream._connection_offset == pytest.approx(0.5)  # the replay starts 0.5 s in
+    # the replay starts 0.5 s into the input
+    assert stream._connection_clock._start_position == pytest.approx(0.5)
 
     await stream.aclose()
     await stt.aclose()
 
 
 def test_each_connection_recomputes_where_it_starts() -> None:
-    """A connection that carries nothing over drops the previous connection's anchor."""
+    """A connection starts as far back as the audio carried into it."""
     stream = _bare_stream()
-    stream._connection_offset = 0.5
-    stream._carry_audio_into_next_connection()
-    assert stream._connection_offset is None
+    assert stream._carry_audio_into_next_connection() == 0.0
 
-    stream._connection_offset = 0.0  # the previous connection started the stream
     stream._sent_samples = 1600
     stream._recent_audio += np.full(800, 1, dtype=np.int16).tobytes()
     stream._audio_buffer.extend([2] * 160)
-    stream._carry_audio_into_next_connection()
+    # 800 replayed samples and 160 never sent
+    assert stream._carry_audio_into_next_connection() == pytest.approx(0.06)
     assert stream._audio_buffer == [1] * 800 + [2] * 160  # replay goes out first
-    assert stream._connection_offset == pytest.approx(0.05)  # 800 of 1600 samples in
     assert stream._sent_samples == 0
 
 
@@ -1113,7 +1110,7 @@ async def test_reconnect_keeps_the_next_utterance_onset(
     new = session.sockets[1]
     await _wait_until(lambda: len(new.audio()) > 0)
     assert new.audio() == audio.data.tobytes()[-640 * 2 :] + more.data.tobytes()
-    assert stream._connection_offset == pytest.approx(0.06)
+    assert stream._connection_clock._start_position == pytest.approx(0.06)
 
     await stream.aclose()
     await stt.aclose()
@@ -1235,8 +1232,9 @@ async def test_reconnect_keeps_transcript_times_on_the_stream_timeline(
     # nothing carried over, so the new connection's clock starts with the next frame
     stream.push_frame(_pcm_frame(60, 2))
     await _wait_until(lambda: len(session.sockets[1].audio()) > 0)
-    # capture times: 0.1 s of audio, a 0.2 s pause, then this frame's 60 ms
-    assert stream.start_time_offset == pytest.approx(0.24, abs=0.02)
+    # capture times: 0.1 s of audio, a 0.2 s pause, then this frame's 60 ms; the polls
+    # waiting for the reconnect lengthen the pause by about 20 ms
+    assert stream.start_time_offset == pytest.approx(0.26, abs=0.02)
 
     await stream._handle_transcript_data(
         {"data": {"transcript": "नमस्ते", "language_code": "hi-IN", "speech_end": 1.7}}

@@ -29,6 +29,7 @@ from ..inference.interruption import (
 from ..language import LanguageCode
 from ..log import logger
 from ..stt import SpeechEvent
+from ..stt.clock import _SessionStart
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
@@ -201,6 +202,8 @@ class _STTPipeline:
     It is never cancelled during handoff — only the consumer is swapped.
     """
 
+    _session_start: _SessionStart | None = None
+
     def __init__(
         self, stt_node: io.STTNode, *, is_closing: Callable[[], bool] | None = None
     ) -> None:
@@ -212,9 +215,31 @@ class _STTPipeline:
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
-        # copy of the session start wall clock time; the first audio when unset
-        # input_started_at + end_time (session relative) = wall-clock end of the speech
-        self.input_started_at: float | None = None
+
+    @property
+    def input_started_at(self) -> float | None:
+        """Copy of the session start wall-clock time; the first audio when unset.
+
+        ``input_started_at + end_time`` (session relative) is the wall-clock end of the speech.
+        """
+        return None if self._session_start is None else self._session_start.wall_timestamp
+
+    @input_started_at.setter
+    def input_started_at(self, value: float | None) -> None:
+        # Assigning the current value keeps the pair: recomputing its monotonic
+        # timestamp after a wall-clock change would move the session start.
+        if value != self.input_started_at:
+            self._session_start = (
+                None if value is None else _SessionStart.from_wall_timestamp(value)
+            )
+
+    @property
+    def session_start(self) -> _SessionStart | None:
+        """The session start, paired with its monotonic timestamp when it was set.
+
+        Each recognize stream of this pipeline receives this value unchanged.
+        """
+        return self._session_start
 
     @property
     def audio_ch(self) -> aio.Chan[rtc.AudioFrame | stt.RecognizeStream._FlushSentinel]:

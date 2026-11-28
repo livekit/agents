@@ -1219,7 +1219,7 @@ class SpeechStream(stt.SpeechStream):
             await step(send("session.handoff.switched"))
             self._connection = candidate
             self._ws = candidate.ws
-            self._input_ch.restart_provider_clock()
+            self._restart_connection_clock()
         except (APIError, aiohttp.ClientError, ConnectionError, asyncio.TimeoutError, ValueError):
             if candidate is not None:
                 await self._close_connection(candidate)
@@ -1774,11 +1774,13 @@ class SpeechStream(stt.SpeechStream):
         assert ws is not None
         return ws
 
-    def _session_time(self, provider_time: float) -> float:
+    def _connection_time(self, provider_time: float) -> float:
+        """Remove silence padding from a provider timestamp; the event channel places the
+        result on the session timeline."""
         connection = self._connection
         if connection is not None:
             provider_time = connection.input_time(provider_time)
-        return self.start_time_offset + provider_time
+        return provider_time
 
     def _build_speech_data(self, data: dict) -> stt.SpeechData:
         language = LanguageCode(data.get("language", self._opts.language or "en"))
@@ -1789,17 +1791,16 @@ class SpeechStream(stt.SpeechStream):
         metadata = extra if isinstance(extra, dict) and extra else None
         return stt.SpeechData(
             language=language,
-            start_time=self._session_time(data.get("start", 0)),
-            end_time=self._session_time(data.get("start", 0) + data.get("duration", 0)),
+            start_time=self._connection_time(data.get("start", 0)),
+            end_time=self._connection_time(data.get("start", 0) + data.get("duration", 0)),
             confidence=data.get("confidence", 1.0),
             text=data.get("transcript", ""),
             speaker_id=data.get("speaker_id"),
             words=[
                 TimedString(
                     text=word.get("word", ""),
-                    start_time=self._session_time(word.get("start", 0)),
-                    end_time=self._session_time(word.get("end", 0)),
-                    start_time_offset=self.start_time_offset,
+                    start_time=self._connection_time(word.get("start", 0)),
+                    end_time=self._connection_time(word.get("end", 0)),
                     confidence=word.get("confidence", 0.0),
                     speaker_id=word.get("speaker_id"),
                 )
@@ -1876,7 +1877,7 @@ class SpeechStream(stt.SpeechStream):
                 # billed audio duration (e.g. Ink-2), so use word timing for EOS.
                 if (words := data.get("words")) and (last_word_end := words[-1].get("end", 0)) > 0:
                     end_alternatives = [
-                        replace(speech_data, end_time=self._session_time(last_word_end))
+                        replace(speech_data, end_time=self._connection_time(last_word_end))
                     ]
                 end_event = stt.SpeechEvent(
                     type=stt.SpeechEventType.END_OF_SPEECH,

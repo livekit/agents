@@ -5,9 +5,10 @@ import asyncio
 import inspect
 import queue
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import create_autospec
 
 import grpc
 import pytest
@@ -152,191 +153,301 @@ def test_offline_results_combine_hypotheses_and_zero_confidence():
     assert event.alternatives[0].confidence == pytest.approx(0.45)
 
 
-@pytest.mark.parametrize("retry", [False, True], ids=["flush", "retry"])
+class _Clock:
+    """Freeze the wall and monotonic clocks; each pushed frame advances them by its duration."""
+
+    def __init__(self, monkeypatch) -> None:
+        self.now = 1000.0
+        monkeypatch.setattr(time, "time", lambda: self.now)
+        monkeypatch.setattr(time, "perf_counter", lambda: self.now)
+
+    def push(self, stream, byte: int) -> None:
+        self.now += 0.01
+        stream.push_frame(_audio_frame(byte))
+
+
+def _word(start_ms: int, end_ms: int):
+    return SimpleNamespace(word="hello", start_time=start_ms, end_time=end_ms, speaker_tag=1)
+
+
+def _pcm(*frame_bytes: int) -> list[bytes]:
+    return [_audio_frame(byte).data.tobytes() for byte in frame_bytes]
+
+
+def _word_times(event) -> tuple[float, float]:
+    word = event.alternatives[0].words[0]
+    return word.start_time, word.end_time
+
+
+@pytest.mark.no_concurrent
 @pytest.mark.parametrize("final", [False, True], ids=["interim", "final"])
-async def test_stt_rpc_timestamps_and_replay(monkeypatch, retry, final):
+async def test_stt_rpc_timestamps_restart_at_flush(monkeypatch, final):
+    """Each flushed RPC counts from its first frame, and the old RPC's audio stays there."""
+    clock = _Clock(monkeypatch)
     calls = []
-    offsets = []
+    first_rpc_closed, release = threading.Event(), threading.Event()
 
     def responses(audio, config):
-        calls.append(list(audio))
-        if retry and len(calls) == 1:
-            raise APIConnectionError("dropped")
-        yield _response(
-            words=[SimpleNamespace(word="hello", start_time=100, end_time=500, speaker_tag=1)],
-            final=final,
-        )
-
-    service = _mock_stt(monkeypatch, responses)
-    stream = service.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
-    original_start = stream._start_recognition_attempt
-
-    def start(config, loop, **kwargs):
-        attempt = original_start(config, loop, **kwargs)
-        offsets.append(attempt.start_time_offset)
-        return attempt
-
-    monkeypatch.setattr(stream, "_start_recognition_attempt", start)
-    try:
-        stream.start_time_offset = 7.25
-        stream.push_frame(_audio_frame(1))
-        if not retry:
-            stream.flush()
-            stream.push_frame(_audio_frame(2))
-        stream.end_input()
-        await asyncio.wait_for(stream._task, 2)
-        transcripts = [e.alternatives[0] async for e in stream if e.alternatives]
-        assert len(calls) == 2
-        assert len(transcripts) == (1 if retry else 2)
-        assert calls == [
-            [_audio_frame(1).data.tobytes()],
-            [_audio_frame(1 if retry else 2).data.tobytes()],
-        ]
-        if retry:
-            assert offsets[0] == offsets[1]
-        else:
-            assert offsets[1] - offsets[0] == pytest.approx(0.01, abs=0.001)
-        for speech, offset in zip(transcripts, offsets[-len(transcripts) :], strict=True):
-            assert speech.words[0].start_time == pytest.approx(offset + 0.1)
-            assert speech.words[0].end_time == pytest.approx(offset + 0.5)
-    finally:
-        await stream.aclose()
-
-
-@pytest.mark.parametrize("termination", ["error", "clean"])
-async def test_stt_reconnects_without_flush(monkeypatch, termination):
-    calls = []
-    restarted = threading.Event()
-
-    def responses(audio, config):
-        chunks = [next(audio)]
+        chunks = list(audio)
         calls.append(chunks)
         if len(calls) == 1:
-            if termination == "error":
-                raise APIConnectionError("dropped")
-            return
-        restarted.set()
-        yield _response()
-        chunks.extend(audio)
+            first_rpc_closed.set()
+            assert release.wait(2)
+        # the word is this RPC's last frame
+        end_ms = len(chunks) * 10
+        yield _response(words=[_word(end_ms - 10, end_ms)], final=final)
 
-    stream = _mock_stt(monkeypatch, responses).stream(
-        conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
-    )
+    stream = _mock_stt(monkeypatch, responses).stream()
     try:
-        stream.push_frame(_audio_frame(1))
-        assert await asyncio.to_thread(restarted.wait, 1)
-        stream.push_frame(_audio_frame(2))
+        stream.start_time_offset = 7.0
+        clock.push(stream, 1)  # session [7.00, 7.01]
+        stream.flush()
+        assert await asyncio.to_thread(first_rpc_closed.wait, 1)
+        # the first RPC is closing: audio pushed now waits for the next one
+        clock.now += 5.0
+        clock.push(stream, 2)  # session [12.01, 12.02]
+        clock.push(stream, 3)  # session [12.02, 12.03]
         stream.end_input()
+        await asyncio.sleep(0)
+        assert stream._input_ch.qsize() == 3  # two frames and the last flush
+        release.set()
         await asyncio.wait_for(stream._task, 2)
-        events = [e async for e in stream]
-        assert [e.type for e in events] == [
-            nvidia_stt.stt.SpeechEventType.START_OF_SPEECH,
-            nvidia_stt.stt.SpeechEventType.FINAL_TRANSCRIPT,
-            nvidia_stt.stt.SpeechEventType.END_OF_SPEECH,
+        transcripts = [e async for e in stream if e.alternatives]
+        assert calls == [_pcm(1), _pcm(2, 3)]
+        # the first RPC's delayed response keeps its own clock
+        assert [_word_times(e) for e in transcripts] == [
+            pytest.approx((7.0, 7.01), abs=1e-6),
+            pytest.approx((12.02, 12.03), abs=1e-6),
         ]
-        assert calls[1] == [_audio_frame(1).data.tobytes(), _audio_frame(2).data.tobytes()]
+        speech = transcripts[1].alternatives[0]
+        assert (speech.start_time, speech.end_time) == pytest.approx((12.02, 12.03), abs=1e-6)
     finally:
+        release.set()
         await stream.aclose()
 
 
-@pytest.mark.parametrize("termination", ["error", "clean", "flush-error"])
-async def test_stt_retry_budget_and_backoff(monkeypatch, termination):
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("termination", ["error", "clean"])
+async def test_stt_next_rpc_starts_at_unread_input_without_replay(monkeypatch, termination):
+    """An RPC that ends mid-stream loses the audio it took; the next starts at unread input."""
+    clock = _Clock(monkeypatch)
     calls = []
-
-    def responses(audio, config):
-        calls.append(list(audio) if termination == "flush-error" else [next(audio)])
-        if termination != "clean":
-            raise APIConnectionError("dropped")
-        return iter(())
-
-    sleep = AsyncMock()
-    monkeypatch.setattr(nvidia_stt.asyncio, "sleep", sleep)
-    stream = _mock_stt(monkeypatch, responses).stream(
-        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.25)
-    )
-    try:
-        stream.push_frame(_audio_frame())
-        if termination == "flush-error":
-            stream.end_input()
-        with pytest.raises(APIConnectionError, match="after 3 attempts") as exc:
-            await asyncio.wait_for(stream._task, 2)
-        assert not exc.value.retryable
-        assert len(calls) == 3
-        assert [c.args[0] for c in sleep.await_args_list] == [0.1, 0.25]
-    finally:
-        await stream.aclose()
-
-
-@pytest.mark.parametrize("termination", ["error", "clean", "flush-error"])
-async def test_stt_replays_recent_audio_after_buffer_overflow(monkeypatch, termination):
-    calls = []
-    offsets = []
-    received = threading.Event()
-    release = threading.Event()
-    original_start = nvidia_stt.SpeechStream._start_recognition_attempt
-
-    def start(self, config, loop, **kwargs):
-        attempt = original_start(self, config, loop, **kwargs)
-        offsets.append(attempt.start_time_offset)
-        return attempt
+    sleeps = []
+    took_audio, release = threading.Event(), threading.Event()
+    backoff, resume = asyncio.Event(), asyncio.Event()
 
     def responses(audio, config):
         chunks = []
         calls.append(chunks)
-        if len(calls) == 1:
-            for _ in range(3):
-                chunks.append(next(audio))
-            received.set()
-            assert release.wait(2)
-            if termination == "flush-error":
-                chunks.extend(audio)
-            if termination != "clean":
-                raise APIConnectionError("dropped")
-            return
         chunks.append(next(audio))
-        yield _response(words=[SimpleNamespace(word="hello", start_time=0, end_time=10)])
+        if len(calls) == 1:
+            chunks.append(next(audio))
+            took_audio.set()
+            assert release.wait(2)
+            if termination == "error":
+                raise APIConnectionError("dropped")
+            yield _response("first", words=[_word(0, 10)])
+            return
+        yield _response("second", words=[_word(0, 10)])
         chunks.extend(audio)
 
-    monkeypatch.setattr(nvidia_stt, "_MAX_REPLAY_AUDIO_SECONDS", 0.02)
-    monkeypatch.setattr(nvidia_stt.SpeechStream, "_start_recognition_attempt", start)
+    async def sleep(delay, result=None):
+        sleeps.append(delay)
+        backoff.set()
+        await resume.wait()
+
     stream = _mock_stt(monkeypatch, responses).stream(
         conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
     )
+    restarted = asyncio.Event()
+    restart_connection_clock = stream._restart_connection_clock
+
+    def restart():
+        restart_connection_clock()
+        restarted.set()
+
+    monkeypatch.setattr(stream, "_restart_connection_clock", restart)
+    monkeypatch.setattr(asyncio, "sleep", sleep)
     try:
-        for byte in (1, 2, 3):
-            stream.push_frame(_audio_frame(byte))
-        assert await asyncio.to_thread(received.wait, 1)
-        if termination == "flush-error":
-            stream.end_input()
+        stream.start_time_offset = 7.0
+        clock.push(stream, 1)  # session [7.00, 7.01]
+        clock.push(stream, 2)  # taken by the first RPC, never transcribed
+        assert await asyncio.to_thread(took_audio.wait, 1)
         release.set()
-        if termination != "flush-error":
-            event = await asyncio.wait_for(anext(stream), 2)
-            assert event.type == nvidia_stt.stt.SpeechEventType.START_OF_SPEECH
-            stream.end_input()
+        if termination == "error":
+            await asyncio.wait_for(backoff.wait(), 1)
+        else:
+            await asyncio.wait_for(restarted.wait(), 1)
+        clock.now += 5.0
+        clock.push(stream, 3)  # session [12.02, 12.03]
+        clock.push(stream, 4)
+        stream.end_input()
+        if termination == "error":
+            # nothing reads the input until the retry starts
+            assert stream._input_ch.qsize() == 3
+            assert sleeps == [0.1]
+            resume.set()
         await asyncio.wait_for(stream._task, 2)
-        transcripts = [e async for e in stream if e.alternatives]
-        assert calls[1] == [_audio_frame(2).data.tobytes(), _audio_frame(3).data.tobytes()]
-        assert offsets[1] == pytest.approx(offsets[0] + 0.01)
-        assert transcripts[0].alternatives[0].start_time == pytest.approx(offsets[1])
+        events = [e async for e in stream]
+        transcripts = [e for e in events if e.alternatives]
+        speech_event = nvidia_stt.stt.SpeechEventType
+        turn = [
+            speech_event.START_OF_SPEECH,
+            speech_event.FINAL_TRANSCRIPT,
+            speech_event.END_OF_SPEECH,
+        ]
+        assert [e.type for e in events] == turn * len(transcripts)
+        assert calls == [_pcm(1, 2), _pcm(3, 4)]
+        assert _word_times(transcripts[-1]) == pytest.approx((12.02, 12.03), abs=1e-6)
+        if termination == "clean":
+            assert [e.alternatives[0].text for e in transcripts] == ["first", "second"]
+            assert _word_times(transcripts[0]) == pytest.approx((7.0, 7.01), abs=1e-6)
+    finally:
+        release.set()
+        resume.set()
+        await stream.aclose()
+
+
+@pytest.mark.no_concurrent
+async def test_stt_keeps_input_queued_while_joining_an_ended_rpc(monkeypatch):
+    clock = _Clock(monkeypatch)
+    calls = []
+    joining, release = asyncio.Event(), asyncio.Event()
+    join_attempt = nvidia_stt._join_attempt
+
+    async def join(attempt):
+        if not joining.is_set():
+            joining.set()
+            await release.wait()
+        await join_attempt(attempt)
+
+    def responses(audio, config):
+        calls.append([next(audio)])
+        yield _response(words=[_word(0, 10)])
+        if len(calls) > 1:
+            calls[-1].extend(audio)
+
+    monkeypatch.setattr(nvidia_stt, "_join_attempt", join)
+    stream = _mock_stt(monkeypatch, responses).stream()
+    try:
+        stream.start_time_offset = 7.0
+        clock.push(stream, 1)
+        await asyncio.wait_for(joining.wait(), 1)
+        clock.now += 5.0
+        clock.push(stream, 2)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert stream._input_ch.qsize() == 1
+        assert stream._input_clock.dequeued_duration == pytest.approx(0.01)
+        release.set()
+        transcripts = []
+        while len(transcripts) < 2:
+            event = await asyncio.wait_for(anext(stream), 1)
+            if event.alternatives:
+                transcripts.append(event)
+        assert calls == [_pcm(1), _pcm(2)]
+        assert _word_times(transcripts[0]) == pytest.approx((7.0, 7.01), rel=0, abs=1e-6)
+        assert _word_times(transcripts[1]) == pytest.approx((12.01, 12.02), rel=0, abs=1e-6)
     finally:
         release.set()
         await stream.aclose()
 
 
-async def test_stt_replay_buffer_rolls_and_resets_after_final():
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("termination", ["error", "clean"])
+async def test_stt_retry_budget_and_backoff(monkeypatch, termination):
+    calls = []
+    sleeps = []
+
+    def responses(audio, config):
+        calls.append([next(audio)])
+        if termination == "error":
+            raise APIConnectionError("dropped")
+        return iter(())
+
+    stream = _mock_stt(monkeypatch, responses).stream(
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.25)
+    )
+
+    async def sleep(delay, result=None):
+        sleeps.append(delay)
+        # each retry needs new audio: the failed RPC's audio is not sent again
+        stream.push_frame(_audio_frame(len(sleeps) + 1))
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    try:
+        stream.push_frame(_audio_frame(1))
+        with pytest.raises(APIConnectionError, match="after 2 attempts"):
+            await asyncio.wait_for(stream._task, 2)
+        assert calls == [_pcm(1), _pcm(2), _pcm(3)]
+        assert sleeps == [0.1, 0.25]
+    finally:
+        await stream.aclose()
+
+
+async def test_stt_failed_last_flush_is_not_retried(monkeypatch):
+    """No input is left for a retry, so it would report an empty flush as success."""
+    calls = []
+
+    def responses(audio, config):
+        calls.append(list(audio))
+        raise APIConnectionError("dropped")
+
+    stream = _mock_stt(monkeypatch, responses).stream(
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
+    )
+    try:
+        stream.push_frame(_audio_frame(1))
+        stream.end_input()
+        with pytest.raises(APIConnectionError, match="dropped") as exc:
+            await asyncio.wait_for(stream._task, 2)
+        assert not exc.value.retryable
+        assert calls == [_pcm(1)]
+    finally:
+        await stream.aclose()
+
+
+async def test_stt_failed_rpc_closes_open_speech(monkeypatch):
+    """The interrupted speech is not resumed, so its turn ends with the RPC."""
+
+    def responses(audio, config):
+        next(audio)
+        yield _response("hel", final=False)
+        raise APIConnectionError("dropped")
+
+    stream = _mock_stt(monkeypatch, responses).stream(conn_options=APIConnectOptions(max_retry=0))
+    try:
+        stream.push_frame(_audio_frame(1))
+        events = []
+        with pytest.raises(APIConnectionError, match="dropped"):
+            async for event in stream:
+                events.append(event.type)
+        speech_event = nvidia_stt.stt.SpeechEventType
+        assert events == [
+            speech_event.START_OF_SPEECH,
+            speech_event.INTERIM_TRANSCRIPT,
+            speech_event.END_OF_SPEECH,
+        ]
+    finally:
+        await stream.aclose()
+
+
+async def test_stt_drops_responses_of_an_abandoned_rpc(monkeypatch):
+    """A worker that outlives its RPC cannot emit on a later RPC's clock."""
+    stream = _mock_stt(monkeypatch, lambda audio, config: iter(())).stream()
     attempt = nvidia_stt._RecognitionAttempt(
         audio_queue=queue.Queue(),
         done_fut=asyncio.get_running_loop().create_future(),
-        start_time_offset=2,
-        bytes_per_second=2,
+        abandoned=True,
     )
-    attempt.buffer_for_replay(b"1234", max_bytes=6)
-    attempt.buffer_for_replay(b"5678", max_bytes=6)
-    assert attempt.replay_snapshot() == ([b"34", b"5678"], 3, False)
-    attempt.mark_final_transcript()
-    assert attempt.replay_snapshot() == ([], 6, True)
-    attempt.buffer_for_replay(b"abcdefgh", max_bytes=6)
-    assert attempt.replay_snapshot() == ([b"cdefgh"], 7, False)
+    try:
+        stream._handle_response(attempt, _response())
+        stream.end_input()
+        await asyncio.wait_for(stream._task, 2)
+        assert [e async for e in stream] == []
+        assert not attempt.received_final_transcript
+    finally:
+        await stream.aclose()
 
 
 async def test_stt_cancellation_stops_worker(monkeypatch):

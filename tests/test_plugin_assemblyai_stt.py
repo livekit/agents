@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -95,11 +95,9 @@ async def test_vad_threshold_partial_update():
 # ---------------------------------------------------------------------------
 # SpeechStarted → speech_start_time conversion
 #
-# The plugin anchors the stream's wall-clock via the base-class `start_time`
-# property (which it overrides in send_task on the first ws.send_bytes). The
-# server emits SpeechStarted with a stream-relative `timestamp` in ms, which
-# the plugin converts to wall-clock by `self.start_time + timestamp_ms/1000`
-# and surfaces via `SpeechEvent.speech_start_time`.
+# The server emits SpeechStarted with a `timestamp` in ms of audio received by
+# the connection. The plugin emits it in seconds on that clock, and the event
+# channel places it on the wall clock from when the audio was captured.
 # ---------------------------------------------------------------------------
 
 
@@ -135,37 +133,123 @@ def _make_stream_for_unit_test(stt=None):
     return stream
 
 
-async def test_speech_started_uses_start_time_anchor():
-    """The SpeechStarted handler converts server timestamp_ms to wall-clock
-    using self.start_time, and emits a SpeechEvent with the correct
-    speech_start_time."""
+def _read_first_audio(stream, monkeypatch, captured_at: float) -> None:
+    """The connection reads its first frame, captured from ``captured_at`` (wall clock)."""
+    from livekit import rtc
+
+    frame = rtc.AudioFrame.create(16000, 1, 1600)
+    monkeypatch.setattr(time, "time", lambda: captured_at + frame.duration)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: captured_at + frame.duration)
+    stream._input_ch.send_nowait(frame)
+    stream._input_ch.recv_nowait()
+
+
+async def test_speech_started_uses_start_time_anchor(monkeypatch):
+    """Map server onset timestamps to wall time using the first audio frame's
+    capture time."""
     stream = _make_stream_for_unit_test()
 
-    # Override the stream anchor to a known value — simulates what send_task
-    # would do on the first ws.send_bytes.
     anchor = 1_700_000_000.0
-    stream.start_time = anchor
+    _read_first_audio(stream, monkeypatch, anchor)
 
     # Simulate the server sending a SpeechStarted message 500ms into the stream.
     stream._process_stream_event({"type": "SpeechStarted", "timestamp": 500})
 
     ev = stream._event_ch.recv_nowait()
     assert ev.type == SpeechEventType.START_OF_SPEECH
-    assert ev.speech_start_time == anchor + 0.5
+    assert ev.speech_start_time == pytest.approx(anchor + 0.5, abs=1e-6)
 
 
-async def test_speech_started_timestamp_zero_still_anchored():
+async def test_speech_started_timestamp_zero_still_anchored(monkeypatch):
     """A timestamp of 0 is a valid onset at stream start (not treated as
     'missing field'). Tests the earlier fix for the `is not None` check."""
     stream = _make_stream_for_unit_test()
 
     anchor = 1_700_000_000.0
-    stream.start_time = anchor
+    _read_first_audio(stream, monkeypatch, anchor)
     stream._process_stream_event({"type": "SpeechStarted", "timestamp": 0})
 
     ev = stream._event_ch.recv_nowait()
     assert ev.type == SpeechEventType.START_OF_SPEECH
-    assert ev.speech_start_time == anchor
+    assert ev.speech_start_time == pytest.approx(anchor, abs=1e-6)
+
+
+async def test_speech_started_follows_the_audio_after_an_input_gap(monkeypatch):
+    """Preserve speech onset and word timing after an input gap."""
+    from livekit import rtc
+
+    now = 1_700_000_000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = 30.0
+    frame = rtc.AudioFrame.create(16000, 1, 1600)
+
+    def push_audio(captured_from: float, duration: float) -> None:
+        nonlocal now
+        for i in range(round(duration / frame.duration)):
+            now = captured_from + (i + 1) * frame.duration
+            stream._input_ch.send_nowait(frame)
+            stream._input_ch.recv_nowait()
+
+    anchor = now
+    push_audio(anchor, 1.0)
+    push_audio(anchor + 6.0, 1.0)  # the input paused for 5s
+
+    stream._process_stream_event({"type": "SpeechStarted", "timestamp": 1500})
+    stream._process_stream_event(
+        {
+            "type": "Turn",
+            "words": [{"text": "hello", "start": 1500, "end": 1800, "confidence": 0.9}],
+            "end_of_turn": False,
+        }
+    )
+
+    started = stream._event_ch.recv_nowait()
+    # compared from the anchor: a relative tolerance on an epoch time is minutes wide
+    assert started.speech_start_time - anchor == pytest.approx(6.5)
+    interim = stream._event_ch.recv_nowait()
+    assert interim.alternatives[0].start_time == pytest.approx(30.0 + 6.5)
+    assert interim.alternatives[0].end_time == pytest.approx(30.0 + 6.8)
+
+
+async def test_speech_that_starts_with_the_audio_after_an_input_gap(monkeypatch):
+    """Place onsets after a gap and endpoints before it at the same stream position."""
+    from livekit import rtc
+
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
+    stream = _make_stream_for_unit_test()
+    stream.start_time_offset = 0.0
+    frame = rtc.AudioFrame.create(16000, 1, 2000)  # 125 ms
+
+    for captured_from in (1000.0, 1006.0):  # the input paused for 5s
+        for i in range(8):
+            now = captured_from + (i + 1) * frame.duration
+            stream._input_ch.send_nowait(frame)
+            stream._input_ch.recv_nowait()
+
+    stream._process_stream_event({"type": "SpeechStarted", "timestamp": 1000})
+    stream._process_stream_event(
+        {
+            "type": "Turn",
+            "words": [
+                {"text": "bye", "start": 700, "end": 1000, "confidence": 0.9},
+                {"text": "hello", "start": 1000, "end": 1300, "confidence": 0.9},
+            ],
+            "end_of_turn": False,
+        }
+    )
+
+    started = stream._event_ch.recv_nowait()
+    assert started.speech_start_time == pytest.approx(1006.0, rel=0, abs=1e-6)
+    words = stream._event_ch.recv_nowait().alternatives[0].words
+    assert (words[0].start_time, words[0].end_time) == pytest.approx((0.7, 1.0))
+    assert (words[1].start_time, words[1].end_time) == pytest.approx((6.0, 6.3))
 
 
 async def test_speech_started_without_timestamp_leaves_field_none():
@@ -182,10 +266,99 @@ async def test_speech_started_without_timestamp_leaves_field_none():
     assert ev.speech_start_time is None
 
 
+async def test_preflight_bounds_restart_with_the_connection_clock():
+    """A retry restarts the provider's clock, so an unfinished turn's preflight end
+    must not bound the next connection's preflight."""
+    import json
+
+    import aiohttp
+
+    from livekit.agents import APIStatusError
+
+    def turn(utterance: str, *words: tuple[str, int, int]) -> MagicMock:
+        data = {
+            "type": "Turn",
+            "utterance": utterance,
+            "end_of_turn": False,
+            "words": [
+                {"text": text, "start": start, "end": end, "confidence": 0.9}
+                for text, start, end in words
+            ],
+        }
+        return MagicMock(type=aiohttp.WSMsgType.TEXT, data=json.dumps(data))
+
+    def connection(message: MagicMock) -> MagicMock:
+        # the connection drops after its message, before the turn ends
+        closed = MagicMock(type=aiohttp.WSMsgType.CLOSED, data=None, extra=None)
+        ws = MagicMock(close_code=1006)
+        ws.receive = AsyncMock(side_effect=[message, closed])
+        ws.close = AsyncMock()
+        return ws
+
+    stream = _make_stream_for_unit_test()
+    connections = [
+        connection(turn("hello there", ("hello", 7000, 7400), ("there", 7500, 8000))),
+        connection(turn("again now", ("again", 100, 400), ("now", 500, 1000))),
+    ]
+    stream._connect_ws = AsyncMock(side_effect=connections)
+
+    preflights = []
+    for _ in connections:
+        with pytest.raises(APIStatusError):
+            await stream._run()
+        stream._restart_connection_clock()  # as the retry loop does
+        while not stream._event_ch.empty():
+            event = stream._event_ch.recv_nowait()
+            if event.type == SpeechEventType.PREFLIGHT_TRANSCRIPT:
+                preflights.append(event.alternatives[0])
+
+    first, second = preflights
+    assert (first.start_time, first.end_time) == pytest.approx((7.0, 8.0))
+    assert (second.text, second.start_time, second.end_time) == (
+        "again now",
+        pytest.approx(0.1),
+        pytest.approx(1.0),
+    )
+    assert [str(word) for word in second.words] == ["again", "now"]
+
+
+async def test_preflight_bounds_continue_within_a_turn_and_reset_after_it():
+    """Each preflight starts where the previous one ended, until the turn ends."""
+    stream = _make_stream_for_unit_test()
+
+    def turn(utterance: str, end_of_turn: bool, *words: tuple[str, int, int]) -> dict:
+        return {
+            "type": "Turn",
+            "utterance": utterance,
+            "transcript": " ".join(text for text, _, _ in words),
+            "end_of_turn": end_of_turn,
+            "words": [
+                {"text": text, "start": start, "end": end, "confidence": 0.9}
+                for text, start, end in words
+            ],
+        }
+
+    hello, there = ("hello", 7000, 7400), ("there", 7500, 8000)
+    stream._speech_duration = 1.0  # audio was sent during the turn
+    stream._process_stream_event(turn("hello", False, hello))
+    stream._process_stream_event(turn("there", True, hello, there))
+    stream._process_stream_event(turn("again", False, ("again", 9000, 9400)))
+
+    preflights = []
+    while not stream._event_ch.empty():
+        event = stream._event_ch.recv_nowait()
+        if event.type == SpeechEventType.PREFLIGHT_TRANSCRIPT:
+            preflights.append(event.alternatives[0])
+    assert [(p.start_time, p.end_time, [str(w) for w in p.words]) for p in preflights] == [
+        (pytest.approx(7.0), pytest.approx(7.4), ["hello"]),
+        (pytest.approx(7.4), pytest.approx(8.0), ["there"]),
+        (pytest.approx(9.0), pytest.approx(9.4), ["again"]),
+    ]
+
+
 async def test_start_time_has_default_before_plugin_override():
-    """Even without any plugin override, the base-class default
-    (time.time() seeded in __init__) is available for the SpeechStarted
-    conversion to use."""
+    """Without any plugin override, ``start_time`` is the base-class default
+    (time.time() seeded in __init__)."""
     stream = _make_stream_for_unit_test()
 
     # start_time should already be a recent wall-clock value from the base

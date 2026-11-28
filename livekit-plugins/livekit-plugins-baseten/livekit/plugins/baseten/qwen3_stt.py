@@ -414,10 +414,9 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
             words = [
                 TimedString(
                     text=w.get("word", ""),
-                    start_time=float(w.get("start_time", 0.0)) + self.start_time_offset,
-                    end_time=float(w.get("end_time", 0.0)) + self.start_time_offset,
+                    start_time=float(w.get("start_time", 0.0)),
+                    end_time=float(w.get("end_time", 0.0)),
                     confidence=float(w.get("prob", 0.0)),
-                    start_time_offset=self.start_time_offset,
                 )
                 for s in segments
                 for w in (s.get("word_timestamps") or [])
@@ -426,12 +425,8 @@ class Qwen3SpeechStream(stt_module.SpeechStream):
         return stt_module.SpeechData(
             language=_language_code(event.get("language_code")),
             text=text,
-            # Server times are socket-relative; the framework grows
-            # start_time_offset on every reconnect so consumers see one timeline.
-            start_time=(float(segments[0].get("start_time", 0.0)) if segments else 0.0)
-            + self.start_time_offset,
-            end_time=(float(segments[-1].get("end_time", 0.0)) if segments else 0.0)
-            + self.start_time_offset,
+            start_time=float(segments[0].get("start_time", 0.0)) if segments else 0.0,
+            end_time=float(segments[-1].get("end_time", 0.0)) if segments else 0.0,
             confidence=1.0,
             words=words,
         )

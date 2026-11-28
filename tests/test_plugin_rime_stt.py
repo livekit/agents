@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import sys
+import time
 import traceback
 import wave
 from collections.abc import AsyncIterator
@@ -170,12 +171,23 @@ class DetectorStream:
     def __aiter__(self):
         return self.events
 
-    def send(self, kind, data, *, speech_duration=0.0, inference_duration=0.0):
+    def send(
+        self,
+        kind,
+        data,
+        *,
+        timestamp=0.0,
+        speech_duration=0.0,
+        silence_duration=0.0,
+        inference_duration=0.0,
+    ):
+        """``timestamp`` counts seconds of audio pushed to this detector."""
         self.events.send_nowait(
             SimpleNamespace(
                 type=kind,
                 frames=[_frame(data=data)],
-                silence_duration=0.5,
+                timestamp=timestamp,
+                silence_duration=silence_duration,
                 speech_duration=speech_duration,
                 inference_duration=inference_duration,
             )
@@ -606,16 +618,6 @@ async def test_end_input_finishes_active_utterance_without_vad_end(setup):
     assert streams[0].audio == [b"aa"]
 
 
-async def test_backlog_is_bounded_in_bytes_and_does_not_finalize(setup):
-    owner, detector, streams, _, _, _ = setup
-    stream = owner.stream()
-    detector.send(VADEventType.START_OF_SPEECH, bytes(320002))
-    with pytest.raises(APIError, match="backlog"):
-        await receive(stream, SpeechEventType.FINAL_TRANSCRIPT)
-    assert not streams
-    assert detector.closed
-
-
 async def test_language_override_and_silence_final(setup, monkeypatch):
     owner, detector, streams, _, _, _ = setup
 
@@ -685,13 +687,12 @@ async def test_flush_restarts_vad_and_resamples_live_frames(setup, monkeypatch):
     assert all(d.closed for d in detectors)
 
 
-async def test_later_utterance_uploads_while_first_final_waits(
+async def test_later_utterance_waits_for_the_previous_final(
     setup, monkeypatch, collect_events, sdk
 ):
     owner, detector, streams, _, _, _ = setup
     release = asyncio.Event()
     first_eof = asyncio.Event()
-    second_done = asyncio.Event()
 
     async def delayed(self):
         first = self is streams[0]
@@ -705,8 +706,6 @@ async def test_later_utterance_uploads_while_first_final_waits(
             first_eof.set()
             await release.wait()
         yield self.sdk.TranscriptionFinal(text=text, language=self.options["language"])
-        if not first:
-            second_done.set()
 
     monkeypatch.setattr(SDKStream, "updates", delayed)
     stream = owner.stream(conn_options=APIConnectOptions(timeout=120))
@@ -716,90 +715,97 @@ async def test_later_utterance_uploads_while_first_final_waits(
     detector.send(VADEventType.END_OF_SPEECH, b"aa")
     await asyncio.wait_for(first_eof.wait(), 2)
     owner.update_options(mode="verbatim", language="es", context_terms=["Second"])
+    # the second utterance is spoken while the first final is still unavailable
     detector.send(VADEventType.START_OF_SPEECH, bytes(32000))
-    await wait_until(lambda: len(streams) == 2 and len(streams[1].audio) == 1)
-    # eleven seconds consumed while the previous final is still unavailable
-    for count in range(2, 12):
-        detector.send(VADEventType.INFERENCE_DONE, bytes(32000))
-        await wait_until(lambda count=count: len(streams[1].audio) == count)
-    detector.send(VADEventType.END_OF_SPEECH, bytes(352000))
-    await asyncio.wait_for(second_done.wait(), 2)
-    assert sum(e.type == SpeechEventType.START_OF_SPEECH for e in observed) == 1
-    assert not any(e.type == SpeechEventType.END_OF_SPEECH for e in observed)
-    assert not any(e.type == SpeechEventType.FINAL_TRANSCRIPT for e in observed)
+    detector.send(VADEventType.INFERENCE_DONE, bytes(32000))
+    detector.send(VADEventType.END_OF_SPEECH, bytes(64000))
+    stream.end_input()
+    for _ in range(5):
+        await asyncio.sleep(0)
+    # it stays in the VAD's event stream: no second request, and no audio held here
+    assert len(streams) == 1
+    assert [e.type for e in observed] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+    ]
+    release.set()
+    await asyncio.wait_for(reader, 2)
+    assert streams[1].audio == [bytes(32000), bytes(32000)]
     assert streams[1].options["language"] == "es"
     assert streams[1].options["mode"] == sdk.TranscriptionMode.VERBATIM
     assert streams[1].options["context_terms"] == ("Second",)
-    stream.end_input()
-    release.set()
-    await asyncio.wait_for(reader, 2)
     finals = [e for e in observed if e.type == SpeechEventType.FINAL_TRANSCRIPT]
     assert [e.request_id for e in finals] == ["first", "second"]
-    assert [e.alternatives[0].text for e in finals] == ["a", "b" * 11]
-    ends = [e.speech_end_time for e in observed if e.type == SpeechEventType.END_OF_SPEECH]
-    assert [e.speech_end_time for e in finals] == ends
-    assert [
-        e.type
-        for e in observed
-        if e.type
-        in (
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.FINAL_TRANSCRIPT,
-            SpeechEventType.END_OF_SPEECH,
-        )
-    ] == [
+    assert [e.alternatives[0].text for e in finals] == ["a", "bb"]
+    assert [e.type for e in observed if e.type != SpeechEventType.INTERIM_TRANSCRIPT] == [
         SpeechEventType.START_OF_SPEECH,
         SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.RECOGNITION_USAGE,
         SpeechEventType.END_OF_SPEECH,
     ] * 2
     usage = [e.recognition_usage.audio_duration for e in observed if e.recognition_usage]
-    assert usage == pytest.approx([1 / 16000, 11])
+    assert usage == pytest.approx([1 / 16000, 2])
     assert all(s.closed for s in streams)
 
 
-@pytest.mark.parametrize("failing", [1, None])
-async def test_parallel_requests_cancel_on_error_or_close(
+@pytest.mark.parametrize("failing", [True, False], ids=["error", "close"])
+async def test_error_or_close_cancels_the_active_request(
     setup, monkeypatch, failing, collect_events
 ):
     owner, detector, streams, _, _, _ = setup
     fail_now = asyncio.Event()
 
     async def delayed(self):
-        index = streams.index(self)
         await self.read_audio()
         await fail_now.wait()
-        if index == failing:
-            raise self.sdk.RimeUnavailableError(
-                "private-provider-content", request_id="failed-request"
-            )
-        await asyncio.Event().wait()
+        raise self.sdk.RimeUnavailableError("private-provider-content", request_id="failed-request")
         yield  # keep this an async generator
 
     monkeypatch.setattr(SDKStream, "updates", delayed)
     stream = owner.stream()
     observed, reader = collect_events(stream)
-    for count in (1, 2):
-        detector.utterance(b"aa")
-        await wait_until(lambda count=count: len(streams) == count and streams[-1].audio)
-    if failing is None:
-        await owner.aclose()
-    else:
+    detector.utterance(b"aa")
+    await wait_until(lambda: streams and streams[0].audio)
+    detector.utterance(b"bb")  # never requested
+    if failing:
         fail_now.set()
         with pytest.raises(APIStatusError):
             await asyncio.wait_for(reader, 2)
-    assert all(s.closed for s in streams)
+    else:
+        await owner.aclose()
+    assert len(streams) == 1
+    assert streams[0].closed
     assert detector.closed
-    assert not any(
-        e.type in (SpeechEventType.FINAL_TRANSCRIPT, SpeechEventType.END_OF_SPEECH)
-        for e in observed
-    )
+    assert [e.type for e in observed] == [SpeechEventType.START_OF_SPEECH]
 
 
-async def test_flush_accepts_new_audio_before_previous_final(setup, monkeypatch, collect_events):
+async def test_sdk_error_leaves_newly_queued_audio_unread(setup, monkeypatch):
+    owner, detector, _, _, _, _ = setup
+    stream = owner.stream()
+
+    def queue_audio():
+        for _ in range(5):
+            stream.push_frame(_frame())
+
+    async def fail(self):
+        await self.read_audio()
+        asyncio.get_running_loop().call_soon(queue_audio)
+        raise self.sdk.RimeUnavailableError("unavailable", request_id="failed-request")
+        yield
+
+    monkeypatch.setattr(SDKStream, "updates", fail)
+    detector.utterance()
+    with pytest.raises(APIStatusError):
+        await stream._task
+    assert stream._input_ch.qsize() == 5
+
+
+async def test_flush_waits_for_the_final_before_reading_new_audio(
+    setup, monkeypatch, collect_events
+):
     owner, _, streams, _, _, _ = setup
     release = asyncio.Event()
     first_eof = asyncio.Event()
-    second_eof = asyncio.Event()
 
     class LiveDetector(DetectorStream):
         def push_frame(self, frame):
@@ -812,8 +818,6 @@ async def test_flush_accepts_new_audio_before_previous_final(setup, monkeypatch,
         if self is streams[0]:
             first_eof.set()
             await release.wait()
-        else:
-            second_eof.set()
         yield self.sdk.TranscriptionFinal(text=str(streams.index(self)), language="en")
 
     monkeypatch.setattr(SDKStream, "updates", delayed)
@@ -825,62 +829,28 @@ async def test_flush_accepts_new_audio_before_previous_final(setup, monkeypatch,
     await asyncio.wait_for(first_eof.wait(), 2)
     stream.push_frame(frame)
     stream.end_input()
-    await asyncio.wait_for(second_eof.wait(), 2)
-    assert not any(e.type == SpeechEventType.FINAL_TRANSCRIPT for e in observed)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    # the flushed segment is still finishing: the next frame and flush stay unread
+    assert stream._input_ch.qsize() == 2
+    assert len(streams) == 1
     release.set()
     await asyncio.wait_for(reader, 2)
     assert [
         e.alternatives[0].text for e in observed if e.type == SpeechEventType.FINAL_TRANSCRIPT
     ] == ["0", "1"]
+    assert all(len(s.audio) == 1 for s in streams)
 
 
-async def test_pending_utterances_are_bounded(setup, monkeypatch, collect_events):
-    owner, detector, streams, _, _, _ = setup
-
-    async def delayed(self):
-        await self.read_audio()
-        await asyncio.Event().wait()
-        yield
-
-    monkeypatch.setattr(SDKStream, "updates", delayed)
-    stream = owner.stream()
-
-    _, reader = collect_events(stream)
-    for count in range(1, 9):
-        detector.utterance(b"aa")
-        await wait_until(lambda count=count: len(streams) == count and streams[-1].audio)
-    detector.send(VADEventType.START_OF_SPEECH, b"aa")
-    with pytest.raises(APIError, match="pending utterance limit"):
-        await asyncio.wait_for(reader, 2)
-    assert len(streams) == 8
-    assert all(s.closed for s in streams)
-    assert detector.closed
-
-
-@pytest.mark.parametrize(
-    "contract,second_finishes_first,commit_between_events",
-    [
-        ("append_fragments", False, False),
-        ("append_fragments", True, True),
-        ("revised_hypotheses", True, False),
-        ("revised_hypotheses", False, True),
-    ],
-)
-async def test_concurrent_results_reach_audio_recognition(
-    setup,
-    monkeypatch,
-    contract,
-    second_finishes_first,
-    commit_between_events,
-    cleanup,
-    collect_events,
+@pytest.mark.parametrize("commit_between_events", [False, True])
+@pytest.mark.parametrize("contract", ["append_fragments", "revised_hypotheses"])
+async def test_results_reach_audio_recognition(
+    setup, monkeypatch, contract, commit_between_events, cleanup, collect_events
 ):
     owner, detector, streams, _, _, _ = setup
     owner._output_contract = contract
-    release = [asyncio.Event(), asyncio.Event()]
-    uploaded = [asyncio.Event(), asyncio.Event()]
 
-    async def delayed(self):
+    async def updates(self):
         index = streams.index(self)
         self.request_id = str(index)
         text = "first" if index == 0 else "second"
@@ -890,11 +860,9 @@ async def test_concurrent_results_reach_audio_recognition(
                 yield self.sdk.TranscriptionDelta(text=text)
             else:
                 yield self.sdk.TranscriptionPartial(text=text)
-        uploaded[index].set()
-        await release[index].wait()
         yield self.sdk.TranscriptionFinal(text=text, language="en")
 
-    monkeypatch.setattr(SDKStream, "updates", delayed)
+    monkeypatch.setattr(SDKStream, "updates", updates)
     session = AgentSession(vad=None, turn_handling={"turn_detection": "stt"})
     hooks = MagicMock()
     hooks.retrieve_chat_ctx.return_value = llm.ChatContext()
@@ -919,25 +887,10 @@ async def test_concurrent_results_reach_audio_recognition(
             if task is not None:
                 await task
 
-    observed, reader = collect_events(stream, consume)
-    for index in range(2):
+    _, reader = collect_events(stream, consume)
+    for _ in range(2):
         detector.utterance(b"aa")
-        await asyncio.wait_for(uploaded[index].wait(), 2)
     stream.end_input()
-    if second_finishes_first:
-        release[1].set()
-        await wait_until(lambda: streams[1].closed)
-    release[0].set()
-    if not second_finishes_first:
-        await wait_until(
-            lambda: (
-                any(e.type == SpeechEventType.FINAL_TRANSCRIPT for e in observed)
-                and sum(e.type == SpeechEventType.START_OF_SPEECH for e in observed) == 2
-            )
-        )
-        # b still awaits its final, so a's completion must not leave b committed
-        assert recognition._speaking
-        release[1].set()
     await asyncio.wait_for(reader, 2)
     if recognition._end_of_turn_task is not None:
         await asyncio.wait_for(recognition._end_of_turn_task, 2)
@@ -951,15 +904,30 @@ async def test_concurrent_results_reach_audio_recognition(
     ] == ["first", "second"]
 
 
-async def test_speech_onset_accounts_for_buffering_before_deferred_publication(
+async def _push_live_audio(stream, seconds):
+    """Push 100 ms frames, each when its capture ends."""
+    frame = _frame(data=bytes(3200))
+    for _ in range(round(seconds / frame.duration)):
+        await asyncio.sleep(frame.duration)
+        stream.push_frame(frame)
+
+
+async def test_speech_bounds_follow_each_segment_across_a_flush_and_an_input_gap(
     setup, monkeypatch, collect_events
 ):
-    from livekit.plugins.rime import _stt_stream
+    # Each segment has its own detector, whose timestamps count from the segment's
+    # first frame. A 5 s input gap separates the segments, and the first final is
+    # late. The second segment's audio is not read until then, and the first
+    # segment's late events keep the first segment's times.
+    owner, _, streams, _, _, _ = setup
+    detectors = []
 
-    owner, detector, streams, _, _, _ = setup
-    clock = [100.0]
-    # patch only the adapter clock, leaving asyncio and the test runner untouched
-    monkeypatch.setattr(_stt_stream, "time", SimpleNamespace(time=lambda: clock[0]))
+    class SegmentDetector(DetectorStream):
+        def __init__(self):
+            super().__init__()
+            detectors.append(self)
+
+    owner._vad = SimpleNamespace(stream=SegmentDetector)
     release = asyncio.Event()
     first_eof = asyncio.Event()
 
@@ -973,31 +941,48 @@ async def test_speech_onset_accounts_for_buffering_before_deferred_publication(
     monkeypatch.setattr(SDKStream, "updates", delayed)
     stream = owner.stream()
     observed, reader = collect_events(stream)
-    detector.send(
+
+    def bounds(kind, field):
+        return [getattr(e, field) - t0 for e in observed if e.type == kind]
+
+    t0 = time.time()
+    await _push_live_audio(stream, 1.0)
+    # detected 0.4 s into the segment, after 0.3 s of speech and a slow inference
+    detectors[0].send(
         VADEventType.START_OF_SPEECH,
         b"aa",
+        timestamp=0.4,
         speech_duration=0.3,
         inference_duration=0.02,
     )
-    await wait_until(lambda: streams and streams[0].audio and observed)
-    detector.send(VADEventType.END_OF_SPEECH, b"aa")
+    detectors[0].send(VADEventType.END_OF_SPEECH, b"aa", timestamp=1.0, silence_duration=0.5)
     await asyncio.wait_for(first_eof.wait(), 2)
-    clock[0] = 200.0
-    detector.send(
-        VADEventType.START_OF_SPEECH,
-        b"bb",
-        speech_duration=0.4,
-        inference_duration=0.03,
+    await wait_until(lambda: observed)
+    assert bounds(SpeechEventType.START_OF_SPEECH, "speech_start_time") == pytest.approx(
+        [0.1], rel=0, abs=1e-4
     )
-    detector.send(VADEventType.END_OF_SPEECH, b"bb")
-    await wait_until(lambda: len(streams) == 2 and streams[1].closed)
-    starts = [e for e in observed if e.type == SpeechEventType.START_OF_SPEECH]
-    assert len(starts) == 1  # B's start is held behind A's final.
-    assert starts[0].speech_start_time == pytest.approx(99.68)
-    clock[0] = 300.0
-    stream.end_input()
+
+    await asyncio.sleep(5.0)
+    stream.flush()
+    await _push_live_audio(stream, 1.0)
+    await asyncio.sleep(100.0)
+    # the second segment's audio waits unread for the first segment's final
+    assert stream._input_ch.qsize() == 10
+    assert len(detectors) == 1
     release.set()
+    await wait_until(lambda: len(detectors) == 2 and stream._input_ch.empty())
+    await wait_until(lambda: observed[-1].type == SpeechEventType.END_OF_SPEECH)
+    assert bounds(SpeechEventType.END_OF_SPEECH, "speech_end_time") == pytest.approx(
+        [0.5], rel=0, abs=1e-4
+    )
+
+    detectors[1].send(VADEventType.START_OF_SPEECH, b"bb", timestamp=0.6, speech_duration=0.4)
+    detectors[1].send(VADEventType.INFERENCE_DONE, b"bb", timestamp=1.0)
+    stream.end_input()  # the second utterance ends with the input, without a VAD end
     await asyncio.wait_for(reader, 2)
-    assert [
-        e.speech_start_time for e in observed if e.type == SpeechEventType.START_OF_SPEECH
-    ] == pytest.approx([99.68, 199.57])
+    assert bounds(SpeechEventType.START_OF_SPEECH, "speech_start_time") == pytest.approx(
+        [0.1, 6.2], rel=0, abs=1e-4
+    )
+    ends = bounds(SpeechEventType.END_OF_SPEECH, "speech_end_time")
+    assert ends == pytest.approx([0.5, 7.0], rel=0, abs=1e-4)
+    assert bounds(SpeechEventType.FINAL_TRANSCRIPT, "speech_end_time") == ends

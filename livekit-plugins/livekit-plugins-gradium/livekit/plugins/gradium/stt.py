@@ -408,7 +408,7 @@ class SpeechStream(stt.SpeechStream):
             def _end_time() -> float:
                 # the `end_text` timing when the server already sent it, else unknown
                 if speech_end > 0:
-                    return speech_end + self.start_time_offset
+                    return speech_end
                 return 0.0
 
             def _finalize() -> None:
@@ -576,7 +576,7 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=data["start_s"] + self.start_time_offset,
+                                    start_time=data["start_s"],
                                 )
                             ],
                         )
@@ -673,7 +673,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 manual_flushes.clear()
                 tasks = [
                     asyncio.create_task(send_task(ws)),

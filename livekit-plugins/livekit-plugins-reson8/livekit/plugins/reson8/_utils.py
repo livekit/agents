@@ -300,21 +300,20 @@ def _confidence(word: dict[str, Any]) -> NotGivenOr[float]:
     return min(confidence, 1.0)
 
 
-def _word_time(word: dict[str, Any], key: str, *, offset: float) -> NotGivenOr[float]:
+def _word_time(word: dict[str, Any], key: str) -> NotGivenOr[float]:
     if "start_ms" not in word:
         return NOT_GIVEN
     start: float = word.get("start_ms", 0)
     if key == "start":
-        return offset + start / 1000.0
+        return start / 1000.0
     duration: float = word.get("duration_ms", 0)
-    return offset + (start + duration) / 1000.0
+    return (start + duration) / 1000.0
 
 
 def build_speech_data(
     msg: dict[str, Any],
     *,
     language: str | None,
-    start_time_offset: float = 0.0,
 ) -> stt.SpeechData:
     """
     Build a LiveKit ``SpeechData`` from a Reson8 transcript/turn payload.
@@ -328,10 +327,9 @@ def build_speech_data(
     words = [
         TimedString(
             text=w.get("text", ""),
-            start_time=_word_time(w, "start", offset=start_time_offset),
-            end_time=_word_time(w, "end", offset=start_time_offset),
+            start_time=_word_time(w, "start"),
+            end_time=_word_time(w, "end"),
             confidence=c,
-            start_time_offset=start_time_offset,
         )
         for w, c in zip(raw_words, confidences, strict=True)
     ]
@@ -342,11 +340,11 @@ def build_speech_data(
     start_ms = msg.get("start_ms")
     duration_ms = msg.get("duration_ms") or 0
     if start_ms is not None:
-        start_time = start_time_offset + start_ms / 1000.0
-        end_time = start_time_offset + (start_ms + duration_ms) / 1000.0
+        start_time = start_ms / 1000.0
+        end_time = (start_ms + duration_ms) / 1000.0
     else:
-        start_time = start_time_offset
-        end_time = start_time_offset
+        start_time = 0.0
+        end_time = 0.0
 
     fallback = language if language and "," not in language else ""
     return stt.SpeechData(

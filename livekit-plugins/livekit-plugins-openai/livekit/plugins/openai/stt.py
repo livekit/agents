@@ -783,7 +783,7 @@ class SpeechStream(stt.SpeechStream):
                     stt.SpeechData(
                         language=LanguageCode(""),
                         text="",
-                        end_time=end_time + self.start_time_offset,
+                        end_time=end_time,
                     )
                 ]
                 if end_time > 0
@@ -847,16 +847,8 @@ class SpeechStream(stt.SpeechStream):
                     if ev.type == vad.VADEventType.START_OF_SPEECH:
                         self._start_speaking()
                     elif ev.type == vad.VADEventType.END_OF_SPEECH:
-                        speech_end_time = None
-                        if (input_started_at := self._input_ch.input_started_at) is not None:
-                            # VAD time counts input audio, including audio queued during setup.
-                            speech_end_time = (
-                                input_started_at
-                                + self.start_time_offset
-                                + ev.timestamp
-                                - ev.silence_duration
-                            )
-                        self._stop_speaking(speech_end_time=speech_end_time)
+                        # VAD time counts input audio, including audio queued during setup.
+                        self._stop_speaking(speech_end_time=ev.timestamp - ev.silence_duration)
                         # a server-endpointed model closes the segment itself; this would cut it twice
                         if _is_realtime_only(self._opts.model):
                             await ws.send_json({"type": "input_audio_buffer.commit"})
@@ -1043,7 +1035,7 @@ class SpeechStream(stt.SpeechStream):
                     self._pool.last_acquire_time, self._pool.last_connection_reused
                 )
                 connection_audio_offset = self._audio_duration_by_ws.get(ws, 0.0)
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 # published before the config is sent, so a change made during the send lands
                 # after it rather than finding no live connection
                 self._ws = ws

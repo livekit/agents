@@ -861,8 +861,8 @@ class SpeechStream(stt.RecognizeStream):
             language=LanguageCode(self._config.language),
             text=text,
             speaker_id=speaker_id,
-            start_time=seg.start_time + self.start_time_offset,
-            end_time=seg.end_time + self.start_time_offset,
+            start_time=seg.start_time,
+            end_time=seg.end_time,
         )
 
         # Determine the event type

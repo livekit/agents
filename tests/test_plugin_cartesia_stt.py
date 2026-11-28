@@ -9,6 +9,8 @@ from livekit.plugins.cartesia._recognize_streams.legacy_recognize_stream import 
     LegacyRecognizeStream,
 )
 
+from .fake_stt import attach_provider_audio_channels
+
 pytestmark = pytest.mark.plugin("cartesia")
 
 
@@ -40,9 +42,7 @@ def test_endpoint_uses_words_and_preserves_transcript_spans(end_time):
     stream._request_id = "test"
     stream._speech_duration = 0.0
     stream._last_speech_end_time = 0.0
-    stream._input_ch = SimpleNamespace(start_time_offset=7.0)
-    events = []
-    stream._event_ch = SimpleNamespace(send_nowait=events.append, closed=False)
+    events = attach_provider_audio_channels(stream, start_time_offset=7.0)
     for turn in range(2):
         for is_final, start, end in [(False, 7.0, 7.5), (True, 7.5, 8.0)]:
             message = {

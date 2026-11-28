@@ -839,7 +839,7 @@ class SpeechStream(stt.SpeechStream):
 
                 # Connect to the WebSocket
                 async with self._session.ws_connect(session_url, autoping=False) as ws:
-                    self._input_ch.restart_provider_clock()
+                    self._restart_connection_clock()
                     self._ws = ws
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
@@ -1001,16 +1001,15 @@ class SpeechStream(stt.SpeechStream):
 
                 speech_data = stt.SpeechData(
                     language=language,
-                    start_time=utterance.get("start", 0) + self.start_time_offset,
-                    end_time=utterance.get("end", 0) + self.start_time_offset,
+                    start_time=utterance.get("start", 0),
+                    end_time=utterance.get("end", 0),
                     confidence=utterance.get("confidence", 1.0),
                     text=text,
                     words=[
                         TimedString(
                             text=word.get("word", ""),
-                            start_time=word.get("start", 0) + self.start_time_offset,
-                            end_time=word.get("end", 0) + self.start_time_offset,
-                            start_time_offset=self.start_time_offset,
+                            start_time=word.get("start", 0),
+                            end_time=word.get("end", 0),
                         )
                         for word in words
                     ],
@@ -1086,16 +1085,15 @@ class SpeechStream(stt.SpeechStream):
                         if original_language
                         else None,
                         source_texts=[original_text or ""] if original_language else None,
-                        start_time=translated_utterance.get("start", 0) + self.start_time_offset,
-                        end_time=translated_utterance.get("end", 0) + self.start_time_offset,
+                        start_time=translated_utterance.get("start", 0),
+                        end_time=translated_utterance.get("end", 0),
                         confidence=translated_utterance.get("confidence", 1.0),
                         text=translated_text,  # Use the translated text
                         words=[
                             TimedString(
                                 text=word.get("word", ""),
-                                start_time=word.get("start", 0) + self.start_time_offset,
-                                end_time=word.get("end", 0) + self.start_time_offset,
-                                start_time_offset=self.start_time_offset,
+                                start_time=word.get("start", 0),
+                                end_time=word.get("end", 0),
                             )
                             for word in words
                         ],
@@ -1121,7 +1119,7 @@ class SpeechStream(stt.SpeechStream):
                                     stt.SpeechData(
                                         language=LanguageCode(original_language),
                                         text="",
-                                        end_time=end_time + self.start_time_offset,
+                                        end_time=end_time,
                                     )
                                 ]
                                 if end_time > 0

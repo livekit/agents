@@ -781,7 +781,7 @@ class SpeechStream(stt.SpeechStream):
                 # A replacement socket cannot deliver the previous connection's pending final.
                 self._emit_end_of_speech()
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 await self._turn_detection.start()
                 self._final_alternatives = []
                 if self._opts.previous_text:
@@ -914,17 +914,16 @@ class SpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=normalized_language,
             text=text,
-            start_time=start_time + self.start_time_offset,
-            end_time=end_time + self.start_time_offset,
+            start_time=start_time,
+            end_time=end_time,
             confidence=_speech_confidence(words),
         )
         if words and self._opts.include_timestamps:
             speech_data.words = [
                 TimedString(
                     text=word.get("text", ""),
-                    start_time=word.get("start", 0) + self.start_time_offset,
-                    end_time=word.get("end", 0) + self.start_time_offset,
-                    start_time_offset=self.start_time_offset,
+                    start_time=word.get("start", 0),
+                    end_time=word.get("end", 0),
                 )
                 for word in words
             ]

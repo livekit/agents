@@ -290,7 +290,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
-                self._input_ch.restart_provider_clock()
+                self._restart_connection_clock()
                 self._ws = ws
 
                 tasks = [
@@ -461,10 +461,9 @@ class SpeechStream(stt.SpeechStream):
                             language=LanguageCode(self._language),
                             metadata=metadata,
                             start_time=words[0].get("startTimeMs", 0) / 1000
-                            + self.start_time_offset
                             if end_time > 0
                             else 0.0,
-                            end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
+                            end_time=end_time,
                         )
                     ],
                 )
@@ -480,7 +479,7 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechData(
                             language=LanguageCode(self._language),
                             text="",
-                            end_time=end_time + self.start_time_offset,
+                            end_time=end_time,
                         )
                     ]
                     if end_time > 0

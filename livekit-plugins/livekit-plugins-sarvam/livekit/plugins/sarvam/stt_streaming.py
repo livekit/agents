@@ -1403,8 +1403,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=LanguageCode(language),
             text=text,
-            start_time=start_time + self.start_time_offset if end_time > 0 else 0.0,
-            end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
+            start_time=start_time if end_time > 0 else 0.0,
+            end_time=end_time,
             confidence=float(confidence),
             metadata=metadata or None,
         )

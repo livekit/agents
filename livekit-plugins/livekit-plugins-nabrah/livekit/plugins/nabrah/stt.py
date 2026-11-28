@@ -116,8 +116,8 @@ def _finite_number(value: object, *, field: str) -> float:
     return number
 
 
-def _timed_word(w: dict[str, Any], offset: float) -> TimedString:
-    """One backend word entry as a TimedString. Timestamps arrive in ms."""
+def _timed_word(w: dict[str, Any]) -> TimedString:
+    """Convert a backend word from millisecond timestamps to seconds."""
     start_time = _finite_number(w.get("start_time", 0), field="word start_time")
     end_time = _finite_number(w.get("end_time", 0), field="word end_time")
     if end_time < start_time:
@@ -131,8 +131,8 @@ def _timed_word(w: dict[str, Any], offset: float) -> TimedString:
     )
     return TimedString(
         _word_text(w),
-        start_time=start_time / 1000.0 + offset,
-        end_time=end_time / 1000.0 + offset,
+        start_time=start_time / 1000.0,
+        end_time=end_time / 1000.0,
         confidence=confidence,
     )
 
@@ -441,7 +441,7 @@ class SpeechStream(stt.SpeechStream):
         self._event_ch.send_nowait(event)
 
     def _audio_clock(self) -> float:
-        """Audio-stream position for this connection, in seconds.
+        """Audio offset on the current provider connection, in seconds.
 
         The backend's audio_processed is what the recognizer actually consumed,
         so it cannot run ahead of realtime the way a send-side count does when
@@ -460,7 +460,7 @@ class SpeechStream(stt.SpeechStream):
 
     def _flush_eos(self) -> None:
         text = self._current_text()
-        end_time = self._segment_end_time or (self._audio_clock() + self.start_time_offset)
+        end_time = self._segment_end_time or self._audio_clock()
         start_time = min(self._segment_start_time, end_time)
 
         if text:
@@ -597,9 +597,7 @@ class SpeechStream(stt.SpeechStream):
         raw_words = data.get("words") or []
         if raw_words:
             self._utt_words = tuple(
-                _timed_word(w, self.start_time_offset)
-                for w in raw_words[self._utt_flushed_words :]
-                if _word_text(w)
+                _timed_word(w) for w in raw_words[self._utt_flushed_words :] if _word_text(w)
             )
             self._utt_raw_seen = len(raw_words)
 
@@ -629,19 +627,15 @@ class SpeechStream(stt.SpeechStream):
                 self._segment_start_time = (
                     word_start
                     if is_given(word_start)
-                    else min(previous_audio_position, self._audio_clock()) + self.start_time_offset
+                    else min(previous_audio_position, self._audio_clock())
                 )
                 self._emit(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.START_OF_SPEECH,
-                        speech_start_time=(
-                            self.start_time - self.start_time_offset + self._segment_start_time
-                        ),
+                        speech_start_time=self._segment_start_time,
                     )
                 )
-            self._segment_end_time = (
-                word_end if is_given(word_end) else self._audio_clock() + self.start_time_offset
-            )
+            self._segment_end_time = word_end if is_given(word_end) else self._audio_clock()
 
         if not self._request_id:
             self._request_id = utils.shortuuid("nabrah-")

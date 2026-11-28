@@ -9,7 +9,9 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from livekit.agents.stt import SpeechEventType
-from livekit.agents.utils.aio.channel import Chan, ChanEmpty
+from livekit.agents.utils.aio.channel import ChanEmpty
+
+from .fake_stt import attach_provider_audio_channels
 
 pytestmark = pytest.mark.plugin("deepgram")
 
@@ -203,17 +205,15 @@ async def test_flux_configure_noop_when_disconnected():
 def test_flux_turn_resumed_reaches_the_pipeline_as_an_interim():
     # the pipeline drops a preemptive reply when an interim moves past the preflight
     # transcript, so TurnResumed has to arrive as one, carrying what the user went on to say
-    from livekit.agents.stt import SpeechEvent, SpeechEventType
+    from livekit.agents.stt import SpeechEventType
     from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
 
-    events: list[SpeechEvent] = []
     stream = SimpleNamespace(
         _opts=SimpleNamespace(language="en"),
         _request_id="",
         _speaking=False,
-        start_time_offset=0.0,
-        _event_ch=SimpleNamespace(send_nowait=events.append),
     )
+    events = attach_provider_audio_channels(stream)
     stream._send_transcript_event = SpeechStreamv2._send_transcript_event.__get__(stream)
 
     # the payloads of https://developers.deepgram.com/docs/flux/state, trimmed
@@ -399,10 +399,9 @@ def test_flux_eos_uses_word_timing_instead_of_audio_window_end(last_word_end):
 
     stream = SpeechStreamv2.__new__(SpeechStreamv2)
     stream._opts = SimpleNamespace(language="en")
-    stream._event_ch = Chan()
     stream._speaking = True
     stream._request_id = "req-1"
-    stream._input_ch = SimpleNamespace(start_time_offset=8.5)
+    attach_provider_audio_channels(stream, start_time_offset=8.5)
     word = {"word": "hello", "start": 1.0, "confidence": 0.9}
     if last_word_end is not None:
         word["end"] = last_word_end
@@ -1316,8 +1315,6 @@ async def test_live_transcription_empty_languages_multilingual() -> None:
             ]
         }
     }
-    speech_data = live_transcription_to_speech_data(
-        "multi", payload, is_final=True, start_time_offset=0.0
-    )
+    speech_data = live_transcription_to_speech_data("multi", payload, is_final=True)
     assert len(speech_data) == 1
     assert speech_data[0].text == "bonjour"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Coroutine
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,8 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
+from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, stt
 from livekit.plugins.nabrah.stt import STT, SpeechStream
+
+from .fake_stt import current_event_loop, queued_events
 
 pytestmark = pytest.mark.unit
 
@@ -21,12 +25,19 @@ def stream() -> SpeechStream:
         coroutine.close()
         return MagicMock()
 
-    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_discard_task):
+    # Construct STT before setting the current loop: garbage collection of an
+    # earlier test's loop can clear it during construction.
+    stt_instance = STT(api_key="test-key")
+    http_session = MagicMock(spec=aiohttp.ClientSession)
+    with (
+        current_event_loop(),
+        patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_discard_task),
+    ):
         return SpeechStream(
-            stt_instance=STT(api_key="test-key"),
+            stt_instance=stt_instance,
             conn_options=DEFAULT_API_CONNECT_OPTIONS,
             language="ar-SA",
-            http_session=MagicMock(spec=aiohttp.ClientSession),
+            http_session=http_session,
         )
 
 
@@ -183,15 +194,77 @@ def test_flush_reports_usage_without_transcript(stream: SpeechStream) -> None:
 def test_endpoint_preserves_word_end_instead_of_audio_processed(stream: SpeechStream) -> None:
     stream.start_time_offset = 7.0
     stream._stt._end_of_turn_confirm_delay_seconds = None
-    emitted: list[stt.SpeechEvent] = []
-    with patch.object(stream, "_emit", side_effect=emitted.append):
-        stream._process_message(
-            {
-                "type": "transcript",
-                "text": "hello <eot>",
-                "audio_processed": 10.0,
-                "words": [{"word": "hello", "start_time": 100, "end_time": 400}],
-            }
-        )
+    stream._process_message(
+        {
+            "type": "transcript",
+            "text": "hello <eot>",
+            "audio_processed": 10.0,
+            "words": [{"word": "hello", "start_time": 100, "end_time": 400}],
+        }
+    )
+    emitted = queued_events(stream)
     endpoint = next(event for event in emitted if event.type == stt.SpeechEventType.END_OF_SPEECH)
     assert endpoint.alternatives[0].end_time == pytest.approx(7.4)
+
+
+def _read_audio_around_a_gap(stream: SpeechStream, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connection reads 1 s of audio captured from 1000 and, after the input paused
+    for 5 s, 1 s captured from 1006. Its audio zero is at 7 s on the session timeline."""
+    now = 1000.0
+    monkeypatch.setattr(time, "time", lambda: now)
+    # the input clock measures elapsed time on the monotonic clock
+    monkeypatch.setattr(time, "perf_counter", lambda: now)
+    stream.start_time_offset = 7.0
+    frame = rtc.AudioFrame.create(16000, 1, 1600)
+    for captured_from in (1000.0, 1006.0):
+        for i in range(10):
+            now = captured_from + (i + 1) * frame.duration
+            stream._input_ch.send_nowait(frame)
+            stream._input_ch.recv_nowait()
+
+
+def test_word_times_follow_the_audio_across_an_input_gap(
+    stream: SpeechStream, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _read_audio_around_a_gap(stream, monkeypatch)
+    stream._stt._end_of_turn_confirm_delay_seconds = None
+    stream._process_message(
+        {
+            "type": "transcript",
+            "text": "hello <eot>",
+            "audio_processed": 2.0,
+            "words": [{"word": "hello", "start_time": 1000, "end_time": 1300}],
+        }
+    )
+    emitted = queued_events(stream)
+
+    events = {event.type: event for event in emitted}
+    started = events[stt.SpeechEventType.START_OF_SPEECH]
+    assert started.speech_start_time is not None
+    assert started.speech_start_time - 1000.0 == pytest.approx(6.0)
+    final = events[stt.SpeechEventType.FINAL_TRANSCRIPT].alternatives[0]
+    assert (final.start_time, final.end_time) == pytest.approx((7.0 + 6.0, 7.0 + 6.3))
+    assert final.words is not None
+    assert (final.words[0].start_time, final.words[0].end_time) == pytest.approx(
+        (7.0 + 6.0, 7.0 + 6.3)
+    )
+    endpoint = events[stt.SpeechEventType.END_OF_SPEECH].alternatives[0]
+    assert endpoint.end_time == pytest.approx(7.0 + 6.3)
+
+
+def test_times_without_words_follow_the_audio_across_an_input_gap(
+    stream: SpeechStream, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _read_audio_around_a_gap(stream, monkeypatch)
+    stream._stt._end_of_turn_confirm_delay_seconds = None
+    # without words the segment spans the audio processed between two messages
+    stream._process_message({"type": "transcript", "text": "", "audio_processed": 1.2})
+    stream._process_message({"type": "transcript", "text": "hello <eot>", "audio_processed": 1.5})
+    emitted = queued_events(stream)
+
+    events = {event.type: event for event in emitted}
+    started = events[stt.SpeechEventType.START_OF_SPEECH]
+    assert started.speech_start_time is not None
+    assert started.speech_start_time - 1000.0 == pytest.approx(6.2)
+    final = events[stt.SpeechEventType.FINAL_TRANSCRIPT].alternatives[0]
+    assert (final.start_time, final.end_time) == pytest.approx((7.0 + 6.2, 7.0 + 6.5))

@@ -28,8 +28,6 @@ def _make_stream_under_test(
     instance._opts = SimpleNamespace(language="en-IN", sample_rate=16000)  # type: ignore[attr-defined]
     instance._speaking = False  # type: ignore[attr-defined]
     instance._should_flush = False  # type: ignore[attr-defined]
-    instance._input_ch = SimpleNamespace(start_time_offset=0.0)  # type: ignore[attr-defined]
-    instance._utterance_speech_start_wall = None  # type: ignore[attr-defined]
     instance._pending_final_data = None  # type: ignore[attr-defined]
     instance._pending_eos = False  # type: ignore[attr-defined]
     instance._eos_fallback_task = None  # type: ignore[attr-defined]
@@ -44,7 +42,6 @@ def _make_stream_under_test(
     instance._sent_samples = 0  # type: ignore[attr-defined]
     instance._end_speech_sample = None  # type: ignore[attr-defined]
     instance._release_at_end_speech = False  # type: ignore[attr-defined]
-    instance._connection_offset = None  # type: ignore[attr-defined]
     instance._recent_audio = bytearray()  # type: ignore[attr-defined]
     return instance, captured
 
@@ -73,14 +70,16 @@ def _events_of_type(captured: list[Any], event_type: stt.SpeechEventType) -> lis
     return [ev for ev in captured if ev.type == event_type]
 
 
-async def test_start_speech_sets_speech_start_time() -> None:
+async def test_start_speech_reports_no_onset_time() -> None:
+    # START_SPEECH has no audio offset, and its arrival is not the onset: the voice
+    # pipeline times the event itself.
     instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
 
     start_events = _events_of_type(captured, stt.SpeechEventType.START_OF_SPEECH)
     assert len(start_events) == 1
-    assert start_events[0].speech_start_time is not None
+    assert start_events[0].speech_start_time is None
     assert start_events[0].request_id == "req-session"
 
 
@@ -127,15 +126,15 @@ async def test_final_end_time_uses_speech_end_when_present() -> None:
 
 
 async def test_final_timing_includes_start_time_offset() -> None:
-    # Provider times are stream-relative; the base class accrues start_time_offset
-    # across reconnects, so present speech_start/speech_end must be shifted by it.
-    instance, captured = _make_stream_under_test()
-    instance._input_ch = SimpleNamespace(start_time_offset=2.0)  # type: ignore[attr-defined]
+    instance, _ = _make_stream_under_test()
+    instance._init_channels(translate_timestamps=True)
+    instance.start_time_offset = 2.0
 
     await instance._handle_events(_event("START_SPEECH"))
     await instance._handle_transcript_data(_ws_message(speech_start=0.5, speech_end=1.7))
 
-    final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
+    queued = list(instance._event_ch._queue)
+    final = _events_of_type(queued, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
     assert final.alternatives[0].start_time == pytest.approx(2.5)
     assert final.alternatives[0].end_time == pytest.approx(3.7)
 
