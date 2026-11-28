@@ -664,8 +664,7 @@ class JobContext:
         Add a callback to be called when the job is shutting down.
         Optionally the callback can take a single argument, the shutdown reason.
         """
-        min_args_num = 2 if inspect.ismethod(callback) else 1
-        if callback.__code__.co_argcount >= min_args_num:
+        if _takes_positional_arg(callback):
             self._shutdown_callbacks.append(callback)  # type: ignore
         else:
 
@@ -1003,7 +1002,7 @@ class JobContext:
                 logger.warning(
                     f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"  # noqa: E501
                 )
-            task_name = f"part-entry-{p.identity}-{coro.__name__}"
+            task_name = f"part-entry-{p.identity}-{_callable_name(coro)}"
             task = asyncio.create_task(coro(self, p), name=task_name)
             self._participant_tasks[(p.identity, coro)] = task
 
@@ -1013,7 +1012,8 @@ class JobContext:
                     self._participant_tasks.pop(key, None)
                 if not task.cancelled() and (exc := task.exception()) is not None:
                     logger.error(
-                        f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
+                        f"error in participant entrypoint {_callable_name(coro)} "
+                        f"for '{p.identity}'",
                         exc_info=exc,
                     )
 
@@ -1041,6 +1041,31 @@ class JobContext:
         if redaction_enabled or (options and options.get("redaction", False)):
             metadata[ATTRIBUTE_REDACTION_ENABLED] = True
         return metadata or None
+
+
+def _takes_positional_arg(fnc: Callable[..., Any]) -> bool:
+    """Whether ``fnc`` accepts a positional argument, e.g. the shutdown reason.
+
+    Read from the signature rather than ``__code__``: a ``functools.partial`` or a
+    callable object has no ``__code__``, and the signature already leaves out a bound
+    method's ``self`` and the arguments a partial has filled in. ``__wrapped__`` is not
+    followed: a decorated callback is called with the wrapper's own parameters, which
+    may differ from the function it wraps.
+    """
+    try:
+        params = inspect.signature(fnc, follow_wrapped=False).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        for p in params
+    )
+
+
+def _callable_name(fnc: Callable[..., Any]) -> str:
+    # a functools.partial or a callable object has no __name__
+    name = getattr(fnc, "__name__", None)
+    return name if isinstance(name, str) else type(fnc).__name__
 
 
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
