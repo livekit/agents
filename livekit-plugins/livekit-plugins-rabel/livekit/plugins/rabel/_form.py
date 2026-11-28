@@ -20,8 +20,9 @@ final's string is exactly the early start's string (livekit-agents 1.8.13,
 voice/audio_recognition.py: `transcript_changed = self._audio_transcript !=
 self._audio_preflight_transcript`). Bell's guesses come in lower case with no punctuation, while
 speech-to-texts send cased, punctuated finals, so a right guess was never kept there. (With the
-speech-to-text's own end of turn, LiveKit compares words, `_transcripts_equivalent`, and either form
-is kept.)
+speech-to-text's own end of turn, LiveKit compares words, `_transcripts_equivalent`, when it commits
+the turn, and either form is kept. A final the speech-to-text sends after its own end of speech is
+still compared as a string, as above.)
 
 So the guess is written from the speech-to-text's own text of the words so far, exactly as it last
 showed them, and only the words Bell adds are formed here: "i" and the common contractions restored,
