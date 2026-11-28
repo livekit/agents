@@ -542,11 +542,20 @@ async def test_contradicting_interim_passes_and_eager_replaces() -> None:
 @pytest.mark.parametrize(
     "final, re_sent", [("check my balance.", True), ("Check my balance.", False)]
 )
+@pytest.mark.parametrize("turn_detection", [None, "stt"])
 @pytest.mark.usefixtures("four_early_starts")
 async def test_final_equal_to_a_cancelled_guess_goes_first_as_an_early_start(
-    final: str, re_sent: bool
+    monkeypatch: pytest.MonkeyPatch, final: str, re_sent: bool, turn_detection: str | None
 ) -> None:
-    # LiveKit remembers the cancelled guess's text and starts no early reply at a final equal to it
+    # LiveKit remembers the cancelled guess's text and starts no early reply at a final equal to it.
+    # With the speech-to-text's own endpointing the final comes before its end of speech (Deepgram
+    # Flux), where LiveKit starts no early reply on a final but does on an early start, so the final
+    # still goes first as one
+    if turn_detection is not None:
+        in_session(
+            monkeypatch,
+            session_with(turn_detection=turn_detection, preemptive_generation={"max_retries": 4}),
+        )
     script = [
         ev(0.00, T.START_OF_SPEECH),
         ev(0.05, T.INTERIM_TRANSCRIPT, "check my", 0.95),

@@ -735,10 +735,12 @@ class SpeechStream(stt.RecognizeStream):
             # endpointing, only after the speech-to-text's end of speech with its endpointing
             on_final = not lim.stt_turns or self._lk_stt_ended
             out = [ev]
-            if on_final and self._lk_pre_stale and pre is not None and text.strip() == pre.strip():
+            if self._lk_pre_stale and pre is not None and text.strip() == pre.strip():
                 # rule 7: LiveKit still remembers the cancelled guess's text, finds this final
                 # unchanged and would start no early reply on it; the final goes first as the early
-                # start on its own words, as LiveKit makes it
+                # start on its own words. LiveKit starts a reply on an early start at any point of
+                # the turn, so this holds before the speech-to-text's end of speech too (Deepgram
+                # Flux sends its final first), and it counts as an early start like any other
                 self._count("final_sent_as_early_start")
                 out = [
                     dataclasses.replace(
