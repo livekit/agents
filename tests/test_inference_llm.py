@@ -560,3 +560,27 @@ async def test_token_counts_survive_a_response_that_generates_nothing() -> None:
     assert metrics[0].ttft == -1
     assert metrics[0].completion_tokens == 7
     assert metrics[0].total_tokens == 18
+
+
+async def test_with_martllm_does_not_send_livekit_inference_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        inference_llm,
+        "get_inference_headers",
+        lambda **_kwargs: {"X-LiveKit-Worker-Token": "worker-secret"},
+    )
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _sse_response(_TEXT + _STOP + _DONE)
+
+    async with _client(handler) as client:
+        martllm = openai_plugin.LLM.with_martllm(api_key="test-key", client=client)
+        plain = openai_plugin.LLM(model="m", client=client)
+        assert (await martllm.chat(chat_ctx=_ctx()).collect()).text == "hello"
+        assert (await plain.chat(chat_ctx=_ctx()).collect()).text == "hello"
+
+    assert "X-LiveKit-Worker-Token" not in seen[0].headers
+    assert seen[1].headers["X-LiveKit-Worker-Token"] == "worker-secret"

@@ -123,6 +123,7 @@ class LLM(llm.LLM):
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         _provider_fmt: NotGivenOr[str] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
+        _inference_headers: bool = True,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
@@ -182,6 +183,7 @@ class LLM(llm.LLM):
 
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
+        self._inference_headers = _inference_headers
         self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
@@ -635,7 +637,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_martllm(
         *,
-        model: str | MartLLMChatModels = "openai/gpt-4.1-mini",
+        model: str | MartLLMChatModels = "deepseek/deepseek-v3.2",
         api_key: str | None = None,
         base_url: str = "https://api.martllm.com/v1",
         client: openai.AsyncClient | None = None,
@@ -656,10 +658,13 @@ class LLM(llm.LLM):
 
         MartLLM is a marketplace where third-party providers serve models behind one
         OpenAI-compatible API. Model ids are provider-prefixed (for example
-        ``openai/gpt-4.1-mini``); the full list is at ``GET https://api.martllm.com/v1/models``.
+        ``deepseek/deepseek-v3.2``); the full list is at ``GET https://api.martllm.com/v1/models``.
 
         Tool schemas are sent non-strict, because a request can be served by different
         upstream providers and not all of them accept strict schemas.
+
+        LiveKit inference headers (room, job and agent ids, and ``LIVEKIT_WORKER_TOKEN`` on
+        hosted agents) are not sent, since they are only meant for the LiveKit gateway.
 
         Docs: https://martllm.com/docs/quickstart
         """
@@ -684,6 +689,7 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             _strict_tool_schema=False,
+            _inference_headers=False,
         )
 
     @staticmethod
@@ -1114,6 +1120,7 @@ class LLM(llm.LLM):
             model=self._opts.model,
             provider_fmt=self._provider_fmt,
             strict_tool_schema=self._strict_tool_schema,
+            inference_headers=self._inference_headers,
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -1148,12 +1155,14 @@ class LLMStream(_LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         prompt_cache_breakpoints: bool = False,
+        inference_headers: bool = True,
     ) -> None:
         super().__init__(
             llm,
             model=model,
             provider_fmt=provider_fmt,
             strict_tool_schema=strict_tool_schema,
+            inference_headers=inference_headers,
             client=client,
             chat_ctx=chat_ctx,
             tools=tools,

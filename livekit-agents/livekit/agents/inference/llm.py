@@ -641,8 +641,11 @@ class LLMStream(llm.LLMStream):
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
         prompt_cache_breakpoints: bool = False,
+        # False for OpenAI-compatible endpoints that are not the LiveKit gateway
+        inference_headers: bool = True,
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._inference_headers = inference_headers
         self._model = model
         self._provider = provider
         self._inference_class = inference_class
@@ -692,7 +695,8 @@ class LLMStream(llm.LLMStream):
                 self._extra_kwargs.pop("tool_choice", None)
 
             extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
-            extra_headers.update(get_inference_headers(inference_class=self._inference_class))
+            if self._inference_headers:
+                extra_headers.update(get_inference_headers(inference_class=self._inference_class))
             if self._provider:
                 extra_headers[HEADER_INFERENCE_PROVIDER] = self._provider
 
