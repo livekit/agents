@@ -239,6 +239,20 @@
       "concealed_samples": 25366,
       "baseline_missing_samples": 14640,
       "note": "Synthetic stress case; controller is not established as preferable to baseline."
+    },
+    "startup_jitter": {
+      "underruns": 4,
+      "concealed_samples": 3840,
+      "baseline_missing_samples": 7200,
+      "fault_start_ms": 100,
+      "provenance": "Illustrative synthetic delivery schedule, not a captured customer packet trace."
+    },
+    "reported_jitter": {
+      "underruns": 14,
+      "concealed_samples": 17019,
+      "baseline_missing_samples": 7200,
+      "fault_start_ms": 5100,
+      "provenance": "Illustrative synthetic delivery schedule, not a captured customer packet trace."
     }
   }
 }

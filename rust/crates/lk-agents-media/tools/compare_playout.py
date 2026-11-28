@@ -27,6 +27,8 @@ SCENARIOS = (
     "late_30ms_no_reserve",
     "repeated_stalls",
     "slow_jittery",
+    "startup_jitter",
+    "reported_jitter",
     "burst_recovery",
     "no_catchup",
     "long_outage",
@@ -86,6 +88,14 @@ def schedule(
             delay = 40_000
         elif name == "long_outage" and anchor <= index <= anchor + 9:
             delay = (anchor + 10 - index) * 100_000
+        elif name == "startup_jitter" and 1 <= index <= 4:
+            # Illustrative first-answer deliveries: no missing source, only delayed chunks.
+            delay = (60_000, 100_000, 160_000, 300_000)[index - 1]
+        elif name == "reported_jitter" and index >= anchor:
+            seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+            delay = 20_000 + seed % 70_001
+            if (index - anchor) % 17 == 9 and (speech_chunks is None or index in speech_chunks):
+                delay = 300_000
         elif name == "slow_jittery" and index >= anchor:
             # Ordered delivery with correlated queueing, recurring active-speech stalls,
             # backlog bursts and sustained 2% source-clock shortfall. This is synthetic,
@@ -195,6 +205,14 @@ def render_player(out: Path, report: dict) -> None:
             "30 ms late, no reserve",
             "Exposes short concealment and recovery during verified speech.",
         ),
+        "startup_jitter": (
+            "First-answer chunks arrive irregularly",
+            "Delivery gaps in the first four chunks; first fault at 0.100s.",
+        ),
+        "reported_jitter": (
+            "Report-inspired jitter with 300 ms stalls",
+            "Mostly 20–90 ms jitter with occasional active-speech 300 ms delays; not a recorded trace.",
+        ),
         "slow_jittery": (
             "Sustained slow and jittery delivery",
             "Correlated jitter, repeated stalls, bursts and 2% clock shortfall.",
@@ -246,7 +264,16 @@ def render_player(out: Path, report: dict) -> None:
         )
     payload = json.dumps(
         {
-            "cases": {name: {"label": labels[name][0]} for name in report["scenarios"]},
+            "cases": {
+                name: {
+                    "label": labels[name][0],
+                    "faultSeconds": case.get(
+                        "fault_start_ms", report["speech_activity"]["anchor_ms"]
+                    )
+                    / 1000,
+                }
+                for name, case in report["scenarios"].items()
+            },
             "tracks": tracks,
             "source": report.get("source_path", "speech.wav"),
             "faultSeconds": report["speech_activity"]["anchor_ms"] / 1000,
@@ -291,7 +318,7 @@ function select(time=0,play=false){
 scenario.addEventListener('change',()=>select(0,false));
 track.addEventListener('change',()=>select(audio.currentTime,!audio.paused));
 document.getElementById('start').onclick=()=>select(0,true);
-document.getElementById('gap').onclick=()=>select(Math.max(0,data.faultSeconds-0.4),true);
+document.getElementById('gap').onclick=()=>select(Math.max(0,data.cases[scenario.value].faultSeconds-0.4),true);
 document.getElementById('original').onclick=()=>{audio.src=data.source;status.textContent='Original GPTLive sentence';audio.play().catch(()=>{});};
 document.querySelectorAll('a.play').forEach(link=>link.onclick=event=>{event.preventDefault();const next=new URL(link.href);scenario.value=next.searchParams.get('scenario');track.value=next.searchParams.get('track');select(0,true);document.getElementById('player').scrollIntoView();});
 audio.addEventListener('error',()=>{status.textContent='Audio could not load. Please reload this page.';});
@@ -453,6 +480,7 @@ def main() -> None:
                 for row in csv.DictReader(stream)
             }
         report["scenarios"][name] = {
+            "fault_start_ms": 100 if name == "startup_jitter" else activity["anchor_ms"],
             "delay_ms": case_delay,
             "rust_metrics": {k: int(v) for k, v in final.items()},
             "fifo_metrics": fifo_metrics,

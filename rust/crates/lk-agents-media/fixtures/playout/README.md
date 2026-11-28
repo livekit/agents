@@ -121,3 +121,16 @@ clock shortfall. It is a synthetic stress case, not a measured provider trace. T
 fixed 40 ms delay case can underrun once and then retain that much reserve; repeated delay
 injection alone does not establish repeated audible underruns. Compare achieved latency,
 gap duration and listening quality, not just the injected delay count.
+
+## Focused listening cases
+
+The PR table retains two cases. `startup_jitter` delays source chunks 1–4 by 60, 100,
+160 and 300 ms. Ordered arrivals for chunks 0–7 are 0, 160, 300, 460, 700, 700, 700,
+700 ms. Speech is active at the first underrun (100 ms), so this tests the beginning
+of an answer before much history or buffering has accumulated.
+
+`reported_jitter` uses 20–90 ms delivery variation with occasional 300 ms delays restricted
+to active source speech. It reflects the reported symptom that a 100 ms reply buffer
+absorbs many gaps but cannot absorb a 300 ms delivery stall. The magnitudes are inspired
+by the report; the schedule is synthetic because no packet-arrival trace was supplied.
+No customer recordings or Slack message content are included in these audio artifacts.

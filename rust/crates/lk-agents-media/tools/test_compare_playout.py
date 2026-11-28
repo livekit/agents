@@ -42,13 +42,35 @@ class FaultPlacementTests(unittest.TestCase):
         self.assertTrue(
             all(arrival == start * 1_000_000 // 24_000 for arrival, start, _ in first[:51])
         )
-        intervals = [second[0] - previous[0] for previous, second in zip(first[51:], first[52:], strict=False)]
+        intervals = [
+            second[0] - previous[0]
+            for previous, second in zip(first[51:], first[52:], strict=False)
+        ]
         self.assertGreater(sum(interval > 120_000 for interval in intervals), 20)
         self.assertGreater(sum(interval < 50_000 for interval in intervals), 10)
         self.assertGreater(len(set(intervals)), 50)
         # Delay keeps accumulating, rather than causing a single initial underrun and then
         # returning to the same playout position forever.
         self.assertGreater(first[-1][0] - first[-1][1] * 1_000_000 // 24_000, 400_000)
+
+    def test_first_answer_packets_have_real_gaps_without_missing_source(self):
+        rows = schedule("startup_jitter", 24_000 * 4, 51)
+        self.assertEqual(
+            [row[0] for row in rows[:8]],
+            [0, 160_000, 300_000, 460_000, 700_000, 700_000, 700_000, 700_000],
+        )
+        self.assertEqual(sum(row[2] for row in rows), 24_000 * 4)
+        self.assertTrue(all(row[1] == i * 2400 for i, row in enumerate(rows)))
+
+    def test_report_inspired_large_stalls_only_target_verified_speech(self):
+        speech = {60, 77}
+        rows = schedule("reported_jitter", 24_000 * 12, 51, speech)
+        stalls = [
+            i for i, row in enumerate(rows) if row[0] - row[1] * 1_000_000 // 24_000 == 300_000
+        ]
+        self.assertEqual(stalls, [60, 77])
+        self.assertEqual(rows, schedule("reported_jitter", 24_000 * 12, 51, speech))
+        self.assertEqual([row[0] for row in rows], sorted(row[0] for row in rows))
 
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
