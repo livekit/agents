@@ -143,18 +143,6 @@ class AdaptiveNoiseGate:
         samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
         rms = float(np.sqrt(np.mean(np.square(samples)))) / 32768.0 if samples.size else 0.0
 
-        if not self._open:
-            # only silence teaches the floor, and only a whole stretch of it
-            self._stretch_sum += rms * frame.duration
-            self._stretch_duration += frame.duration
-            if self._stretch_duration >= self._min_silence_duration:
-                mean = self._stretch_sum / self._stretch_duration
-                self._history.append((mean, self._stretch_duration))
-                self._history_duration += self._stretch_duration
-                self._stretch_sum = self._stretch_duration = 0.0
-                while self._history_duration > self._window and len(self._history) > 1:
-                    self._history_duration -= self._history.popleft()[1]
-
         if self._history:
             floor = min(level for level, _ in self._history)
         elif self._stretch_duration:
@@ -167,6 +155,17 @@ class AdaptiveNoiseGate:
             if rms > floor * self._activation_ratio:
                 self._open = True
                 self._quiet = 0.0
+                self._stretch_sum = self._stretch_duration = 0.0
+            else:
+                self._stretch_sum += rms * frame.duration
+                self._stretch_duration += frame.duration
+                if self._stretch_duration >= self._min_silence_duration:
+                    mean = self._stretch_sum / self._stretch_duration
+                    self._history.append((mean, self._stretch_duration))
+                    self._history_duration += self._stretch_duration
+                    self._stretch_sum = self._stretch_duration = 0.0
+                    while self._history_duration > self._window and len(self._history) > 1:
+                        self._history_duration -= self._history.popleft()[1]
         elif rms < floor * self._deactivation_ratio:
             self._quiet += frame.duration
             if self._quiet >= self._min_silence_duration:

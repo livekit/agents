@@ -279,6 +279,17 @@ def test_one_dropped_frame_does_not_define_the_floor() -> None:
     assert not any(gate.update(_frame(0.002)) for _ in range(300))
 
 
+def test_speech_that_opens_the_gate_does_not_pollute_the_next_floor() -> None:
+    gate = AdaptiveNoiseGate(min_silence_duration=0.5)
+    for _ in range(4):
+        assert not gate.update(_frame(0.001))
+    assert gate.update(_frame(0.3))
+    gate.deactivate()
+    for _ in range(3):
+        gate.update(_frame(0.001))
+    assert gate.update(_frame(0.004))
+
+
 def test_the_floor_recovers_once_the_model_is_really_silent() -> None:
     gate = AdaptiveNoiseGate()
     # the session opens mid-speech, so the gate starts out with speech for a floor
