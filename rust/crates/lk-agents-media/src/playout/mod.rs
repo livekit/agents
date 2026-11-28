@@ -7,6 +7,7 @@
 
 mod delay;
 mod dsp;
+mod histogram;
 mod level;
 #[cfg(test)]
 mod playout_tests;
@@ -20,8 +21,11 @@ pub const SAMPLE_RATE: u32 = 24_000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
-    /// Initial reserve and lower bound for the adaptive target.
+    /// Lower bound for the adaptive reserve target.
     pub minimum_delay: Duration,
+    /// Cold-start waiting-time prior. Learned startup coverage replaces it across utterances;
+    /// clamped to the minimum/maximum delay bounds. EOF can release a short reply sooner.
+    pub startup_delay: Duration,
     /// Upper bound for the target, not a hard latency cap: accepted speech is never dropped.
     pub maximum_delay: Duration,
     pub capacity: Duration,
@@ -36,6 +40,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             minimum_delay: Duration::from_millis(20),
+            startup_delay: Duration::from_millis(80),
             maximum_delay: Duration::from_millis(100),
             capacity: Duration::from_secs(2),
             maximum_concealment: Duration::from_millis(200),
@@ -66,6 +71,11 @@ pub struct Statistics {
     pub source_consumed: u64,
     pub rendered: u64,
     pub stretched: u64,
+    /// Subset of inserted samples placed in low-energy source regions.
+    pub passive_stretched: u64,
+    pub reserve_requests: u64,
+    pub reserve_budget_limited: u64,
+    pub reserve_no_match: u64,
     pub accelerated: u64,
     /// Subset of `accelerated` removed by the severe-backlog mode.
     pub fast_accelerated: u64,
@@ -84,6 +94,9 @@ pub struct Render {
     pub queued_source: usize,
     pub pending_output: usize,
     pub target_delay: Duration,
+    /// Selected startup waiting-time budget; queued bursts/EOF may release it sooner.
+    pub startup_delay: Duration,
+    pub started: bool,
     /// All accepted source audio has been rendered and input was explicitly finished.
     pub drained: bool,
 }
@@ -100,6 +113,7 @@ pub struct Playout {
     last_time: Option<Duration>,
     delay: delay::Delay,
     target: usize,
+    startup_target: usize,
     level: level::Level,
     started: bool,
     finished: bool,
@@ -134,6 +148,9 @@ impl Playout {
             last_time: None,
             delay: delay::Delay::default(),
             target: samples(config.minimum_delay),
+            startup_target: samples(
+                config.startup_delay.clamp(config.minimum_delay, config.maximum_delay),
+            ),
             level: level::Level::default(),
             started: false,
             finished: false,
@@ -159,7 +176,14 @@ impl Playout {
         if pcm.is_empty() {
             return Ok(());
         }
-        self.first_arrival.get_or_insert(now);
+        if self.first_arrival.is_none() {
+            self.startup_target = self.delay.startup(
+                self.config.startup_delay,
+                self.config.minimum_delay,
+                self.config.maximum_delay,
+            );
+            self.first_arrival = Some(now);
+        }
         self.delay.update(now, self.statistics.source_received, pcm.len());
         self.target = self.delay.target(self.config.minimum_delay, self.config.maximum_delay);
         self.queue.extend(pcm.iter().copied());
@@ -177,10 +201,24 @@ impl Playout {
     /// End of source audio, not a temporary delivery gap. Idempotent; accepted samples drain.
     pub fn finish(&mut self) {
         self.finished = true;
+        self.delay.end_utterance();
     }
 
-    /// Cancel the old epoch. Reuses allocated storage and clears DSP, estimates and counters.
+    /// Cancel the old utterance and start a new audio/clock epoch. Keep only normalized
+    /// delivery/startup statistics: inter-answer silence never becomes an arrival delay.
+    /// Clears queued PCM, old phonemes, render counters and the time-scaling budget.
+    pub fn begin_utterance(&mut self) {
+        self.delay.begin_utterance();
+        self.clear_audio();
+    }
+
+    /// Full reset for a new provider/connection. Clears learned timing as well as audio.
     pub fn reset(&mut self) {
+        self.delay = delay::Delay::default();
+        self.clear_audio();
+    }
+
+    fn clear_audio(&mut self) {
         self.queue.clear();
         self.pending.clear();
         self.history.clear();
@@ -188,8 +226,12 @@ impl Playout {
         self.statistics = Statistics::default();
         self.first_arrival = None;
         self.last_time = None;
-        self.delay = delay::Delay::default();
-        self.target = samples(self.config.minimum_delay);
+        self.target = self.delay.target(self.config.minimum_delay, self.config.maximum_delay);
+        self.startup_target = self.delay.startup(
+            self.config.startup_delay,
+            self.config.minimum_delay,
+            self.config.maximum_delay,
+        );
         self.level = level::Level::default();
         self.started = false;
         self.finished = false;
@@ -212,9 +254,12 @@ impl Playout {
         }
         self.last_time = Some(now);
         if !self.started {
-            self.started = self
-                .first_arrival
-                .is_some_and(|first| self.finished || now - first >= self.config.minimum_delay);
+            self.started = self.first_arrival.is_some_and(|first| {
+                self.finished
+                    || samples(now - first) >= self.startup_target
+                    || self.queue.len()
+                        >= self.statistics.largest_chunk.saturating_add(self.startup_target)
+            });
         }
         if self.started
             && self.pending.is_empty()
@@ -296,6 +341,10 @@ impl Playout {
             queued_source: self.queue.len(),
             pending_output: self.pending.len(),
             target_delay: Duration::from_secs_f64(self.target as f64 / f64::from(SAMPLE_RATE)),
+            startup_delay: Duration::from_secs_f64(
+                self.startup_target as f64 / f64::from(SAMPLE_RATE),
+            ),
+            started: self.started,
             drained: self.finished && self.queue.is_empty() && self.pending.is_empty(),
         })
     }
@@ -333,6 +382,15 @@ impl Playout {
             .floor() as u64;
         let available_budget =
             budget.saturating_sub(self.statistics.stretched + self.statistics.accelerated);
+        if expand {
+            self.statistics.reserve_requests += 1;
+        }
+        if available_budget < dsp::PERIOD_MIN as u64 {
+            if expand {
+                self.statistics.reserve_budget_limited += 1;
+            }
+            return;
+        }
         let mut output = [0; FRAME];
         let operation = if expand {
             Stretch::Expand
@@ -341,7 +399,12 @@ impl Playout {
         } else {
             Stretch::Accelerate
         };
-        let limit = available_budget.min(PERIOD_MAX as u64) as usize;
+        let mut limit = available_budget.min(PERIOD_MAX as u64) as usize;
+        if !expand && !self.delay.startup_observed() {
+            // Do not reclaim the selected startup reserve before early deliveries have
+            // been observed. Genuine excess backlog can still be removed safely.
+            limit = limit.min(playout_delay.saturating_sub(self.startup_target));
+        }
         let result = if expand && self.queue.len() < FRAME + PERIOD_MAX {
             dsp::preemptive(
                 &self.history,
@@ -353,9 +416,14 @@ impl Playout {
         } else {
             dsp::stretch(&self.queue, operation, limit, self.concealer.passive_level(), &mut output)
         };
-        let Some((consumed, period)) = result else {
+        let Some(scale) = result else {
+            if expand {
+                self.statistics.reserve_no_match += 1;
+            }
             return;
         };
+        let consumed = scale.consumed;
+        let period = scale.change;
         self.pending.extend(output);
         for _ in 0..consumed {
             let source = self.queue.pop_front().expect("stretch validated queue length");
@@ -365,6 +433,9 @@ impl Playout {
         self.level.correct(if expand { -(period as isize) } else { period as isize });
         if expand {
             self.statistics.stretched += period as u64;
+            if scale.passive {
+                self.statistics.passive_stretched += period as u64;
+            }
         } else {
             self.statistics.accelerated += period as u64;
             if fast {

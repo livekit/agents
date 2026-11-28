@@ -45,6 +45,7 @@ fn normal_stretch_conceal_recover_and_reset_do_not_allocate() {
         .collect();
     let mut expansion = Playout::new(Config {
         minimum_delay: Duration::ZERO,
+        startup_delay: Duration::ZERO,
         maximum_stretch: 0.05,
         ..Config::default()
     })
@@ -65,14 +66,15 @@ fn normal_stretch_conceal_recover_and_reset_do_not_allocate() {
         }
         expansion.render(Duration::from_millis(at), &mut out).unwrap();
     }
+    // Preserve timing while clearing speech; this transition must not allocate either.
+    playout.begin_utterance();
     // Enter an actual voiced alignment prefix, not only an unvoiced gain ramp.
-    playout.reset();
     playout.push(Duration::ZERO, &voice).unwrap();
-    for at in (0..140).step_by(10) {
+    for at in (0..200).step_by(10) {
         playout.render(Duration::from_millis(at), &mut out).unwrap();
     }
-    playout.push(Duration::from_millis(140), &voice[30..]).unwrap();
-    playout.render(Duration::from_millis(140), &mut out).unwrap();
+    playout.push(Duration::from_millis(200), &voice[30..]).unwrap();
+    playout.render(Duration::from_millis(200), &mut out).unwrap();
     let merged = playout.statistics().merge_inserted;
     playout.finish();
     playout.reset();

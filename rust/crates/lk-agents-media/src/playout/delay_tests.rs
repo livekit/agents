@@ -1,29 +1,14 @@
 use super::*;
 
 #[test]
-fn histogram_normalizes_and_remembers_repeated_stalls() {
-    let mut delay = Delay::default();
-    for _ in 0..8 {
-        delay.add(15);
-    }
-    assert_eq!(delay.histogram.iter().sum::<i64>(), PROBABILITY);
-    assert_eq!(delay.target_ms, 320);
-    for _ in 0..20 {
-        delay.add(1);
-    }
-    assert_eq!(delay.histogram.iter().sum::<i64>(), PROBABILITY);
-    assert!(delay.target_ms >= 300);
-}
-
-#[test]
 fn packetization_is_not_a_reason_to_accelerate() {
     let mut delay = Delay::default();
     for packet in 0..30_u64 {
         let now = Duration::from_millis(packet * 100);
         delay.update(now, packet * 2400, 2400);
-        assert_eq!(delay.max_delay_ms(), 80);
+        assert_eq!(delay.max_delay_ms(), 0);
         let playout = delay.playout_delay(now + Duration::from_millis(20), packet * 2400);
-        assert_eq!(playout, 2400);
+        assert_eq!(playout, 480);
     }
 }
 
@@ -34,7 +19,7 @@ fn late_packet_envelope_prevents_immediate_catchup_into_another_gap() {
         delay.update(Duration::from_millis(packet * 100), packet * 2400, 2400);
     }
     delay.update(Duration::from_millis(1300), 24000, 2400);
-    assert_eq!(delay.max_delay_ms(), 380);
+    assert_eq!(delay.max_delay_ms(), 300);
     let actual = delay.playout_delay(Duration::from_millis(1300), 24000);
     assert!(actual < (100 + delay.max_delay_ms() + 20) * 24);
 }
@@ -59,4 +44,47 @@ fn sub_millisecond_reserve_is_not_rounded_up_to_the_target() {
     assert_eq!(delay.playout_delay(now, 24000 - 460), 460);
     delay.update(Duration::from_nanos(1000 * 1_000_000_000 / 24000), 1000, 1);
     assert!(delay.max_delay_ms() <= 1);
+}
+
+#[test]
+fn clean_startup_relaxes_gradually_and_bad_startup_is_remembered() {
+    let mut delay = Delay::default();
+    for expected in [60, 40, 20] {
+        delay.update(Duration::ZERO, 0, 2400);
+        delay.update(Duration::from_millis(100), 2400, 2400);
+        delay.end_utterance();
+        assert_eq!(
+            delay.startup(Duration::from_millis(80), Duration::ZERO, Duration::from_millis(100)),
+            expected * 24
+        );
+        delay.begin_utterance();
+    }
+    delay.update(Duration::ZERO, 0, 2400);
+    delay.update(Duration::from_millis(400), 2400, 2400);
+    delay.end_utterance();
+    assert_eq!(
+        delay.startup(Duration::from_millis(80), Duration::ZERO, Duration::from_millis(100)),
+        2400
+    );
+    delay.begin_utterance();
+    delay.update(Duration::from_secs(3600), 0, 2400);
+    delay.update(Duration::from_millis(3_600_100), 2400, 2400);
+    assert_eq!(delay.max_delay_ms(), 0);
+    assert!(
+        delay.startup(Duration::from_millis(80), Duration::ZERO, Duration::from_millis(100))
+            <= 2400
+    );
+}
+
+#[test]
+fn a_single_finished_chunk_is_not_evidence_of_good_packet_timing() {
+    let mut delay = Delay::default();
+    delay.update(Duration::ZERO, 0, 12000);
+    delay.end_utterance();
+    delay.begin_utterance();
+    assert_eq!(delay.target(Duration::ZERO, Duration::from_millis(100)), 1920);
+    assert_eq!(
+        delay.startup(Duration::from_millis(80), Duration::ZERO, Duration::from_millis(100)),
+        1920
+    );
 }

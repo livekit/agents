@@ -16,83 +16,98 @@ pub(in crate::playout) enum Stretch {
     FastAccelerate,
 }
 
-/// Finds a periodic splice over two windows, rather than matching an isolated transient.
-/// Low-energy input may use a short splice without reliable pitch; noisy speech is left
-/// untouched when no safe splice exists. Output is exactly FRAME samples; returns consumed
-/// source samples and the signed timing change. The caller owns the rate budget.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::playout) struct Scale {
+    pub consumed: usize,
+    pub change: usize,
+    pub passive: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Match {
+    period: usize,
+    splice: usize,
+    overlap: usize,
+    score: f64,
+    passive: bool,
+}
+
+/// Validate adjacent pitch periods and the actual overlap, rather than requiring an entire
+/// 20ms of stationary speech. Preserve the onset before the splice. A genuine low-energy
+/// interval is preferred to changing voiced speech, even if the latter correlates perfectly.
 pub(in crate::playout) fn stretch(
     queue: &VecDeque<i16>,
     operation: Stretch,
     budget: usize,
     passive_level: f64,
     output: &mut [i16; FRAME],
-) -> Option<(usize, usize)> {
+) -> Option<Scale> {
     if queue.len() < FRAME + PERIOD_MAX || budget < PERIOD_MIN {
         return None;
     }
-    let low_energy = rms(|i| queue[i], FRAME + PERIOD_MAX) < passive_level;
-    let mut best = -1.0;
-    let mut period = 0;
-    let mut scores = [-1.0; PERIOD_MAX + 1];
-    let length = FRAME - OVERLAP; // all candidate comparisons use exactly the same length
-    for lag in PERIOD_MIN..=PERIOD_MAX.min(budget) {
-        let a = correlation(|i| queue[i], |i| queue[lag + i], length);
-        let b = correlation(|i| queue[OVERLAP + i], |i| queue[OVERLAP + lag + i], length);
-        let score = a.min(b);
-        scores[lag] = score;
-        if score > best {
-            best = score;
-            period = lag;
-        }
-    }
+    let expand = operation == Stretch::Expand;
     let threshold =
         if operation == Stretch::FastAccelerate { FAST_CORRELATION } else { CORRELATION };
-    if best < threshold && !low_energy {
-        return None;
+    let evaluate = |period: usize| -> Option<Match> {
+        let anchor = if expand { FRAME - OVERLAP } else { (FRAME - OVERLAP).max(period + OVERLAP) };
+        let splice = if expand { anchor } else { anchor - period };
+        let overlap = OVERLAP.min(FRAME - splice);
+        let before = rms(|i| queue[anchor - period + i], period);
+        let after = rms(|i| queue[anchor + i], period);
+        let passive = before < passive_level
+            && after < passive_level
+            && rms(|i| queue[splice + i], overlap) < passive_level;
+        if !passive && (after < before * 0.8 || after > before * 1.25) {
+            return None;
+        }
+        let other = if expand { splice - period } else { splice + period };
+        let score = correlation(|i| queue[anchor - period + i], |i| queue[anchor + i], period)
+            .min(correlation(|i| queue[splice + i], |i| queue[other + i], overlap));
+        if !passive && score < threshold {
+            return None;
+        }
+        Some(Match { period, splice, overlap, score, passive })
+    };
+    let mut best: Option<Match> = None;
+    for period in PERIOD_MIN..=PERIOD_MAX.min(budget) {
+        let Some(candidate) = evaluate(period) else {
+            continue;
+        };
+        if best.is_none_or(|old| {
+            candidate.passive && !old.passive
+                || candidate.passive == old.passive && candidate.score > old.score + 1e-9
+        }) {
+            best = Some(candidate);
+        }
+        if candidate.passive {
+            break;
+        }
     }
-    if low_energy && best < threshold {
-        period = PERIOD_MIN;
-    }
-    // Choose the first sufficiently strong local period rather than a long multiple.
-    if !low_energy {
-        for lag in PERIOD_MIN + 1..period {
-            if scores[lag] >= best * 0.95
-                && scores[lag] >= scores[lag - 1]
-                && scores[lag] > scores[lag + 1]
-            {
-                period = lag;
+    let mut best = best?;
+    if operation == Stretch::FastAccelerate {
+        for multiple in (2..=PERIOD_MAX.min(budget) / best.period).rev() {
+            if let Some(candidate) = evaluate(best.period * multiple) {
+                best = candidate;
                 break;
             }
         }
     }
-    if operation == Stretch::FastAccelerate && !low_energy {
-        // NetEq's fast mode removes a multiple of the pitch lag. Verify the actual long
-        // splice, rather than assuming a harmonic remains valid across changing speech.
-        for multiple in (2..=PERIOD_MAX.min(budget) / period).rev() {
-            let lag = period * multiple;
-            let a = correlation(|i| queue[i], |i| queue[lag + i], length);
-            let b = correlation(|i| queue[OVERLAP + i], |i| queue[OVERLAP + lag + i], length);
-            if a.min(b) >= threshold {
-                period = lag;
-                break;
-            }
-        }
-    }
-    let expand = operation == Stretch::Expand;
-    let splice = if expand { period } else { 0 };
     for (i, out) in output.iter_mut().enumerate() {
-        *out = if i < splice {
+        *out = if i < best.splice {
             queue[i]
-        } else if i < splice + OVERLAP {
-            let at = i - splice;
-            let weight = smooth(at as f64 / OVERLAP as f64);
-            let other = if expand { i - period } else { i + period };
+        } else if i < best.splice + best.overlap {
+            let weight = smooth((i - best.splice) as f64 / best.overlap as f64);
+            let other = if expand { i - best.period } else { i + best.period };
             sample(f64::from(queue[i]) * (1.0 - weight) + f64::from(queue[other]) * weight)
         } else {
-            queue[if expand { i - period } else { i + period }]
+            queue[if expand { i - best.period } else { i + best.period }]
         };
     }
-    Some((if expand { FRAME - period } else { FRAME + period }, period))
+    Some(Scale {
+        consumed: if expand { FRAME - best.period } else { FRAME + best.period },
+        change: best.period,
+        passive: best.passive,
+    })
 }
 
 /// Builds reserve even with 20 ms deliveries, borrowing already rendered history for
@@ -104,32 +119,32 @@ pub(in crate::playout) fn preemptive(
     budget: usize,
     passive_level: f64,
     output: &mut [i16; FRAME],
-) -> Option<(usize, usize)> {
-    if history.len() < FRAME + PERIOD_MAX || budget < PERIOD_MIN {
+) -> Option<Scale> {
+    if history.len() < 2 * PERIOD_MIN || budget < PERIOD_MIN {
         return None;
     }
     let end = history.len();
-    let quiet = rms(|i| history[end - FRAME + i], FRAME) < passive_level
-        && rms(|i| queue[i], queue.len().min(FRAME)) < passive_level;
+    let mut quiet = false;
     let mut best = CORRELATION;
     let mut period = 0;
-    for lag in PERIOD_MIN..=PERIOD_MAX.min(budget) {
+    for lag in PERIOD_MIN..=PERIOD_MAX.min(budget).min(end / 2) {
         if queue.len() < (FRAME - lag).max(lag) {
             continue;
         }
         let previous = rms(|i| history[end - lag + i], lag);
         let next = rms(|i| queue[i], lag);
-        if !quiet && (next < previous * 0.8 || next > previous * 1.25) {
+        let passive = previous < passive_level && next < passive_level;
+        if !passive && (next < previous * 0.8 || next > previous * 1.25) {
             continue;
         }
-        let past =
-            correlation(|i| history[end - FRAME + i], |i| history[end - FRAME - lag + i], FRAME);
+        let past = correlation(|i| history[end - lag + i], |i| history[end - 2 * lag + i], lag);
         let upcoming = correlation(|i| history[end - lag + i], |i| queue[i], lag);
         let score = past.min(upcoming);
-        if quiet || score > best + 1e-9 {
+        if passive || score > best + 1e-9 {
             best = score;
             period = lag;
-            if quiet {
+            quiet = passive;
+            if passive {
                 break;
             }
         }
@@ -147,5 +162,5 @@ pub(in crate::playout) fn preemptive(
             queue[i - period]
         };
     }
-    Some((FRAME - period, period))
+    Some(Scale { consumed: FRAME - period, change: period, passive: quiet })
 }

@@ -21,8 +21,8 @@
 struct Chunk { int64_t arrival_us; size_t start; size_t count; };
 
 int main(int argc, char** argv) {
-  if (argc != 6) {
-    std::cerr << "neteq_reference input48.pcm arrivals.csv output48.pcm duration_ms minimum_delay_ms\n";
+  if (argc != 9) {
+    std::cerr << "neteq_reference input48.pcm arrivals.csv output48.pcm duration_ms minimum_delay_ms maximum_delay_ms stretch_enabled timeline.csv\n";
     return 2;
   }
   std::ifstream pcm_file(argv[1], std::ios::binary);
@@ -49,6 +49,11 @@ int main(int argc, char** argv) {
   webrtc::NetEq::Config config;
   config.sample_rate_hz = 48000;
   config.min_delay_ms = std::stoi(argv[5]);
+  config.max_delay_ms = std::stoi(argv[6]);
+  config.for_test_no_time_stretching = std::stoi(argv[7]) == 0;
+  std::ofstream timeline(argv[8]);
+  if (!timeline) return 11;
+  timeline << "time_us,queued_ms,target_ms,filtered_ms,concealed,concealment_events,stretched,accelerated,packets_discarded\n";
   auto neteq = webrtc::DefaultNetEqFactory().Create(
       env, config, webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderL16>());
   if (!neteq->RegisterPayloadType(93, webrtc::SdpAudioFormat("L16", 48000, 1))) return 6;
@@ -83,6 +88,14 @@ int main(int argc, char** argv) {
     now_us = tick;
     webrtc::AudioFrame frame;
     if (neteq->GetAudio(&frame) != 0 || frame.samples_per_channel_ != 480) return 9;
+    auto state = neteq->GetOperationsAndState();
+    auto cumulative = neteq->GetLifetimeStatistics();
+    timeline << tick << ',' << state.current_buffer_size_ms << ','
+             << neteq->TargetDelayMs() << ',' << neteq->FilteredCurrentDelayMs() << ','
+             << cumulative.concealed_samples << ',' << cumulative.concealment_events << ','
+             << cumulative.inserted_samples_for_deceleration << ','
+             << cumulative.removed_samples_for_acceleration << ','
+             << cumulative.packets_discarded << '\n';
     for (size_t i = 0; i < 480; ++i) {
       auto sample = static_cast<uint16_t>(frame.data()[i]);
       output.put(static_cast<char>(sample & 255));

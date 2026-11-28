@@ -147,7 +147,8 @@ fn time_stretch_preserves_tone_pitch_and_handles_quiet_input() {
     for operation in [Stretch::Expand, Stretch::Accelerate] {
         let input: VecDeque<_> = sine(FRAME + PERIOD_MAX, 120, 23, 8000.0).into();
         let mut output = [0; FRAME];
-        let (consumed, period) = stretch(&input, operation, PERIOD_MAX, 40.0, &mut output).unwrap();
+        let scale = stretch(&input, operation, PERIOD_MAX, 40.0, &mut output).unwrap();
+        let (consumed, period) = (scale.consumed, scale.change);
         assert!((period as isize - 120).abs() < 5);
         assert_eq!(
             consumed,
@@ -207,7 +208,8 @@ fn preemptive_expansion_uses_history_with_only_twenty_ms_of_new_audio() {
     let history: VecDeque<_> = sine(HISTORY, 120, 23, 8000.0).into();
     let input: VecDeque<_> = sine(FRAME, 120, HISTORY + 23, 8000.0).into();
     let mut output = [0; FRAME];
-    let (consumed, inserted) = preemptive(&history, &input, PERIOD_MAX, 40.0, &mut output).unwrap();
+    let scale = preemptive(&history, &input, PERIOD_MAX, 40.0, &mut output).unwrap();
+    let (consumed, inserted) = (scale.consumed, scale.change);
     assert_eq!(inserted, 120);
     assert_eq!(consumed + inserted, FRAME);
     assert!(correlation(|i| output[i], |i| output[i + 120], FRAME - 120) > 0.99);
@@ -224,9 +226,10 @@ fn fast_acceleration_removes_multiple_periods_without_changing_tone_pitch() {
     let input: VecDeque<_> = sine(FRAME + PERIOD_MAX, 120, 23, 8000.0).into();
     let mut normal = [0; FRAME];
     let mut fast = [0; FRAME];
-    let (_, regular) = stretch(&input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut normal).unwrap();
-    let (consumed, removed) =
-        stretch(&input, Stretch::FastAccelerate, PERIOD_MAX, 40.0, &mut fast).unwrap();
+    let regular =
+        stretch(&input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut normal).unwrap().change;
+    let scale = stretch(&input, Stretch::FastAccelerate, PERIOD_MAX, 40.0, &mut fast).unwrap();
+    let (consumed, removed) = (scale.consumed, scale.change);
     assert_eq!(regular, 120);
     assert_eq!(removed, 360);
     assert_eq!(consumed, FRAME + removed);
@@ -270,4 +273,27 @@ fn learned_room_tone_can_be_time_scaled_without_treating_it_as_voiced_speech() {
     assert!(output.iter().all(|s| i32::from(*s).abs() <= 200));
     let speech_only = begin(&noise(24000, 12000.0), 2400);
     assert_eq!(speech_only.passive_level(), 40.0);
+}
+
+#[test]
+fn scaling_prefers_a_pause_and_preserves_the_word_attack_before_it() {
+    let mut input = sine(FRAME + PERIOD_MAX, 120, 23, 12000.0);
+    input[300..600].fill(0);
+    let queue = input.iter().copied().collect();
+    let mut out = [0; FRAME];
+    let scale = stretch(&queue, Stretch::Expand, PERIOD_MAX, 40.0, &mut out).unwrap();
+    assert!(scale.passive);
+    assert_eq!(&out[..300], &input[..300]);
+    assert_eq!(out[FRAME - 1], 0);
+    assert!(scale.change >= PERIOD_MIN);
+}
+
+#[test]
+fn time_scaling_defers_a_sharp_consonant_onset() {
+    let mut input = vec![0; FRAME + PERIOD_MAX];
+    let onset = noise(FRAME + PERIOD_MAX - 300, 12000.0);
+    input[300..].copy_from_slice(&onset);
+    let queue = input.into();
+    let mut out = [0; FRAME];
+    assert!(stretch(&queue, Stretch::Expand, PERIOD_MAX, 40.0, &mut out).is_none());
 }

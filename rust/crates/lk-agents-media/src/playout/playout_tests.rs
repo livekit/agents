@@ -7,7 +7,8 @@ fn ms(value: u64) -> Duration {
 fn plain() -> Playout {
     Playout::new(Config {
         minimum_delay: Duration::ZERO,
-        maximum_delay: ms(100),
+        startup_delay: Duration::ZERO,
+        maximum_delay: Duration::ZERO,
         maximum_stretch: 0.0,
         ..Config::default()
     })
@@ -56,7 +57,9 @@ fn arbitrary_chunk_boundaries_preserve_clean_samples() {
 
 #[test]
 fn startup_delay_is_time_not_a_chunk_size_threshold() {
-    let mut p = Playout::new(Config { maximum_stretch: 0.0, ..Config::default() }).unwrap();
+    let mut p =
+        Playout::new(Config { startup_delay: ms(20), maximum_stretch: 0.0, ..Config::default() })
+            .unwrap();
     p.push(ms(0), &[4000; 2400]).unwrap();
     let mut output = [9; 240];
     for now in [0, 10] {
@@ -134,6 +137,7 @@ fn concealment_and_recovery_bound_discontinuities_and_fade_out() {
 fn unvoiced_outage_and_disabled_plc_ramp_to_silence() {
     let mut p = Playout::new(Config {
         minimum_delay: Duration::ZERO,
+        startup_delay: Duration::ZERO,
         maximum_concealment: Duration::ZERO,
         maximum_stretch: 0.0,
         ..Config::default()
@@ -151,7 +155,9 @@ fn unvoiced_outage_and_disabled_plc_ramp_to_silence() {
 
 #[test]
 fn a_reserve_absorbs_short_delivery_stalls() {
-    let mut p = Playout::new(Config { maximum_stretch: 0.0, ..Config::default() }).unwrap();
+    let mut p =
+        Playout::new(Config { startup_delay: ms(20), maximum_stretch: 0.0, ..Config::default() })
+            .unwrap();
     p.push(ms(0), &voice(2400, 0)).unwrap();
     let mut output = [0; 240];
     for at in (0..220).step_by(10) {
@@ -202,6 +208,7 @@ fn finish_drains_without_inventing_speech_and_reset_clears_epoch() {
 fn voiced_time_stretching_accounts_for_every_source_sample() {
     let mut p = Playout::new(Config {
         minimum_delay: Duration::ZERO,
+        startup_delay: Duration::ZERO,
         maximum_stretch: 0.05,
         ..Config::default()
     })
@@ -283,7 +290,9 @@ fn a_permanent_delivery_shift_is_not_counted_twice_as_buffer_delay() {
         account(&p, r);
     }
     let s = p.statistics();
-    assert!(s.rendered - s.source_consumed <= 24 * 70);
+    // The network's permanent 40ms shift is separate from the learned reserve. The
+    // reserve may grow to its configured 60ms target, plus at most one pitch splice.
+    assert!(s.rendered - s.source_consumed <= 24 * (40 + 60) + PERIOD_MAX as u64, "{s:?}");
     assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
 }
 
@@ -440,6 +449,7 @@ fn concealment_and_recovery_are_invariant_to_render_block_boundaries() {
 fn small_provider_chunks_build_reserve_before_a_later_delivery_stall() {
     let mut protected = Playout::new(Config {
         minimum_delay: Duration::ZERO,
+        startup_delay: Duration::ZERO,
         maximum_stretch: 0.03,
         ..Config::default()
     })
@@ -491,7 +501,7 @@ fn severe_playout_backlog_bypasses_cooldown_but_not_the_rate_budget() {
         let s = p.statistics();
         assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
     }
-    assert!(p.statistics().fast_accelerated >= 720, "{:?}", p.statistics());
+    assert!(p.statistics().fast_accelerated >= dsp::PERIOD_MIN as u64, "{:?}", p.statistics());
 }
 
 #[test]
@@ -523,7 +533,13 @@ fn an_alignment_prefix_drains_with_eof_without_losing_source_or_accounting() {
 #[test]
 fn faded_recovery_rebuilds_half_the_target_reserve_but_eof_never_waits() {
     for finish in [false, true] {
-        let mut p = plain();
+        let mut p = Playout::new(Config {
+            minimum_delay: Duration::ZERO,
+            startup_delay: Duration::ZERO,
+            maximum_stretch: 0.0,
+            ..Config::default()
+        })
+        .unwrap();
         let mut output = [0; 240];
         p.push(ms(0), &voice(2400, 0)).unwrap();
         for at in (0..300).step_by(10) {
@@ -544,6 +560,201 @@ fn faded_recovery_rebuilds_half_the_target_reserve_but_eof_never_waits() {
         assert!(p.statistics().source_consumed > 2400);
         if finish {
             assert!(p.render(ms(320), &mut output).unwrap().drained);
+        }
+    }
+}
+
+#[test]
+fn a_cold_start_budget_covers_the_delayed_second_chunk() {
+    let mut p = Playout::new(Config::default()).unwrap();
+    let mut out = [0; 240];
+    for at in (0..500_u64).step_by(10) {
+        if at == 0 {
+            p.push(ms(at), &voice(2400, 0)).unwrap();
+        }
+        if at >= 160 && (at - 60).is_multiple_of(100) {
+            p.push(ms(at), &voice(2400, (at - 60) as usize * 24)).unwrap();
+        }
+        let report = p.render(ms(at), &mut out).unwrap();
+        account(&p, report);
+        assert_eq!(report.started, at >= 80);
+    }
+    assert_eq!(p.statistics().underruns, 0);
+}
+
+#[test]
+fn queued_bursts_and_known_eof_release_startup_early() {
+    let mut p = Playout::new(Config::default()).unwrap();
+    let mut out = [0; 240];
+    p.push(ms(0), &voice(2400, 23)).unwrap();
+    for at in [0, 10, 20, 30] {
+        assert!(!p.render(ms(at), &mut out).unwrap().started);
+    }
+    p.push(ms(40), &voice(2400, 2423)).unwrap();
+    let report = p.render(ms(40), &mut out).unwrap();
+    assert!(report.started);
+    assert_eq!(report.startup_delay, ms(80));
+    assert_eq!(out[0], voice(1, 23)[0]);
+    p.begin_utterance();
+    p.push(ms(0), &voice(240, 23)).unwrap();
+    p.finish();
+    assert!(p.render(ms(0), &mut out).unwrap().drained);
+    assert_ne!(out[0], 0);
+}
+
+#[test]
+fn learned_startup_protects_later_answers_without_learning_idle_time() {
+    let mut p =
+        Playout::new(Config { startup_delay: ms(20), maximum_stretch: 0.0, ..Config::default() })
+            .unwrap();
+    let mut out = [0; 240];
+    for turn in 0..10_u64 {
+        if turn > 0 {
+            p.begin_utterance();
+        }
+        let base = turn * 60_000; // Long conversation pauses must not train delay estimates.
+        for tick in (0..1300_u64).step_by(10) {
+            if tick == 0 {
+                p.push(ms(base), &voice(2400, 23)).unwrap();
+            }
+            if (160..=960).contains(&tick) && (tick - 60).is_multiple_of(100) {
+                p.push(ms(base + tick), &voice(2400, (tick - 60) as usize * 24 + 23)).unwrap();
+                if tick == 960 {
+                    p.finish();
+                }
+            }
+            let report = p.render(ms(base + tick), &mut out).unwrap();
+            account(&p, report);
+            assert!(report.startup_delay <= ms(100));
+            if turn > 0 {
+                assert_eq!(report.startup_delay, ms(80));
+            }
+        }
+        if turn == 0 {
+            assert_eq!(p.statistics().underruns, 1);
+        } else {
+            assert_eq!(p.statistics().underruns, 0, "turn={turn}");
+        }
+    }
+    p.reset();
+    p.push(ms(0), &voice(2400, 23)).unwrap();
+    assert_eq!(p.render(ms(0), &mut out).unwrap().startup_delay, ms(20));
+}
+
+#[test]
+fn beginning_an_utterance_cancels_pending_audio_and_old_phonemes() {
+    let mut p = plain();
+    let mut out = [0; 240];
+    p.push(ms(0), &voice(2400, 23)).unwrap();
+    for at in (0..120).step_by(10) {
+        p.render(ms(at), &mut out).unwrap();
+    }
+    p.push(ms(120), &voice(2400, 61)).unwrap();
+    p.render(ms(120), &mut out[..1]).unwrap();
+    assert!(p.recovery.active());
+    p.begin_utterance();
+    assert_eq!(p.statistics(), Statistics::default());
+    p.push(ms(0), &[1234; 2400]).unwrap();
+    p.render(ms(0), &mut out).unwrap();
+    assert_eq!(out, [1234; 240]);
+}
+
+#[test]
+fn hundred_ms_delivery_drift_builds_reserve_instead_of_only_concealing() {
+    let mut p = Playout::new(Config::default()).unwrap();
+    let mut out = [0; 240];
+    let mut packet = 0_u64;
+    for at in (0..20_000_u64).step_by(10) {
+        while packet * 101 <= at {
+            p.push(ms(packet * 101), &voice(2400, packet as usize * 2400)).unwrap();
+            packet += 1;
+        }
+        let report = p.render(ms(at), &mut out).unwrap();
+        account(&p, report);
+    }
+    let s = p.statistics();
+    assert_eq!(s.underruns, 0, "{s:?}");
+    assert!(s.stretched > 24 * 100, "{s:?}");
+    assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
+}
+
+#[test]
+fn startup_reserve_is_not_accelerated_away_before_early_delivery_is_observed() {
+    let mut p = Playout::new(Config { startup_delay: ms(100), ..Config::default() }).unwrap();
+    let mut out = [0; 240];
+    for at in (0..350_u64).step_by(10) {
+        if at == 0 {
+            p.push(ms(at), &voice(2400, 23)).unwrap();
+        }
+        if at == 160 {
+            p.push(ms(at), &voice(2400, 2423)).unwrap();
+        }
+        if at == 300 {
+            p.push(ms(at), &voice(2400, 4823)).unwrap();
+        }
+        p.render(ms(at), &mut out).unwrap();
+    }
+    assert_eq!(p.statistics().accelerated, 0);
+    assert_eq!(p.statistics().underruns, 0);
+}
+
+#[test]
+fn learned_severe_startup_respects_the_budget_instead_of_promising_impossible_recovery() {
+    for maximum in [100, 400] {
+        let mut p =
+            Playout::new(Config { maximum_delay: ms(maximum), ..Config::default() }).unwrap();
+        let mut out = [0; 240];
+        for turn in 0..2_u64 {
+            if turn > 0 {
+                p.begin_utterance();
+            }
+            let base = turn * 10_000;
+            let arrivals = [0, 160, 300, 460, 700, 700, 700, 700, 800, 900];
+            let mut packet = 0;
+            let mut selected = Duration::ZERO;
+            for tick in (0..1600_u64).step_by(10) {
+                while packet < arrivals.len() && arrivals[packet] <= tick {
+                    p.push(ms(base + arrivals[packet]), &voice(2400, packet * 2400 + 23)).unwrap();
+                    packet += 1;
+                    if packet == arrivals.len() {
+                        p.finish();
+                    }
+                }
+                let report = p.render(ms(base + tick), &mut out).unwrap();
+                selected = report.startup_delay;
+                account(&p, report);
+            }
+            if turn > 0 {
+                if maximum == 400 {
+                    assert_eq!(selected, ms(320));
+                    assert_eq!(p.statistics().underruns, 0);
+                } else {
+                    assert_eq!(selected, ms(100));
+                    assert!(p.statistics().underruns > 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_clean_answer_does_not_raise_a_small_configured_startup_prior() {
+    let mut p = Playout::new(Config { startup_delay: ms(20), ..Config::default() }).unwrap();
+    let mut out = [0; 240];
+    for turn in 0..4_u64 {
+        if turn > 0 {
+            p.begin_utterance();
+        }
+        let base = turn * 10000;
+        for at in (0..700_u64).step_by(10) {
+            if at < 500 && at.is_multiple_of(100) {
+                p.push(ms(base + at), &voice(2400, at as usize * 24)).unwrap();
+                if at == 400 {
+                    p.finish();
+                }
+            }
+            let report = p.render(ms(base + at), &mut out).unwrap();
+            assert_eq!(report.startup_delay, ms(20));
         }
     }
 }

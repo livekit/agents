@@ -78,20 +78,30 @@ def main() -> None:
 
     rust_queue = np.array([row["queued_source"] + row["pending_output"] for row in rows])
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10, "axes.titlesize": 12})
-    fig, axes = plt.subplots(2, 2, figsize=(13, 8.6), sharex=True)
+    fig, axes = plt.subplots(2, 2, figsize=(13, 8.6), sharex=False)
     fig.subplots_adjust(left=0.075, right=0.98, bottom=0.13, top=0.86, hspace=0.4, wspace=0.24)
     fig.suptitle(
-        "Catchup · backlog recovery", fontsize=21, fontweight="bold", x=0.075, ha="left", y=0.97
+        "Playout · backlog recovery and learned startup",
+        fontsize=21,
+        fontweight="bold",
+        x=0.075,
+        ha="left",
+        y=0.97,
     )
     fig.text(
         0.075,
         0.915,
-        "A temporary 3× delivery rate creates 1 s of backlog. Acceleration reduces delay while preserving pitch.",
+        "Catchup uses identical arrivals. The answer replay compares retaining timing with resetting it.",
         fontsize=11,
         color=GRAY,
     )
 
     ax = axes[0, 0]
+    native = read_rows(args.input / "catchup" / "neteq_timeline.csv")
+    if [row["time_us"] for row in native] != list(times_us):
+        raise ValueError("native and Rust traces must use the same render clock")
+    native_queue = np.array([row["queued_ms"] for row in native])
+    ax.plot(mean(time), mean(native_queue[visible]), color="#0f766e", label="WebRTC", linewidth=2)
     ax.plot(
         mean(time),
         mean(np.array(untreated)[visible] / 24),
@@ -156,31 +166,47 @@ def main() -> None:
             ax.axvline(when, color=color, alpha=0.35, linestyle=":")
 
     ax = axes[1, 1]
-    arrival_seconds = np.array([row["arrival_us"] for row in arrivals]) / 1_000_000
-    lead_ms = np.array([row["source_start"] for row in arrivals]) / 24 - arrival_seconds * 1000
-    ax.step(arrival_seconds, lead_ms, where="post", color="#0f766e", linewidth=2.3)
+    with (args.input / "turns.csv").open() as stream:
+        turns = list(csv.DictReader(stream))
+    for variant, offset, color, label in [
+        ("retained", -0.18, BLUE, "Retain timing: 20 → 80 ms"),
+        ("reset", 0.18, GRAY, "Reset: 20 ms each answer"),
+    ]:
+        selected = [row for row in turns if row["variant"] == variant]
+        positions = np.array([int(row["turn"]) for row in selected])
+        ax.bar(
+            positions + offset,
+            [int(row["underruns"]) for row in selected],
+            width=0.34,
+            color=color,
+            label=label,
+        )
     ax.set(
-        title="Input · provider delivery lead",
-        ylabel="Source timestamp − arrival time (ms)",
-        xlabel="Elapsed playback time (s)",
+        title="Later answers · 60 ms late second chunk",
+        ylabel="Underruns per answer",
+        xlabel="Answer",
     )
-    ax.annotate(
-        "1 s ahead of realtime",
-        xy=(end * 0.7, 1000),
-        xytext=(0, -24),
-        textcoords="offset points",
-        ha="center",
-        color="#0f766e",
+    ax.set_ylim(0, 1.4)
+    ax.set_yticks([0, 1])
+    ax.legend(
+        loc="upper right",
+        frameon=True,
+        facecolor="white",
+        framealpha=0.95,
+        edgecolor="none",
+        fontsize=9,
     )
 
     onset = case["fault_start_ms"] / 1000
-    for ax in axes.flat:
+    for ax in list(axes.flat)[:3]:
         ax.set_xlim(0, end)
         ax.set_axisbelow(True)
         ax.grid(axis="y", color="#e2e8f0", linewidth=0.8)
         ax.axvline(onset, color=GRAY, linestyle="--", linewidth=1, alpha=0.65)
         ax.spines[["top", "right"]].set_visible(False)
         ax.spines[["bottom", "left"]].set_color("#cbd5e1")
+    axes[1, 1].set_xlim(0.4, 10.6)
+    axes[1, 1].set_xticks(range(1, 11))
     fig.text(
         0.075,
         0.065,
@@ -191,7 +217,7 @@ def main() -> None:
     fig.text(
         0.075,
         0.033,
-        "Recorded Rust trace; untreated FIFO replayed from identical arrivals. Ends at final delivery; startup delay retained. NetEq audio is in the PR table.",
+        "First 3 panels: Catchup traces, including startup recovery. Last: repeated-answer replay with a 20ms cold prior. No timing is realigned.",
         fontsize=8.5,
         color=GRAY,
     )

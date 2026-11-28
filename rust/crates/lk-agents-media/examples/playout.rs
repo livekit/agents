@@ -1,4 +1,4 @@
-//! Offline fixture renderer. Arguments: input.pcm arrivals.csv output_directory duration_ms delay_ms.
+//! Offline fixture renderer. Arguments: input.pcm arrivals.csv output_directory duration_ms minimum_ms startup_ms maximum_ms stretch_fraction.
 //! PCM is little-endian mono 24 kHz. Schedule rows: arrival_us,source_start,samples.
 
 use std::collections::VecDeque;
@@ -12,9 +12,9 @@ use lk_agents_media::playout::{Config, Playout};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 6 {
+    if args.len() != 9 {
         return Err(
-            "usage: playout input.pcm arrivals.csv output_directory duration_ms delay_ms".into()
+            "usage: playout input.pcm arrivals.csv output_directory duration_ms minimum_ms startup_ms maximum_ms stretch_fraction".into()
         );
     }
     let bytes = fs::read(&args[1])?;
@@ -47,7 +47,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let delay = Duration::from_millis(args[5].parse()?);
     let mut playout = Playout::new(Config {
         minimum_delay: delay,
-        maximum_delay: delay.max(Duration::from_millis(100)),
+        startup_delay: Duration::from_millis(args[6].parse()?),
+        maximum_delay: Duration::from_millis(args[7].parse()?),
+        maximum_stretch: args[8].parse()?,
         ..Config::default()
     })?;
     let out = Path::new(&args[3]);
@@ -57,7 +59,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut timeline = BufWriter::new(fs::File::create(out.join("timeline.csv"))?);
     writeln!(
         timeline,
-        "time_us,queued_source,pending_output,target_delay_us,source_consumed,concealed,silent,stretched,accelerated,underruns,fast_accelerated,merge_inserted"
+        "time_us,queued_source,pending_output,target_delay_us,source_consumed,concealed,silent,stretched,accelerated,underruns,fast_accelerated,merge_inserted,passive_stretched,reserve_requests,reserve_budget_limited,reserve_no_match,startup_delay_us,started"
     )?;
     let mut fifo_timeline = BufWriter::new(fs::File::create(out.join("fifo_timeline.csv"))?);
     writeln!(fifo_timeline, "time_us,source_consumed,missing_samples,underruns")?;
@@ -102,7 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
         writeln!(
             timeline,
-            "{at},{},{},{},{},{},{},{},{},{},{},{}",
+            "{at},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             report.queued_source,
             report.pending_output,
             report.target_delay.as_micros(),
@@ -113,7 +115,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             stats.accelerated,
             stats.underruns,
             stats.fast_accelerated,
-            stats.merge_inserted
+            stats.merge_inserted,
+            stats.passive_stretched,
+            stats.reserve_requests,
+            stats.reserve_budget_limited,
+            stats.reserve_no_match,
+            report.startup_delay.as_micros(),
+            u8::from(report.started)
         )?;
         final_report = Some(report);
     }

@@ -28,6 +28,7 @@ SCENARIOS = (
     "repeated_stalls",
     "slow_jittery",
     "startup_jitter",
+    "startup_second",
     "reported_jitter",
     "sustained_jitter",
     "stalled_delivery",
@@ -113,6 +114,8 @@ def schedule(
             delay = 40_000
         elif name == "long_outage" and anchor <= index <= anchor + 9:
             delay = (anchor + 10 - index) * 100_000
+        elif name == "startup_second" and index == 1:
+            delay = 60_000
         elif name == "startup_jitter" and 1 <= index <= 4:
             # Illustrative first-answer deliveries: no missing source, only delayed chunks.
             delay = (60_000, 100_000, 160_000, 300_000)[index - 1]
@@ -275,6 +278,66 @@ def baseline_gaps(path: Path, activity: dict) -> list[dict]:
     return events
 
 
+def first_active_ms(path: Path, threshold: float = 150) -> float | None:
+    raw = path.read_bytes()
+    for offset in range(0, len(raw) - 47, 48):
+        samples = struct.unpack_from("<24h", raw, offset)
+        if math.sqrt(sum(value * value for value in samples) / 24) >= threshold:
+            return offset / 48
+    return None
+
+
+def evaluation_metrics(case: Path, source: Path, duration_ms: int) -> dict:
+    """Same pre-EOF clock window; native concealment totals otherwise include observation tail."""
+
+    def trace(name: str) -> list[dict[str, int]]:
+        with (case / name).open() as stream:
+            return [
+                {k: int(v) for k, v in row.items()}
+                for row in csv.DictReader(stream)
+                if int(row["time_us"]) < duration_ms * 1000
+            ]
+
+    rust = trace("timeline.csv")
+    native = trace("neteq_timeline.csv")
+    origin = first_active_ms(source)
+    first = {
+        track: first_active_ms(case / f"{track}.pcm")
+        for track in ["baseline", "neteq", "candidate"]
+    }
+    queues = {
+        "candidate": [
+            (row["queued_source"] + row["pending_output"]) / 24
+            for row in rust
+            if row["time_us"] >= 1_000_000
+        ],
+        "neteq": [row["queued_ms"] for row in native if row["time_us"] >= 1_000_000],
+    }
+    return {
+        "window_ms": duration_ms,
+        "startup_measurement_window_ms": 1,
+        "added_startup_ms": {
+            k: value - origin if value is not None and origin is not None else None
+            for k, value in first.items()
+        },
+        "mean_queued_ms_after_1s": {
+            k: sum(value) / len(value) if value else None for k, value in queues.items()
+        },
+        "rust": {
+            "underruns": rust[-1]["underruns"],
+            "concealed_ms": rust[-1]["concealed"] / 24,
+            "inserted_ms": rust[-1]["stretched"] / 24,
+            "passive_inserted_ms": rust[-1]["passive_stretched"] / 24,
+        },
+        "neteq": {
+            "concealment_events": native[-1]["concealment_events"],
+            "concealed_ms": native[-1]["concealed"] / 48,
+            "inserted_ms": native[-1]["stretched"] / 48,
+            "packets_discarded": native[-1]["packets_discarded"],
+        },
+    }
+
+
 def render_player(out: Path, report: dict) -> None:
     """One HTML player, with per-cell deep links; serves media inline with no download links."""
     import html
@@ -285,6 +348,10 @@ def render_player(out: Path, report: dict) -> None:
         "late_30ms_no_reserve": (
             "30 ms late, no reserve",
             "Exposes short concealment and recovery during verified speech.",
+        ),
+        "startup_second": (
+            "Late second chunk",
+            "The second 100ms chunk arrives at 160ms; the initial reserve can prevent starvation.",
         ),
         "startup_jitter": (
             "First-answer chunks arrive irregularly",
@@ -350,7 +417,8 @@ def render_player(out: Path, report: dict) -> None:
                 metrics = case["fifo_metrics"][track]
                 detail = f"{metrics['missing_samples'] / 24:g} ms gaps · {metrics['startup_ms']} ms startup"
             elif track == "candidate":
-                detail = f"{case['rust_metrics']['concealed'] / 24:g} ms concealed · {case.get('delay_ms', report['delay_ms'])} ms startup"
+                startup = case.get("evaluation", {}).get("added_startup_ms", {}).get("candidate")
+                detail = f"{case['rust_metrics']['concealed'] / 24:g} ms concealed · {startup} ms measured added startup"
                 if case.get("acceleration", {}).get("removed_ms"):
                     detail += f" · {case['acceleration']['removed_ms']:.0f} ms removed ({case['acceleration']['fast_removed_ms']:.0f} fast)"
             else:
@@ -443,12 +511,23 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--input", type=Path, required=True, help="external mono 24 kHz PCM16 WAV")
-    parser.add_argument("--delay-ms", type=int, default=20)
+    parser.add_argument("--delay-ms", type=int, default=20, help="minimum reserve target")
+    parser.add_argument("--startup-ms", type=int, default=80, help="Rust cold-start prior")
+    parser.add_argument("--max-delay-ms", type=int, default=100, help="shared maximum target")
+    parser.add_argument(
+        "--stretch", type=float, default=0.03, help="Rust cumulative time-scale fraction"
+    )
     parser.add_argument(
         "--fault-at-ms",
         type=int,
         default=2000,
         help="preferred fault onset; nearest verified speech window is selected",
+    )
+    parser.add_argument(
+        "--webrtc-max-delay-ms",
+        type=int,
+        default=0,
+        help="NetEq maximum target; 0 retains its native unlimited default",
     )
     parser.add_argument("--scenario", choices=SCENARIOS, action="append")
     args = parser.parse_args()
@@ -462,7 +541,9 @@ def main() -> None:
             raise ValueError("fixture must be mono 24 kHz signed PCM16")
         pcm = source.readframes(source.getnframes())
     activity = speech_activity(pcm, args.fault_at_ms)
-    if "startup_jitter" in (args.scenario or SCENARIOS) and not activity["startup_active"]:
+    if {"startup_jitter", "startup_second"}.intersection(
+        args.scenario or SCENARIOS
+    ) and not activity["startup_active"]:
         raise ValueError(
             "startup fixture must have active speech at 0.100–0.150s; trim source leading silence"
         )
@@ -501,6 +582,10 @@ def main() -> None:
         ).hexdigest(),
         "reference_expected_tag": WEBRTC_TAG,
         "delay_ms": args.delay_ms,
+        "startup_ms": args.startup_ms,
+        "maximum_delay_ms": args.max_delay_ms,
+        "maximum_stretch": args.stretch,
+        "reference_maximum_delay_ms": args.webrtc_max_delay_ms,
         "speech_activity": activity,
         "scenarios": {},
     }
@@ -520,8 +605,23 @@ def main() -> None:
             writer = csv.writer(stream, lineterminator="\n")
             writer.writerow(("arrival_us", "source_start", "samples"))
             writer.writerows(schedule(name, len(pcm) // 2, activity["anchor_chunk"], active_chunks))
-        case_delay = 0 if name == "late_30ms_no_reserve" else args.delay_ms
-        run(executable, raw, arrivals, case, str(duration_ms), str(case_delay))
+        no_reserve = name == "late_30ms_no_reserve"
+        case_delay = 0 if no_reserve else args.delay_ms
+        case_startup = 0 if no_reserve else args.startup_ms
+        case_maximum = 0 if no_reserve else args.max_delay_ms
+        case_stretch = 0 if no_reserve else args.stretch
+        reference_maximum = 0 if no_reserve else args.webrtc_max_delay_ms
+        run(
+            executable,
+            raw,
+            arrivals,
+            case,
+            str(duration_ms),
+            str(case_delay),
+            str(case_startup),
+            str(case_maximum),
+            str(case_stretch),
+        )
         reference_stats = run(
             reference,
             source48,
@@ -529,6 +629,9 @@ def main() -> None:
             case / "neteq48.pcm",
             str(duration_ms),
             str(case_delay),
+            str(reference_maximum),
+            str(int(case_stretch > 0)),
+            case / "neteq_timeline.csv",
         )
         # NetEq L16 supports 8/16/32/48 kHz, not 24 kHz. Resampling happens offline on the
         # reference branch only; document it rather than claiming sample equivalence.
@@ -593,13 +696,20 @@ def main() -> None:
                 row["track"]: {k: int(v) for k, v in row.items() if k != "track"}
                 for row in csv.DictReader(stream)
             }
-        fault_start_ms = 100 if name == "startup_jitter" else activity["anchor_ms"]
+        fault_start_ms = (
+            100 if name in {"startup_jitter", "startup_second"} else activity["anchor_ms"]
+        )
         if name in STALL_CASES:
             fault_start_ms = min(planned_stalls) * 100
         report["scenarios"][name] = {
             "fault_start_ms": fault_start_ms,
             "delay_ms": case_delay,
+            "startup_ms": case_startup,
+            "maximum_delay_ms": case_maximum,
+            "maximum_stretch": case_stretch,
+            "reference_maximum_delay_ms": reference_maximum,
             "rust_metrics": final,
+            "evaluation": evaluation_metrics(case, raw, min(20_000, len(pcm) // 48)),
             "acceleration": {
                 "first_ms": next(
                     (row["time_us"] / 1000 for row in timeline if row["accelerated"]), None

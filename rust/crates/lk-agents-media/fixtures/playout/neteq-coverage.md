@@ -11,10 +11,10 @@ not a claim of algorithm, output, or perceptual equivalence. The product remains
 | NetEq feature | Rust handling | Regression evidence |
 | --- | --- | --- |
 | Normal decoded playout / sync buffer | Ordered PCM queue plus bounded pending output | Clean PCM preserved with stretching off; source accounting |
-| Arrival history and clock mismatch | Two-second source-time envelope, sample-precision relative delay | Tiny chunks, sub-ms reserve, batching, permanent shift, deterministic drift |
-| Underrun optimizer / delay constraints | Q30 95th-percentile histogram, 500 ms peaks, configurable target bounds | Histogram normalization, repeated stalls, bounded target |
-| Buffer-level smoothing | Target-dependent Q8 filter on a 10 ms render-sample cadence; correct for time-scale changes | Spike rejection, correction, render-size cadence |
-| Preemptive expansion | Pitch-preserving overlap/add; borrow history when new chunks are only 20 ms | A later 20 ms stall is absorbed with reserve; transient rejection |
+| Arrival history and clock mismatch | Actual first-sample arrival envelope; sample-precision relative delay | Tiny chunks, sub-ms reserve, batching, permanent shift, deterministic drift |
+| Underrun optimizer / delay constraints | Q30 95th-percentile histograms, 500 ms peaks, configurable target/startup bounds | Histogram normalization, repeated stalls, bounded target |
+| Buffer-level smoothing | Target-dependent Q8 filter on a 10 ms render-sample cadence; correct for time-scale changes | Spike rejection, correction, render-size cadence, protected startup budget |
+| Preemptive expansion | Prefer quiet splices; adjacent-period/overlap validation; borrow history for 20 ms chunks | A later 20 ms stall is absorbed with reserve; transient rejection |
 | Acceleration | Strong two-window splice; per-epoch insertion/removal budget; 50 ms minimum ordinary operation spacing | Tone pitch/energy, source accounting, budget |
 | Fast acceleration | Four-times-high-limit trigger, bypass ordinary cooldown, verified pitch multiples and lower correlation threshold | Severe consumer backlog, transient rejection, same hard rate budget |
 | Expand / PLC | Multiple pitch candidates/lags, voiced/unvoiced mix, stabilized LPC residual excitation, signal-dependent muting | Harmonics, voiced gap energy, unvoiced spectrum, DC/full-scale/impulses |
@@ -51,10 +51,16 @@ No relevant operation enum is silently unaccounted for. Listening quality across
 speech/noise content and real provider arrival traces remains an evaluation requirement;
 passing these regressions does not establish NetEq quality parity.
 
-## Sustained-speech qualification
+## Startup and multi-answer qualification
 
-The sustained 100 ms speech-chunk fixture (20 s of 1% slower delivery plus 0–30 ms
-variation) currently has 20 untreated and 20 Rust underruns. Rust conceals the gaps,
-but does not insert preemptive expansion in this run. The 20 ms chunk drift regressions
-are not evidence that all speech/chunking combinations build adequate reserve.
-This remains a buffering-quality limitation, visible in the PR listening comparison.
+Startup uses an 80 ms configurable cold prior, measured first-500ms coverage deficits,
+early release for burst coverage/EOF and a slowly relaxing, bounded per-answer budget.
+`begin_utterance()` retains only normalized timing; `reset()` clears the connection profile.
+Regressions cover ten answers with long idle gaps, cancellation, single-chunk replies,
+clean low priors and severe 300 ms startup deficits under 100/400 ms caller budgets.
+
+Actual chunk arrivals replace imaginary intra-payload arrivals. The sustained 100 ms speech
+fixture previously had 20 Rust underruns; the revised control path has two tiny events in
+the recorded run. This does not establish universal gap-free playback or human quality
+parity. The primary native NetEq audio remains unchanged. Native-default and explicitly
+capped targets are recorded separately, with measured startup and queue depth.
