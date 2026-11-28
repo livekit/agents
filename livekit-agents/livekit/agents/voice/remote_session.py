@@ -28,6 +28,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
+from ..utils.aio.channel import ChanEmpty
 from ..version import __version__
 from ..voice.amd import AMDCategory, AMDCompletedEvent, AMDPredictionEvent
 from .events import (
@@ -434,6 +435,14 @@ class SessionHost:
             self._session.off("close", self._on_close)
         self._session = None
 
+    def discard_pending_events(self) -> None:
+        """Drop events buffered for the current session without closing the host."""
+        while True:
+            try:
+                self._event_ch.recv_nowait()
+            except ChanEmpty:
+                return
+
     async def start(self) -> None:
         if self._started:
             return
@@ -445,11 +454,19 @@ class SessionHost:
         self._recv_task = asyncio.create_task(self._recv_loop())
 
     async def aclose(self) -> None:
-        if not self._started:
-            return
+        started = self._started
         self._started = False
 
         self.unregister_session()
+
+        if not started:
+            # start() never ran, so there are no tasks to drain, but the callbacks
+            # and the transport/channel built in __init__ still need releasing: a
+            # session start() that failed after register_session() leaves this as
+            # the only teardown
+            self._event_ch.close()
+            await self._transport.close()
+            return
 
         if self._recv_task:
             await utils.aio.cancel_and_wait(self._recv_task)

@@ -193,6 +193,10 @@ class RecorderIO:
 
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
+        # the streams the wrappers replace, restored if the session is closed
+        # before an activity exists to detach them
+        self._wrapped_input: io.AudioInput | None = None
+        self._wrapped_output: io.AudioOutput | None = None
 
         self._q: queue.Queue[_Captured | _Flush | _EndRun | None] = queue.Queue()
         self._session = agent_session
@@ -234,6 +238,14 @@ class RecorderIO:
             thread.start()
 
     async def aclose(self) -> None:
+        # unwrap the session streams this recorder replaced. a start() that failed
+        # before publishing an activity has no activity to detach them, and the
+        # closed wrappers must not look like the caller's I/O on a retry
+        if self._in_record is not None and self._session.input.audio is self._in_record:
+            self._session.input.audio = self._wrapped_input
+        if self._out_record is not None and self._session.output.audio is self._out_record:
+            self._session.output.audio = self._wrapped_output
+
         async with self._lock:
             if not self._started:
                 return
@@ -256,6 +268,7 @@ class RecorderIO:
             self._input_settled = started_at + frame.duration
             self._put(_Captured(channel=0, started_at=started_at, frame=frame))
 
+        self._wrapped_input = audio_input
         self._in_record = RecorderAudioInput(
             recording_io=self, source=audio_input, on_frame=on_frame
         )
@@ -266,6 +279,7 @@ class RecorderIO:
         def on_played(started_at: float, frame: rtc.AudioFrame) -> None:
             self._put(_Captured(channel=1, started_at=started_at, frame=frame))
 
+        self._wrapped_output = audio_output
         self._out_record = RecorderAudioOutput(
             recording_io=self, audio_output=audio_output, on_played=on_played
         )

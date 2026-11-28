@@ -91,6 +91,14 @@ class RoomIO:
         self._text_input_cb: TextInputCallback | None = None
         self._chat_handler_registered = False
 
+        # the session I/O this RoomIO attached, detached again in aclose()
+        self._attached_input_audio: AudioInput | None = None
+        self._attached_input_video: VideoInput | None = None
+        self._attached_output_audio: AudioOutput | None = None
+        self._attached_output_transcription: TextOutput | None = None
+        # an output the transcription synchronizer replaced, restored on close
+        self._previous_output_audio: AudioOutput | None = None
+
     def register_text_input(self, text_input_cb: TextInputCallback) -> None:
         self._text_input_cb = text_input_cb
 
@@ -195,15 +203,22 @@ class RoomIO:
 
         # -- attach to the agent session --
         if self.audio_input:
+            self._attached_input_audio = self.audio_input
             self._agent_session.input.audio = self.audio_input
 
         if self.video_input:
+            self._attached_input_video = self.video_input
             self._agent_session.input.video = self.video_input
 
         if self.audio_output:
+            # the transcription synchronizer may wrap a caller output (an avatar,
+            # for example); remember it so a failed start can restore it
+            self._previous_output_audio = self._agent_session.output.audio
+            self._attached_output_audio = self.audio_output
             self._agent_session.output.audio = self.audio_output
 
         if self.transcription_output:
+            self._attached_output_transcription = self.transcription_output
             self._agent_session.output.transcription = self.transcription_output
 
         self._agent_session.on("agent_state_changed", self._on_agent_state_changed)
@@ -222,6 +237,19 @@ class RoomIO:
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
+
+        # release the session I/O this RoomIO attached. activity teardown clears it
+        # normally, but a start() that failed before publishing an activity has no
+        # activity to clear it, and the closed streams must not look like the
+        # caller's I/O on a retry
+        if self._agent_session.input.audio is self._attached_input_audio:
+            self._agent_session.input.audio = None
+        if self._agent_session.input.video is self._attached_input_video:
+            self._agent_session.input.video = None
+        if self._agent_session.output.audio is self._attached_output_audio:
+            self._agent_session.output.audio = self._previous_output_audio
+        if self._agent_session.output.transcription is self._attached_output_transcription:
+            self._agent_session.output.transcription = None
 
         if self._chat_handler_registered:
             self._chat_handler_registered = False

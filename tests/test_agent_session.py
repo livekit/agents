@@ -5,8 +5,9 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterable, AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -53,12 +54,21 @@ from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equi
 from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo, _STTPipeline
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
+from livekit.agents.voice.events import (
+    AgentState,
+    CloseReason,
+    FunctionToolsExecutedEvent,
+    UserState,
+)
 from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities, PlaybackFinishedEvent
+from livekit.agents.voice.remote_session import SessionHost
+from livekit.agents.voice.room_io import RoomOptions
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 from livekit.agents.voice.turn import _StreamingTurnDetector
 
+from .fake_io import FakeAudioInput, FakeAudioOutput
 from .fake_llm import FakeLLM
+from .fake_realtime import FakeRealtimeModel
 from .fake_session import FakeActions, create_session, run_session
 from .fake_vad import FakeVAD
 
@@ -2857,3 +2867,627 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+async def test_failed_start_tears_down_partial_session() -> None:
+    """start() must clean up a session whose bring-up failed mid-way.
+
+    start() publishes the activity before the realtime provider connects. When
+    bring-up fails, _started was never set, so aclose() used to return early and
+    leave the provider session open with the agent still holding its activity;
+    reusing the agent then raised "an activity is already running".
+    """
+    model = FakeRealtimeModel()
+    model.bring_up_error = RuntimeError("provider connect failed")
+    agent = Agent(instructions="hello")
+    session = AgentSession(llm=model)
+
+    closes: list[CloseReason] = []
+    session.on("close", lambda ev: closes.append(ev.reason))
+
+    with pytest.raises(RuntimeError, match="provider connect failed"):
+        await asyncio.wait_for(session.start(agent), timeout=SESSION_TIMEOUT)
+
+    # start() rolls back before re-raising: the activity is closed, the provider
+    # session is released, and no close event is emitted for a session that never
+    # started
+    assert closes == []
+    assert session._activity is None
+    assert agent._activity is None
+    assert session._chat_ctx.items == []
+    assert len(model.created_sessions) == 1
+    rt_session = model.created_sessions[0]
+    assert rt_session.closed
+
+    # closing an already-rolled-back session stays safe and silent
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+    assert closes == []
+
+    retry = AgentSession(llm=FakeRealtimeModel())
+    try:
+        await asyncio.wait_for(retry.start(agent), timeout=SESSION_TIMEOUT)
+        assert retry._started
+    finally:
+        await asyncio.wait_for(retry.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_in_room_bring_up_is_still_closed() -> None:
+    """start() must also tear down a failure before the activity existed.
+
+    Room IO is started (and stored on the session) before the activity is published.
+    If room bring-up raises, there is no activity, but the session span and the
+    half-started RoomIO still need to be released.
+    """
+
+    class _UnavailableRoom:
+        name = "unavailable-room"
+
+        def on(self, event: str, callback: object) -> None:
+            raise RuntimeError("room unavailable")
+
+        def off(self, event: str, callback: object) -> None:
+            pass
+
+        def isconnected(self) -> bool:
+            return False
+
+    session = AgentSession(llm=FakeRealtimeModel())
+    closes: list[CloseReason] = []
+    session.on("close", lambda ev: closes.append(ev.reason))
+
+    with pytest.raises(RuntimeError, match="room unavailable"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=_UnavailableRoom(),  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=False,
+                    audio_output=False,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    # no activity was published, but room io and the session span existed; both
+    # are released by start() before the error reaches the caller
+    assert closes == []
+    assert session._activity is None
+    assert session._room_io is None
+    assert session._session_span is None
+    assert session._session_start_context is None
+
+    # closing an already-rolled-back session stays safe and silent
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+    assert closes == []
+
+
+class _RetryableRoom:
+    """Just enough of an rtc.Room for RoomIO's audio input/output setup."""
+
+    def __init__(self) -> None:
+        self._listeners: dict[str, list[object]] = {}
+        self.local_participant = SimpleNamespace(identity="local")
+        self.remote_participants: dict[str, object] = {}
+        self.name = "retry-room"
+
+    def on(self, event: str, callback: object) -> None:
+        self._listeners.setdefault(event, []).append(callback)
+
+    def off(self, event: str, callback: object) -> None:
+        callbacks = self._listeners.get(event, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+
+    def isconnected(self) -> bool:
+        return False
+
+    def register_byte_stream_handler(self, topic: str, handler: object) -> None:
+        pass
+
+    def unregister_byte_stream_handler(self, topic: str) -> None:
+        pass
+
+
+async def test_failed_start_detaches_room_io_streams_for_a_retry() -> None:
+    """RoomIO attaches its streams before the activity exists; a failed bring-up must
+    detach them, or a retry treats the closed streams as caller-provided I/O and
+    disables fresh room audio.
+    """
+    session = AgentSession(llm=FakeRealtimeModel())
+    room = _RetryableRoom()
+
+    # a realtime config AgentActivity rejects after RoomIO has attached its streams
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    assert session._room_io is None
+    assert session._activity is None
+    assert session.input.audio is None
+    assert session.input.video is None
+    assert session.output.audio is None
+    assert session.output.transcription is None
+
+    # closing an already-rolled-back session stays safe
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    # the retry attaches fresh room streams instead of trusting the closed ones
+    retry_room = _RetryableRoom()
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=retry_room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        assert session._started
+        assert session._room_io is not None
+        assert session.input.audio is session._room_io.audio_input
+        assert session.input.audio is not None
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_releases_the_unstarted_session_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A start() that fails before SessionHost.start() has already registered the
+    host's callbacks and built its transport/channel. start() must release them,
+    not leave the abandoned host subscribed while a retry attaches a fresh one.
+    """
+    session = AgentSession(llm=FakeRealtimeModel())
+    no_media = RoomOptions(
+        audio_input=False,
+        audio_output=False,
+        text_input=False,
+        text_output=False,
+    )
+
+    hosts: list[SessionHost] = []
+    original_attach = session._attach_session_host
+
+    def _record_host(make_host: object, *, room: object = None) -> None:
+        original_attach(make_host, room=room)  # type: ignore[arg-type]
+        assert session._session_host is not None
+        hosts.append(session._session_host)
+
+    monkeypatch.setattr(session, "_attach_session_host", _record_host)
+
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=True,
+                room_options=no_media,
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    assert len(hosts) == 1
+    host = hosts[0]
+    assert session._session_host is None
+    assert host.session is None
+    assert host._event_ch.closed
+    assert host._transport._recv_ch.closed  # type: ignore[attr-defined]
+
+    # a retry attaches a fresh host instead of re-registering on the released one
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=True,
+                room_options=no_media,
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        assert session._session_host is not None
+        assert session._session_host is not host
+        assert session._session_host.session is session
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_cancels_on_enter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow on_enter must not outlive a failed start and touch the retry."""
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class SlowAgent(Agent):
+        async def on_enter(self) -> None:
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    async def _fail_after_on_enter(host: SessionHost) -> None:
+        # make the failure land while on_enter is still running
+        await entered.wait()
+        raise RuntimeError("host start failed")
+
+    monkeypatch.setattr(SessionHost, "start", _fail_after_on_enter)
+
+    session = AgentSession(llm=FakeRealtimeModel())
+    with pytest.raises(RuntimeError, match="host start failed"):
+        await asyncio.wait_for(
+            session.start(
+                SlowAgent(instructions="hello"),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=True,
+                room_options=RoomOptions(
+                    audio_input=False,
+                    audio_output=False,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    assert entered.is_set()
+    assert cancelled.is_set()
+    assert session._activity is None
+
+
+async def test_failed_start_reattaches_console_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A console acquisition outlives the failed attempt; the retry must get the
+    console streams back instead of starting without microphone or speaker.
+    """
+    from livekit.agents import cli
+
+    class FakeConsole:
+        enabled = True
+        record = False
+        _tcp_transport = None
+
+        def __init__(self) -> None:
+            self.io_acquired = False
+            self.acquires = 0
+            self.reattaches = 0
+            self.audio_input = FakeAudioInput()
+
+        def acquire_io(self, *, loop: asyncio.AbstractEventLoop, session: AgentSession) -> None:
+            self.io_acquired = True
+            self.session = session
+            self.acquires += 1
+
+        def reattach_io(self, *, session: AgentSession) -> bool:
+            if not (self.io_acquired and self.session is session):
+                return False
+            session.input.audio = self.audio_input
+            self.reattaches += 1
+            return True
+
+    fake_console = FakeConsole()
+    monkeypatch.setattr(cli.AgentsConsole, "_instance", fake_console)
+    session = AgentSession(llm=FakeRealtimeModel())
+
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(Agent(instructions="hello", allow_interruptions=False)),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    await asyncio.wait_for(session.start(Agent(instructions="hello")), timeout=SESSION_TIMEOUT)
+    try:
+        assert fake_console.acquires == 1
+        assert fake_console.reattaches == 1
+        assert session.input.audio is fake_console.audio_input
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_interrupts_the_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Queued greetings must be interrupted before the activity is closed; the
+    scheduler alone would leave them waiting for authorization forever.
+    """
+    from livekit.agents.voice.agent_activity import AgentActivity
+
+    calls: list[bool] = []
+
+    async def _interrupt(
+        self: AgentActivity, *, force: bool = False, source: str = "programmatic"
+    ) -> None:
+        calls.append(force)
+
+    monkeypatch.setattr(AgentActivity, "interrupt", _interrupt)
+    model = FakeRealtimeModel()
+    model.bring_up_error = RuntimeError("provider connect failed")
+    session = AgentSession(llm=model)
+
+    with pytest.raises(RuntimeError, match="provider connect failed"):
+        await asyncio.wait_for(session.start(Agent(instructions="hello")), timeout=SESSION_TIMEOUT)
+
+    assert calls == [True]
+
+
+async def test_failed_start_closes_session_toolsets_on_aclose() -> None:
+    """Session-owned toolsets stay open for a retry, but an explicit aclose()
+    after the failure must still release them (the start span is already gone).
+    """
+    from livekit.agents.llm import Toolset
+
+    class FakeToolset(Toolset):
+        def __init__(self) -> None:
+            super().__init__(id="fake")
+            self.closed = 0
+
+        async def aclose(self) -> None:
+            self.closed += 1
+
+    toolset = FakeToolset()
+    model = FakeRealtimeModel()
+    model.bring_up_error = RuntimeError("provider connect failed")
+    session = AgentSession(llm=model, tools=[toolset])
+
+    with pytest.raises(RuntimeError, match="provider connect failed"):
+        await asyncio.wait_for(session.start(Agent(instructions="hello")), timeout=SESSION_TIMEOUT)
+
+    assert toolset.closed == 0, "rollback closed a toolset the retry may still need"
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+    assert toolset.closed == 1
+
+
+async def test_failed_start_keeps_caller_provided_audio() -> None:
+    """Only the I/O RoomIO attached is released on a partial teardown."""
+    session = AgentSession(llm=FakeRealtimeModel())
+    caller_audio = FakeAudioInput()
+    session.input.audio = caller_audio
+
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    # the rollback already restored it; aclose is a no-op for a session that
+    # never started
+    assert session.input.audio is caller_audio
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+    assert session.input.audio is caller_audio
+
+
+def _fake_job_ctx(tmp_path: Path) -> MagicMock:
+    ctx = MagicMock()
+    ctx._primary_agent_session = None
+    ctx.session_directory = tmp_path
+    ctx.connect = AsyncMock()
+    ctx.job.enable_recording = False
+    ctx.job.enable_redaction = False
+    ctx.job.id = "job-1"
+    ctx.job.agent_name = "agent"
+    ctx.job.room.sid = "RM_1"
+    ctx.job.dispatch_id = "dispatch"
+    ctx._info.worker_id = "worker"
+    ctx.job.state.agent_id = "agent-id"
+    return ctx
+
+
+async def test_failed_start_keeps_a_job_owned_session_host(tmp_path: Path) -> None:
+    """A failed attempt must not close the job's host or leave its events queued.
+
+    The host outlives the session; the next attempt attaches to the same host, so
+    closing it here would break the retry and a queued ``session_closed`` would be
+    replayed to the client.
+    """
+    from livekit.agents.job import _JobContextVar
+
+    no_media = RoomOptions(
+        audio_input=False,
+        audio_output=False,
+        text_input=False,
+        text_output=False,
+    )
+    room = _RetryableRoom()
+    ctx = _fake_job_ctx(tmp_path)
+    ctx.room = room
+    ctx._session_host = None
+    session = AgentSession(llm=FakeRealtimeModel())
+
+    token = _JobContextVar.set(ctx)
+    try:
+        with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+            await asyncio.wait_for(
+                session.start(
+                    Agent(instructions="hello", allow_interruptions=False),
+                    room=room,  # type: ignore[arg-type]
+                    session_host=True,
+                    room_options=no_media,
+                ),
+                timeout=SESSION_TIMEOUT,
+            )
+    finally:
+        _JobContextVar.reset(token)
+
+    host = ctx._session_host
+    assert host is not None
+    assert host.session is None
+    assert not host._started
+    assert not host._event_ch.closed
+    assert session._session_host is None
+
+    # the retry reuses the job-owned host instead of building a second one
+    token = _JobContextVar.set(ctx)
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=room,  # type: ignore[arg-type]
+                session_host=True,
+                room_options=no_media,
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        assert session._session_host is host
+        assert host.session is session
+        assert host._started
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+        # the job owns the host, so the test must close it explicitly
+        if ctx._session_host is not None:
+            await asyncio.wait_for(ctx._session_host.aclose(), timeout=SESSION_TIMEOUT)
+        _JobContextVar.reset(token)
+
+
+async def test_failed_start_with_recording_detaches_wrappers(tmp_path: Path) -> None:
+    """Recording wraps RoomIO's streams before the activity exists; a partial close
+    must unwrap them so a retry attaches fresh room media.
+    """
+    from livekit.agents.job import _JobContextVar
+
+    session = AgentSession(llm=FakeRealtimeModel())
+    token = _JobContextVar.set(_fake_job_ctx(tmp_path))
+    try:
+        # the encoder thread needs real time; the wrapper identity is what this checks
+        with patch(
+            "livekit.agents.voice.recorder_io.recorder_io.RecorderIO.start",
+            new=AsyncMock(),
+        ):
+            with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+                await asyncio.wait_for(
+                    session.start(
+                        Agent(instructions="hello", allow_interruptions=False),
+                        room=_RetryableRoom(),  # type: ignore[arg-type]
+                        session_host=False,
+                        record=True,
+                        room_options=RoomOptions(
+                            audio_input=True,
+                            audio_output=True,
+                            text_input=False,
+                            text_output=False,
+                        ),
+                    ),
+                    timeout=SESSION_TIMEOUT,
+                )
+    finally:
+        _JobContextVar.reset(token)
+
+    assert session._room_io is None
+    assert session._recorder_io is None
+    assert session._activity is None
+    # the recorder wrappers were unwrapped and RoomIO's streams released
+    assert session.input.audio is None
+    assert session.output.audio is None
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+    retry_room = _RetryableRoom()
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=retry_room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=True,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=False,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        assert session._room_io is not None
+        assert session.input.audio is session._room_io.audio_input
+        assert session.input.audio is not None
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+
+
+async def test_failed_start_restores_caller_audio_output() -> None:
+    """RoomIO's transcription synchronizer wraps a caller output (e.g. an avatar) when
+    room audio is disabled; a partial close must restore the caller's output, or a
+    retry publishes speech to the room track instead.
+    """
+    session = AgentSession(llm=FakeRealtimeModel())
+    caller_output = FakeAudioOutput()
+    session.output.audio = caller_output
+
+    with pytest.raises(ValueError, match="allow_interruptions cannot be False"):
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello", allow_interruptions=False),
+                room=_RetryableRoom(),  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=False,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=True,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    assert session._room_io is None
+    # the synchronizer's output was unwrapped and the caller's avatar output
+    # restored before the error reached us
+    assert session.output.audio is caller_output
+
+    await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
+    assert session.output.audio is caller_output
+
+    retry_room = _RetryableRoom()
+    try:
+        await asyncio.wait_for(
+            session.start(
+                Agent(instructions="hello"),
+                room=retry_room,  # type: ignore[arg-type]
+                session_host=False,
+                room_options=RoomOptions(
+                    audio_input=False,
+                    audio_output=True,
+                    text_input=False,
+                    text_output=True,
+                ),
+            ),
+            timeout=SESSION_TIMEOUT,
+        )
+        # room audio stays disabled because the caller output is still attached
+        assert session._room_io is not None
+        assert session._room_io._audio_output is None
+        assert session.output.audio is session._room_io.audio_output
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=SESSION_TIMEOUT)
