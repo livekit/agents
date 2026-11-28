@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Nabrah speech-to-text plugin for LiveKit Agents."""
+"""Nabrah STT: original recognizers and conversational STT over the backend WebSocket."""
 
 from livekit.agents import Plugin
 
+from ._factory import STT, NabrahRecognitionModel
 from .log import logger
-from .stt import STT, NabrahRecognitionModel, SpeechStream
+from .stt import SpeechStream
+from .stt_conv import SpeechStreamConv, STTConv
 from .version import __version__
 
 
@@ -28,4 +30,11 @@ class NabrahPlugin(Plugin):
 
 Plugin.register_plugin(NabrahPlugin())
 
-__all__ = ["STT", "NabrahRecognitionModel", "SpeechStream", "__version__"]
+__all__ = [
+    "STT",
+    "NabrahRecognitionModel",
+    "SpeechStream",
+    "STTConv",
+    "SpeechStreamConv",
+    "__version__",
+]

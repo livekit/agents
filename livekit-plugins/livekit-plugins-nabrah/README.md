@@ -1,7 +1,7 @@
-# Nabrah plugin for LiveKit Agents
+# Nabrah STT for LiveKit Agents
 
-Support for [Nabrah](https://nabrah.ai/) Speech-to-Text in LiveKit Agents, with
-client-side end-of-turn detection tuned for Arabic conversation.
+Support for [Nabrah](https://nabrah.ai/) Speech-to-Text in LiveKit Agents, tuned for
+Arabic conversation.
 
 ## Installation
 
@@ -9,168 +9,179 @@ client-side end-of-turn detection tuned for Arabic conversation.
 pip install livekit-plugins-nabrah
 ```
 
-## Pre-requisites
-
-You'll need an API key from Nabrah. It can be set as an environment variable:
-`NABRAH_API_KEY`.
+You'll need an API key from Nabrah, set as the `NABRAH_API_KEY` environment variable
+or passed as `api_key`.
 
 ## Usage
 
-Use Nabrah STT in an `AgentSession`:
+Use `nabrah.STT(recognition_model=...)` for all three backend models. It selects
+one of two implementations internally:
 
 ```python
-from livekit.agents import AgentSession
-from livekit.plugins import nabrah
+nabrah.STT(recognition_model="nabrah_stt_v1", api_key="YOUR_KEY")
+nabrah.STT(recognition_model="eot_nabrah", api_key="YOUR_KEY")
+nabrah.STT(recognition_model="nabrah_stt_conv", api_key="YOUR_KEY")
+```
 
-session = AgentSession(
-    stt=nabrah.STT(
+The default is `nabrah_stt_conv`; pass `recognition_model="eot_nabrah"` or
+`"nabrah_stt_v1"` for the legacy models. Each model takes
+its implementation's own options. `STTConv` fixes transcript metadata to `ar-SA`;
+the original `STT` retains its production language handling, defaulting to
+`ar-SA`. Neither implementation sends a language option to the backend.
+
+## Conversational (`nabrah_stt_conv`)
+
+The server decides when a turn ends. Use
+`turn_detection="stt"` and no VAD. The wire/metrics model name is `nabrah_stt_conv_v1`.
+
+```python
+import logging
+import os
+
+from dotenv import load_dotenv
+from livekit import agents
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, TurnHandlingOptions
+from livekit.plugins import cartesia, google, nabrah
+
+load_dotenv()
+server = AgentServer()
+
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
+    recognizer = nabrah.STT(
+        recognition_model="nabrah_stt_conv",
+        api_key=os.getenv("NABRAH_API_KEY"),
+    )
+    await recognizer.check_ready()
+
+    session = AgentSession(
+        stt=recognizer,
+        vad=None,  # the server owns speech and end of turn
+        llm=google.LLM(model="YOUR_LLM_MODEL"),
+        tts=cartesia.TTS(model="YOUR_TTS_MODEL", voice="YOUR_VOICE_ID", language="ar"),
+        turn_handling=TurnHandlingOptions(turn_detection="stt"),
+    )
+    await session.start(
+        agent=Agent(instructions="You are a helpful voice assistant."),
+        room=ctx.room,
+    )
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    agents.cli.run_app(server)
+```
+
+Options of `STTConv`. `None` means the server default.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `api_key` | `NABRAH_API_KEY` | API key (`NABRAH_STT_V2_API_KEY` also works). |
+| `eot_threshold` | `None` (0.915) | End-of-turn probability. |
+| `eot_debounce` | `None` (2) | Consecutive 80 ms frames above the threshold. |
+| `min_speech_ms` | `None` (350) | Speech needed before a turn end. |
+| `no_text_reset_s` | `None` | Seconds without new words before the turn state resets (0 disables). |
+| `preflight_threshold` | `0.5` | Probability that sends an early transcript for preemptive generation; `None` disables. |
+
+`STTConv` sends 16 kHz mono PCM16 in 20 ms packets. The model processes 80 ms
+frames. Transcript timing uses `audio_processed`; preflight uses the latest
+`turn.frames[].p_end`. LiveKit must enable preemptive generation to use
+preflight for early replies. Finals close the turn; the STT also emits a custom
+`end_of_turn` event with `{"text": <the final transcript>}`.
+
+## Legacy (`eot_nabrah`, `nabrah_stt_v1`)
+
+The server returns utterances; the plugin joins them into a turn, strips `<eot>`,
+and ends the turn on turn punctuation, after a confirm delay, or after an idle
+timeout. The plugin owns the end of turn, so use `turn_detection="stt"` and no VAD.
+
+```python
+import logging
+import os
+
+from dotenv import load_dotenv
+from livekit import agents
+from livekit.agents import Agent, AgentServer, AgentSession, JobContext, TurnHandlingOptions
+from livekit.plugins import cartesia, google, nabrah
+
+load_dotenv()
+server = AgentServer()
+
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext):
+    recognizer = nabrah.STT(
         recognition_model="eot_nabrah",
-        language="ar-SA",
+        api_key=os.getenv("NABRAH_API_KEY"),
+        priority_words=["نبرة"],
+        priority_words_strength=0.5,
         end_of_turn_confirm_delay_seconds=0.4,
-    ),
-)
+        end_of_turn_idle_timeout_seconds=1.5,
+    )
+
+    session = AgentSession(
+        stt=recognizer,
+        vad=None,  # the plugin ends the turn
+        llm=google.LLM(model="YOUR_LLM_MODEL"),
+        tts=cartesia.TTS(model="YOUR_TTS_MODEL", voice="YOUR_VOICE_ID", language="ar"),
+        turn_handling=TurnHandlingOptions(turn_detection="stt"),
+    )
+
+    await session.start(
+        agent=Agent(instructions="You are a helpful voice assistant."),
+        room=ctx.room,
+    )
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    agents.cli.run_app(server)
 ```
 
-### Turn detection
+Options of the legacy `STT`:
 
-`recognition_model="eot_nabrah"` emits the end-of-turn signal the plugin uses to
-close a turn. `end_of_turn_confirm_delay_seconds` is how long it waits after that
-signal before committing. Speaking again inside the window keeps the turn open.
-`max_transcript_inactivity_seconds` optionally commits after that many seconds
-without new transcript text. It is disabled by default because it measures
-recognizer inactivity, not acoustic silence, and a provider delay could otherwise
-split continuous speech.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `recognition_model` | — | `"eot_nabrah"` or `"nabrah_stt_v1"`; must be passed to `nabrah.STT`, which defaults to `nabrah_stt_conv`. |
+| `api_key` | `NABRAH_API_KEY` | API key. |
+| `language` | `"ar-SA"` | Language tag on returned transcripts; not sent to the backend. |
+| `priority_words` | `None` (none) | Words the recognizer should favour. |
+| `priority_words_strength` | `0.5` | How strongly to favour `priority_words`. |
+| `end_of_turn_confirm_delay_seconds` | `0.4` | Wait this long after turn punctuation before ending the turn; `None` ends it at once. |
+| `end_of_turn_idle_timeout_seconds` | `3.0` | End the turn when text exists but no new text arrived for this many seconds; `None` disables. |
 
-Nabrah's unnamed model (`recognition_model=""`) is more accurate but emits no
-end-of-turn signal. When using it, configure another turn detector or explicitly
-set `max_transcript_inactivity_seconds` as a fallback heuristic.
+### Word boosting (legacy models)
 
-### Word boosting
+`priority_words` biases recognition toward terms the model gets wrong. `0.5` is the
+recommended strength; higher values make boosted terms appear where they were not said.
+Multi-word phrases are boosted as a unit.
 
-Bias recognition toward terms the model gets wrong:
-
-```python
-stt = nabrah.STT(
-    priority_words=["مستشفى الملك فيصل التخصصي", "رقم الهوية الوطنية"],
-    priority_words_strength=0.5,
-)
-```
-
-`0.5` is the recommended strength. Higher values make boosted terms appear in
-places they were not said, so keep the list to terms your callers actually say
-and add one only after hearing it come out wrong. Multi-word phrases are boosted
-as a unit.
-
-#### Loading terms from a file
-
-For anything beyond a handful of terms, keep them in a JSON file so they can be
-edited without touching code. Create `boosting.json` next to your agent:
+For more than a handful of terms, keep them in a `boosting.json` next to your agent:
 
 ```json
 {
   "boost_threshold": 0.5,
-  "words": [
-    "مستشفى الملك فيصل التخصصي",
-    "رقم الهوية الوطنية"
-  ]
+  "words": ["مستشفى الملك فيصل التخصصي", "رقم الهوية الوطنية"]
 }
 ```
 
-Load it at startup and pass it to the plugin:
-
 ```python
 import json
 import pathlib
-
-from livekit.agents import AgentSession
-from livekit.plugins import nabrah
 
 boosting = json.loads(
     pathlib.Path(__file__).with_name("boosting.json").read_text(encoding="utf-8")
 )
 
-session = AgentSession(
-    stt=nabrah.STT(
-        recognition_model="eot_nabrah",
-        language="ar-SA",
-        end_of_turn_confirm_delay_seconds=0.4,
-        priority_words=boosting["words"],
-        priority_words_strength=boosting["boost_threshold"],
-    ),
+recognizer = nabrah.STT(
+    recognition_model="eot_nabrah",
+    priority_words=boosting["words"],
+    priority_words_strength=boosting["boost_threshold"],
 )
 ```
 
-Read the file with `encoding="utf-8"`. Without it, Arabic terms fail to load on
-platforms that default to a different encoding.
+Read the file with `encoding="utf-8"`, or Arabic terms fail to load on platforms with a
+different default encoding.
 
-## Full example
-
-A complete agent using Nabrah STT with word boosting loaded from a file:
-
-```python
-import json
-import pathlib
-
-from dotenv import load_dotenv
-from livekit import agents
-from livekit.agents import (
-    Agent,
-    AgentServer,
-    AgentSession,
-    JobContext,
-    TurnHandlingOptions,
-    inference,
-)
-from livekit.plugins import nabrah
-
-load_dotenv()
-
-boosting = json.loads(
-    pathlib.Path(__file__).with_name("boosting.json").read_text(encoding="utf-8")
-)
-
-server = AgentServer()
-
-
-class Assistant(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions="You are a helpful voice assistant.")
-
-
-@server.rtc_session()
-async def entrypoint(ctx: JobContext) -> None:
-    session = AgentSession(
-        stt=nabrah.STT(
-            recognition_model="eot_nabrah",
-            language="ar-SA",
-            end_of_turn_confirm_delay_seconds=0.4,
-            max_transcript_inactivity_seconds=1.5,
-            priority_words=boosting["words"],
-            priority_words_strength=boosting["boost_threshold"],
-        ),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
-        tts=inference.TTS("cartesia/sonic-3"),
-        turn_handling=TurnHandlingOptions(
-            turn_detection="stt",
-            endpointing={"min_delay": 0},
-        ),
-    )
-
-    await session.start(agent=Assistant(), room=ctx.room)
-    await ctx.connect()
-
-
-if __name__ == "__main__":
-    agents.cli.run_app(server)
-```
-
-## Parameters
-
-| Parameter | Default | Description |
-| --- | --- | --- |
-| `recognition_model` | `"eot_nabrah"` | `"eot_nabrah"` emits the end-of-turn signal used for turn detection. `""` selects the default model, which is more accurate but emits no signal. |
-| `end_of_turn_confirm_delay_seconds` | `0.4` | Hold after an end-of-turn signal before committing the turn. `None` commits immediately. |
-| `max_transcript_inactivity_seconds` | `None` | Optional fallback that finalizes after no new transcript text. This does not measure acoustic silence. |
-| `priority_words` | `[]` | Terms to bias recognition toward. |
-| `priority_words_strength` | `0.5` | How strongly to bias. |
-| `api_key` | `NABRAH_API_KEY` | API key, if not set in the environment. |
+Both classes read `NABRAH_API_KEY` when `api_key` is omitted.
