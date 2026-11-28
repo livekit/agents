@@ -203,7 +203,8 @@ people use.
   the model string. The model name is the vendor's id as the application gave it; nothing
   is renamed or grouped, so a dated snapshot (`gpt-4o-mini-2024-07-18`) stays itself.
 - A model that declares no provider, like a plugin given only a base URL, is `unknown`:
-  its host name is never sent.
+  its host name is never sent. So is any declared value that is not a short identifier (at
+  most 64 ASCII letters, digits and `. - _ / : +`): free text never leaves the process.
 - A plugin id is the last part of the package name, the same in every language:
   `livekit-plugins-deepgram` in Python and `@livekit/agents-plugin-deepgram` in Node are
   both `deepgram`.

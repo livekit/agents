@@ -221,7 +221,12 @@ LiveKit's own statistics, never customer data; the list is
   share (`ModelUsage::measure`) takes either as a `Measure`.
 - Exported by `lk_agents_net::export::otlp`, as the exporter's third destination
   (`otlp/product_stats.rs`): see [Destinations](#destinations).
-- Models: `ModelLabels::of(kind, &ProviderId)` derives the four labels. Requests, tokens,
+- Models: `ModelId::of(kind, &ProviderId)` copies the four labels from the identity the model
+  declares, parsing and mapping nothing. `ProviderId.plugin` is filled once per host by its
+  base classes (Python: `_bindings.plugin_id`, from the class's package) and by a Rust-native
+  provider itself; a LiveKit Inference model keeps `provider`/`model` as customer metrics and
+  usage name them (`livekit`, `deepgram/nova-3:en`) and declares the vendor and model it runs
+  in `upstream_provider`/`upstream_model`, which `ModelId` prefers. Requests, tokens,
   characters, audio and first-output times are recorded where the request's span ends
   (`lk-agents-inference/src/telemetry.rs`, `stt/retrying.rs`); what only a session knows (the
   audio its STT reported, a realtime response, the transcription delay, its own start) in
@@ -247,7 +252,7 @@ What keeps the two audiences apart, now that one function records both:
 | Guarantee | Enforced by |
 | --- | --- |
 | A declaration's audience, name prefix and module agree, both ways; so do its keys | compile time: `#[span]`/`#[event]`/`#[metric]` expand to `decl::declared::<A>(name, module_path!())`, `#[derive(Attrs)]` to `decl::key_declared(..)`; `lk-agents-codegen --check` repeats it |
-| A product statistic carries closed enums and bounded labels only | compile time: its fields must be `decl::Bounded`, a sealed marker implemented by `Label`, closed `SpanValue` enums and `#[derive(Bounded)]` groups |
+| A product statistic carries closed enums and bounded labels only | compile time: its fields must be `decl::Bounded`, a sealed marker implemented by `BoundedLabel`, closed `SpanValue` enums and `#[derive(Bounded)]` groups. `BoundedLabel` has one constructor: a value of at most 64 ASCII letters, digits and `. - _ / : +` is kept, any other is `unknown`. The customer's `Label` is unchanged |
 | There are two audiences | compile time: `Audience` is sealed |
 | The audience alone routes a measurement | compile time: `Audience::record` makes the record; `ProductStat` has no constructor outside ABI |
 | Spans and events are observability only | compile time: `Audience = Observability` bounds on `start`, `Trace::open`, `event` |
