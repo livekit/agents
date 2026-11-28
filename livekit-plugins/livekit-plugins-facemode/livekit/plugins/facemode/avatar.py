@@ -48,6 +48,15 @@ _DEFAULT_AVATAR_NAME = "FaceMode Avatar"
 
 
 class _FaceModeAudioOutput(AudioOutput):
+    """Audio sink forwarding TTS audio to the FaceMode ingestion socket.
+
+    Playback completion is reported only when the server confirms it through
+    ``utterance_ended``: TTS audio is forwarded faster than realtime, so the
+    framework's speech handle must stay interruptible while the server-side
+    queue is still draining. The pending-report ledger lives on the owner so
+    reconnects and session teardown can settle interrupted segments.
+    """
+
     def __init__(self, owner: AvatarSession):
         super().__init__(
             label="FaceModeAudioOutput",
@@ -57,6 +66,9 @@ class _FaceModeAudioOutput(AudioOutput):
         )
         self.owner = owner
         self._utterance_started = False
+        self._segment_duration = 0.0
+        self._segment_started_at: float | None = None
+        self._end_task: asyncio.Task[None] | None = None
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
         await self.owner._drain_control_tasks()
@@ -65,23 +77,73 @@ class _FaceModeAudioOutput(AudioOutput):
             await self.owner._ensure_protocol_started(frame.sample_rate, frame.num_channels)
             await self.owner._send_start_utterance()
             self._utterance_started = True
+            self._segment_duration = 0.0
+            self._segment_started_at = time.monotonic()
+            self.on_playback_started(created_at=time.time())
+        self._segment_duration += _frame_duration_seconds(frame)
         await self.owner._send_tts_audio(frame)
 
     def flush(self) -> None:
         super().flush()
-        if self._utterance_started:
-            self.owner._schedule_control(self._finish_utterance(), "facemode-end-utterance")
-            self._utterance_started = False
-
-    def clear_buffer(self) -> None:
-        if self._utterance_started:
-            self.owner._schedule_control(
-                self.owner._send_cancel_utterance(), "facemode-cancel-utterance"
-            )
+        if not self._utterance_started:
+            return
+        sequence = self.owner._next_sequence()
+        self.owner._register_pending_playback(sequence, playback_position=self._segment_duration)
+        self._end_task = self.owner._schedule_control(
+            self._end_utterance(sequence), "facemode-end-utterance"
+        )
         self._utterance_started = False
 
-    async def _finish_utterance(self) -> None:
-        await self.owner._send_end_utterance()
+    def clear_buffer(self) -> None:
+        # The framework flushes before clearing, so an interrupted utterance
+        # usually already sent end_utterance. The server-side queue is still
+        # draining at that point and must be told to discard it; the cancel is
+        # chained after the end send so the wire order stays end-then-cancel.
+        streaming = self._utterance_started
+        has_unconfirmed_end = bool(self.owner._pending_playback)
+        if streaming or has_unconfirmed_end:
+            sequence = self.owner._next_sequence()
+            self.owner._schedule_control(
+                self._cancel_utterance(
+                    sequence, streaming, self._interrupted_position(), self._end_task
+                ),
+                "facemode-cancel-utterance",
+            )
+        self._utterance_started = False
+        self._end_task = None
+
+    def _interrupted_position(self) -> float:
+        if self._segment_started_at is None:
+            return 0.0
+        elapsed = time.monotonic() - self._segment_started_at
+        return max(0.0, min(self._segment_duration, elapsed))
+
+    async def _end_utterance(self, sequence: int) -> None:
+        sent = await self.owner._send_end_utterance(sequence)
+        if not sent:
+            # The end never reached the server (e.g. the transport dropped into
+            # a reconnect first), so no confirmation can ever arrive; the
+            # segment is abandoned rather than completed.
+            self.owner._drop_pending_playback(sequence)
+
+    async def _cancel_utterance(
+        self,
+        sequence: int,
+        streaming: bool,
+        playback_position: float,
+        end_task: asyncio.Task[None] | None,
+    ) -> None:
+        if end_task is not None and end_task is not asyncio.current_task():
+            with contextlib.suppress(Exception):
+                await end_task
+        # A server-side cancel wipes every queued speech/end marker, so each
+        # unconfirmed end settles here as interrupted; its own utterance_ended
+        # can never arrive. The cancel control frame itself is not a captured
+        # segment and gets no ledger entry - its confirmation is ignored.
+        self.owner._settle_unconfirmed_playback()
+        if streaming:
+            self.on_playback_finished(playback_position=playback_position, interrupted=True)
+        await self.owner._send_cancel_utterance(sequence)
 
 
 class AvatarSession(BaseAvatarSession):
@@ -147,6 +209,8 @@ class AvatarSession(BaseAvatarSession):
         self._audio_sample_rate: int | None = None
         self._audio_channels: int | None = None
         self._session_log_marker: str | None = None
+        self._audio_output: _FaceModeAudioOutput | None = None
+        self._pending_playback: dict[int, dict[str, Any]] = {}
         self._sequence = 0
         self._started_once = False
         self._stopped = False
@@ -237,7 +301,8 @@ class AvatarSession(BaseAvatarSession):
             tts = getattr(agent_session, "tts", None)
             if tts is not None:
                 await self._ensure_protocol_started(int(tts.sample_rate), int(tts.num_channels))
-            agent_session.output.replace_audio_tail(_FaceModeAudioOutput(self))
+            self._audio_output = _FaceModeAudioOutput(self)
+            agent_session.output.replace_audio_tail(self._audio_output)
             logger.info("FaceMode avatar session started session=%s", self._session_log_marker)
         except asyncio.CancelledError:
             with contextlib.suppress(Exception):
@@ -257,6 +322,7 @@ class AvatarSession(BaseAvatarSession):
         if self._stopped:
             return
         self._stopped = True
+        self._fail_pending_playback()
         await self._cancel_task(self._keepalive_task)
         self._keepalive_task = None
         await self._cancel_task(self._reconnect_task)
@@ -413,6 +479,7 @@ class AvatarSession(BaseAvatarSession):
         self._protocol_started.clear()
         self._protocol_response.clear()
         self._avatar_ready.clear()
+        self._fail_pending_playback()
         task = asyncio.create_task(self._reconnect(), name="facemode-ws-reconnect")
         self._reconnect_task = task
         return task
@@ -434,7 +501,12 @@ class AvatarSession(BaseAvatarSession):
             pending: ClientConnection | None = None
             adopted = False
             try:
+                # A failed attempt records the error through _set_protocol_error,
+                # which also sets _protocol_response. Both must be re-armed
+                # together: clearing only the error leaves the event set, and
+                # _wait_for_send_ready would spin without ever yielding.
                 self._protocol_error = None
+                self._protocol_response.clear()
                 refreshed = await self._request_reconnect_session()
                 self._session = refreshed
                 pending = await self._connect_websocket()
@@ -443,6 +515,12 @@ class AvatarSession(BaseAvatarSession):
                     await pending.send(self._start_message())
                 await self._await_reconnect_started(pending)
                 adopted = True
+                output = self._audio_output
+                if output is not None:
+                    # The fresh socket has no utterance state. Clearing the flag
+                    # makes the next captured frame re-declare start_utterance
+                    # through the normal path, keeping the wire order correct.
+                    output._utterance_started = False
                 logger.info(
                     "FaceMode WebSocket reconnected session=%s attempt=%s",
                     self._session_log_marker,
@@ -505,13 +583,17 @@ class AvatarSession(BaseAvatarSession):
     async def _send_start_utterance(self) -> None:
         await self._send_control("start_utterance", self._next_sequence())
 
-    async def _send_end_utterance(self) -> None:
-        if self._protocol_started.is_set():
-            await self._send_control("end_utterance", self._next_sequence())
+    async def _send_end_utterance(self, sequence: int) -> bool:
+        if not self._protocol_started.is_set():
+            return False
+        await self._send_control("end_utterance", sequence)
+        return True
 
-    async def _send_cancel_utterance(self) -> None:
-        if self._protocol_started.is_set():
-            await self._send_control("cancel_utterance", self._next_sequence())
+    async def _send_cancel_utterance(self, sequence: int) -> bool:
+        if not self._protocol_started.is_set():
+            return False
+        await self._send_control("cancel_utterance", sequence)
+        return True
 
     async def _send_tts_audio(self, frame: rtc.AudioFrame) -> None:
         await self._ensure_protocol_started(frame.sample_rate, frame.num_channels)
@@ -707,6 +789,7 @@ class AvatarSession(BaseAvatarSession):
         elif message_type == "audio_ready":
             self._avatar_ready.set()
         elif message_type == "utterance_ended":
+            self._resolve_pending_playback(message)
             logger.debug(
                 "FaceMode utterance ended seq=%s cycles=%s",
                 message.get("seq"),
@@ -723,6 +806,7 @@ class AvatarSession(BaseAvatarSession):
         elif message_type == "ended":
             self._session_ended.set()
             self._protocol_response.set()
+            self._fail_pending_playback()
         elif message_type == "error":
             protocol_error = FaceModeProtocolError(
                 f"{message.get('code', 'INTERNAL_ERROR')}: {message.get('message', 'FaceMode error')}"
@@ -755,10 +839,13 @@ class AvatarSession(BaseAvatarSession):
         self._protocol_response.set()
         logger.info("FaceMode protocol started session=%s", self._session_log_marker)
 
-    def _schedule_control(self, coroutine: Coroutine[Any, Any, None], name: str) -> None:
+    def _schedule_control(
+        self, coroutine: Coroutine[Any, Any, None], name: str
+    ) -> asyncio.Task[None]:
         task = asyncio.create_task(coroutine, name=name)
         self._control_tasks.add(task)
         task.add_done_callback(self._control_task_done)
+        return task
 
     def _control_task_done(self, task: asyncio.Task[None]) -> None:
         self._control_tasks.discard(task)
@@ -797,7 +884,66 @@ class AvatarSession(BaseAvatarSession):
     def _set_protocol_error(self, error: FaceModeError) -> None:
         if self._protocol_error is None:
             self._protocol_error = error
+            self._fail_pending_playback()
         self._protocol_response.set()
+
+    def _register_pending_playback(self, sequence: int, *, playback_position: float) -> None:
+        self._pending_playback[sequence] = {"position": playback_position}
+
+    def _report_playback_finished(self, entry: dict[str, Any], *, interrupted: bool) -> None:
+        output = self._audio_output
+        if output is None:
+            return
+        output.on_playback_finished(
+            playback_position=float(entry.get("position", 0.0)),
+            interrupted=interrupted,
+        )
+
+    def _resolve_pending_playback(self, message: Mapping[str, Any]) -> None:
+        """Match one server ``utterance_ended`` to its segment report.
+
+        The echoed sequence is the protocol sequence of the end/cancel control
+        frame the server consumed. Confirmations for entries already settled
+        by a cancel, reconnect, or teardown are unmatched and ignored.
+        """
+        sequence = message.get("seq")
+        entry = self._pending_playback.pop(sequence, None) if isinstance(sequence, int) else None
+        if entry is None:
+            return
+        self._report_playback_finished(entry, interrupted=False)
+
+    def _settle_unconfirmed_playback(self) -> None:
+        """Report every end-confirmed-pending segment as interrupted.
+
+        A server-side cancel wipes all queued speech/end markers, so ends
+        that have not been confirmed yet will never produce their own
+        ``utterance_ended``. Each captured segment owes the framework exactly
+        one playback report, so they are settled here before the cancel goes
+        out; the cancel's own confirmation resolves the final segment.
+        """
+        unconfirmed = list(self._pending_playback)
+        for sequence in unconfirmed:
+            entry = self._pending_playback.pop(sequence, None)
+            if entry is not None:
+                self._report_playback_finished(entry, interrupted=True)
+
+    def _drop_pending_playback(self, sequence: int) -> None:
+        """Settle one ledger entry as interrupted when its end never went out."""
+        entry = self._pending_playback.pop(sequence, None)
+        if entry is not None:
+            self._report_playback_finished(entry, interrupted=True)
+
+    def _fail_pending_playback(self) -> None:
+        """Settle every pending segment as interrupted.
+
+        Used when the transport drops or the session stops: the server
+        discards in-flight utterances on disconnect, so no confirmation can
+        ever arrive for them.
+        """
+        entries = list(self._pending_playback.values())
+        self._pending_playback.clear()
+        for entry in entries:
+            self._report_playback_finished(entry, interrupted=True)
 
     def _raise_protocol_error(self) -> None:
         if self._protocol_error is not None:
@@ -807,6 +953,15 @@ class AvatarSession(BaseAvatarSession):
         sequence = self._sequence
         self._sequence += 1
         return sequence
+
+
+def _frame_duration_seconds(frame: rtc.AudioFrame) -> float:
+    duration = getattr(frame, "duration", None)
+    if isinstance(duration, (int, float)) and duration > 0:
+        return float(duration)
+    channels = max(int(frame.num_channels), 1)
+    rate = max(int(frame.sample_rate), 1)
+    return len(frame.data) / (2.0 * channels * rate)
 
 
 def _resolve_optional_string(value: NotGivenOr[str | None], default: str) -> str:
