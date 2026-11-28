@@ -342,7 +342,7 @@ class AudioRecognition:
 
         self._last_final_transcript_time: float | None = None
         # when the speech-to-text last sent a final transcript; unlike _last_final_transcript_time a
-        # preflight does not set it, so a commit right after a preflight still waits for the final
+        # preflight clears it, so a commit right after a preflight still waits for the final
         self._last_stt_final_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
