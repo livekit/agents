@@ -116,6 +116,7 @@ class FallbackAdapter(
 
         # the instance that most recently served a request; used to label metrics & traces
         self._active_instance: STT = self._stt_instances[0]
+        self._closed = False
 
         for stt_instance in self._stt_instances:
             stt_instance.on("metrics_collected", self._on_metrics_collected)
@@ -235,6 +236,9 @@ class FallbackAdapter(
         language: NotGivenOr[str],
         conn_options: APIConnectOptions,
     ) -> None:
+        if self._closed:
+            return
+
         stt_status = self._status[self._stt_instances.index(stt)]
         if (
             stt_status.recovering_recognize_task is None
@@ -330,6 +334,7 @@ class FallbackAdapter(
             self._stt_instances[0].prewarm()
 
     async def aclose(self) -> None:
+        self._closed = True
         for stt_status in self._status:
             if stt_status.recovering_recognize_task is not None:
                 await aio.cancel_and_wait(stt_status.recovering_recognize_task)
@@ -486,6 +491,9 @@ class FallbackRecognizeStream(RecognizeStream):
         )
 
     def _try_recovery(self, stt: STT) -> None:
+        if self._fallback_adapter._closed:
+            return
+
         stt_status = self._fallback_adapter._status[
             self._fallback_adapter._stt_instances.index(stt)
         ]
