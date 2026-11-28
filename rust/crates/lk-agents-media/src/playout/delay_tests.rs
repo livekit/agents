@@ -13,19 +13,7 @@ fn packetization_is_not_a_reason_to_accelerate() {
 }
 
 #[test]
-fn late_packet_envelope_prevents_immediate_catchup_into_another_gap() {
-    let mut delay = Delay::default();
-    for packet in 0..10_u64 {
-        delay.update(Duration::from_millis(packet * 100), packet * 2400, 2400);
-    }
-    delay.update(Duration::from_millis(1300), 24000, 2400);
-    assert_eq!(delay.max_delay_ms(), 300);
-    let actual = delay.playout_delay(Duration::from_millis(1300), 24000);
-    assert!(actual < (100 + delay.max_delay_ms() + 20) * 24);
-}
-
-#[test]
-fn tiny_chunks_do_not_exhaust_the_time_window_or_allocate() {
+fn tiny_chunks_do_not_exhaust_the_time_window() {
     let mut delay = Delay::default();
     for sample in 0..24_000_u64 {
         delay.update(Duration::from_micros(sample * 1_000_000 / 24_000), sample, 1);

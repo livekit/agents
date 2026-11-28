@@ -1,5 +1,5 @@
 // Copyright (c) 2012 The WebRTC project authors. All Rights Reserved.
-// Buffer-level filter adapted under fixtures/playout/LICENSE.webrtc and PATENTS.webrtc.
+// Buffer-level filter adapted under LICENSE.webrtc and PATENTS.webrtc.
 
 //! Smooth timing decisions on a fixed 10 ms source-independent rendering cadence. Account
 //! immediately for a successful time-scale operation so it cannot feed back into the filter.

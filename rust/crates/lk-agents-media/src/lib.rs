@@ -22,6 +22,8 @@ pub mod recorder;
 pub mod resample;
 pub mod source;
 mod soxr;
+#[cfg(test)]
+mod test_alloc;
 pub mod wav;
 
 pub use audio_byte_stream::{AudioByteStream, Frame};

@@ -1,6 +1,6 @@
 // Copyright (c) 2012 The WebRTC project authors. All Rights Reserved.
 // Expand analysis adapted under the BSD license and patent grant in
-// fixtures/playout/LICENSE.webrtc and fixtures/playout/PATENTS.webrtc.
+// LICENSE.webrtc and PATENTS.webrtc.
 
 use std::collections::VecDeque;
 

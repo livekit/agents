@@ -1,5 +1,5 @@
 // Copyright (c) 2019 The WebRTC project authors. All Rights Reserved.
-// Adapted under fixtures/playout/LICENSE.webrtc and PATENTS.webrtc.
+// Adapted under LICENSE.webrtc and PATENTS.webrtc.
 
 //! Bounded Q30 delay distribution. Values beyond the final bucket saturate rather than
 //! disappearing from the estimate. Early observations adapt quickly; older data decays.
