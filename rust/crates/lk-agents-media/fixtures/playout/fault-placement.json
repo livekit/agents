@@ -800,6 +800,72 @@
           "candidate": "1be6425fc73c74816646e487d84084b5cccca2318bd02ea933f531e8c09a3df4"
         }
       }
+    },
+    "clustered_stalls": {
+      "fault_start_ms": 2200,
+      "duration_ms": 2000,
+      "preview_end_ms": 6000,
+      "stall_duration_ms": 80,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 7256,
+        "silent": 40286,
+        "stretched": 458,
+        "accelerated": 0,
+        "underruns": 4,
+        "fast_accelerated": 0,
+        "merge_inserted": 270
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 4,
+        "missing_samples": 7680
+      },
+      "baseline_gaps": [
+        {
+          "start_ms": 2200.0,
+          "source_start": 52800,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 2780.0,
+          "source_start": 64800,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 3360.0,
+          "source_start": 76800,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 4040.0,
+          "source_start": 91200,
+          "duration_ms": 80.0,
+          "active_source": true
+        }
+      ],
+      "browser_preview_verification": {
+        "interval_ms": [
+          2220,
+          2260
+        ],
+        "decoded_rms": {
+          "baseline": 0.0,
+          "candidate": 1946.6
+        },
+        "files_sha256": {
+          "baseline": "d1f0b0122230d7693bf56ccc289eebce3d06f489a65749c461fe7f71810dc817",
+          "neteq": "6b467379704e1aebc18be4ef1c0259fa952909419e2e3908b925085851c9651a",
+          "candidate": "b296ff3c49187c5cf9bc564496514d4d32be83115bebfa30212d192c39092dbc"
+        }
+      }
     }
   }
 }

@@ -148,6 +148,22 @@ class FaultPlacementTests(unittest.TestCase):
         self.assertEqual(gap_lengths, [80 * 24] * 10)
         self.assertEqual(consumed, 24_000 * 27)
 
+    def test_clustered_stalls_finish_soon_after_the_common_onset(self):
+        selected = {22, 27, 32, 38, 51, 53, 58}
+        rows = schedule("clustered_stalls", 24_000 * 27, 22, selected)
+        retained = 0
+        changes = []
+        for index, (arrival, start, _) in enumerate(rows):
+            offset = arrival - start * 1_000_000 // 24_000
+            if offset != retained:
+                self.assertEqual(offset - retained, 80_000)
+                changes.append(index)
+                retained = offset
+        self.assertEqual(changes, [22, 27, 32, 38])
+        self.assertEqual(retained, 320_000)
+        self.assertEqual(sum(row[2] for row in rows), 24_000 * 27)
+        self.assertEqual([row[0] for row in rows], sorted(row[0] for row in rows))
+
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
             speech_activity(bytes(24_000 * 10 * 2))

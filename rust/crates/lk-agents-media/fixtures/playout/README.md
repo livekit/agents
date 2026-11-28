@@ -212,7 +212,7 @@ faults can be verified rather than inferred from injected packet delays alone.
 
 ## Clearly audible stall stress case
 
-The PR Stalls row uses `stalled_delivery`: ten 80 ms delivery pauses over twenty seconds
+The long `stalled_delivery` stress case uses ten 80 ms delivery pauses over twenty seconds
 of source time. Each two-second window chooses its first strong speech boundary: every
 10 ms source window in the preceding 20 ms and following 50 ms must exceed 1000 PCM RMS.
 If the source lacks strong speech in at least eight such windows, rendering refuses it.
@@ -229,3 +229,11 @@ The final browser MP4s are decoded and checked as well as the raw WAVs: the firs
 encoding can soften small clicks, so raw-wave gap counts alone are insufficient evidence
 that a browser preview makes a useful listening example. The mild jitter cases remain in
 the offline tool for realistic robustness checks even when their differences are subtle.
+
+## Short Stalls preview in the PR
+
+The PR uses `clustered_stalls`: four 80 ms pauses at strong speech boundaries in a
+two-second source window near 2.2 s. The captured fixture's untreated gaps begin at
+2.20, 2.78, 3.36 and 4.04 s. All three PR previews use the same 0–6 s wall-clock crop;
+no startup delay or recovery time is realigned. Full renders retain the entire passage.
+The twenty-second `stalled_delivery` stress remains available in the offline simulator.

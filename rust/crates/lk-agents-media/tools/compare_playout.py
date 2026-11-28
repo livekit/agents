@@ -31,6 +31,7 @@ SCENARIOS = (
     "reported_jitter",
     "sustained_jitter",
     "stalled_delivery",
+    "clustered_stalls",
     "burst_recovery",
     "no_catchup",
     "long_outage",
@@ -38,6 +39,20 @@ SCENARIOS = (
     "clock_drift",
     "catchup",
 )
+
+
+# Source chunks are 100ms in these fixtures: (span, window width, required strong windows).
+STALL_CASES = {"stalled_delivery": (200, 20, 8), "clustered_stalls": (20, 5, 3)}
+
+
+def stall_positions(name: str, anchor: int, active: set[int] | None) -> set[int]:
+    span, width, _ = STALL_CASES[name]
+    selected = set()
+    for begin in range(anchor, anchor + span, width):
+        eligible = [i for i in range(begin, begin + width) if active is None or i in active]
+        if eligible:
+            selected.add(eligible[0])
+    return selected
 
 
 def run(*args: str | Path) -> str:
@@ -68,14 +83,7 @@ def schedule(
     seed = 734
     correlated_jitter = 0
     retained_delay = 0
-    stalls = set()
-    if name == "stalled_delivery":
-        for begin in range(anchor, anchor + 200, 20):
-            eligible = [
-                i for i in range(begin, begin + 20) if speech_chunks is None or i in speech_chunks
-            ]
-            if eligible:
-                stalls.add(eligible[0])
+    stalls = stall_positions(name, anchor, speech_chunks) if name in STALL_CASES else set()
     while start < count:
         duration_ms = (
             (20, 100, 40, 200, 60)[(index - anchor) % 5]
@@ -108,7 +116,7 @@ def schedule(
         elif name == "startup_jitter" and 1 <= index <= 4:
             # Illustrative first-answer deliveries: no missing source, only delayed chunks.
             delay = (60_000, 100_000, 160_000, 300_000)[index - 1]
-        elif name == "stalled_delivery":
+        elif name in STALL_CASES:
             # Repeated production/pacing pauses, followed by realtime delivery without
             # catch-up. Retaining each pause makes the actual FIFO gaps recur. This is
             # a harsh concealment stress test, not bounded network jitter or a trace replay.
@@ -281,6 +289,10 @@ def render_player(out: Path, report: dict) -> None:
         "startup_jitter": (
             "First-answer chunks arrive irregularly",
             "Delivery gaps in the first four chunks; first fault at 0.100s.",
+        ),
+        "clustered_stalls": (
+            "Closely spaced 80 ms provider stalls",
+            "Strong-speech pauses within 2s of source time; the PR uses a shared 6s preview.",
         ),
         "stalled_delivery": (
             "Repeated 80 ms provider stalls",
@@ -498,18 +510,12 @@ def main() -> None:
         case.mkdir(exist_ok=True)
         arrivals = case / "arrivals.csv"
         active_chunks = set(
-            activity["strong_speech_chunks" if name == "stalled_delivery" else "speech_chunks"]
+            activity["strong_speech_chunks" if name in STALL_CASES else "speech_chunks"]
         )
-        if name == "stalled_delivery":
-            windows = {
-                (chunk - activity["anchor_chunk"]) // 20
-                for chunk in active_chunks
-                if activity["anchor_chunk"] <= chunk < activity["anchor_chunk"] + 200
-            }
-            if len(windows) < 8:
-                raise ValueError(
-                    "stalled_delivery needs strong speech across at least eight 2s windows"
-                )
+        if name in STALL_CASES:
+            planned_stalls = stall_positions(name, activity["anchor_chunk"], active_chunks)
+            if len(planned_stalls) < STALL_CASES[name][2]:
+                raise ValueError(f"{name} needs strong speech in more of its fault windows")
         with arrivals.open("w", newline="") as stream:
             writer = csv.writer(stream, lineterminator="\n")
             writer.writerow(("arrival_us", "source_start", "samples"))
@@ -588,15 +594,8 @@ def main() -> None:
                 for row in csv.DictReader(stream)
             }
         fault_start_ms = 100 if name == "startup_jitter" else activity["anchor_ms"]
-        if name == "stalled_delivery":
-            fault_start_ms = (
-                min(
-                    chunk
-                    for chunk in active_chunks
-                    if activity["anchor_chunk"] <= chunk < activity["anchor_chunk"] + 200
-                )
-                * 100
-            )
+        if name in STALL_CASES:
+            fault_start_ms = min(planned_stalls) * 100
         report["scenarios"][name] = {
             "fault_start_ms": fault_start_ms,
             "delay_ms": case_delay,
