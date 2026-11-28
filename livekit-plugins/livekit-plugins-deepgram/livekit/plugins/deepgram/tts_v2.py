@@ -25,7 +25,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
-from ._utils import _to_deepgram_url
+from ._utils import _encoding_to_mimetype, _to_deepgram_url, _tts_http_format_params
 from .log import logger
 from .models import FluxTTSModels
 
@@ -35,28 +35,6 @@ from .models import FluxTTSModels
 # https://developers.deepgram.com/docs/flux-tts/overview
 BASE_URL_V2 = "https://api.deepgram.com/v2/speak"
 NUM_CHANNELS = 1
-
-# Encodings the LiveKit pipeline can decode, mapped to their mime type. Deepgram Flux
-# also offers mulaw/alaw, but those aren't playable through the pipeline yet, so they're
-# intentionally omitted here.
-_ENCODING_TO_MIMETYPE: dict[str, str] = {
-    "linear16": "audio/pcm",
-    "mp3": "audio/mp3",
-    "opus": "audio/opus",
-    "flac": "audio/flac",
-    "aac": "audio/aac",
-}
-
-
-def _encoding_to_mimetype(encoding: str) -> str:
-    try:
-        return _ENCODING_TO_MIMETYPE[encoding]
-    except KeyError:
-        raise ValueError(
-            f"unsupported Deepgram Flux TTS encoding {encoding!r}; "
-            f"supported encodings are: {', '.join(_ENCODING_TO_MIMETYPE)}"
-        ) from None
-
 
 # Speaking rate accepted by Flux TTS: 0.5 to 1.5 in 0.05 steps. Anything else is rejected
 # with a 400, which on the WebSocket path surfaces only as a failed handshake.
@@ -133,7 +111,9 @@ class TTSv2(tts.TTS):
 
         """  # noqa: E501
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            # Only linear16 can be streamed. With any other encoding, callers that check
+            # this flag (the voice agent does) wrap synthesize() in a StreamAdapter instead.
+            capabilities=tts.TTSCapabilities(streaming=encoding == "linear16"),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -256,6 +236,7 @@ class TTSv2(tts.TTS):
             connection_params_changed = True
         if is_given(encoding):
             self._opts.encoding = encoding
+            self._capabilities.streaming = encoding == "linear16"
             connection_params_changed = True
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
@@ -307,10 +288,8 @@ class ChunkedStreamv2(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             http_params: dict = {
-                "encoding": self._opts.encoding,
-                "container": "none",
+                **_tts_http_format_params(self._opts.encoding, self._opts.sample_rate),
                 "model": self._opts.model,
-                "sample_rate": self._opts.sample_rate,
                 "mip_opt_out": self._opts.mip_opt_out,
             }
             if self._opts.bit_rate is not None:
