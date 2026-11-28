@@ -66,7 +66,7 @@ async function send(text) {
   const query = thread ? `browser=${browser}&thread=${thread}` : `browser=${browser}`;
   const { token, agent } = await get(`token?${query}`);
 
-  const res = await fetch(`${agent}/chat/v1`, {
+  const res = await fetch(`${agent}/v1`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -87,7 +87,15 @@ async function send(text) {
       },
     }),
   });
-  if (!res.ok) throw new Error((await res.json()).error ?? `chat: ${res.status}`);
+  if (!res.ok) {
+    // An error is JSON from the agent, or plain text from the platform ("no workers available").
+    const body = await res.text();
+    let message = body;
+    try {
+      message = JSON.parse(body).error ?? body;
+    } catch {}
+    throw new Error(message || `chat: ${res.status}`);
+  }
 
   // The answer arrives as server-sent events: one JSON-RPC response per `data:` line.
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();

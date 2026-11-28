@@ -22,9 +22,17 @@ load_dotenv()
 KEY = os.environ["LIVEKIT_API_KEY"]
 SECRET = os.environ["LIVEKIT_API_SECRET"]
 
-# The agent's endpoints on LiveKit Cloud, under the deployment `lk agent dev` registered.
+# The agent's endpoint on LiveKit Cloud: /agents/<agent>/<deployment>/<endpoint>. An agent
+# deployed to production, and a worker started without a deployment, is served at `_`. Set
+# LIVEKIT_AGENT_DEPLOYMENT only for a named deployment (such as `dev`), to the worker's value.
+NAME = os.environ.get("LIVEKIT_AGENT_NAME", "web-chat")
+ENDPOINT = os.environ.get("LIVEKIT_AGENT_ENDPOINT", "chat")
 DEPLOYMENT = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT", "_")
-AGENT = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + f"/agents/web-chat/{DEPLOYMENT}"
+if DEPLOYMENT in ("", "production"):
+    DEPLOYMENT = "_"
+AGENT = (
+    os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + f"/agents/{NAME}/{DEPLOYMENT}/{ENDPOINT}"
+)
 
 TOKEN_TTL = 15 * 60  # seconds; the page asks for a fresh token per message
 

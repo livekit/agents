@@ -39,7 +39,6 @@ export LIVEKIT_URL=wss://<project>.staging.livekit.cloud
 export LIVEKIT_API_KEY=<key>
 export LIVEKIT_API_SECRET=<secret>
 export OPENAI_API_KEY=<key>                  # for calls
-export LIVEKIT_AGENT_DEPLOYMENT=default      # temporary
 
 cd examples/frontdesk && lk agent dev
 ```

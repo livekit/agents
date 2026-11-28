@@ -401,7 +401,8 @@ left empty. Each text or voice door selects its saved history and state with
 `partition_key=`, which defaults to `"default"` independently of these names.
 
 The endpoint is served at `/agents/<agent>/<deployment>/<endpoint>`, with
-`_` as the deployment of a worker registered without one. Where it is served
+`_` as the deployment of a worker registered without one, and of an agent in LiveKit Cloud's
+`production` deployment. Where it is served
 follows the server the worker registers with: LiveKit Cloud when the worker is hosted there
 or its URL is a Cloud project's, decided before the job processes start so they delegate
 alike. The registration's edition is checked against it, and a mismatch is logged:
