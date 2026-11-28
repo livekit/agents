@@ -58,6 +58,9 @@ _MAX_RETRY_AFTER_S = 300.0
 # A conversation that was open this long and then closed cleanly (the API closes one after an hour)
 # reopens at once.
 _LONG_CONVERSATION_S = 60.0
+# The back-off starts again only after a conversation that stayed up this long after its ready, so
+# an API that sends ready and then closes is reopened on the growing waits, not every second.
+_STEADY_S = 30.0
 # One timeout from opening the connection until the API's ready; past it the attempt counts as a
 # timeout and is retried.
 _OPEN_TIMEOUT_S = 2.0
@@ -208,7 +211,7 @@ class BellConnection:
                 await self._session.close()
 
     async def _run(self) -> None:
-        attempt = 0  # failed attempts since the last conversation that reached ready
+        attempt = 0  # failed attempts since the last conversation that stayed up
         while not self._closed:
             opened_at: float | None = None
             refusal: dict[str, Any] | None = None
@@ -238,7 +241,7 @@ class BellConnection:
                 # an API that does not speak version 3: the stream passes through for the
                 # rest of the call
                 return
-            if opened_at is not None:
+            if opened_at is not None and time.perf_counter() - opened_at >= _STEADY_S:
                 attempt = 0
             wait = self._wait_after(attempt, opened_at, refusal, clean)
             if wait is None:

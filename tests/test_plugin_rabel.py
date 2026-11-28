@@ -204,7 +204,8 @@ class FakeAPI:
     older version (`ready` with `"v": 2`). min_chance: the `ready`'s, else the hello's. mode: "ok"
     (guess `answers[heard words]` after `delay` s), "refuse" (an error message, then close),
     "garbage" (broken JSON, a guess for words never sent and a 400), "half-open" (`ready`, then
-    the connection goes half-open: nothing sent arrives, pings go unanswered, no close comes).
+    the connection goes half-open: nothing sent arrives, pings go unanswered, no close comes),
+    "ready-close" (`ready`, then a clean close `close_after` s later).
     `plan` gives a mode for each conversation in turn, the last repeating."""
 
     def __init__(
@@ -221,12 +222,14 @@ class FakeAPI:
         send_chance: bool = True,
         min_chance: float | None = None,
         plan: list[str] | None = None,
+        close_after: float = 0.0,
     ) -> None:
         self.answers, self.delay = answers or {}, delay
         self.status, self.error, self.retry_after = status, error, retry_after
         self.ready_after, self.v = ready_after, v
         self.chance, self.send_chance, self.min_chance = chance, send_chance, min_chance
         self.plan = plan or [mode]
+        self.close_after = close_after
         self.received: list[dict] = []
         self.hello: dict | None = None
         self.connected_at: list[float] = []
@@ -270,6 +273,8 @@ class FakeAPI:
                 ws._end()
             else:
                 loop.call_later(self.ready_after, ws.push, self._ready())
+                if mode == "ready-close":
+                    loop.call_later(self.ready_after + self.close_after, ws._end)
                 if mode == "half-open":
                     loop.call_later(self.ready_after, setattr, ws, "half_open", True)
             return
@@ -829,6 +834,21 @@ async def test_reopens_after_503_with_backoff_and_not_after_400() -> None:
     api = FakeAPI(plan=["refuse"], status=400, error="bad_message", retry_after=0)
     await wrapped_run(TWO_TURNS, api)
     assert len(api.connected_at) == 1
+
+
+@pytest.mark.parametrize("up_for, waits", [(0.0, [1.0, 2.0, 4.0, 8.0]), (31.0, [1.0, 1.0])])
+@pytest.mark.usefixtures("four_early_starts")
+async def test_an_api_that_closes_after_ready_is_reopened_on_the_growing_back_off(
+    up_for: float, waits: list[float]
+) -> None:
+    # an API that sends ready and closes at once is reopened 1, 2, 4, 8 s later, not every 1 s;
+    # the back-off starts again only after a conversation that stayed up 30 s
+    api = FakeAPI(plan=["ready-close"], close_after=up_for)
+    out, *_ = await wrapped_run(TURN, api, settle=2 * up_for + 15.0)
+    assert out == await plain_run(TURN)
+    at = api.connected_at
+    gaps = [round(b - a - up_for, 2) for a, b in zip(at[:-1], at[1:], strict=True)]
+    assert gaps[: len(waits)] == waits, gaps
 
 
 LATE_TURN = [(at + 20.0, *rest) for at, *rest in TURN]  # a turn after 20 s of a quiet line
