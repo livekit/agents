@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import weakref
 from dataclasses import dataclass
@@ -47,6 +48,14 @@ class _VADOptions:
     activation_threshold: float
     deactivation_threshold: float
     sample_rate: int
+    # whether a caller chose deactivation_threshold, rather than it being derived from the
+    # activation threshold: a copy keeps a chosen band instead of re-deriving it
+    deactivation_threshold_is_explicit: bool = False
+
+
+def _derived_deactivation_threshold(activation_threshold: float) -> float:
+    # the hysteresis band that keeps a state from flapping around the activation threshold
+    return max(activation_threshold - 0.15, 0.01)
 
 
 class VAD(agents.vad.VAD):
@@ -81,6 +90,12 @@ class VAD(agents.vad.VAD):
         **Note:**
             This method is blocking and may take time to load the model into memory.
             It is recommended to call this method inside your prewarm mechanism.
+
+            Every call builds a new ``onnxruntime.InferenceSession``, which takes about 15 ms and
+            holds the GIL while it runs, so on a worker that runs jobs in threads it stalls every
+            other job's event loop in the same process for that long. To give one session its own
+            options, call :meth:`with_options` on a prewarmed instance instead of calling this
+            method again.
 
         **Example:**
 
@@ -135,10 +150,130 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
+            deactivation_threshold=deactivation_threshold
+            or _derived_deactivation_threshold(activation_threshold),
             sample_rate=sample_rate,
+            deactivation_threshold_is_explicit=is_given(deactivation_threshold),
         )
         return cls(session=session, opts=opts)
+
+    def _deactivation_follows_activation(self) -> bool:
+        """Whether the hysteresis band is still the one derived from the current activation.
+
+        Provenance decides this, not the value: a band a caller chose stays even when it happens
+        to equal the derived one. The value is only used to notice a band that is neither chosen
+        nor derived any more -- what ``update_options(activation_threshold=...)`` leaves behind
+        when it moves the activation threshold on its own -- and such a band is kept, because it
+        is the one the instance is actually running with.
+        """
+        if self._opts.deactivation_threshold_is_explicit:
+            return False
+        return math.isclose(
+            self._opts.deactivation_threshold,
+            _derived_deactivation_threshold(self._opts.activation_threshold),
+        )
+
+    def with_options(
+        self,
+        *,
+        min_speech_duration: NotGivenOr[float] = NOT_GIVEN,
+        min_silence_duration: NotGivenOr[float] = NOT_GIVEN,
+        prefix_padding_duration: NotGivenOr[float] = NOT_GIVEN,
+        max_buffered_speech: NotGivenOr[float] = NOT_GIVEN,
+        activation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
+        sample_rate: NotGivenOr[Literal[8000, 16000]] = NOT_GIVEN,
+    ) -> VAD:
+        """
+        Create another VAD on this instance's ONNX session, with different options.
+
+        Building the ONNX session is the expensive half of `load`: it takes about 15 ms and
+        holds the GIL, so on a worker that runs jobs in threads it stalls every other job's
+        event loop for that long. A session can be shared -- `InferenceSession.run` is
+        thread-safe and each stream keeps its own model state, so stream state does not leak
+        between instances -- which makes a per-session VAD with its own threshold nearly free.
+
+        Options that are not passed are inherited from this instance. A `deactivation_threshold`
+        the caller chose is kept; the one `load` derived from the activation threshold follows a
+        new `activation_threshold` the way it would in `load`.
+
+        **Example:**
+
+            ```python
+            def prewarm(proc: JobProcess):
+                proc.userdata["vad"] = silero.VAD.load()
+
+
+            async def entrypoint(ctx: JobContext):
+                shared = ctx.proc.userdata["vad"]
+                # same ONNX session, this session's own threshold
+                vad = shared.with_options(activation_threshold=0.6)
+            ```
+
+        Args:
+            min_speech_duration (float): Minimum duration of speech to start a new speech chunk.
+            min_silence_duration (float): At the end of each speech, wait this duration before ending the speech.
+            prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
+            max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
+            activation_threshold (float): Threshold to consider a frame as speech.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Default is max(activation_threshold - 0.15, 0.01).
+            sample_rate (Literal[8000, 16000]): Sample rate for the inference (only 8KHz and 16KHz are supported).
+
+        Returns:
+            VAD: A new instance that shares this instance's ONNX session.
+
+        Raises:
+            ValueError: If an unsupported sample rate or a non-positive deactivation threshold is provided.
+        """  # noqa: E501
+        resolved_sample_rate = sample_rate if is_given(sample_rate) else self._opts.sample_rate
+        if resolved_sample_rate not in onnx_model.SUPPORTED_SAMPLE_RATES:
+            raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
+
+        resolved_activation = (
+            activation_threshold
+            if is_given(activation_threshold)
+            else self._opts.activation_threshold
+        )
+        if is_given(deactivation_threshold):
+            if deactivation_threshold <= 0:
+                raise ValueError("deactivation_threshold must be greater than 0")
+            resolved_deactivation = deactivation_threshold
+        elif is_given(activation_threshold) and self._deactivation_follows_activation():
+            # the hysteresis band is still the derived one, so it follows the new threshold; a
+            # band a caller chose is theirs and stays, which is what a copy must do
+            resolved_deactivation = _derived_deactivation_threshold(resolved_activation)
+        else:
+            resolved_deactivation = self._opts.deactivation_threshold
+
+        opts = _VADOptions(
+            min_speech_duration=(
+                min_speech_duration
+                if is_given(min_speech_duration)
+                else self._opts.min_speech_duration
+            ),
+            min_silence_duration=(
+                min_silence_duration
+                if is_given(min_silence_duration)
+                else self._opts.min_silence_duration
+            ),
+            prefix_padding_duration=(
+                prefix_padding_duration
+                if is_given(prefix_padding_duration)
+                else self._opts.prefix_padding_duration
+            ),
+            max_buffered_speech=(
+                max_buffered_speech
+                if is_given(max_buffered_speech)
+                else self._opts.max_buffered_speech
+            ),
+            activation_threshold=resolved_activation,
+            deactivation_threshold=resolved_deactivation,
+            sample_rate=resolved_sample_rate,
+            deactivation_threshold_is_explicit=(
+                is_given(deactivation_threshold) or self._opts.deactivation_threshold_is_explicit
+            ),
+        )
+        return type(self)(session=self._onnx_session, opts=opts)
 
     def __init__(
         self,
@@ -210,6 +345,7 @@ class VAD(agents.vad.VAD):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.deactivation_threshold_is_explicit = True
 
         for stream in self._streams:
             stream.update_options(
@@ -276,6 +412,9 @@ class VADStream(agents.vad.VADStream):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            # the options object is shared with the VAD, so a band chosen here is a chosen band
+            # for any copy taken afterwards
+            self._opts.deactivation_threshold_is_explicit = True
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None
