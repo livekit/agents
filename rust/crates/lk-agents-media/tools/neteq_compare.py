@@ -1,15 +1,3 @@
-"""Optional offline comparison with actual NetEq; no fixtures, downloads or Python packages.
-
-Requires cargo, clang++, ffmpeg and an extracted livekit/rust-sdks webrtc-a545de4 archive.
-Example: python3 neteq_compare.py --input speech.wav --webrtc /path/to/mac-arm64-release \
-    --output /tmp/comparison
-A copied standalone script also accepts --crate /path/to/lk-agents-media.
-Both controllers receive the same complete ordered PCM chunks and arrival times. NetEq
-alone uses offline 24->48->24 kHz conversion for L16; this is not a sample-exact comparison.
-The native default maximum is unlimited; Rust defaults to 100 ms. Reports retain settings,
-hashes, per-frame traces and added onset latency. No automatic quality ranking is made.
-"""
-
 import argparse
 import csv
 import hashlib
@@ -22,14 +10,441 @@ import sys
 import tempfile
 import wave
 from pathlib import Path
+from typing import Literal, NamedTuple, NotRequired, TypedDict
 
-CPP = r"""
+# Compare Rust playout, untreated PCM and actual libwebrtc NetEq using the same speech
+# and ordered arrival schedule. This is an optional offline tool, with no Python packages
+# or automatic downloads. Requires Python 3.11+, Cargo, clang++ and FFmpeg.
+#
+# Download the archive for your platform from livekit/rust-sdks and extract it:
+# https://github.com/livekit/rust-sdks/releases/tag/webrtc-a545de4
+# Pass the extracted directory containing include/ and lib/ to --webrtc.
+#
+# Example:
+#   python3 neteq_compare.py --input speech.wav \
+#       --webrtc /path/to/mac-arm64-release --output /tmp/comparison
+# A copied standalone script also accepts --crate /path/to/lk-agents-media.
+# Input must be a mono 24 kHz PCM16 WAV; choose speech active at the fault onset.
+#
+# Writes a directory per scenario containing:
+#   untreated.wav, rust.wav, neteq.wav: recordings with the original wall-clock alignment.
+#   arrivals.csv: actual chunk arrival times and source sample ranges shared by both paths.
+#   rust.csv, neteq.csv: per-frame queue, target, concealment and time-scaling counters.
+# report.json records settings, source/archive/output hashes, added startup latency and
+# operation counters before EOF. Latency uses 1 ms signal-onset windows and excludes
+# model, live network and device latency. These measurements are not audio-quality scores.
+#
+# Only NetEq uses offline 24->48->24 kHz conversion for L16. Its native maximum target is
+# unlimited by default; Rust defaults to 100 ms. Native and Rust rate controls differ.
+# Temporary C++/Rust bridges are compiled locally and deleted after the run.
+
+SAMPLE_RATE = 24_000
+SAMPLES_PER_MS = SAMPLE_RATE // 1000
+BYTES_PER_MS = SAMPLES_PER_MS * 2
+REFERENCE_TAG = "webrtc-a545de4"
+
+Scenario = Literal["clean", "startup", "jitter", "burst", "outage", "catchup"]
+Track = Literal["untreated", "rust", "neteq"]
+
+SCENARIOS: tuple[Scenario, ...] = ("clean", "startup", "jitter", "burst", "outage", "catchup")
+TRACKS: tuple[Track, ...] = ("untreated", "rust", "neteq")
+
+
+class Arrival(NamedTuple):
+    arrival_us: int
+    source_start: int
+    samples: int
+
+
+class TrackMetrics(TypedDict):
+    pcm_sha256: str
+    added_startup_ms: int | None
+    pre_eof_counters: NotRequired[dict[str, str]]
+
+
+class ScenarioMetrics(TypedDict):
+    fault_source_ms: int
+    tracks: dict[Track, TrackMetrics]
+
+
+class Report(TypedDict):
+    settings: dict[str, object]
+    reference_api: str
+    archive_sha256: str
+    source_pcm_sha256: str
+    scenarios: dict[Scenario, ScenarioMetrics]
+
+
+class Options(argparse.Namespace):
+    input: Path
+    webrtc: Path
+    crate: Path
+    output: Path
+    scenario: list[Scenario] | None
+    chunk_ms: int
+    fault_at_ms: int
+    minimum_ms: int
+    startup_ms: int
+    maximum_ms: int
+    native_maximum_ms: int
+
+
+def run(*arguments: str | Path | int) -> str:
+    completed = subprocess.run(
+        [str(argument) for argument in arguments], capture_output=True, text=True
+    )
+    if completed.returncode:
+        sys.stderr.write(completed.stderr)
+        completed.check_returncode()
+
+    return completed.stdout
+
+
+def sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def onset_ms(pcm: bytes) -> int | None:
+    for offset in range(0, len(pcm) - BYTES_PER_MS + 1, BYTES_PER_MS):
+        samples = struct.unpack("<24h", pcm[offset : offset + BYTES_PER_MS])
+        energy = sum(sample * sample for sample in samples) / SAMPLES_PER_MS
+        if energy >= 150**2:
+            return offset // BYTES_PER_MS
+
+    return None
+
+
+def make_schedule(name: Scenario, sample_count: int, chunk_ms: int, fault_ms: int) -> list[Arrival]:
+    schedule: list[Arrival] = []
+    previous_arrival_us = 0
+    seed = 734
+    anchor = fault_ms * SAMPLES_PER_MS
+    chunk_samples = chunk_ms * SAMPLES_PER_MS
+
+    for start in range(0, sample_count, chunk_samples):
+        nominal_us = start * 1_000_000 // SAMPLE_RATE
+        elapsed_us = max(0, nominal_us - fault_ms * 1000)
+        delay_us = 0
+
+        if name == "startup" and start == chunk_samples:
+            delay_us = 60_000
+        elif start >= anchor:
+            if name in ("burst", "outage"):
+                stall_us = 400_000 if name == "burst" else 1_000_000
+                delay_us = max(0, stall_us - elapsed_us)
+            elif name == "jitter":
+                # Twenty seconds of 1% slower delivery plus deterministic 0–30 ms jitter.
+                seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+                delay_us = min(elapsed_us, 20_000_000) // 100
+                if elapsed_us < 20_000_000:
+                    delay_us += seed % 30_001
+            elif name == "catchup":
+                # A 1.5 s source interval arrives at 3x speed, creating a 1 s backlog.
+                progress_us = min(elapsed_us, 1_500_000)
+                delay_us = -(progress_us - progress_us // 3)
+
+        # A reliable ordered transport can batch chunks, but never reorders source audio.
+        arrival_us = max(previous_arrival_us, nominal_us + delay_us)
+        count = min(chunk_samples, sample_count - start)
+        schedule.append(Arrival(arrival_us, start, count))
+        previous_arrival_us = arrival_us
+
+    return schedule
+
+
+def parse_arguments() -> Options:
+    parser = argparse.ArgumentParser(description="Compare ordered PCM playout with native NetEq.")
+    parser.add_argument("--input", type=Path, required=True, help="mono 24 kHz PCM16 WAV")
+    parser.add_argument(
+        "--webrtc", type=Path, required=True, help=f"extracted {REFERENCE_TAG} archive"
+    )
+    parser.add_argument("--crate", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--scenario", action="append", choices=SCENARIOS)
+    parser.add_argument("--chunk-ms", type=int, default=100)
+    parser.add_argument("--fault-at-ms", type=int, default=2200)
+    parser.add_argument("--minimum-ms", type=int, default=20)
+    parser.add_argument("--startup-ms", type=int, default=80)
+    parser.add_argument("--maximum-ms", type=int, default=100)
+    parser.add_argument(
+        "--native-maximum-ms", type=int, default=0, help="0: native unlimited target"
+    )
+    options = parser.parse_args(namespace=Options())
+
+    if options.chunk_ms < 10 or options.chunk_ms % 10:
+        parser.error("chunk duration must be a positive multiple of 10 ms")
+    if options.fault_at_ms < 0:
+        parser.error("fault time must be nonnegative")
+
+    return options
+
+
+def read_input(options: Options) -> bytes:
+    with wave.open(str(options.input), "rb") as stream:
+        audio_format = (stream.getframerate(), stream.getnchannels(), stream.getsampwidth())
+        if audio_format != (SAMPLE_RATE, 1, 2):
+            raise ValueError("input must be mono 24 kHz PCM16 WAV")
+
+        pcm = stream.readframes(stream.getnframes())
+
+    if len(pcm) < (options.fault_at_ms + 1500) * BYTES_PER_MS:
+        raise ValueError("input must extend at least 1.5 seconds beyond the fault onset")
+    if len(pcm) <= options.chunk_ms * BYTES_PER_MS:
+        raise ValueError("input must contain at least two chunks")
+
+    return pcm
+
+
+def build_native(root: Path, temporary: Path) -> Path:
+    source = temporary / "reference.cc"
+    source.write_text(CPP_SOURCE)
+    include = root / "include"
+    library = root / "lib/libwebrtc.a"
+    flags = [
+        "-std=c++20",
+        "-O2",
+        "-DNDEBUG",
+        "-DWEBRTC_POSIX",
+        "-Wno-nullability-completeness",
+        f"-I{include}",
+        f"-I{include / 'third_party/abseil-cpp'}",
+    ]
+    links: list[str] = []
+
+    if platform.system() == "Darwin":
+        flags.append("-DWEBRTC_MAC")
+        for framework in (
+            "Foundation",
+            "AudioToolbox",
+            "CoreAudio",
+            "CoreMedia",
+            "CoreVideo",
+            "VideoToolbox",
+            "AVFoundation",
+        ):
+            links.extend(["-framework", framework])
+    elif platform.system() == "Linux":
+        flags.append("-DWEBRTC_LINUX")
+        links.extend(["-lpthread", "-ldl"])
+    else:
+        raise ValueError("native compilation supports macOS and Linux")
+
+    executable = temporary / "reference"
+    run("clang++", *flags, source, library, *links, "-o", executable)
+    return executable
+
+
+def build_rust(crate: Path, temporary: Path) -> Path:
+    (temporary / "src").mkdir()
+    (temporary / "src/main.rs").write_text(RUST_SOURCE)
+    manifest = temporary / "Cargo.toml"
+    manifest.write_text(
+        '[package]\nname = "playout-comparison"\nversion = "0.0.0"\nedition = "2024"\n\n'
+        "[workspace]\n\n[dependencies]\nlk-agents-media = { path = "
+        + json.dumps(str(crate.resolve()))
+        + " }\n"
+    )
+
+    build_output = run(
+        "cargo",
+        "build",
+        "--offline",
+        "--release",
+        "--manifest-path",
+        manifest,
+        "--message-format=json",
+    )
+    for line in build_output.splitlines():
+        artifact = json.loads(line)
+        if executable := artifact.get("executable"):
+            return Path(executable)
+
+    raise RuntimeError("Cargo did not report the comparison executable")
+
+
+def fault_onset_ms(schedule: list[Arrival], name: Scenario, options: Options) -> int:
+    if name == "startup":
+        return options.chunk_ms
+
+    anchor = options.fault_at_ms * SAMPLES_PER_MS
+    first_fault = next(chunk for chunk in schedule if chunk.source_start >= anchor)
+    return first_fault.source_start // SAMPLES_PER_MS
+
+
+def check_active_speech(pcm: bytes, name: Scenario, fault_ms: int) -> None:
+    if name == "clean":
+        return
+
+    window = pcm[fault_ms * BYTES_PER_MS : (fault_ms + 50) * BYTES_PER_MS]
+    samples = struct.unpack(f"<{len(window) // 2}h", window)
+    energy = sum(sample * sample for sample in samples) / len(samples) if samples else 0
+    if math.sqrt(energy) < 150:
+        raise ValueError(f"{name}: fault window is silent; select another onset or speech excerpt")
+
+
+def collect_metrics(directory: Path, source: bytes, cutoff_us: int) -> dict[Track, TrackMetrics]:
+    metrics: dict[Track, TrackMetrics] = {}
+    source_onset = onset_ms(source)
+
+    for track in TRACKS:
+        raw = directory / f"{track}.pcm"
+        pcm = raw.read_bytes()
+        with wave.open(str(directory / f"{track}.wav"), "wb") as stream:
+            stream.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
+            stream.writeframes(pcm)
+
+        output_onset = onset_ms(pcm)
+        added_startup = None
+        if output_onset is not None and source_onset is not None:
+            added_startup = output_onset - source_onset
+
+        metrics[track] = {"pcm_sha256": sha256(raw), "added_startup_ms": added_startup}
+
+    # NetEq has no PCM finish signal. Exclude counters after source EOF from comparisons.
+    for track in ("rust", "neteq"):
+        with (directory / f"{track}.csv").open() as stream:
+            rows = [row for row in csv.DictReader(stream) if int(row["time_us"]) < cutoff_us]
+        metrics[track]["pre_eof_counters"] = rows[-1]
+
+    return metrics
+
+
+def render_scenario(
+    name: Scenario,
+    options: Options,
+    source: bytes,
+    raw: Path,
+    source48: Path,
+    rust: Path,
+    native: Path,
+) -> ScenarioMetrics:
+    directory = options.output.resolve() / name
+    directory.mkdir(exist_ok=True)
+    schedule = make_schedule(name, len(source) // 2, options.chunk_ms, options.fault_at_ms)
+    fault_ms = fault_onset_ms(schedule, name, options)
+    check_active_speech(source, name, fault_ms)
+
+    arrivals_file = directory / "arrivals.csv"
+    with arrivals_file.open("w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("arrival_us", "source_start", "samples"))
+        writer.writerows(schedule)
+
+    source_duration_ms = len(source) // BYTES_PER_MS
+    last_arrival_us = schedule[-1].arrival_us
+    end_ms = max(source_duration_ms, last_arrival_us / 1000) + options.maximum_ms + 2500
+    render_duration_ms = math.ceil(end_ms / 10) * 10
+
+    run(
+        rust,
+        raw,
+        arrivals_file,
+        directory,
+        render_duration_ms,
+        options.minimum_ms,
+        options.startup_ms,
+        options.maximum_ms,
+    )
+    run(
+        native,
+        source48,
+        arrivals_file,
+        directory / "neteq48.pcm",
+        render_duration_ms,
+        options.minimum_ms,
+        options.native_maximum_ms,
+        1,
+        directory / "neteq.csv",
+    )
+    run(
+        "ffmpeg",
+        "-v",
+        "error",
+        "-y",
+        "-f",
+        "s16le",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        "-i",
+        directory / "neteq48.pcm",
+        "-ar",
+        "24000",
+        "-f",
+        "s16le",
+        directory / "neteq.pcm",
+    )
+
+    cutoff_us = min(20_000_000, source_duration_ms * 1000, last_arrival_us)
+    metrics = collect_metrics(directory, source, cutoff_us)
+    print(f"{name}: {directory}", flush=True)
+    return {"fault_source_ms": fault_ms, "tracks": metrics}
+
+
+def main() -> None:
+    options = parse_arguments()
+    source = read_input(options)
+    root = options.webrtc.resolve()
+    library = root / "lib/libwebrtc.a"
+    if not library.is_file() or not (root / "include/api/neteq/neteq.h").is_file():
+        raise ValueError("webrtc distribution must contain headers and lib/libwebrtc.a")
+
+    output = options.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    raw = output / "source.pcm"
+    raw.write_bytes(source)
+
+    report: Report = {
+        "settings": {
+            name: str(value) if isinstance(value, Path) else value
+            for name, value in vars(options).items()
+        },
+        "reference_api": REFERENCE_TAG,
+        "archive_sha256": sha256(library),
+        "source_pcm_sha256": sha256(raw),
+        "scenarios": {},
+    }
+
+    with tempfile.TemporaryDirectory(prefix="neteq-compare-") as directory:
+        temporary = Path(directory)
+        native = build_native(root, temporary)
+        rust = build_rust(options.crate, temporary)
+        source48 = temporary / "source48.pcm"
+        run(
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            options.input.resolve(),
+            "-ar",
+            "48000",
+            "-f",
+            "s16le",
+            source48,
+        )
+
+        for name in options.scenario or SCENARIOS:
+            report["scenarios"][name] = render_scenario(
+                name, options, source, raw, source48, rust, native
+            )
+
+    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+# Small bridges to the real implementations. Keeping the sources here makes this script
+# standalone; they are written only to the temporary build directory.
+
+CPP_SOURCE = r"""
+
 // Offline reference only. Links the pinned libwebrtc distribution; no product dependency.
 #include <algorithm>
 #include <cstdint>
-#include <iterator>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -44,11 +459,16 @@ CPP = r"""
 #include "api/rtp_packet_info.h"
 #include "system_wrappers/include/clock.h"
 
-struct Chunk { int64_t arrival_us; size_t start; size_t count; };
+struct Chunk {
+  int64_t arrival_us;
+  size_t start;
+  size_t count;
+};
 
 int main(int argc, char** argv) {
   if (argc != 9) {
-    std::cerr << "neteq_reference input48.pcm arrivals.csv output48.pcm duration_ms minimum_delay_ms maximum_delay_ms stretch_enabled timeline.csv\n";
+    std::cerr << "neteq_reference input48.pcm arrivals.csv output48.pcm duration_ms "
+                 "minimum_delay_ms maximum_delay_ms stretch_enabled timeline.csv\n";
     return 2;
   }
   std::ifstream pcm_file(argv[1], std::ios::binary);
@@ -60,7 +480,8 @@ int main(int argc, char** argv) {
   std::string line;
   std::getline(schedule, line);
   while (std::getline(schedule, line)) {
-    for (auto& ch : line) if (ch == ',') ch = ' ';
+    for (auto& ch : line)
+      if (ch == ',') ch = ' ';
     std::istringstream row(line);
     Chunk chunk;
     if (!(row >> chunk.arrival_us >> chunk.start >> chunk.count)) return 4;
@@ -79,7 +500,8 @@ int main(int argc, char** argv) {
   config.for_test_no_time_stretching = std::stoi(argv[7]) == 0;
   std::ofstream timeline(argv[8]);
   if (!timeline) return 11;
-  timeline << "time_us,queued_ms,target_ms,filtered_ms,concealed,concealment_events,stretched,accelerated,packets_discarded\n";
+  timeline << "time_us,queued_ms,target_ms,filtered_ms,concealed,concealment_events,stretched,"
+              "accelerated,packets_discarded\n";
   auto neteq = webrtc::DefaultNetEqFactory().Create(
       env, config, webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderL16>());
   if (!neteq->RegisterPayloadType(93, webrtc::SdpAudioFormat("L16", 48000, 1))) return 6;
@@ -107,7 +529,9 @@ int main(int argc, char** argv) {
         header.timestamp = static_cast<uint32_t>(chunk.start + offset);
         header.ssrc = 1;
         if (neteq->InsertPacket(header, payload,
-            webrtc::RtpPacketInfo(header, webrtc::Timestamp::Micros(now_us))) != 0) return 8;
+                                webrtc::RtpPacketInfo(header, webrtc::Timestamp::Micros(now_us))) !=
+            0)
+          return 8;
       }
     }
     clock.AdvanceTimeMicroseconds(tick - now_us);
@@ -116,11 +540,10 @@ int main(int argc, char** argv) {
     if (neteq->GetAudio(&frame) != 0 || frame.samples_per_channel_ != 480) return 9;
     auto state = neteq->GetOperationsAndState();
     auto cumulative = neteq->GetLifetimeStatistics();
-    timeline << tick << ',' << state.current_buffer_size_ms << ','
-             << neteq->TargetDelayMs() << ',' << neteq->FilteredCurrentDelayMs() << ','
-             << cumulative.concealed_samples << ',' << cumulative.concealment_events << ','
-             << cumulative.inserted_samples_for_deceleration << ','
-             << cumulative.removed_samples_for_acceleration << ','
+    timeline << tick << ',' << state.current_buffer_size_ms << ',' << neteq->TargetDelayMs() << ','
+             << neteq->FilteredCurrentDelayMs() << ',' << cumulative.concealed_samples << ','
+             << cumulative.concealment_events << ',' << cumulative.inserted_samples_for_deceleration
+             << ',' << cumulative.removed_samples_for_acceleration << ','
              << cumulative.packets_discarded << '\n';
     for (size_t i = 0; i < 480; ++i) {
       auto sample = static_cast<uint16_t>(frame.data()[i]);
@@ -136,24 +559,36 @@ int main(int argc, char** argv) {
 }
 """
 
-RUST = r"""
-use std::{error::Error, fs, io::{BufWriter, Write}, path::Path, time::Duration};
+RUST_SOURCE = r"""
 use lk_agents_media::playout::{Config, Playout};
+use std::{
+    error::Error,
+    fs,
+    io::{BufWriter, Write},
+    path::Path,
+    time::Duration,
+};
 fn main() -> Result<(), Box<dyn Error>> {
-    let a: Vec<_> = std::env::args().collect();
-    let source = lk_agents_media::pcm_samples(&fs::read(&a[1])?);
-    let schedule = fs::read_to_string(&a[2])?;
-    let chunks: Vec<Vec<usize>> = schedule.lines().skip(1).map(|line|
-        line.split(',').map(str::parse).collect()).collect::<Result<_, _>>()?;
-    let out = Path::new(&a[3]);
+    let args: Vec<_> = std::env::args().collect();
+    let source = lk_agents_media::pcm_samples(&fs::read(&args[1])?);
+    let schedule = fs::read_to_string(&args[2])?;
+    let chunks: Vec<Vec<usize>> = schedule
+        .lines()
+        .skip(1)
+        .map(|line| line.split(',').map(str::parse).collect())
+        .collect::<Result<_, _>>()?;
+    let out = Path::new(&args[3]);
     let mut pcm = BufWriter::new(fs::File::create(out.join("rust.pcm"))?);
     let mut baseline = BufWriter::new(fs::File::create(out.join("untreated.pcm"))?);
     let mut trace = BufWriter::new(fs::File::create(out.join("rust.csv"))?);
-    writeln!(trace, "time_us,queued_source,target_us,concealed,underruns,inserted,removed")?;
-    let mut p = Playout::new(Config {
-        minimum_delay: Duration::from_millis(a[5].parse()?),
-        startup_delay: Duration::from_millis(a[6].parse()?),
-        maximum_delay: Duration::from_millis(a[7].parse()?),
+    writeln!(
+        trace,
+        "time_us,queued_source,target_us,concealed,underruns,inserted,removed"
+    )?;
+    let mut playout = Playout::new(Config {
+        minimum_delay: Duration::from_millis(args[5].parse()?),
+        startup_delay: Duration::from_millis(args[6].parse()?),
+        maximum_delay: Duration::from_millis(args[7].parse()?),
         ..Config::default()
     })?;
     let mut next = 0;
@@ -161,293 +596,60 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut read = 0;
     let mut output = [0; 240];
     let mut drained = false;
-    for tick in (0..a[4].parse::<u64>()? * 1000).step_by(10_000) {
+    for tick in (0..args[4].parse::<u64>()? * 1000).step_by(10_000) {
         while next < chunks.len() && chunks[next][0] as u64 <= tick {
-            let c = &chunks[next];
-            p.push(Duration::from_micros(c[0] as u64), &source[c[1]..c[1]+c[2]])?;
-            available += c[2];
+            let chunk = &chunks[next];
+            playout.push(
+                Duration::from_micros(chunk[0] as u64),
+                &source[chunk[1]..chunk[1] + chunk[2]],
+            )?;
+            available += chunk[2];
             next += 1;
         }
-        if next == chunks.len() { p.finish(); }
-        let r = p.render(Duration::from_micros(tick), &mut output)?;
-        let s = p.statistics();
-        assert_eq!(s.source_received, s.source_consumed + r.queued_source as u64);
-        assert_eq!(s.rendered as i128, s.source_consumed as i128 + s.stretched as i128
-            - s.accelerated as i128 + s.concealed as i128 + s.silent as i128
-            - r.pending_output as i128);
-        drained = r.drained;
-        writeln!(trace, "{tick},{},{},{},{},{},{}", r.queued_source,
-            r.target_delay.as_micros(), s.concealed, s.underruns, s.stretched, s.accelerated)?;
+        if next == chunks.len() {
+            playout.finish();
+        }
+        let rendered = playout.render(Duration::from_micros(tick), &mut output)?;
+        let stats = playout.statistics();
+        assert_eq!(
+            stats.source_received,
+            stats.source_consumed + rendered.queued_source as u64
+        );
+        assert_eq!(
+            stats.rendered as i128,
+            stats.source_consumed as i128 + stats.stretched as i128 - stats.accelerated as i128
+                + stats.concealed as i128
+                + stats.silent as i128
+                - rendered.pending_output as i128
+        );
+        drained = rendered.drained;
+        writeln!(
+            trace,
+            "{tick},{},{},{},{},{},{}",
+            rendered.queued_source,
+            rendered.target_delay.as_micros(),
+            stats.concealed,
+            stats.underruns,
+            stats.stretched,
+            stats.accelerated
+        )?;
         for sample in output {
             pcm.write_all(&sample.to_le_bytes())?;
-            let value = if read < available { let s = source[read]; read += 1; s } else { 0 };
+            let value = if read < available {
+                let s = source[read];
+                read += 1;
+                s
+            } else {
+                0
+            };
             baseline.write_all(&value.to_le_bytes())?;
         }
     }
     assert!(drained && next == chunks.len());
-    assert_eq!(p.statistics().source_consumed, source.len() as u64);
+    assert_eq!(playout.statistics().source_consumed, source.len() as u64);
     Ok(())
 }
 """
-
-
-def run(*args):
-    completed = subprocess.run([str(a) for a in args], capture_output=True, text=True)
-    if completed.returncode:
-        sys.stderr.write(completed.stderr)
-        completed.check_returncode()
-    return completed.stdout
-
-
-def digest(path):
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def onset(pcm):
-    for offset in range(0, len(pcm) - 47, 48):
-        values = struct.unpack("<24h", pcm[offset : offset + 48])
-        if sum(s * s for s in values) / 24 >= 150**2:
-            return offset // 48
-    return None
-
-
-def arrivals(name, samples, chunk_ms, fault_ms):
-    rows, previous, seed = [], 0, 734
-    anchor = fault_ms * 24
-    for start in range(0, samples, chunk_ms * 24):
-        nominal = start * 1_000_000 // 24000
-        delay = 0
-        elapsed = max(0, nominal - fault_ms * 1000)
-        if name == "startup" and start == chunk_ms * 24:
-            delay = 60_000
-        elif start >= anchor:
-            if name in ("burst", "outage"):
-                delay = max(0, (400_000 if name == "burst" else 1_000_000) - elapsed)
-            elif name == "jitter":
-                seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
-                delay = min(elapsed, 20_000_000) // 100
-                if elapsed < 20_000_000:
-                    delay += seed % 30_001
-            elif name == "catchup":
-                progress = min(elapsed, 1_500_000)
-                delay = -(progress - progress // 3)
-        previous = max(previous, nominal + delay)
-        rows.append((previous, start, min(chunk_ms * 24, samples - start)))
-    return rows
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, required=True, help="mono 24 kHz PCM16 WAV")
-    parser.add_argument("--webrtc", type=Path, required=True, help="webrtc-a545de4 distribution")
-    parser.add_argument("--crate", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument(
-        "--scenario",
-        action="append",
-        choices=("clean", "startup", "jitter", "burst", "outage", "catchup"),
-    )
-    parser.add_argument("--chunk-ms", type=int, default=100)
-    parser.add_argument("--fault-at-ms", type=int, default=2200)
-    parser.add_argument("--minimum-ms", type=int, default=20)
-    parser.add_argument("--startup-ms", type=int, default=80)
-    parser.add_argument("--maximum-ms", type=int, default=100)
-    parser.add_argument(
-        "--native-maximum-ms", type=int, default=0, help="0: native unlimited target"
-    )
-    args = parser.parse_args()
-    if args.chunk_ms < 10 or args.chunk_ms % 10 or args.fault_at_ms < 0:
-        parser.error(
-            "chunk duration must be a positive multiple of 10 ms; fault time must be nonnegative"
-        )
-    with wave.open(str(args.input), "rb") as stream:
-        if (stream.getframerate(), stream.getnchannels(), stream.getsampwidth()) != (24000, 1, 2):
-            parser.error("input must be mono 24 kHz PCM16 WAV")
-        pcm = stream.readframes(stream.getnframes())
-    if len(pcm) < (args.fault_at_ms + 1500) * 48:
-        parser.error("input must extend at least 1.5 seconds beyond the fault onset")
-    if len(pcm) <= args.chunk_ms * 48:
-        parser.error("input must contain at least two chunks")
-    out = args.output.resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    raw = out / "source.pcm"
-    raw.write_bytes(pcm)
-    root = args.webrtc.resolve()
-    library = root / "lib/libwebrtc.a"
-    if not library.is_file() or not (root / "include/api/neteq/neteq.h").is_file():
-        parser.error("webrtc distribution must contain headers and lib/libwebrtc.a")
-    cases = args.scenario or ["clean", "startup", "jitter", "burst", "outage", "catchup"]
-    report = {
-        "settings": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
-        "reference_api": "webrtc-a545de4",
-        "archive_sha256": digest(library),
-        "source_pcm_sha256": digest(raw),
-        "scenarios": {},
-    }
-    with tempfile.TemporaryDirectory(prefix="neteq-compare-") as directory:
-        temporary = Path(directory)
-        source = temporary / "reference.cc"
-        source.write_text(CPP)
-        include = root / "include"
-        links = []
-        flags = [
-            "-std=c++20",
-            "-O2",
-            "-DNDEBUG",
-            "-DWEBRTC_POSIX",
-            "-Wno-nullability-completeness",
-            f"-I{include}",
-            f"-I{include / 'third_party/abseil-cpp'}",
-        ]
-        if platform.system() == "Darwin":
-            flags.append("-DWEBRTC_MAC")
-            for framework in (
-                "Foundation",
-                "AudioToolbox",
-                "CoreAudio",
-                "CoreMedia",
-                "CoreVideo",
-                "VideoToolbox",
-                "AVFoundation",
-            ):
-                links.extend(["-framework", framework])
-        elif platform.system() == "Linux":
-            flags.append("-DWEBRTC_LINUX")
-            links.extend(["-lpthread", "-ldl"])
-        else:
-            parser.error("native compilation supports macOS and Linux")
-        native = temporary / "reference"
-        run("clang++", *flags, source, library, *links, "-o", native)
-        (temporary / "src").mkdir()
-        (temporary / "src/main.rs").write_text(RUST)
-        (temporary / "Cargo.toml").write_text(
-            '[package]\nname="playout-comparison"\nversion="0.0.0"\nedition="2024"\n'
-            "[workspace]\n[dependencies]\nlk-agents-media={path="
-            + json.dumps(str(args.crate.resolve()))
-            + "}\n"
-        )
-        built = run(
-            "cargo",
-            "build",
-            "--offline",
-            "--release",
-            "--manifest-path",
-            temporary / "Cargo.toml",
-            "--message-format=json",
-        )
-        executable = next(
-            event["executable"]
-            for line in built.splitlines()
-            if (event := json.loads(line)).get("executable")
-        )
-        source48 = temporary / "source48.pcm"
-        run(
-            "ffmpeg",
-            "-v",
-            "error",
-            "-y",
-            "-i",
-            args.input.resolve(),
-            "-ar",
-            "48000",
-            "-f",
-            "s16le",
-            source48,
-        )
-        for name in cases:
-            case = out / name
-            case.mkdir(exist_ok=True)
-            schedule = arrivals(name, len(pcm) // 2, args.chunk_ms, args.fault_at_ms)
-            # Fail silent tests rather than claiming a fault was audibly exercised.
-            fault = (
-                args.chunk_ms
-                if name == "startup"
-                else schedule[
-                    next(i for i, r in enumerate(schedule) if r[1] >= args.fault_at_ms * 24)
-                ][1]
-                // 24
-            )
-            if name != "clean":
-                window = pcm[fault * 48 : (fault + 50) * 48]
-                values = struct.unpack(f"<{len(window) // 2}h", window)
-                if not values or math.sqrt(sum(v * v for v in values) / len(values)) < 150:
-                    raise ValueError(
-                        f"{name}: fault window is silent; select another onset or speech excerpt"
-                    )
-            path = case / "arrivals.csv"
-            with path.open("w", newline="") as stream:
-                writer = csv.writer(stream)
-                writer.writerow(("arrival_us", "source_start", "samples"))
-                writer.writerows(schedule)
-            duration = (
-                math.ceil(
-                    (max(len(pcm) // 48, schedule[-1][0] / 1000) + args.maximum_ms + 2500) / 10
-                )
-                * 10
-            )
-            run(
-                executable,
-                raw,
-                path,
-                case,
-                duration,
-                args.minimum_ms,
-                args.startup_ms,
-                args.maximum_ms,
-            )
-            run(
-                native,
-                source48,
-                path,
-                case / "neteq48.pcm",
-                duration,
-                args.minimum_ms,
-                args.native_maximum_ms,
-                1,
-                case / "neteq.csv",
-            )
-            run(
-                "ffmpeg",
-                "-v",
-                "error",
-                "-y",
-                "-f",
-                "s16le",
-                "-ar",
-                "48000",
-                "-ac",
-                "1",
-                "-i",
-                case / "neteq48.pcm",
-                "-ar",
-                "24000",
-                "-f",
-                "s16le",
-                case / "neteq.pcm",
-            )
-            metrics = {}
-            for track in ("untreated", "rust", "neteq"):
-                data = (case / f"{track}.pcm").read_bytes()
-                with wave.open(str(case / f"{track}.wav"), "wb") as stream:
-                    stream.setparams((1, 2, 24000, 0, "NONE", "not compressed"))
-                    stream.writeframes(data)
-                active, original = onset(data), onset(pcm)
-                metrics[track] = {
-                    "pcm_sha256": digest(case / f"{track}.pcm"),
-                    "added_startup_ms": active - original
-                    if active is not None and original is not None
-                    else None,
-                }
-            # Compare operation counters before source EOF; native intentionally has no EOF signal.
-            cutoff = min(20_000_000, len(pcm) // 48 * 1000, schedule[-1][0])
-            for track in ("rust", "neteq"):
-                with (case / f"{track}.csv").open() as stream:
-                    rows = [row for row in csv.DictReader(stream) if int(row["time_us"]) < cutoff]
-                metrics[track]["pre_eof_counters"] = rows[-1]
-            report["scenarios"][name] = {"fault_source_ms": fault, "tracks": metrics}
-            print(f"{name}: {case}", flush=True)
-    (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 if __name__ == "__main__":
