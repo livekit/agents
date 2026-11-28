@@ -82,6 +82,8 @@ _max_session_duration = 10 * 60
 _delta_transcript_interval = 0.5
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
+_DEFAULT_MODEL = "gpt-transcribe"
+_LEGACY_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
 # turn_detection is a discriminated union, so a plain dict needs an adapter to validate
 _TURN_DETECTION: TypeAdapter[RealtimeTranscriptionSessionAudioInputTurnDetection] = TypeAdapter(
     RealtimeTranscriptionSessionAudioInputTurnDetection
@@ -191,7 +193,7 @@ class STT(stt.STT):
         *,
         language: str | list[str] = "en",
         detect_language: bool = False,
-        model: STTModels | str = "gpt-4o-mini-transcribe",
+        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
         keywords: NotGivenOr[list[str]] = NOT_GIVEN,
         turn_detection: NotGivenOr[SessionTurnDetection] = NOT_GIVEN,
@@ -210,7 +212,9 @@ class STT(stt.STT):
             language: The language code to use for transcription (e.g., "en" for English).
                 gpt-transcribe and gpt-live-transcribe accept a list for code-switched audio.
             detect_language: Whether to automatically detect the language.
-            model: The OpenAI model to use for transcription.
+            model: The OpenAI model to use for transcription. Defaults to "gpt-transcribe", or
+                to "gpt-4o-mini-transcribe" with `use_realtime=True`, a custom `base_url` (or
+                `OPENAI_BASE_URL`) or `client`.
             prompt: Optional free-form description of the audio, such as its topic or setting.
             keywords: Literal terms to expect, such as product names or acronyms. Only for
                 gpt-transcribe and gpt-live-transcribe, and only a hint.
@@ -235,6 +239,16 @@ class STT(stt.STT):
                 default settings. Pass `vad=None` to opt out and drive
                 `input_audio_buffer.commit` yourself.
         """  # noqa: E501
+
+        if not is_given(model):
+            custom_endpoint = (
+                is_given(base_url) or bool(os.environ.get("OPENAI_BASE_URL")) or client is not None
+            )
+            model = (
+                _DEFAULT_MODEL
+                if use_realtime is not True and not custom_endpoint
+                else _LEGACY_DEFAULT_MODEL
+            )
 
         if not is_given(use_realtime):
             use_realtime = _is_realtime_only(model)
