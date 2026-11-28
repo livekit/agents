@@ -1,12 +1,12 @@
 use super::*;
 
-fn push(p: &mut Playout, now: Duration, pcm: &[i16]) {
+fn push<Mode>(p: &mut Playout<Mode>, now: Duration, pcm: &[i16]) {
     let (result, bytes) = crate::test_alloc::allocated(|| p.push(now, pcm));
     assert_eq!(bytes, 0, "push allocated on the audio path");
     result.unwrap();
 }
 
-fn render(p: &mut Playout, now: Duration, output: &mut [i16]) -> Render {
+fn render<Mode>(p: &mut Playout<Mode>, now: Duration, output: &mut [i16]) -> Render {
     let (result, bytes) = crate::test_alloc::allocated(|| p.render(now, output));
     assert_eq!(bytes, 0, "render allocated on the audio path");
     result.unwrap()
@@ -17,7 +17,7 @@ fn ms(value: u64) -> Duration {
 }
 
 fn plain() -> Playout {
-    Playout::new(Config {
+    Playout::continuous(Config {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
         maximum_delay: Duration::ZERO,
@@ -33,7 +33,7 @@ fn voice(length: usize, offset: usize) -> Vec<i16> {
         .collect()
 }
 
-fn account(p: &Playout, render: Render) {
+fn account<Mode>(p: &Playout<Mode>, render: Render) {
     let s = p.statistics();
     assert_eq!(s.source_received, s.source_consumed + render.queued_source as u64);
     assert_eq!(
@@ -132,7 +132,7 @@ fn concealment_and_recovery_bound_discontinuities_and_fade_out() {
 
 #[test]
 fn unvoiced_outage_and_disabled_plc_ramp_to_silence() {
-    let mut p = Playout::new(Config {
+    let mut p = Playout::continuous(Config {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
         maximum_concealment: Duration::ZERO,
@@ -152,9 +152,12 @@ fn unvoiced_outage_and_disabled_plc_ramp_to_silence() {
 
 #[test]
 fn a_reserve_absorbs_short_delivery_stalls() {
-    let mut p =
-        Playout::new(Config { startup_delay: ms(20), maximum_stretch: 0.0, ..Config::default() })
-            .unwrap();
+    let mut p = Playout::continuous(Config {
+        startup_delay: ms(20),
+        maximum_stretch: 0.0,
+        ..Config::default()
+    })
+    .unwrap();
     push(&mut p, ms(0), &voice(2400, 0));
     let mut output = [0; 240];
     for at in (0..220).step_by(10) {
@@ -206,7 +209,7 @@ fn finish_drains_without_inventing_speech_and_reset_clears_epoch() {
 
 #[test]
 fn voiced_time_stretching_accounts_for_every_source_sample() {
-    let mut p = Playout::new(Config {
+    let mut p = Playout::continuous(Config {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
         maximum_stretch: 0.05,
@@ -235,7 +238,7 @@ fn voiced_time_stretching_accounts_for_every_source_sample() {
 
 #[test]
 fn stalls_bursts_and_clock_drift_remain_bounded() {
-    let mut p = Playout::new(Config::default()).unwrap();
+    let mut p = Playout::continuous(Config::default()).unwrap();
     let mut output = [0; 240];
     let mut source = 0;
     let mut next = 0;
@@ -274,7 +277,7 @@ fn invalid_configuration_and_render_leave_state_unchanged() {
         Config { minimum_delay: ms(101), ..Config::default() },
         Config { capacity: ms(1), ..Config::default() },
     ] {
-        assert!(matches!(Playout::new(config), Err(PlayoutError::Configuration)));
+        assert!(matches!(Playout::continuous(config), Err(PlayoutError::Configuration)));
     }
     let mut p = plain();
     assert_eq!(p.render(ms(100), &mut []), Err(PlayoutError::OutputSize));
@@ -287,7 +290,7 @@ fn invalid_configuration_and_render_leave_state_unchanged() {
 
 #[test]
 fn a_permanent_delivery_shift_is_not_counted_twice_as_buffer_delay() {
-    let mut p = Playout::new(Config { maximum_delay: ms(60), ..Config::default() }).unwrap();
+    let mut p = Playout::continuous(Config { maximum_delay: ms(60), ..Config::default() }).unwrap();
     let mut output = [0; 240];
     let mut source = 0;
     for at in (0..5000_u64).step_by(10) {
@@ -419,7 +422,7 @@ fn concealment_and_recovery_are_invariant_to_render_block_boundaries() {
 
 #[test]
 fn small_provider_chunks_build_reserve_before_a_later_delivery_stall() {
-    let mut protected = Playout::new(Config {
+    let mut protected = Playout::continuous(Config {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
         maximum_stretch: 0.03,
@@ -453,7 +456,7 @@ fn small_provider_chunks_build_reserve_before_a_later_delivery_stall() {
 
 #[test]
 fn severe_playout_backlog_bypasses_cooldown_but_not_the_rate_budget() {
-    let mut p = Playout::new(Config::default()).unwrap();
+    let mut p = Playout::continuous(Config::default()).unwrap();
     let mut output = [0; 240];
     for at in (0..1000_u64).step_by(10) {
         if at.is_multiple_of(100) {
@@ -505,7 +508,7 @@ fn an_alignment_prefix_drains_with_eof_without_losing_source_or_accounting() {
 #[test]
 fn faded_recovery_rebuilds_half_the_target_reserve_but_eof_never_waits() {
     for finish in [false, true] {
-        let mut p = Playout::new(Config {
+        let mut p = Playout::continuous(Config {
             minimum_delay: Duration::ZERO,
             startup_delay: Duration::ZERO,
             maximum_stretch: 0.0,
@@ -538,7 +541,7 @@ fn faded_recovery_rebuilds_half_the_target_reserve_but_eof_never_waits() {
 
 #[test]
 fn a_cold_start_budget_covers_the_delayed_second_chunk() {
-    let mut p = Playout::new(Config::default()).unwrap();
+    let mut p = Playout::continuous(Config::default()).unwrap();
     let mut out = [0; 240];
     for at in (0..500_u64).step_by(10) {
         if at == 0 {
@@ -556,7 +559,7 @@ fn a_cold_start_budget_covers_the_delayed_second_chunk() {
 
 #[test]
 fn queued_bursts_and_known_eof_release_startup_early() {
-    let mut p = Playout::new(Config::default()).unwrap();
+    let mut p = Playout::continuous(Config::default()).unwrap();
     let mut out = [0; 240];
     push(&mut p, ms(0), &voice(2400, 23));
     for at in [0, 10, 20, 30] {
@@ -567,7 +570,7 @@ fn queued_bursts_and_known_eof_release_startup_early() {
     assert!(report.started);
     assert_eq!(report.startup_delay, ms(80));
     assert_eq!(out[0], voice(1, 23)[0]);
-    p.begin_utterance();
+    p.reset();
     push(&mut p, ms(0), &voice(240, 23));
     p.finish();
     assert!(render(&mut p, ms(0), &mut out).drained);
@@ -576,13 +579,16 @@ fn queued_bursts_and_known_eof_release_startup_early() {
 
 #[test]
 fn learned_startup_protects_later_answers_without_learning_idle_time() {
-    let mut p =
-        Playout::new(Config { startup_delay: ms(20), maximum_stretch: 0.0, ..Config::default() })
-            .unwrap();
+    let mut p = Playout::segmented(Config {
+        startup_delay: ms(20),
+        maximum_stretch: 0.0,
+        ..Config::default()
+    })
+    .unwrap();
     let mut out = [0; 240];
     for turn in 0..10_u64 {
         if turn > 0 {
-            p.begin_utterance();
+            p.begin_segment();
         }
         let base = turn * 60_000; // Long conversation pauses must not train delay estimates.
         for tick in (0..1300_u64).step_by(10) {
@@ -592,7 +598,7 @@ fn learned_startup_protects_later_answers_without_learning_idle_time() {
             if (160..=960).contains(&tick) && (tick - 60).is_multiple_of(100) {
                 push(&mut p, ms(base + tick), &voice(2400, (tick - 60) as usize * 24 + 23));
                 if tick == 960 {
-                    p.finish();
+                    p.end_segment();
                 }
             }
             let report = render(&mut p, ms(base + tick), &mut out);
@@ -618,8 +624,15 @@ fn learned_startup_protects_later_answers_without_learning_idle_time() {
 }
 
 #[test]
-fn beginning_an_utterance_cancels_pending_audio_and_old_phonemes() {
-    let mut p = plain();
+fn beginning_a_segment_cancels_pending_audio_and_old_phonemes() {
+    let mut p = Playout::segmented(Config {
+        minimum_delay: Duration::ZERO,
+        startup_delay: Duration::ZERO,
+        maximum_delay: Duration::ZERO,
+        maximum_stretch: 0.0,
+        ..Config::default()
+    })
+    .unwrap();
     let mut out = [0; 240];
     push(&mut p, ms(0), &voice(2400, 23));
     for at in (0..120).step_by(10) {
@@ -628,7 +641,7 @@ fn beginning_an_utterance_cancels_pending_audio_and_old_phonemes() {
     push(&mut p, ms(120), &voice(2400, 61));
     render(&mut p, ms(120), &mut out[..1]);
     assert!(p.recovery.active());
-    p.begin_utterance();
+    p.begin_segment();
     assert_eq!(p.statistics(), Statistics::default());
     push(&mut p, ms(0), &[1234; 2400]);
     render(&mut p, ms(0), &mut out);
@@ -637,7 +650,7 @@ fn beginning_an_utterance_cancels_pending_audio_and_old_phonemes() {
 
 #[test]
 fn hundred_ms_delivery_drift_builds_reserve_instead_of_only_concealing() {
-    let mut p = Playout::new(Config::default()).unwrap();
+    let mut p = Playout::continuous(Config::default()).unwrap();
     let mut out = [0; 240];
     let mut packet = 0_u64;
     for at in (0..20_000_u64).step_by(10) {
@@ -656,7 +669,8 @@ fn hundred_ms_delivery_drift_builds_reserve_instead_of_only_concealing() {
 
 #[test]
 fn startup_reserve_is_not_accelerated_away_before_early_delivery_is_observed() {
-    let mut p = Playout::new(Config { startup_delay: ms(100), ..Config::default() }).unwrap();
+    let mut p =
+        Playout::continuous(Config { startup_delay: ms(100), ..Config::default() }).unwrap();
     let mut out = [0; 240];
     for at in (0..350_u64).step_by(10) {
         if at == 0 {
@@ -678,11 +692,11 @@ fn startup_reserve_is_not_accelerated_away_before_early_delivery_is_observed() {
 fn learned_severe_startup_respects_the_budget_instead_of_promising_impossible_recovery() {
     for maximum in [100, 400] {
         let mut p =
-            Playout::new(Config { maximum_delay: ms(maximum), ..Config::default() }).unwrap();
+            Playout::segmented(Config { maximum_delay: ms(maximum), ..Config::default() }).unwrap();
         let mut out = [0; 240];
         for turn in 0..2_u64 {
             if turn > 0 {
-                p.begin_utterance();
+                p.begin_segment();
             }
             let base = turn * 10_000;
             let arrivals = [0, 160, 300, 460, 700, 700, 700, 700, 800, 900];
@@ -693,7 +707,7 @@ fn learned_severe_startup_respects_the_budget_instead_of_promising_impossible_re
                     push(&mut p, ms(base + arrivals[packet]), &voice(2400, packet * 2400 + 23));
                     packet += 1;
                     if packet == arrivals.len() {
-                        p.finish();
+                        p.end_segment();
                     }
                 }
                 let report = render(&mut p, ms(base + tick), &mut out);
@@ -715,18 +729,18 @@ fn learned_severe_startup_respects_the_budget_instead_of_promising_impossible_re
 
 #[test]
 fn a_clean_answer_does_not_raise_a_small_configured_startup_prior() {
-    let mut p = Playout::new(Config { startup_delay: ms(20), ..Config::default() }).unwrap();
+    let mut p = Playout::segmented(Config { startup_delay: ms(20), ..Config::default() }).unwrap();
     let mut out = [0; 240];
     for turn in 0..4_u64 {
         if turn > 0 {
-            p.begin_utterance();
+            p.begin_segment();
         }
         let base = turn * 10000;
         for at in (0..700_u64).step_by(10) {
             if at < 500 && at.is_multiple_of(100) {
                 push(&mut p, ms(base + at), &voice(2400, at as usize * 24));
                 if at == 400 {
-                    p.finish();
+                    p.end_segment();
                 }
             }
             let report = render(&mut p, ms(base + at), &mut out);
@@ -736,15 +750,63 @@ fn a_clean_answer_does_not_raise_a_small_configured_startup_prior() {
 }
 
 #[test]
-fn construction_is_bounded_and_answer_transitions_reuse_storage() {
-    let (mut p, bytes) = crate::test_alloc::allocated(|| Playout::new(Config::default()).unwrap());
+fn construction_is_bounded_and_lifecycle_transitions_reuse_storage() {
+    let (mut p, bytes) =
+        crate::test_alloc::allocated(|| Playout::continuous(Config::default()).unwrap());
     assert!(bytes <= 100_000, "default controller heap budget exceeded: {bytes}");
     push(&mut p, ms(0), &voice(2400, 23));
     render(&mut p, ms(100), &mut [0; 240]);
+    let mut segments = Playout::segmented(Config::default()).unwrap();
+    push(&mut segments, ms(0), &voice(2400, 23));
+    render(&mut segments, ms(100), &mut [0; 240]);
     let (_, bytes) = crate::test_alloc::allocated(|| {
         p.finish();
-        p.begin_utterance();
         p.reset();
+        segments.end_segment();
+        segments.begin_segment();
+        segments.reset();
     });
     assert_eq!(bytes, 0);
+}
+
+#[test]
+fn continuous_pcm_silence_and_speech_resume_without_new_startup_or_boundaries() {
+    let mut p = Playout::continuous(Config::default()).unwrap();
+    let mut source = voice(120_000, 23);
+    source[24_000..72_000].fill(0);
+    let mut block = [0; 240];
+    let mut sent = 0;
+    let mut chunk = 0;
+    for at in (0..5000_u64).step_by(10) {
+        while sent < source.len() && sent as u64 <= at * 24 {
+            let size = [480, 2400, 960, 4800, 1440][chunk % 5].min(source.len() - sent);
+            push(
+                &mut p,
+                Duration::from_nanos(sent as u64 * 1_000_000_000 / 24_000),
+                &source[sent..sent + size],
+            );
+            sent += size;
+            chunk += 1;
+        }
+        let report = render(&mut p, ms(at), &mut block);
+        account(&p, report);
+        assert!(!report.drained);
+        assert_eq!(report.started, at >= 80);
+        if at >= 1000 {
+            assert_eq!(report.startup_observations, 1);
+        }
+        if (1800..2600).contains(&at) {
+            assert_eq!(block, [0; 240]);
+        }
+    }
+    p.finish();
+    let mut drained = false;
+    for at in (5000..6000).step_by(10) {
+        let report = render(&mut p, ms(at), &mut block);
+        account(&p, report);
+        drained = report.drained;
+    }
+    assert!(drained);
+    assert_eq!(p.statistics().source_consumed, source.len() as u64);
+    assert_eq!(p.statistics().underruns, 0);
 }

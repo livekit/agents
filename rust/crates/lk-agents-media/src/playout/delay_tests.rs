@@ -40,21 +40,21 @@ fn clean_startup_relaxes_gradually_and_bad_startup_is_remembered() {
     for expected in [60, 40, 20] {
         delay.update(Duration::ZERO, 0, 2400);
         delay.update(Duration::from_millis(100), 2400, 2400);
-        delay.end_utterance();
+        delay.end_segment();
         assert_eq!(
             delay.startup(Duration::from_millis(80), Duration::ZERO, Duration::from_millis(100)),
             expected * 24
         );
-        delay.begin_utterance();
+        delay.begin_segment();
     }
     delay.update(Duration::ZERO, 0, 2400);
     delay.update(Duration::from_millis(400), 2400, 2400);
-    delay.end_utterance();
+    delay.end_segment();
     assert_eq!(
         delay.startup(Duration::from_millis(80), Duration::ZERO, Duration::from_millis(100)),
         2400
     );
-    delay.begin_utterance();
+    delay.begin_segment();
     delay.update(Duration::from_secs(3600), 0, 2400);
     delay.update(Duration::from_millis(3_600_100), 2400, 2400);
     assert_eq!(delay.max_delay_ms(), 0);
@@ -68,8 +68,8 @@ fn clean_startup_relaxes_gradually_and_bad_startup_is_remembered() {
 fn a_single_finished_chunk_is_not_evidence_of_good_packet_timing() {
     let mut delay = Delay::default();
     delay.update(Duration::ZERO, 0, 12000);
-    delay.end_utterance();
-    delay.begin_utterance();
+    delay.end_segment();
+    delay.begin_segment();
     assert_eq!(delay.target(Duration::ZERO, Duration::from_millis(100)), 1920);
     assert_eq!(
         delay.startup(Duration::from_millis(80), Duration::ZERO, Duration::from_millis(100)),

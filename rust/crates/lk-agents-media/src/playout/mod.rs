@@ -3,7 +3,10 @@
 //! The caller supplies monotonic arrival times, renders on its own clock, and owns downstream
 //! scheduling. No clock, task, I/O or allocation is used by `push` or `render`. Source samples
 //! are never silently dropped: queue pressure rejects a whole chunk for the caller to handle.
-//! `finish` drains real audio; `reset` begins a new timeline and discards the old epoch explicitly.
+//!
+//! Choose [`Playout::continuous`] for audio with no boundaries, or [`Playout::segmented`] for
+//! explicit source segments. Continuous streams need only `push` and `render`; real PCM
+//! silence and underruns never imply a new segment. `reset` explicitly discards the timeline.
 
 mod delay;
 mod dsp;
@@ -13,6 +16,7 @@ mod level;
 mod playout_tests;
 
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use dsp::{Concealer, FRAME, OVERLAP, PERIOD_MAX, Recovery, Stretch, mix};
@@ -23,7 +27,7 @@ pub const SAMPLE_RATE: u32 = 24_000;
 pub struct Config {
     /// Lower bound for the adaptive reserve target.
     pub minimum_delay: Duration,
-    /// Cold-start waiting-time prior. Learned startup coverage replaces it across utterances;
+    /// Cold-start waiting-time prior. Learned startup coverage replaces it across explicit segments;
     /// clamped to the minimum/maximum delay bounds. EOF can release a short reply sooner.
     pub startup_delay: Duration,
     /// Upper bound for the target, not a hard latency cap: accepted speech is never dropped.
@@ -96,7 +100,7 @@ pub struct Render {
     pub target_delay: Duration,
     /// Selected startup waiting-time budget; queued bursts/EOF may release it sooner.
     pub startup_delay: Duration,
-    /// Completed answer-start observations retained across `begin_utterance()`.
+    /// Completed stream/segment-start observations; retained across explicit segment boundaries.
     pub startup_observations: u64,
     /// Unclamped learned quantile; the selected budget also respects bounds and slow release.
     pub startup_quantile: Option<Duration>,
@@ -105,7 +109,16 @@ pub struct Render {
     pub drained: bool,
 }
 
-pub struct Playout {
+/// Continuous source audio; no segment-boundary methods are exposed.
+pub struct Continuous;
+
+/// Explicit source segments with independent startup and shared learned delivery timing.
+pub struct Segmented;
+
+/// Bounded PCM playout. Choose `continuous` or `segmented` to match the provider's lifecycle.
+/// Both modes share exactly the same buffering and DSP; the mode has no runtime state.
+pub struct Playout<Mode = Continuous> {
+    mode: PhantomData<Mode>,
     config: Config,
     queue: VecDeque<i16>,
     capacity: usize,
@@ -127,8 +140,55 @@ pub struct Playout {
     stretch_after: u64,
 }
 
-impl Playout {
-    pub fn new(config: Config) -> Result<Self, PlayoutError> {
+impl Playout<Continuous> {
+    /// Ready to accept a continuous source. Call `finish` only at its actual end, never
+    /// during silence or a temporary delivery gap. No boundary events are needed.
+    ///
+    /// ```compile_fail
+    /// use lk_agents_media::playout::{Config, Playout};
+    /// let mut audio = Playout::continuous(Config::default()).unwrap();
+    /// audio.begin_segment(); // Available only on segmented playout.
+    /// ```
+    pub fn continuous(config: Config) -> Result<Self, PlayoutError> {
+        Self::new(config)
+    }
+
+    /// End of the continuous source. Idempotent; accepted samples drain before `drained`.
+    pub fn finish(&mut self) {
+        self.finish_input();
+    }
+}
+
+impl Playout<Segmented> {
+    /// Ready to accept the first explicit segment. Subsequent segments use `begin_segment`.
+    /// Use this mode only when the caller knows where source boundaries occur.
+    pub fn segmented(config: Config) -> Result<Self, PlayoutError> {
+        Self::new(config)
+    }
+
+    /// Start a new segment and audio/clock epoch, retaining normalized delivery statistics.
+    /// Clears queued audio, DSP, counters and scaling budget. Drain the previous segment
+    /// before calling this, unless deliberately cancelling it. Never infer this from silence.
+    pub fn begin_segment(&mut self) {
+        self.delay.begin_segment();
+        self.clear_audio();
+    }
+
+    /// End the current segment. Keep rendering until `drained` before beginning the next.
+    /// Rejects further input until `begin_segment` or `reset`. Idempotent.
+    ///
+    /// ```compile_fail
+    /// use lk_agents_media::playout::{Config, Playout};
+    /// let mut audio = Playout::segmented(Config::default()).unwrap();
+    /// audio.finish(); // Segmented playout uses end_segment instead.
+    /// ```
+    pub fn end_segment(&mut self) {
+        self.finish_input();
+    }
+}
+
+impl<Mode> Playout<Mode> {
+    fn new(config: Config) -> Result<Self, PlayoutError> {
         let capacity = samples(config.capacity);
         if config.minimum_delay > config.maximum_delay
             || config.maximum_delay > config.capacity
@@ -141,6 +201,7 @@ impl Playout {
             return Err(PlayoutError::Configuration);
         }
         Ok(Self {
+            mode: PhantomData,
             config,
             queue: VecDeque::with_capacity(capacity),
             capacity,
@@ -202,18 +263,9 @@ impl Playout {
         Ok(())
     }
 
-    /// End of source audio, not a temporary delivery gap. Idempotent; accepted samples drain.
-    pub fn finish(&mut self) {
+    fn finish_input(&mut self) {
         self.finished = true;
-        self.delay.end_utterance();
-    }
-
-    /// Cancel the old utterance and start a new audio/clock epoch. Keep only normalized
-    /// delivery/startup statistics: inter-answer silence never becomes an arrival delay.
-    /// Clears queued PCM, old phonemes, render counters and the time-scaling budget.
-    pub fn begin_utterance(&mut self) {
-        self.delay.begin_utterance();
-        self.clear_audio();
+        self.delay.end_segment();
     }
 
     /// Full reset for a new provider/connection. Clears learned timing as well as audio.

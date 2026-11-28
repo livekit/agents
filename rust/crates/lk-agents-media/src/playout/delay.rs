@@ -1,6 +1,6 @@
 //! Transport timing in source-sample units. Each chunk contributes its actual first-sample
 //! arrival, never fabricated RTP arrivals inside a WebSocket payload. Source time bounds the
-//! recent path envelope; persistent distributions survive an explicit utterance boundary.
+//! recent path envelope; persistent distributions survive an explicit segment boundary.
 
 use std::time::Duration;
 
@@ -138,18 +138,18 @@ impl Delay {
         self.startup_histogram.observe(self.startup_peak_ms);
         let previous = self.startup_hint.unwrap_or(Duration::from_millis(80));
         // React to worse startup coverage immediately. Release one histogram bin per
-        // observed utterance so a single clean response does not erase a cautious prior.
+        // observed segment so a single clean response does not erase a cautious prior.
         self.startup_hint = Some(
             Duration::from_millis(self.startup_histogram.quantile_ms() as u64)
                 .max(previous.saturating_sub(Duration::from_millis(BIN_MS as u64))),
         );
     }
 
-    pub(super) fn end_utterance(&mut self) {
+    pub(super) fn end_segment(&mut self) {
         self.complete_startup();
     }
 
-    pub(super) fn begin_utterance(&mut self) {
+    pub(super) fn begin_segment(&mut self) {
         self.complete_startup();
         if self.timing_observed && self.interval_start.is_some() {
             self.histogram.observe(self.interval_peak_ms);

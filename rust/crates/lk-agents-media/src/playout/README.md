@@ -1,34 +1,46 @@
 # Ordered PCM playout
 
-Synchronous, bounded mono 24 kHz PCM16 processing. Callers supply monotonic arrival/render
-clock values, push complete chunks, and render 1–480 samples per call. Chunk lengths may
-change. Queue pressure rejects a whole chunk atomically; accepted source stays ordered.
-The caller owns downstream pacing and format conversion.
+Bounded mono 24 kHz PCM16 playout. Push complete chunks with monotonic arrival times and
+render 1–480 samples on the consumer's clock. Chunk sizes may change. The caller owns
+pacing and format conversion; capacity errors reject the entire chunk atomically.
 
-Defaults: 80 ms startup prior, 20–100 ms adaptive target, 2 s capacity, 200 ms maximum
-speech concealment and a 3% cumulative insertion/removal budget. Targets are not hard
-latency caps: accepted speech is preserved. Startup can release early for bursts or EOF.
-`begin_utterance()` clears PCM/DSP and retains normalized arrival history; `reset()` also
-clears learned timing. Clean answers gradually reduce startup; worse observed deficits
-increase it within the configured bounds. Recent bad history takes time to decay.
+## Choose the source lifecycle
 
-Reserve insertion and acceleration prefer low-energy splices or matching pitch periods.
-Concealment uses mixed voiced/unvoiced continuation and fades into source-trained room
-tone. Recovery aligns a strong voiced match with a bounded generated prefix and blends
-back to source. Generated sound never trains the background model. These algorithms
-cannot reconstruct missing words or guarantee transparent sound during a long outage.
+| Source | Constructor | Lifecycle |
+| --- | --- | --- |
+| Continuous audio | `Playout::continuous(config)` | `push` / `render`; `finish` only at actual EOF |
+| Explicit segments | `Playout::segmented(config)` | First segment is ready; `end_segment`, drain, then `begin_segment` |
 
-In-memory regressions cover sample preservation/accounting, changing chunks, atomic
-errors, bounded startup/learning, cancellation/EOF, pitch/energy, transient rejection,
-recovery edges, drift, backlog and rate limits. Allocation recording shares the crate's
-existing test allocator.
+The continuous type has no segment methods. It starts once and keeps learning delivery
+timing without boundary events. PCM silence remains part of the stream; missing audio is
+an underrun, never an inferred segment boundary. Keep rendering through delivery gaps.
 
-## Optional native comparison
+The segmented type exposes symmetric `begin_segment()` / `end_segment()` methods instead
+of `finish()`. Use it when a provider identifies answers or other source boundaries.
+`end_segment()` rejects new input while accepted audio drains. Wait for `Render::drained`
+before `begin_segment()` unless deliberately cancelling queued speech. A new segment
+clears audio/DSP and resets its clock, counters and scaling budget while retaining learned
+delivery timing. In either mode, `reset()` discards audio **and** learned timing.
 
-One standalone script generates its tiny native/Rust bridges in a temporary directory.
-No source audio, generated fixtures, plot tools or native implementation are vendored.
-Requires Python 3.11+, Cargo, FFmpeg, a C++20 compiler and an extracted distribution from
-[webrtc-a545de4](https://github.com/livekit/rust-sdks/releases/tag/webrtc-a545de4):
+Both types use the same DSP and buffers. Mode selection has no runtime or allocation cost.
+
+## Buffering
+
+Defaults: 80 ms startup, 20–100 ms adaptive target, 2 s capacity, up to 200 ms extrapolated
+speech and a 3% cumulative insertion/removal budget. Targets are not hard latency caps.
+Queued bursts and EOF may release startup early. Across explicit segments, clean startup
+observations gradually reduce the initial wait; worse history increases it within bounds.
+
+Time scaling prefers quiet splices or matching pitch periods. Concealment blends voiced
+and unvoiced continuation into source-trained room tone, then recovery merges returning
+PCM. Generated sound never trains the noise model. Long outages still lose intelligibility.
+Tests cover accounting, allocation, lifecycle, silence/resumption, jitter/drift, scaling,
+transients, recovery, capacity errors and EOF. Provider/runtime wiring remains separate.
+
+## Optional NetEq comparison
+
+Requires Python 3.11+, Cargo, clang++, FFmpeg and the extracted platform archive from
+[livekit/rust-sdks: webrtc-a545de4](https://github.com/livekit/rust-sdks/releases/tag/webrtc-a545de4).
 
 ```sh
 python3 rust/crates/lk-agents-media/tools/neteq_compare.py \
@@ -36,27 +48,24 @@ python3 rust/crates/lk-agents-media/tools/neteq_compare.py \
   --webrtc /path/to/mac-arm64-release --output /tmp/playout-comparison
 ```
 
-A copied script accepts `--crate /path/to/lk-agents-media`. It renders clean, late startup,
-20 s of 1%-slow jitter, 400 ms stall, 1 s outage and faster-than-realtime catch-up schedules.
-It rejects silent fault onsets. WAVs, arrival/per-frame CSVs and a settings/hash/onset report
-stay in the chosen output directory. All source accounting and final Rust drain are checked.
+The single script has typed, described presets for steady delivery, delayed startup,
+bounded jitter, slow jitter, positive/negative clock drift, short/long/repeated stalls,
+catch-up and variable chunks. `--help` lists exact timings. All preserve ordered source;
+RTP loss, reordering and encoded FEC/PLC are outside this reliable PCM layer.
 
-Both paths receive identical chunk arrivals. Only NetEq resamples 24→48→24 kHz for L16;
-its <=20 ms encoded packets keep the enclosing chunk's arrival time. Native rate control
-and default maximum differ from Rust; use `--native-maximum-ms` for an explicit alternative.
-Counters are sampled before EOF because native NetEq lacks this PCM finish signal.
-Onset delay excludes model, live network and device latency; no automatic quality score
-or claim of perceptual parity is made. PR listening attachments remain review evidence.
+A fixed seed and source-time clock make retries reproducible with the same inputs and
+toolchain. Outputs include aligned WAVs, arrival/operation CSVs and a report containing
+settings, preset descriptions, seed, hashes, startup delay and pre-EOF counters. The script
+checks source accounting/drain and rejects silent fault onsets. A copied script accepts
+`--crate /path/to/lk-agents-media`; embedded bridges build in a temporary directory.
 
-RTP ordering, retransmission, encoded FEC/PLC, codec switching, DTMF and SID comfort-noise
-packets belong outside this ordered PCM layer. Relevant NetEq processing informed this
-independent Rust implementation; it is not a sample-exact port. Adapted components retain
-upstream notices below.
-Provider/runtime integration and validation against real arrival traces remain separate.
+Only NetEq resamples 24→48→24 kHz for L16. It retains each enclosing chunk's arrival time
+and its own native rate control; `--native-maximum-ms` sets an optional target cap. Onset
+latency excludes model, live network and device delay. These are diagnostic comparisons,
+not perceptual scores or a claim of NetEq parity. Existing PR recordings remain attached.
 
-## Upstream notices
-
-For the adapted playout components:
+<details>
+<summary>Upstream notices for adapted components</summary>
 
 ```text
 Copyright (c) 2011, The WebRTC project authors. All rights reserved.
@@ -114,3 +123,5 @@ infringement, then any patent rights granted to you under this License
 for this implementation of the WebRTC code package shall terminate as
 of the date such litigation is filed.
 ```
+
+</details>
