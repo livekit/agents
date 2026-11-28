@@ -108,6 +108,7 @@ class FakeRoom(rtc.EventEmitter[str]):
 
     name = "dev-room-42"
     local_participant = SimpleNamespace(identity="my-agent")
+    remote_participants: dict[str, Any] = {}
 
     def isconnected(self) -> bool:
         return False
@@ -402,7 +403,8 @@ async def test_the_render_ends_once(fake: FakeAtmee, trigger: str) -> None:
         await asyncio.sleep(0)
     assert len(fake.calls("POST", END)) == 1 and avatar._ended and avatar._api._session is None
     # our listeners are gone (the agent's audio output keeps its own)
-    assert not room._events["participant_disconnected"] and not agent_session._events["close"]
+    assert avatar._on_participant_disconnected not in room._events["participant_disconnected"]
+    assert not agent_session._events["close"]
 
 
 @pytest.mark.parametrize(("failure", "ends"), [("5xx", 3), ("4xx", 1)])
