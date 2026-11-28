@@ -553,6 +553,153 @@
         "removed_ms": 672.7916666666666,
         "fast_removed_ms": 279.6666666666667
       }
+    },
+    "sustained_jitter": {
+      "fault_start_ms": 2200,
+      "duration_ms": 20000,
+      "source_rate_deficit": 0.01,
+      "jitter_max_ms": 30,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 4914,
+        "silent": 43086,
+        "stretched": 0,
+        "accelerated": 0,
+        "underruns": 20,
+        "fast_accelerated": 0,
+        "merge_inserted": 639
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 20,
+        "missing_samples": 5280
+      },
+      "baseline_gaps": [
+        {
+          "start_ms": 2200.0,
+          "source_start": 52800,
+          "duration_ms": 30.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 3230.0,
+          "source_start": 76800,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 3840.0,
+          "source_start": 91200,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 5850.0,
+          "source_start": 139200,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 6560.0,
+          "source_start": 156000,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 6970.0,
+          "source_start": 165600,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 7980.0,
+          "source_start": 189600,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 9290.0,
+          "source_start": 220800,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 10700.0,
+          "source_start": 254400,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 11310.0,
+          "source_start": 268800,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 12220.0,
+          "source_start": 290400,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 12530.0,
+          "source_start": 297600,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 14340.0,
+          "source_start": 340800,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 15150.0,
+          "source_start": 360000,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 16060.0,
+          "source_start": 381600,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 17570.0,
+          "source_start": 417600,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 18080.0,
+          "source_start": 429600,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 18490.0,
+          "source_start": 439200,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 20700.0,
+          "source_start": 492000,
+          "duration_ms": 10.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 21610.0,
+          "source_start": 513600,
+          "duration_ms": 10.0,
+          "active_source": true
+        }
+      ]
     }
   }
 }

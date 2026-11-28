@@ -50,3 +50,11 @@ but cannot exceed it. This intentionally differs from unbounded emergency catch-
 No relevant operation enum is silently unaccounted for. Listening quality across wider
 speech/noise content and real provider arrival traces remains an evaluation requirement;
 passing these regressions does not establish NetEq quality parity.
+
+## Sustained-speech qualification
+
+The sustained 100 ms speech-chunk fixture (20 s of 1% slower delivery plus 0–30 ms
+variation) currently has 20 untreated and 20 Rust underruns. Rust conceals the gaps,
+but does not insert preemptive expansion in this run. The 20 ms chunk drift regressions
+are not evidence that all speech/chunking combinations build adequate reserve.
+This remains a buffering-quality limitation, visible in the PR listening comparison.

@@ -82,6 +82,41 @@ class FaultPlacementTests(unittest.TestCase):
         self.assertEqual(sum(row[2] for row in rows), 24_000 * 10)
         self.assertTrue(all(start == index * 2400 for index, (_, start, _) in enumerate(rows)))
 
+    def test_sustained_jitter_continues_twenty_seconds_then_stabilizes(self):
+        active = set(range(300))
+        rows = schedule("sustained_jitter", 24_000 * 27, 22, active)
+        self.assertEqual(rows, schedule("sustained_jitter", 24_000 * 27, 22, active))
+        self.assertEqual(sum(row[2] for row in rows), 24_000 * 27)
+        self.assertEqual([row[0] for row in rows], sorted(row[0] for row in rows))
+        delays = [arrival - start * 1_000_000 // 24_000 for arrival, start, _ in rows]
+        self.assertEqual(delays[:22], [0] * 22)
+        for begin in [22, 72, 122, 172]:
+            variation = [delays[i] - (i - 22) * 1000 for i in range(begin, begin + 50)]
+            self.assertTrue(all(0 <= value <= 30_000 for value in variation))
+            self.assertGreater(len(set(variation)), 40)
+        self.assertEqual(delays[222:], [200_000] * len(delays[222:]))
+        available = consumed = next_chunk = 0
+        gaps = []
+        in_gap = False
+        for at in range(0, 27_000, 10):
+            while next_chunk < len(rows) and rows[next_chunk][0] <= at * 1000:
+                available += rows[next_chunk][2]
+                next_chunk += 1
+            count = min(240, available - consumed)
+            if count < 240 and consumed < 24_000 * 27:
+                if not in_gap:
+                    gaps.append(at)
+                in_gap = True
+            else:
+                in_gap = False
+            consumed += count
+        self.assertGreater(len(gaps), 15)
+        self.assertGreater(gaps[-1], 20_000)
+        for begin in [2200, 7200, 12200, 17200]:
+            self.assertTrue(any(begin <= at < begin + 5000 for at in gaps))
+        silence = schedule("sustained_jitter", 24_000 * 27, 22, set())
+        self.assertEqual(silence[172][0] - silence[172][1] * 1_000_000 // 24_000, 150_000)
+
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
             speech_activity(bytes(24_000 * 10 * 2))

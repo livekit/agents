@@ -29,6 +29,7 @@ SCENARIOS = (
     "slow_jittery",
     "startup_jitter",
     "reported_jitter",
+    "sustained_jitter",
     "burst_recovery",
     "no_catchup",
     "long_outage",
@@ -97,6 +98,16 @@ def schedule(
         elif name == "startup_jitter" and 1 <= index <= 4:
             # Illustrative first-answer deliveries: no missing source, only delayed chunks.
             delay = (60_000, 100_000, 160_000, 300_000)[index - 1]
+        elif name == "sustained_jitter" and index >= anchor:
+            # A 20s period of 1% slower delivery plus up to 30ms variation. Bounded
+            # jitter alone eventually fills even an untreated FIFO with enough reserve;
+            # a persistent rate deficit keeps exercising starvation and concealment.
+            elapsed = nominal - anchor * 100_000
+            delay = min(elapsed, 20_000_000) // 100
+            if elapsed < 20_000_000:
+                seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+                if speech_chunks is None or index in speech_chunks:
+                    delay += seed % 30_001
         elif name == "reported_jitter" and index >= anchor:
             seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
             delay = 20_000 + seed % 70_001
@@ -201,6 +212,38 @@ def compile_reference(root: Path, destination: Path) -> None:
     run(*arguments, "-o", destination)
 
 
+def baseline_gaps(path: Path, activity: dict) -> list[dict]:
+    """Actual FIFO starvation intervals, with energy of the upcoming source at each gap."""
+    events = []
+    missing = underruns = 0
+    with path.open() as stream:
+        for fields in csv.DictReader(stream):
+            row = {key: int(value) for key, value in fields.items()}
+            added = row["missing_samples"] - missing
+            if row["underruns"] > underruns:
+                if row["underruns"] != underruns + 1 or not 0 < added <= 240:
+                    raise ValueError("invalid FIFO starvation trace")
+                window = row["source_consumed"] // 240
+                levels = activity["window_rms"][window : window + 5]
+                events.append(
+                    {
+                        "start_ms": row["time_us"] / 1000 + (240 - added) / 24,
+                        "source_start": row["source_consumed"],
+                        "duration_ms": 0,
+                        "active_source": len(levels) == 5
+                        and min(levels) >= activity["threshold_rms"],
+                    }
+                )
+            if added:
+                if not events:
+                    raise ValueError("missing FIFO starvation event")
+                events[-1]["duration_ms"] += added / 24
+            missing, underruns = row["missing_samples"], row["underruns"]
+    if len(events) != underruns:
+        raise ValueError("FIFO underrun accounting diverged")
+    return events
+
+
 def render_player(out: Path, report: dict) -> None:
     """One HTML player, with per-cell deep links; serves media inline with no download links."""
     import html
@@ -215,6 +258,10 @@ def render_player(out: Path, report: dict) -> None:
         "startup_jitter": (
             "First-answer chunks arrive irregularly",
             "Delivery gaps in the first four chunks; first fault at 0.100s.",
+        ),
+        "sustained_jitter": (
+            "Twenty seconds of jitter and slow delivery",
+            "1% slower delivery plus up to 30ms active-speech variation, for 20s; then stable.",
         ),
         "reported_jitter": (
             "Report-inspired jitter with 300 ms stalls",
@@ -528,6 +575,7 @@ def main() -> None:
                 ],
             },
             "fifo_metrics": fifo_metrics,
+            "baseline_gaps": baseline_gaps(case / "fifo_timeline.csv", activity),
             "rust": (case / "statistics.txt").read_text(),
             "neteq": reference_stats,
             "fifo": (case / "fifo_statistics.txt").read_text(),

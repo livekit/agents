@@ -192,3 +192,20 @@ and provider delivery lead. Queue lines use explicitly labeled 100 ms means. The
 FIFO is replayed from the same arrivals/render clock; Rust uses its actual trace. Stop at
 the final delivery to exclude the EOF drain/observation tail. No per-frame NetEq timing is
 inferred from aggregate counters. Keep the PNG as a PR attachment, outside Git.
+
+## Sustained listening comparison
+
+The PR Jitter row uses `sustained_jitter`: 20 seconds of 1% slower source delivery plus
+0–30 ms variation on verified active-speech chunks, starting near 2 s. After that period,
+delivery resumes at realtime with the accumulated 200 ms delay retained. No source is
+lost, reordered or discarded; the untreated FIFO is never reset to manufacture gaps.
+
+Bounded jitter alone eventually gives an untreated FIFO enough retained delay to stop
+underrunning. This case explicitly includes a rate deficit to exercise recurring gaps
+throughout the passage. It evaluates ongoing concealment; the current Rust controller
+still underruns in this case and is not demonstrated to provide gap-free buffering.
+The original 20–90 ms / 300 ms `reported_jitter` case remains available separately.
+
+`fifo_timeline.csv` records actual untreated consumption/starvation on every render.
+`report.json` lists each gap's onset, duration and source-energy check, so the continued
+faults can be verified rather than inferred from injected packet delays alone.

@@ -59,6 +59,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         timeline,
         "time_us,queued_source,pending_output,target_delay_us,source_consumed,concealed,silent,stretched,accelerated,underruns,fast_accelerated,merge_inserted"
     )?;
+    let mut fifo_timeline = BufWriter::new(fs::File::create(out.join("fifo_timeline.csv"))?);
+    writeln!(fifo_timeline, "time_us,source_consumed,missing_samples,underruns")?;
     let mut untreated = Fifo::new(0, pcm.len());
     let mut buffered = Fifo::new(100_000, pcm.len());
     let mut buffered_file = BufWriter::new(fs::File::create(out.join("buffered.pcm"))?);
@@ -94,6 +96,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             buffered_file.write_all(&buffered.sample(time).to_le_bytes())?;
         }
         writeln!(
+            fifo_timeline,
+            "{at},{},{},{}",
+            untreated.consumed, untreated.missing, untreated.underruns
+        )?;
+        writeln!(
             timeline,
             "{at},{},{},{},{},{},{},{},{},{},{},{}",
             report.queued_source,
@@ -116,6 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         return Err("simulation ended before accepted audio drained".into());
     }
+    fifo_timeline.flush()?;
     candidate.flush()?;
     baseline.flush()?;
     buffered_file.flush()?;
