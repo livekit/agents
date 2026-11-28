@@ -107,6 +107,18 @@ NebiusChatModels = Literal[
     "google/gemma-2-2b-it",
 ]
 
+CrusoeChatModels = Literal[
+    "openai/gpt-oss-120b",
+    "deepseek-ai/DeepSeek-V4.1-Flash",
+    "google/gemma-4-31b-it",
+    "nvidia/Nemotron-3-Nano-Omni-Reasoning-30B-A3B",
+    "nvidia/Nemotron-3.5-Lightning-30B-A3B",
+    "nvidia/NVIDIA-Nemotron-3.5-Super-VL",
+    "Qwen/Qwen3.8-27B",
+    "zai-org/GLM-5.3",
+    "zai-org/GLM-5.3-Flash",
+]
+
 CerebrasChatModels = Literal[
     "gpt-oss-120b",
     "qwen-3.8-27b",
