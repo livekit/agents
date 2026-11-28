@@ -21,7 +21,7 @@ fn plain() -> Playout {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
         maximum_delay: Duration::ZERO,
-        maximum_stretch: 0.0,
+        time_stretching: false,
         ..Config::default()
     })
     .unwrap()
@@ -136,7 +136,7 @@ fn unvoiced_outage_and_disabled_plc_ramp_to_silence() {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
         maximum_concealment: Duration::ZERO,
-        maximum_stretch: 0.0,
+        time_stretching: false,
         ..Config::default()
     })
     .unwrap();
@@ -154,7 +154,7 @@ fn unvoiced_outage_and_disabled_plc_ramp_to_silence() {
 fn a_reserve_absorbs_short_delivery_stalls() {
     let mut p = Playout::continuous(Config {
         startup_delay: ms(20),
-        maximum_stretch: 0.0,
+        time_stretching: false,
         ..Config::default()
     })
     .unwrap();
@@ -212,7 +212,7 @@ fn voiced_time_stretching_accounts_for_every_source_sample() {
     let mut p = Playout::continuous(Config {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
-        maximum_stretch: 0.05,
+        time_stretching: true,
         ..Config::default()
     })
     .unwrap();
@@ -254,10 +254,8 @@ fn stalls_bursts_and_clock_drift_remain_bounded() {
         let r = render(&mut p, ms(at), &mut output);
         account(&p, r);
         assert!(r.queued_source <= 48_000);
-        assert!(r.pending_output <= FRAME);
+        assert!(r.pending_output <= dsp::MAX_STRETCH);
         assert!(r.target_delay <= ms(100));
-        let s = p.statistics();
-        assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
     }
     p.finish();
     let mut drained = false;
@@ -273,7 +271,6 @@ fn stalls_bursts_and_clock_drift_remain_bounded() {
 #[test]
 fn invalid_configuration_and_render_leave_state_unchanged() {
     for config in [
-        Config { maximum_stretch: f32::NAN, ..Config::default() },
         Config { minimum_delay: ms(101), ..Config::default() },
         Config { capacity: ms(1), ..Config::default() },
     ] {
@@ -305,7 +302,6 @@ fn a_permanent_delivery_shift_is_not_counted_twice_as_buffer_delay() {
     // The network's permanent 40ms shift is separate from the learned reserve. The
     // reserve may grow to its configured 60ms target, plus at most one pitch splice.
     assert!(s.rendered - s.source_consumed <= 24 * (40 + 60) + PERIOD_MAX as u64, "{s:?}");
-    assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
 }
 
 #[test]
@@ -425,7 +421,7 @@ fn small_provider_chunks_build_reserve_before_a_later_delivery_stall() {
     let mut protected = Playout::continuous(Config {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
-        maximum_stretch: 0.03,
+        time_stretching: true,
         ..Config::default()
     })
     .unwrap();
@@ -451,32 +447,37 @@ fn small_provider_chunks_build_reserve_before_a_later_delivery_stall() {
     assert!(s.stretched >= 24 * 20, "{s:?}");
     assert_eq!(s.underruns, 0);
     assert_eq!(untreated.statistics().underruns, 1);
-    assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
 }
 
 #[test]
-fn severe_playout_backlog_bypasses_cooldown_but_not_the_rate_budget() {
-    let mut p = Playout::continuous(Config::default()).unwrap();
-    let mut output = [0; 240];
-    for at in (0..1000_u64).step_by(10) {
-        if at.is_multiple_of(100) {
-            push(&mut p, ms(at), &voice(2400, at as usize * 24));
+fn severe_playout_backlog_bypasses_ordinary_cooldown() {
+    for sample_rate in [16_000, 24_000, 48_000] {
+        let chunk = sample_rate as usize / 10;
+        let source: Vec<i16> = (0..chunk)
+            .map(|i| {
+                ((i as f64 * std::f64::consts::TAU * 200.0 / f64::from(sample_rate)).sin()
+                    * 12000.0) as i16
+            })
+            .collect();
+        let mut p = Playout::continuous(Config { sample_rate, ..Config::default() }).unwrap();
+        let mut output = vec![0; sample_rate as usize / 100];
+        for at in (0..1000_u64).step_by(10) {
+            if at.is_multiple_of(100) {
+                push(&mut p, ms(at), &source);
+            }
+            render(&mut p, ms(at), &mut output);
         }
-        render(&mut p, ms(at), &mut output);
+        // Consumer pauses while delivery continues: a genuine 1.5s backlog.
+        for at in (1000..2500).step_by(100) {
+            push(&mut p, ms(at), &source);
+        }
+        p.stretch_after = u64::MAX;
+        for at in (2500..3000).step_by(10) {
+            let report = render(&mut p, ms(at), &mut output);
+            account(&p, report);
+        }
+        assert!(p.statistics().fast_accelerated > u64::from(sample_rate) / 5);
     }
-    // The consumer stops rendering while delivery continues: a real 1.5s backlog, not a
-    // delayed packet whose arrival envelope should legitimately retain extra reserve.
-    for at in (1000..2500_u64).step_by(100) {
-        push(&mut p, ms(at), &voice(2400, at as usize * 24));
-    }
-    p.stretch_after = u64::MAX;
-    for at in (2500..2580).step_by(10) {
-        let report = render(&mut p, ms(at), &mut output);
-        account(&p, report);
-        let s = p.statistics();
-        assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
-    }
-    assert!(p.statistics().fast_accelerated >= dsp::PERIOD_MIN as u64, "{:?}", p.statistics());
 }
 
 #[test]
@@ -511,7 +512,7 @@ fn faded_recovery_rebuilds_half_the_target_reserve_but_eof_never_waits() {
         let mut p = Playout::continuous(Config {
             minimum_delay: Duration::ZERO,
             startup_delay: Duration::ZERO,
-            maximum_stretch: 0.0,
+            time_stretching: false,
             ..Config::default()
         })
         .unwrap();
@@ -581,7 +582,7 @@ fn queued_bursts_and_known_eof_release_startup_early() {
 fn learned_startup_protects_later_answers_without_learning_idle_time() {
     let mut p = Playout::segmented(Config {
         startup_delay: ms(20),
-        maximum_stretch: 0.0,
+        time_stretching: false,
         ..Config::default()
     })
     .unwrap();
@@ -629,7 +630,7 @@ fn beginning_a_segment_cancels_pending_audio_and_old_phonemes() {
         minimum_delay: Duration::ZERO,
         startup_delay: Duration::ZERO,
         maximum_delay: Duration::ZERO,
-        maximum_stretch: 0.0,
+        time_stretching: false,
         ..Config::default()
     })
     .unwrap();
@@ -664,7 +665,6 @@ fn hundred_ms_delivery_drift_builds_reserve_instead_of_only_concealing() {
     let s = p.statistics();
     assert_eq!(s.underruns, 0, "{s:?}");
     assert!(s.stretched > 24 * 100, "{s:?}");
-    assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
 }
 
 #[test]
@@ -753,7 +753,7 @@ fn a_clean_answer_does_not_raise_a_small_configured_startup_prior() {
 fn construction_is_bounded_and_lifecycle_transitions_reuse_storage() {
     let (mut p, bytes) =
         crate::test_alloc::allocated(|| Playout::continuous(Config::default()).unwrap());
-    assert!(bytes <= 100_000, "default controller heap budget exceeded: {bytes}");
+    assert!(bytes <= 104_000, "default controller heap budget exceeded: {bytes}");
     push(&mut p, ms(0), &voice(2400, 23));
     render(&mut p, ms(100), &mut [0; 240]);
     let mut segments = Playout::segmented(Config::default()).unwrap();
@@ -866,15 +866,14 @@ fn replay_native_rate(sample_rate: u32) -> (String, Statistics) {
 fn twenty_four_khz_pcm_regression() {
     assert_eq!(
         replay_native_rate(24_000).0,
-        "910c785d2a9c733569c5f3ebe62ddc97104c3fdf68033b02a7ada8f51d582b8b"
+        "a199787e62198c6f2b9ce4900b17dc5f3a93eb57f963a034cc0aa5ce3c2013e1"
     );
 }
 
 #[test]
-fn native_rates_account_for_stalls_backlog_and_rate_limits() {
+fn native_rates_account_for_stalls_and_backlog() {
     for sample_rate in [16_000, 48_000] {
-        let (_, s) = replay_native_rate(sample_rate);
-        assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
+        replay_native_rate(sample_rate);
     }
 }
 
@@ -889,7 +888,7 @@ fn supported_native_rates_preserve_pcm_and_use_rate_specific_render_limits() {
                 minimum_delay: Duration::ZERO,
                 startup_delay: Duration::ZERO,
                 maximum_delay: Duration::ZERO,
-                maximum_stretch: 0.0,
+                time_stretching: false,
                 ..Config::default()
             })
             .unwrap();
@@ -941,7 +940,7 @@ fn segmented_startup_learning_preserves_native_rate_across_answer_boundaries() {
         let mut p = Playout::segmented(Config {
             sample_rate,
             startup_delay: ms(20),
-            maximum_stretch: 0.0,
+            time_stretching: false,
             ..Config::default()
         })
         .unwrap();
@@ -977,5 +976,55 @@ fn segmented_startup_learning_preserves_native_rate_across_answer_boundaries() {
             assert_eq!(p.sample_rate(), sample_rate);
             assert_eq!(p.statistics().underruns > 0, turn == 0);
         }
+    }
+}
+
+#[test]
+fn ordinary_acceleration_respects_fifty_ms_spacing_at_every_rate() {
+    for sample_rate in [16_000, 24_000, 48_000] {
+        let source: Vec<i16> = (0..sample_rate / 10)
+            .map(|i| {
+                ((f64::from(i) * std::f64::consts::TAU * 200.0 / f64::from(sample_rate)).sin()
+                    * 12000.0) as i16
+            })
+            .collect();
+        let mut p = Playout::continuous(Config {
+            sample_rate,
+            minimum_delay: ms(100),
+            startup_delay: ms(100),
+            maximum_delay: ms(100),
+            ..Config::default()
+        })
+        .unwrap();
+        let mut out = vec![0; sample_rate as usize / 100];
+        for at in (0..1000_u64).step_by(10) {
+            if at.is_multiple_of(100) {
+                push(&mut p, ms(at), &source);
+            }
+            render(&mut p, ms(at), &mut out);
+        }
+        push(&mut p, ms(1000), &source);
+        push(&mut p, ms(1100), &source);
+        let mut previous = None;
+        let mut removed = p.statistics().accelerated;
+        let mut operations = 0;
+        for at in (1200..2500_u64).step_by(10) {
+            if at.is_multiple_of(100) {
+                push(&mut p, ms(at), &source);
+            }
+            let report = render(&mut p, ms(at), &mut out);
+            account(&p, report);
+            let s = p.statistics();
+            assert_eq!(s.fast_accelerated, 0);
+            if s.accelerated > removed {
+                if let Some(last) = previous {
+                    assert!(at - last >= 50);
+                }
+                previous = Some(at);
+                removed = s.accelerated;
+                operations += 1;
+            }
+        }
+        assert!(operations >= 5);
     }
 }

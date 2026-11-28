@@ -23,6 +23,10 @@ impl Rate {
         self.0 as usize / 50
     }
 
+    pub(super) fn stretch_window(self) -> usize {
+        self.0 as usize * 30 / 1000
+    }
+
     pub(super) fn overlap(self) -> usize {
         self.0 as usize / 200
     }

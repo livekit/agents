@@ -146,26 +146,31 @@ fn lpc_handles_dc_full_scale_impulses_and_silence_without_unbounded_states() {
 fn time_stretch_preserves_tone_pitch_and_handles_quiet_input() {
     for operation in [Stretch::Expand, Stretch::Accelerate] {
         let input: VecDeque<_> = sine(FRAME + PERIOD_MAX, 120, 23, 8000.0).into();
-        let mut output = [0; FRAME];
+        let mut output = [0; MAX_STRETCH];
         let scale =
             stretch(Rate::default(), &input, operation, PERIOD_MAX, 40.0, &mut output).unwrap();
         let (consumed, period) = (scale.consumed, scale.change);
         assert!((period as isize - 120).abs() < 5);
-        assert_eq!(
-            consumed,
-            if operation == Stretch::Expand { FRAME - period } else { FRAME + period }
-        );
+        assert_eq!(consumed, Rate::default().stretch_window());
         assert!(correlation(|i| output[i], |i| output[i + 120], FRAME - 120) > 0.98);
         let quiet = VecDeque::from(vec![12; FRAME + PERIOD_MAX]);
         stretch(Rate::default(), &quiet, operation, PERIOD_MAX, 40.0, &mut output).unwrap();
-        assert_eq!(output, [12; FRAME]);
+        assert!(
+            output[..if operation == Stretch::Expand {
+                Rate::default().stretch_window() + PERIOD_MIN
+            } else {
+                Rate::default().stretch_window() - PERIOD_MIN
+            }]
+                .iter()
+                .all(|&s| s == 12)
+        );
     }
 }
 
 #[test]
 fn unvoiced_transients_are_not_spliced_without_a_safe_match() {
     let input = noise(FRAME + PERIOD_MAX, 10_000.0).into();
-    let mut output = [0; FRAME];
+    let mut output = [0; MAX_STRETCH];
     assert!(
         stretch(Rate::default(), &input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut output)
             .is_none()
@@ -211,15 +216,16 @@ fn a_quiet_phoneme_does_not_force_the_returning_onset_to_near_silence() {
 fn preemptive_expansion_uses_history_with_only_twenty_ms_of_new_audio() {
     let history: VecDeque<_> = sine(HISTORY, 120, 23, 8000.0).into();
     let input: VecDeque<_> = sine(FRAME, 120, HISTORY + 23, 8000.0).into();
-    let mut output = [0; FRAME];
+    let mut output = [0; MAX_STRETCH];
     let scale =
-        preemptive(Rate::default(), &history, &input, PERIOD_MAX, 40.0, &mut output).unwrap();
+        preemptive(Rate::default(), &history, &input, PERIOD_MAX, 40.0, &mut output[..FRAME])
+            .unwrap();
     let (consumed, inserted) = (scale.consumed, scale.change);
     assert_eq!(inserted, 120);
     assert_eq!(consumed + inserted, FRAME);
     assert!(correlation(|i| output[i], |i| output[i + 120], FRAME - 120) > 0.99);
     assert_eq!(output[0], input[0]);
-    assert!(output.windows(2).all(|p| (i32::from(p[1]) - i32::from(p[0])).abs() < 600));
+    assert!(output[..FRAME].windows(2).all(|p| (i32::from(p[1]) - i32::from(p[0])).abs() < 600));
     // A voiced history is not permission to duplicate a returning consonant or new onset.
     let transient: VecDeque<_> = noise(FRAME, 12000.0).into();
     assert!(
@@ -234,8 +240,8 @@ fn preemptive_expansion_uses_history_with_only_twenty_ms_of_new_audio() {
 #[test]
 fn fast_acceleration_removes_multiple_periods_without_changing_tone_pitch() {
     let input: VecDeque<_> = sine(FRAME + PERIOD_MAX, 120, 23, 8000.0).into();
-    let mut normal = [0; FRAME];
-    let mut fast = [0; FRAME];
+    let mut normal = [0; MAX_STRETCH];
+    let mut fast = [0; MAX_STRETCH];
     let regular =
         stretch(Rate::default(), &input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut normal)
             .unwrap()
@@ -246,8 +252,8 @@ fn fast_acceleration_removes_multiple_periods_without_changing_tone_pitch() {
     let (consumed, removed) = (scale.consumed, scale.change);
     assert_eq!(regular, 120);
     assert_eq!(removed, 360);
-    assert_eq!(consumed, FRAME + removed);
-    assert!(correlation(|i| fast[i], |i| fast[i + 120], FRAME - 120) > 0.99);
+    assert_eq!(consumed, Rate::default().stretch_window());
+    assert!(correlation(|i| fast[i], |i| fast[i + 120], scale.produced - 120) > 0.99);
     let transient = noise(FRAME + PERIOD_MAX, 10000.0).into();
     assert!(
         stretch(Rate::default(), &transient, Stretch::FastAccelerate, PERIOD_MAX, 40.0, &mut fast)
@@ -282,7 +288,7 @@ fn learned_room_tone_can_be_time_scaled_without_treating_it_as_voiced_speech() {
     let c = begin(&background, 2400);
     assert!(c.passive_level() > 200.0);
     let input: VecDeque<_> = noise(FRAME + PERIOD_MAX, 200.0).into();
-    let mut output = [0; FRAME];
+    let mut output = [0; MAX_STRETCH];
     assert!(
         stretch(Rate::default(), &input, Stretch::Accelerate, PERIOD_MAX, 40.0, &mut output)
             .is_none()
@@ -308,7 +314,7 @@ fn scaling_prefers_a_pause_and_preserves_the_word_attack_before_it() {
     let mut input = sine(FRAME + PERIOD_MAX, 120, 23, 12000.0);
     input[300..600].fill(0);
     let queue = input.iter().copied().collect();
-    let mut out = [0; FRAME];
+    let mut out = [0; MAX_STRETCH];
     let scale =
         stretch(Rate::default(), &queue, Stretch::Expand, PERIOD_MAX, 40.0, &mut out).unwrap();
     assert!(scale.passive);
@@ -323,7 +329,7 @@ fn time_scaling_defers_a_sharp_consonant_onset() {
     let onset = noise(FRAME + PERIOD_MAX - 300, 12000.0);
     input[300..].copy_from_slice(&onset);
     let queue = input.into();
-    let mut out = [0; FRAME];
+    let mut out = [0; MAX_STRETCH];
     assert!(
         stretch(Rate::default(), &queue, Stretch::Expand, PERIOD_MAX, 40.0, &mut out).is_none()
     );
@@ -365,20 +371,13 @@ fn native_rate_pitch_scaling_and_recovery_keep_physical_time_and_energy() {
             returned.windows(2).all(|pair| (i32::from(pair[1]) - i32::from(pair[0])).abs() < 4000)
         );
         for operation in [Stretch::Expand, Stretch::Accelerate, Stretch::FastAccelerate] {
-            let mut output = vec![0; rate.frame()];
+            let mut output = vec![0; MAX_STRETCH];
             let scale =
                 stretch(rate, &queue, operation, rate.period_max(), 40.0, &mut output).unwrap();
             assert!(scale.change >= rate.period_min() && scale.change <= rate.period_max());
-            assert_eq!(
-                scale.consumed,
-                if operation == Stretch::Expand {
-                    rate.frame() - scale.change
-                } else {
-                    rate.frame() + scale.change
-                }
-            );
+            assert_eq!(scale.consumed, rate.stretch_window());
             assert!(
-                correlation(|i| output[i], |i| output[i + period], rate.frame() - period) > 0.98
+                correlation(|i| output[i], |i| output[i + period], scale.produced - period) > 0.98
             );
         }
     }

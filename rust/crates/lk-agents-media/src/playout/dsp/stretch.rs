@@ -19,6 +19,7 @@ pub(in crate::playout) enum Stretch {
 #[derive(Debug, Clone, Copy)]
 pub(in crate::playout) struct Scale {
     pub consumed: usize,
+    pub produced: usize,
     pub change: usize,
     pub passive: bool,
 }
@@ -32,31 +33,28 @@ struct Match {
     passive: bool,
 }
 
-/// Validate adjacent pitch periods and the actual overlap, rather than requiring an entire
-/// 20ms of stationary speech. Preserve the onset before the splice. A genuine low-energy
-/// interval is preferred to changing voiced speech, even if the latter correlates perfectly.
+/// Match adjacent periods in NetEq's 30ms window and crossfade over the whole period.
+/// Prefer a low-energy splice and preserve the onset before it. Return the actual produced
+/// length: expansion adds one period, acceleration removes it.
 pub(in crate::playout) fn stretch(
     rate: Rate,
     queue: &VecDeque<i16>,
     operation: Stretch,
-    budget: usize,
+    maximum_change: usize,
     passive_level: f64,
     output: &mut [i16],
 ) -> Option<Scale> {
-    if queue.len() < rate.frame() + rate.period_max() || budget < rate.period_min() {
+    if queue.len() < rate.stretch_window() || maximum_change < rate.period_min() {
         return None;
     }
     let expand = operation == Stretch::Expand;
     let threshold =
         if operation == Stretch::FastAccelerate { FAST_CORRELATION } else { CORRELATION };
     let evaluate = |period: usize| -> Option<Match> {
-        let anchor = if expand {
-            rate.frame() - rate.overlap()
-        } else {
-            (rate.frame() - rate.overlap()).max(period + rate.overlap())
-        };
+        // NetEq splices at 15ms with a full pitch-period crossfade, over 30ms of input.
+        let anchor = rate.period_max();
         let splice = if expand { anchor } else { anchor - period };
-        let overlap = rate.overlap().min(rate.frame() - splice);
+        let overlap = period;
         let before = rms(|i| queue[anchor - period + i], period);
         let after = rms(|i| queue[anchor + i], period);
         let passive = before < passive_level
@@ -74,7 +72,7 @@ pub(in crate::playout) fn stretch(
         Some(Match { period, splice, overlap, score, passive })
     };
     let mut best: Option<Match> = None;
-    for period in rate.period_min()..=rate.period_max().min(budget) {
+    for period in rate.period_min()..=rate.period_max().min(maximum_change) {
         let Some(candidate) = evaluate(period) else {
             continue;
         };
@@ -90,14 +88,19 @@ pub(in crate::playout) fn stretch(
     }
     let mut best = best?;
     if operation == Stretch::FastAccelerate {
-        for multiple in (2..=rate.period_max().min(budget) / best.period).rev() {
+        for multiple in (2..=rate.period_max().min(maximum_change) / best.period).rev() {
             if let Some(candidate) = evaluate(best.period * multiple) {
                 best = candidate;
                 break;
             }
         }
     }
-    for (i, out) in output.iter_mut().enumerate() {
+    let produced = if expand {
+        rate.stretch_window() + best.period
+    } else {
+        rate.stretch_window() - best.period
+    };
+    for (i, out) in output[..produced].iter_mut().enumerate() {
         *out = if i < best.splice {
             queue[i]
         } else if i < best.splice + best.overlap {
@@ -109,7 +112,8 @@ pub(in crate::playout) fn stretch(
         };
     }
     Some(Scale {
-        consumed: if expand { rate.frame() - best.period } else { rate.frame() + best.period },
+        consumed: rate.stretch_window(),
+        produced,
         change: best.period,
         passive: best.passive,
     })
@@ -122,18 +126,18 @@ pub(in crate::playout) fn preemptive(
     rate: Rate,
     history: &VecDeque<i16>,
     queue: &VecDeque<i16>,
-    budget: usize,
+    maximum_change: usize,
     passive_level: f64,
     output: &mut [i16],
 ) -> Option<Scale> {
-    if history.len() < 2 * rate.period_min() || budget < rate.period_min() {
+    if history.len() < 2 * rate.period_min() || maximum_change < rate.period_min() {
         return None;
     }
     let end = history.len();
     let mut quiet = false;
     let mut best = CORRELATION;
     let mut period = 0;
-    for lag in rate.period_min()..=rate.period_max().min(budget).min(end / 2) {
+    for lag in rate.period_min()..=rate.period_max().min(maximum_change).min(end / 2) {
         if queue.len() < (rate.frame() - lag).max(lag) {
             continue;
         }
@@ -158,7 +162,7 @@ pub(in crate::playout) fn preemptive(
     if period == 0 {
         return None;
     }
-    for (i, out) in output.iter_mut().enumerate() {
+    for (i, out) in output[..rate.frame()].iter_mut().enumerate() {
         *out = if i < period {
             // Start on the real next sample; finish on the repeated history period before
             // joining source[0]. The complete-period match protects both boundaries.
@@ -168,5 +172,10 @@ pub(in crate::playout) fn preemptive(
             queue[i - period]
         };
     }
-    Some(Scale { consumed: rate.frame() - period, change: period, passive: quiet })
+    Some(Scale {
+        consumed: rate.frame() - period,
+        produced: rate.frame(),
+        change: period,
+        passive: quiet,
+    })
 }

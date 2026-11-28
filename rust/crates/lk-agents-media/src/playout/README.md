@@ -24,23 +24,27 @@ The segmented type exposes symmetric `begin_segment()` / `end_segment()` methods
 of `finish()`. Use it when a provider identifies answers or other source boundaries.
 `end_segment()` rejects new input while accepted audio drains. Wait for `Render::drained`
 before `begin_segment()` unless deliberately cancelling queued speech. A new segment
-clears audio/DSP and resets its clock, counters and scaling budget while retaining learned
+clears audio/DSP and resets its clock, counters and scaling cadence while retaining learned
 delivery timing. In either mode, `reset()` discards audio **and** learned timing.
 
 Both types use the same DSP and buffers. Mode selection has no runtime or allocation cost.
 
 ## Buffering
 
-Defaults: 80 ms startup, 20–100 ms adaptive target, 2 s capacity, up to 200 ms extrapolated
-speech and a 3% cumulative insertion/removal budget. Targets are not hard latency caps.
+Defaults: 80 ms startup, 20–100 ms adaptive target, 2 s capacity and up to 200 ms
+extrapolated speech. Targets are not hard latency caps. Time scaling uses NetEq's 30 ms
+window, full-period crossfade, 0.9/0.5 normal/fast correlation thresholds and 50 ms ordinary
+cadence. Above four times the high-delay threshold, emergency catch-up bypasses the wait.
+There is no cumulative percentage quota. `time_stretching: false` disables scaling.
 Queued bursts and EOF may release startup early. Across explicit segments, clean startup
 observations gradually reduce the initial wait; worse history increases it within bounds.
 
 Time scaling prefers quiet splices or matching pitch periods. Concealment blends voiced
 and unvoiced continuation into source-trained room tone, then recovery merges returning
 PCM. Generated sound never trains the noise model. Long outages still lose intelligibility.
-A deterministic PCM hash and the saved comparison recordings pin the existing 24 kHz
-output byte-for-byte. Tests cover accounting, allocation, lifecycle, silence/resumption, jitter/drift, scaling,
+The native-rate-only change preserved all 24 kHz outputs byte-for-byte. The subsequent
+explicit cadence/splice tuning intentionally changes audio; the deterministic PCM hash
+now pins that latest implementation. Tests cover accounting, allocation, lifecycle, silence/resumption, jitter/drift, scaling,
 transients, recovery, capacity errors and EOF. Provider/runtime wiring remains separate.
 
 ## Optional NetEq comparison
@@ -55,7 +59,7 @@ python3 rust/crates/lk-agents-media/tools/neteq_compare.py \
 ```
 
 The single script has typed, described presets for steady delivery, delayed startup,
-bounded jitter, slow jitter, positive/negative clock drift, short/long/repeated stalls,
+bounded jitter, slow startup/jitter, positive/negative clock drift, short/long/repeated stalls,
 catch-up and variable chunks. `--help` lists exact timings. All preserve ordered source;
 RTP loss, reordering and encoded FEC/PLC are outside this reliable PCM layer.
 

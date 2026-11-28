@@ -25,6 +25,7 @@ pub(super) const PERIOD_MAX: usize = 360;
 pub(super) const HISTORY: usize = 960;
 
 pub(super) const MAX_FRAME: usize = 960;
+pub(super) const MAX_STRETCH: usize = 2160; // 30ms input plus a 15ms pitch period at 48kHz.
 pub(super) const MAX_PERIOD: usize = 720;
 
 pub(super) fn sample(value: f64) -> i16 {

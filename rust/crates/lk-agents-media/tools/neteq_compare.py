@@ -197,10 +197,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut trace = BufWriter::new(fs::File::create(out.join("rust.csv"))?);
     writeln!(
         trace,
-        "time_us,queued_source,target_us,concealed,underruns,inserted,removed"
+        "time_us,queued_source,pending_output,queued_ms,target_us,concealed,underruns,inserted,removed"
     )?;
     let mut playout = Playout::continuous(Config {
         sample_rate: args[8].parse()?,
+        time_stretching: args[9].parse()?,
         minimum_delay: Duration::from_millis(args[5].parse()?),
         startup_delay: Duration::from_millis(args[6].parse()?),
         maximum_delay: Duration::from_millis(args[7].parse()?),
@@ -240,8 +241,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         drained = rendered.drained;
         writeln!(
             trace,
-            "{tick},{},{},{},{},{},{}",
+            "{tick},{},{},{},{},{},{},{},{}",
             rendered.queued_source,
+            rendered.pending_output,
+            (rendered.queued_source + rendered.pending_output) * 1000 / playout.sample_rate() as usize,
             rendered.target_delay.as_micros(),
             stats.concealed,
             stats.underruns,
@@ -273,6 +276,7 @@ REFERENCE_TAG = "webrtc-a545de4"
 Scenario = Literal[
     "steady",
     "late-start",
+    "slow-start",
     "bounded-jitter",
     "slow-jitter",
     "slow-clock",
@@ -289,6 +293,7 @@ Track = Literal["untreated", "rust", "neteq"]
 SCENARIOS: dict[Scenario, str] = {
     "steady": "Evenly paced chunks; clean control.",
     "late-start": "Second chunk is 60 ms late; later chunks return to nominal timing.",
+    "slow-start": "First 400 ms delivered 1.8x slower; then nominal pacing with 320 ms retained lag.",
     "bounded-jitter": "Seeded 0–30 ms delay variation for 20 s, with no clock drift.",
     "slow-jitter": "20 s of 1% slower delivery plus seeded 0–30 ms jitter.",
     "slow-clock": "Sender is 1000 ppm (0.1%) slower after the onset, with no jitter.",
@@ -335,6 +340,7 @@ class Report(TypedDict):
 class Options(argparse.Namespace):
     input: Path
     sample_rate: int
+    no_time_stretching: bool
     webrtc: Path
     crate: Path
     output: Path
@@ -396,6 +402,8 @@ def make_schedule(
 
         if name == "late-start" and start == chunk_ms * samples_per_ms:
             delay_us = 60_000
+        elif name == "slow-start":
+            delay_us = min(nominal_us, 400_000) * 4 // 5
         elif after_onset:
             if name in ("stall-400ms", "stall-1s"):
                 stall_us = 400_000 if name == "stall-400ms" else 1_000_000
@@ -451,6 +459,9 @@ def parse_arguments() -> Options:
     parser.add_argument("--minimum-ms", type=int, default=20)
     parser.add_argument("--startup-ms", type=int, default=80)
     parser.add_argument("--maximum-ms", type=int, default=100)
+    parser.add_argument(
+        "--no-time-stretching", action="store_true", help="disable time scaling on both paths"
+    )
     parser.add_argument(
         "--native-maximum-ms", type=int, default=0, help="0: native unlimited target"
     )
@@ -543,7 +554,7 @@ def build_rust(crate: Path, temporary: Path) -> Path:
 def fault_onset_ms(schedule: list[Arrival], name: Scenario, options: Options) -> int | None:
     if name == "steady":
         return None
-    if name == "late-start":
+    if name in ("late-start", "slow-start"):
         return options.chunk_ms
 
     anchor = options.fault_at_ms * (options.sample_rate // 1000)
@@ -620,8 +631,9 @@ def render_scenario(
     end_ms = max(source_duration_ms, last_arrival_us / 1000) + options.maximum_ms + 2500
     render_duration_ms = math.ceil(end_ms / 10) * 10
 
-    run(rust, raw, arrivals_file, directory, render_duration_ms, options.minimum_ms, options.startup_ms, options.maximum_ms, options.sample_rate)  # fmt: skip
-    run(native, source48, arrivals_file, directory / "neteq48.pcm", render_duration_ms, options.minimum_ms, options.native_maximum_ms, 1, directory / "neteq.csv", options.sample_rate)  # fmt: skip
+    stretching = str(not options.no_time_stretching).lower()
+    run(rust, raw, arrivals_file, directory, render_duration_ms, options.minimum_ms, options.startup_ms, options.maximum_ms, options.sample_rate, stretching)  # fmt: skip
+    run(native, source48, arrivals_file, directory / "neteq48.pcm", render_duration_ms, options.minimum_ms, options.native_maximum_ms, int(not options.no_time_stretching), directory / "neteq.csv", options.sample_rate)  # fmt: skip
     run("ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", "48000", "-ac", "1", "-i", directory / "neteq48.pcm", "-ar", options.sample_rate, "-f", "s16le", directory / "neteq.pcm")  # fmt: skip
 
     cutoff_us = min(20_000_000, source_duration_ms * 1000, last_arrival_us)

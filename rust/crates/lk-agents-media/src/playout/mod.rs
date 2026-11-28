@@ -11,7 +11,6 @@
 mod delay;
 mod dsp;
 mod histogram;
-mod level;
 #[cfg(test)]
 mod playout_tests;
 mod rate;
@@ -42,8 +41,9 @@ pub struct Config {
     /// Bounds extrapolated speech. Zero disables it but retains the short transition.
     /// Independently learned room tone can continue and fades out over two seconds.
     pub maximum_concealment: Duration,
-    /// Maximum fraction of rendered samples inserted or removed by time stretching, 0..=0.1.
-    pub maximum_stretch: f32,
+    /// Enable pitch-preserving reserve insertion and acceleration, with NetEq-style
+    /// ordinary spacing and emergency catch-up. No cumulative rate quota is imposed.
+    pub time_stretching: bool,
 }
 
 impl Default for Config {
@@ -55,7 +55,7 @@ impl Default for Config {
             maximum_delay: Duration::from_millis(100),
             capacity: Duration::from_secs(2),
             maximum_concealment: Duration::from_millis(200),
-            maximum_stretch: 0.03,
+            time_stretching: true,
         }
     }
 }
@@ -87,7 +87,6 @@ pub struct Statistics {
     /// Subset of inserted samples placed in low-energy source regions.
     pub passive_stretched: u64,
     pub reserve_requests: u64,
-    pub reserve_budget_limited: u64,
     pub reserve_no_match: u64,
     pub accelerated: u64,
     /// Subset of `accelerated` removed by the severe-backlog mode.
@@ -141,7 +140,6 @@ pub struct Playout<Mode = Continuous> {
     delay: delay::Delay,
     target: usize,
     startup_target: usize,
-    level: level::Level,
     started: bool,
     finished: bool,
     outage: bool,
@@ -177,7 +175,7 @@ impl Playout<Segmented> {
     }
 
     /// Start a new segment and audio/clock epoch, retaining normalized delivery statistics.
-    /// Clears queued audio, DSP, counters and scaling budget. Drain the previous segment
+    /// Clears queued audio, DSP, counters and scaling cadence. Drain the previous segment
     /// before calling this, unless deliberately cancelling it. Never infer this from silence.
     pub fn begin_segment(&mut self) {
         self.delay.begin_segment();
@@ -206,8 +204,6 @@ impl<Mode> Playout<Mode> {
             || capacity < rate.frame() + rate.period_max()
             || capacity > rate.hz() as usize * 60
             || config.maximum_concealment > Duration::from_millis(200)
-            || !config.maximum_stretch.is_finite()
-            || !(0.0..=0.1).contains(&config.maximum_stretch)
         {
             return Err(PlayoutError::Configuration);
         }
@@ -217,7 +213,7 @@ impl<Mode> Playout<Mode> {
             rate,
             queue: VecDeque::with_capacity(capacity),
             capacity,
-            pending: VecDeque::with_capacity(rate.frame()),
+            pending: VecDeque::with_capacity(rate.stretch_window() + rate.period_max()),
             history: VecDeque::with_capacity(rate.history()),
             concealer: Concealer::new(rate),
             statistics: Statistics::default(),
@@ -227,7 +223,6 @@ impl<Mode> Playout<Mode> {
             target: rate.samples(config.minimum_delay),
             startup_target: rate
                 .samples(config.startup_delay.clamp(config.minimum_delay, config.maximum_delay)),
-            level: level::Level::new(rate),
             started: false,
             finished: false,
             outage: false,
@@ -299,7 +294,6 @@ impl<Mode> Playout<Mode> {
             self.config.minimum_delay,
             self.config.maximum_delay,
         );
-        self.level = level::Level::new(self.rate);
         self.started = false;
         self.finished = false;
         self.outage = false;
@@ -350,7 +344,6 @@ impl<Mode> Playout<Mode> {
             if self.outage && !self.queue.is_empty() && !postpone {
                 self.recovery.start(&self.concealer, &self.queue, !self.finished);
                 self.outage = false;
-                self.level = level::Level::new(self.rate);
             }
             if let Some(sample) = self.recovery.next_prefix() {
                 *out = sample;
@@ -438,41 +431,29 @@ impl<Mode> Playout<Mode> {
     }
 
     fn adjust(&mut self, now: Duration) {
-        if self.config.maximum_stretch == 0.0 {
+        if !self.config.time_stretching {
             return;
         }
         let source_position =
             self.statistics.source_consumed.saturating_sub(self.pending.len() as u64);
         let playout_delay = self.delay.playout_delay(now, source_position);
-        let target_ms = self.target * 1000 / self.rate.hz() as usize;
         // NetEq's decision window includes the recent arrival envelope and 20ms granularity.
         // A queue refilled by a late packet must not immediately be drained back to zero.
         let high_limit =
             self.target + (self.delay.max_delay_ms() + 20) * (self.rate.hz() as usize / 1000);
-        let filtered = self.level.update(playout_delay, target_ms, self.statistics.rendered);
         let fast = playout_delay >= high_limit.saturating_mul(4);
         if !fast && self.statistics.rendered < self.stretch_after {
             return;
         }
-        let expand = playout_delay < self.target && filtered < self.target;
-        let accelerate = playout_delay >= high_limit && (filtered >= high_limit || fast);
+        let expand = playout_delay < self.target;
+        let accelerate = playout_delay >= high_limit;
         if !expand && !accelerate {
             return;
         }
-        let budget = (self.statistics.rendered as f64 * f64::from(self.config.maximum_stretch))
-            .floor() as u64;
-        let available_budget =
-            budget.saturating_sub(self.statistics.stretched + self.statistics.accelerated);
         if expand {
             self.statistics.reserve_requests += 1;
         }
-        if available_budget < self.rate.period_min() as u64 {
-            if expand {
-                self.statistics.reserve_budget_limited += 1;
-            }
-            return;
-        }
-        let mut output = [0; dsp::MAX_FRAME];
+        let mut output = [0; dsp::MAX_STRETCH];
         let operation = if expand {
             Stretch::Expand
         } else if fast {
@@ -480,13 +461,13 @@ impl<Mode> Playout<Mode> {
         } else {
             Stretch::Accelerate
         };
-        let mut limit = available_budget.min(self.rate.period_max() as u64) as usize;
+        let mut limit = self.rate.period_max();
         if !expand && !self.delay.startup_observed() {
             // Do not reclaim the selected startup reserve before early deliveries have
             // been observed. Genuine excess backlog can still be removed safely.
             limit = limit.min(playout_delay.saturating_sub(self.startup_target));
         }
-        let result = if expand && self.queue.len() < self.rate.frame() + self.rate.period_max() {
+        let result = if expand && self.queue.len() < self.rate.stretch_window() {
             dsp::preemptive(
                 self.rate,
                 &self.history,
@@ -502,7 +483,7 @@ impl<Mode> Playout<Mode> {
                 operation,
                 limit,
                 self.concealer.passive_level(),
-                &mut output[..self.rate.frame()],
+                &mut output,
             )
         };
         let Some(scale) = result else {
@@ -513,13 +494,12 @@ impl<Mode> Playout<Mode> {
         };
         let consumed = scale.consumed;
         let period = scale.change;
-        self.pending.extend(output[..self.rate.frame()].iter().copied());
+        self.pending.extend(output[..scale.produced].iter().copied());
         for _ in 0..consumed {
             let source = self.queue.pop_front().expect("stretch validated queue length");
             self.concealer.observe(source);
         }
         self.statistics.source_consumed += consumed as u64;
-        self.level.correct(if expand { -(period as isize) } else { period as isize });
         if expand {
             self.statistics.stretched += period as u64;
             if scale.passive {
@@ -531,8 +511,8 @@ impl<Mode> Playout<Mode> {
                 self.statistics.fast_accelerated += period as u64;
             }
         }
-        self.stretch_after = self.statistics.rendered
-            + ((period as f64 / f64::from(self.config.maximum_stretch)).ceil() as u64)
-                .max(u64::from(self.rate.hz()) / 20);
+        // NetEq spaces ordinary successful operations by 5 x 10ms ticks. Its emergency
+        // path bypasses that wait, bounded by one verified <=15ms removal per operation.
+        self.stretch_after = self.statistics.rendered + u64::from(self.rate.hz()) / 20;
     }
 }
