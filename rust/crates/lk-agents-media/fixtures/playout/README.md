@@ -175,3 +175,20 @@ These are measured operation times, distinct from the schedule onset in the PR l
 
 See [NetEq coverage](neteq-coverage.md) for the complete operation/stage inventory,
 regression evidence and explicit transport/decoder exclusions.
+
+## Catchup timing figure
+
+Generate the four-panel PR image from the recorded comparison output (Matplotlib is only
+an optional offline plotting dependency):
+
+```sh
+uv run --no-project --with matplotlib python \
+  rust/crates/lk-agents-media/tools/plot_catchup.py \
+  --input /tmp/playout-comparison --output /tmp/catchup-timing.png
+```
+
+The figure shows queued audio, cumulative normal/fast acceleration, individual operations,
+and provider delivery lead. Queue lines use explicitly labeled 100 ms means. The untreated
+FIFO is replayed from the same arrivals/render clock; Rust uses its actual trace. Stop at
+the final delivery to exclude the EOF drain/observation tail. No per-frame NetEq timing is
+inferred from aggregate counters. Keep the PNG as a PR attachment, outside Git.
