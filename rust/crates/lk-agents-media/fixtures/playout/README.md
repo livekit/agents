@@ -65,12 +65,29 @@ replay, bounded queues, sample accounting and zero allocations in the hot path.
 The benchmark reports normal, stalled and backlogged processing times without asserting
 hardware-specific speed thresholds. It is not an end-to-end deployment benchmark.
 
-The controller accepts continuous ordered mono 24 kHz PCM16, not discontinuous speech-only
-streams. Adapters must normalize format and explicitly finish/reset at lifecycle boundaries.
-All source audio is retained unless the caller resets; latency can exceed the adaptive target
-following long outages. The short periodic continuation is bounded and confidence-gated;
-it is not a port of NetEq DSP and still needs human listening evaluation. Live session
-wiring, host exports and transcript source-to-device mapping are outside this crate change.
+## Recovery DSP
+
+The controller accepts continuous ordered mono 24 kHz PCM16. Source-only noise analysis
+runs at a fixed sample cadence, independent of incoming chunks and render call size.
+A stabilized eight-order LPC model generates unvoiced continuation; a confidence-weighted
+pitch estimate mixes two source periods for voiced continuation. Speech fades into a
+separately learned, conservative room-tone model. Long gaps eventually mute; silence does
+not turn into a tone. No generated audio trains the background model.
+
+Recovery searches the generated continuation for a phase match to the beginning of the
+returning source. It adjusts the synthetic phase, never skips source samples, crossfades
+with correlation-aware energy normalization, and restores gain gradually after a faded
+outage. Unvoiced onsets use a shorter merge than strongly correlated voiced returns.
+Overlap/add time stretching validates a splice over two windows and handles quiet signals
+without a pitch estimate. Unreliable transient matches are left untouched.
+
+The implementation is independent Rust DSP, not a sample-exact NetEq port. Tests cover
+pitch, unvoiced spectrum, room tone, phase inversions, long-gap gain recovery, full-scale
+and DC inputs, repeated noisy underruns, EOF/reset, sample accounting and allocation bounds.
+Human listening review and production integration remain outstanding; these tests do not
+establish perceptual equivalence to NetEq. All accepted source audio is preserved, so long
+outages can add delay beyond the adaptive target. Provider/runtime wiring and host exports
+are outside this media-only change.
 
 ## Artifacts
 

@@ -12,7 +12,7 @@ mod playout_tests;
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use dsp::{Concealer, FRAME, OVERLAP, PERIOD_MAX, PERIOD_MIN, correlation, mix};
+use dsp::{Concealer, FRAME, OVERLAP, PERIOD_MAX, Recovery, Stretch, mix};
 
 pub const SAMPLE_RATE: u32 = 24_000;
 
@@ -21,7 +21,8 @@ pub struct Config {
     pub minimum_delay: Duration,
     pub maximum_delay: Duration,
     pub capacity: Duration,
-    /// Zero disables speech continuation, but retains the short fade into silence.
+    /// Bounds extrapolated speech. Zero disables it but retains the short transition.
+    /// Independently learned room tone can continue and fades out over two seconds.
     pub maximum_concealment: Duration,
     /// Maximum fraction of rendered samples inserted or removed by time stretching, 0..=0.1.
     pub maximum_stretch: f32,
@@ -99,7 +100,7 @@ pub struct Playout {
     started: bool,
     finished: bool,
     outage: bool,
-    recovery: usize,
+    recovery: Recovery,
     last_output: i16,
     stretch_after: u64,
 }
@@ -136,7 +137,7 @@ impl Playout {
             started: false,
             finished: false,
             outage: false,
-            recovery: 0,
+            recovery: Recovery::default(),
             last_output: 0,
             stretch_after: 0,
         })
@@ -205,7 +206,7 @@ impl Playout {
         self.started = false;
         self.finished = false;
         self.outage = false;
-        self.recovery = 0;
+        self.recovery = Recovery::default();
         self.last_output = 0;
         self.stretch_after = 0;
     }
@@ -227,28 +228,32 @@ impl Playout {
                 .first_arrival
                 .is_some_and(|first| self.finished || now - first >= self.config.minimum_delay);
         }
-        if self.started && self.pending.is_empty() && !self.finished && !self.outage {
+        if self.started
+            && self.pending.is_empty()
+            && !self.finished
+            && !self.outage
+            && !self.recovery.active()
+        {
             self.adjust(now);
         }
         for out in output.iter_mut() {
+            if self.outage && !self.queue.is_empty() {
+                self.recovery.start(&self.concealer, &self.queue);
+                self.outage = false;
+            }
             let real = self.pending.pop_front().or_else(|| {
                 if !self.started {
                     return None;
                 }
                 let sample = self.queue.pop_front()?;
                 self.statistics.source_consumed += 1;
+                self.concealer.observe(sample);
                 Some(sample)
             });
             let sample = match real {
                 Some(mut sample) => {
-                    if self.outage {
-                        self.outage = false;
-                        self.recovery = OVERLAP;
-                    }
-                    if self.recovery > 0 {
-                        let continuation = self.concealer.next();
-                        sample = mix(continuation, sample, OVERLAP - self.recovery, OVERLAP);
-                        self.recovery -= 1;
+                    if self.recovery.active() {
+                        sample = self.recovery.apply(sample);
                     }
                     if self.finished && self.pending.len() + self.queue.len() < OVERLAP {
                         sample = mix(0, sample, self.pending.len() + self.queue.len(), OVERLAP);
@@ -268,7 +273,7 @@ impl Playout {
                             self.last_output,
                         );
                         self.outage = true;
-                        self.recovery = 0;
+                        self.recovery = Recovery::default();
                     }
                     let sample = self.concealer.next();
                     if self.concealer.active() {
@@ -322,40 +327,25 @@ impl Playout {
         if !expand && !accelerate {
             return;
         }
-        let mut best = 0.85;
-        let mut period = 0;
-        for lag in (PERIOD_MIN..=PERIOD_MAX).step_by(2) {
-            let similarity = correlation(|i| self.queue[i], |i| self.queue[lag + i], OVERLAP);
-            if similarity > best {
-                best = similarity;
-                period = lag;
-            }
-        }
-        // Avoid stretching unvoiced transients with an unreliable period estimate.
-        if period == 0
-            || (self.statistics.stretched + self.statistics.accelerated + period as u64) as f64
-                > self.statistics.rendered as f64 * f64::from(self.config.maximum_stretch)
-        {
+        let budget = (self.statistics.rendered as f64 * f64::from(self.config.maximum_stretch))
+            .floor() as u64;
+        let available_budget =
+            budget.saturating_sub(self.statistics.stretched + self.statistics.accelerated);
+        let mut output = [0; FRAME];
+        let operation = if expand { Stretch::Expand } else { Stretch::Accelerate };
+        let Some((consumed, period)) = dsp::stretch(
+            &self.queue,
+            operation,
+            available_budget.min(PERIOD_MAX as u64) as usize,
+            &mut output,
+        ) else {
             return;
+        };
+        self.pending.extend(output);
+        for _ in 0..consumed {
+            let source = self.queue.pop_front().expect("stretch validated queue length");
+            self.concealer.observe(source);
         }
-        for i in 0..FRAME {
-            let sample = if expand {
-                if i < period {
-                    self.queue[i]
-                } else if i < period + OVERLAP {
-                    mix(self.queue[i], self.queue[i - period], i - period, OVERLAP)
-                } else {
-                    self.queue[i - period]
-                }
-            } else if i < OVERLAP {
-                mix(self.queue[i], self.queue[i + period], i, OVERLAP)
-            } else {
-                self.queue[i + period]
-            };
-            self.pending.push_back(sample);
-        }
-        let consumed = if expand { FRAME - period } else { FRAME + period };
-        self.queue.drain(..consumed);
         self.statistics.source_consumed += consumed as u64;
         if expand {
             self.statistics.stretched += period as u64;

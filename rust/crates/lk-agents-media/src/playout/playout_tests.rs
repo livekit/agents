@@ -144,7 +144,8 @@ fn unvoiced_outage_and_disabled_plc_ramp_to_silence() {
     p.render(ms(0), &mut output).unwrap();
     p.render(ms(10), &mut output).unwrap();
     assert_eq!(output[0], 12_000);
-    assert_eq!(output[119], 100);
+    assert!(output[..120].windows(2).all(|pair| pair[1] <= pair[0]));
+    assert_eq!(output[119], 0);
     assert_eq!(output[120..], [0; 120]);
 }
 
@@ -355,4 +356,82 @@ fn periodic_pcm_short_stall_has_no_hard_silence_edges() {
         assert!(smooth < hard / 4, "hard={hard} smooth={smooth}");
     }
     assert_eq!(p.statistics().concealed, 480);
+}
+
+#[test]
+fn noisy_background_repeated_short_returns_drain_every_source_sample() {
+    let mut p = plain();
+    let mut seed = 734_u32;
+    let mut output = [0; 240];
+    let mut received = 0;
+    let mut last_arrival = 0;
+    for at in (0..5000).step_by(10) {
+        if at % 130 == 0 {
+            let input: Vec<_> = (0..2400)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 17;
+                    seed ^= seed << 5;
+                    (seed as i16 / 100).saturating_add(50)
+                })
+                .collect();
+            p.push(ms(at), &input).unwrap();
+            received += input.len();
+            last_arrival = at;
+        }
+        let report = p.render(ms(at), &mut output).unwrap();
+        account(&p, report);
+        assert!(output.iter().all(|s| i32::from(*s).abs() < 2000));
+    }
+    p.finish();
+    let mut report = p.render(ms(5000.max(last_arrival)), &mut output).unwrap();
+    for at in (5010..6000).step_by(10) {
+        report = p.render(ms(at), &mut output).unwrap();
+        account(&p, report);
+    }
+    assert!(report.drained);
+    assert_eq!(p.statistics().source_consumed, received as u64);
+    assert!(p.statistics().underruns > 20);
+}
+
+#[test]
+fn recovery_state_is_cleared_by_reset_and_does_not_cross_epochs() {
+    let mut p = plain();
+    let mut out = [0; 240];
+    p.push(ms(0), &voice(2400, 23)).unwrap();
+    for at in (0..150).step_by(10) {
+        p.render(ms(at), &mut out).unwrap();
+    }
+    p.push(ms(150), &voice(2400, 61)).unwrap();
+    // Enter a partially completed recovery, then cancel it.
+    p.render(ms(150), &mut out[..1]).unwrap();
+    p.reset();
+    p.push(ms(0), &[1234; 2400]).unwrap();
+    p.render(ms(0), &mut out).unwrap();
+    assert_eq!(out, [1234; 240]);
+    assert_eq!(p.statistics().concealed, 0);
+}
+
+#[test]
+fn concealment_and_recovery_are_invariant_to_render_block_boundaries() {
+    fn run(size: usize) -> (Vec<i16>, Statistics) {
+        let mut p = plain();
+        let mut output = vec![0; size];
+        let mut rendered = Vec::new();
+        let count = 24_000;
+        for position in (0..count).step_by(size) {
+            let now = Duration::from_nanos(position as u64 * 1_000_000_000 / 24_000);
+            // All tested render sizes divide the arrival positions exactly.
+            if [0, 2400, 5280, 8400, 12000].contains(&position) {
+                p.push(now, &voice(2400, position + 23)).unwrap();
+            }
+            let report = p.render(now, &mut output).unwrap();
+            account(&p, report);
+            rendered.extend_from_slice(&output);
+        }
+        (rendered, p.statistics())
+    }
+    let reference = run(1);
+    assert_eq!(reference, run(120));
+    assert_eq!(reference, run(240));
 }
