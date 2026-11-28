@@ -874,6 +874,127 @@ def _mock_client(
     )
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "sends_language"),
+    [
+        ({}, True),
+        ({"use_realtime": False}, True),
+        ({"detect_language": True}, False),
+    ],
+)
+async def test_default_stt_uses_gpt_transcribe_batch_api(
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, Any],
+    sends_language: bool,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    captured: list[httpx.Request] = []
+    client = _mock_client(captured)
+    constructor_kwargs: dict[str, Any] = {}
+
+    def fake_async_client(**client_kwargs: Any) -> openai.AsyncClient:
+        constructor_kwargs.update(client_kwargs)
+        return client
+
+    monkeypatch.setattr(stt.openai, "AsyncClient", fake_async_client)
+    instance = stt.STT(api_key="test-key", **kwargs)
+
+    try:
+        assert instance.model == "gpt-transcribe"
+        assert instance.capabilities.streaming is False
+        assert constructor_kwargs["api_key"] == "test-key"
+        assert constructor_kwargs.get("base_url") is None
+
+        await instance.recognize(_silence())
+
+        assert captured[0].url.path == "/v1/audio/transcriptions"
+        body = captured[0].read().decode("utf-8", errors="replace")
+        assert 'name="model"\r\n\r\ngpt-transcribe' in body
+        assert ('name="languages[]"\r\n\r\nen' in body) is sends_language
+        assert 'name="language"' not in body
+    finally:
+        await instance.aclose()
+        http_client = constructor_kwargs.get("http_client")
+        if http_client is not None:
+            await http_client.aclose()
+
+
+async def test_custom_base_url_keeps_gpt_4o_mini_transcribe_default() -> None:
+    instance = stt.STT(api_key="test-key", base_url="http://localhost:8000/v1")
+
+    try:
+        assert instance.model == "gpt-4o-mini-transcribe"
+        assert instance.capabilities.streaming is False
+    finally:
+        await instance.aclose()
+
+
+async def test_openai_base_url_env_keeps_gpt_4o_mini_transcribe_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://localhost:8000/v1")
+    instance = stt.STT(api_key="test-key")
+
+    try:
+        assert instance.model == "gpt-4o-mini-transcribe"
+        assert instance.capabilities.streaming is False
+    finally:
+        await instance.aclose()
+
+
+async def test_custom_client_keeps_gpt_4o_mini_transcribe_default() -> None:
+    captured: list[httpx.Request] = []
+    client = _mock_client(captured)
+    instance = stt.STT(client=client)
+
+    try:
+        assert instance.model == "gpt-4o-mini-transcribe"
+        assert instance.capabilities.streaming is False
+
+        await instance.recognize(_silence())
+
+        body = captured[0].read().decode("utf-8", errors="replace")
+        assert 'name="model"\r\n\r\ngpt-4o-mini-transcribe' in body
+        assert 'name="language"\r\n\r\nen' in body
+        assert 'name="languages[]"' not in body
+    finally:
+        await instance.aclose()
+        await client.close()
+
+
+async def test_azure_stt_keeps_gpt_4o_mini_transcribe_default() -> None:
+    instance = stt.STT.with_azure(
+        azure_endpoint="https://example.openai.azure.com",
+        api_key="test-key",
+        api_version="2025-04-01-preview",
+    )
+
+    try:
+        assert instance.model == "gpt-4o-mini-transcribe"
+    finally:
+        await instance.aclose()
+
+
+async def test_realtime_stt_keeps_gpt_4o_mini_transcribe_default() -> None:
+    instance = stt.STT(api_key="test-key", use_realtime=True)
+
+    try:
+        assert instance.model == "gpt-4o-mini-transcribe"
+        assert instance.capabilities.streaming is True
+    finally:
+        await instance.aclose()
+
+
+async def test_explicit_gpt_4o_mini_transcribe_stays_non_streaming() -> None:
+    instance = stt.STT(api_key="test-key", model="gpt-4o-mini-transcribe")
+
+    try:
+        assert instance.model == "gpt-4o-mini-transcribe"
+        assert instance.capabilities.streaming is False
+    finally:
+        await instance.aclose()
+
+
 async def test_file_transcription_sends_bracketed_form_fields() -> None:
     captured: list[httpx.Request] = []
     instance = stt.STT(
