@@ -15,6 +15,24 @@ class FaultPlacementTests(unittest.TestCase):
         self.assertEqual(rows[21][0], 2_100_000)
         self.assertEqual(sum(row[2] for row in rows), 24_000 * 5)
 
+    def test_requested_onset_uses_the_nearest_verified_speech(self):
+        pcm = [
+            int(5000 * math.sin(i * math.tau / 120)) if 5.1 <= i / 24_000 < 8 else 0
+            for i in range(24_000 * 10)
+        ]
+        activity = speech_activity(struct.pack(f"<{len(pcm)}h", *pcm), preferred_ms=5000)
+        self.assertEqual(activity["anchor_ms"], 5100)
+        self.assertEqual(min(activity["window_rms"][510:515]) > 150, True)
+        for scenario in ["variable_chunks", "clock_drift"]:
+            rows = schedule(scenario, len(pcm), 51)
+            for arrival, start, count in rows[:51]:
+                self.assertEqual(arrival, start * 1_000_000 // 24_000)
+                self.assertEqual(count, 2400)
+            if scenario == "variable_chunks":
+                self.assertEqual(rows[51][2], 480)
+            else:
+                self.assertGreater(rows[52][0], rows[52][1] * 1_000_000 // 24_000)
+
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
             speech_activity(bytes(24_000 * 10 * 2))

@@ -1,9 +1,10 @@
 {
-  "anchor_chunk": 104,
-  "anchor_ms": 10400,
+  "preferred_onset_ms": 5000,
+  "anchor_chunk": 51,
+  "anchor_ms": 5100,
   "threshold_rms": 150,
   "window_ms": 10,
-  "active_fraction_next_second": 0.99,
+  "active_fraction_next_second": 0.94,
   "speech_chunks": [
     1,
     2,
@@ -198,6 +199,11 @@
       "concealed_samples": 0,
       "baseline_missing_samples": 480
     },
+    "late_30ms_no_reserve": {
+      "underruns": 1,
+      "concealed_samples": 720,
+      "baseline_missing_samples": 720
+    },
     "repeated_stalls": {
       "underruns": 1,
       "concealed_samples": 480,
@@ -205,7 +211,7 @@
     },
     "burst_recovery": {
       "underruns": 1,
-      "concealed_samples": 960,
+      "concealed_samples": 9120,
       "baseline_missing_samples": 9600
     },
     "no_catchup": {
@@ -215,7 +221,7 @@
     },
     "long_outage": {
       "underruns": 1,
-      "concealed_samples": 960,
+      "concealed_samples": 23520,
       "baseline_missing_samples": 24000
     },
     "variable_chunks": {
@@ -227,13 +233,6 @@
       "underruns": 0,
       "concealed_samples": 0,
       "baseline_missing_samples": 720
-    },
-    "late_30ms_no_reserve": {
-      "underruns": 1,
-      "concealed_samples": 720,
-      "baseline_missing_samples": 720,
-      "fault_start_ms": 10400,
-      "fault_end_ms": 10430
     }
   }
 }

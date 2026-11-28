@@ -60,7 +60,11 @@ def schedule(
     previous = 0
     index = 0
     while start < count:
-        duration_ms = (20, 100, 40, 200, 60)[index % 5] if name == "variable_chunks" else 100
+        duration_ms = (
+            (20, 100, 40, 200, 60)[(index - anchor) % 5]
+            if name == "variable_chunks" and index >= anchor
+            else 100
+        )
         length = min(duration_ms * 24, count - start)
         nominal = start * 1_000_000 // 24000
         delay = 0
@@ -80,7 +84,9 @@ def schedule(
         elif name == "long_outage" and anchor <= index <= anchor + 9:
             delay = (anchor + 10 - index) * 100_000
         elif name == "clock_drift":
-            delay = nominal // 1000  # sender is 1000 ppm slower than the receiver
+            delay = (
+                max(0, nominal - anchor * 100_000) // 1000
+            )  # sender is 1000 ppm slower than the receiver
         arrival = max(previous, nominal + delay)
         result.append((arrival, start, length))
         previous = arrival
@@ -89,7 +95,7 @@ def schedule(
     return result
 
 
-def speech_activity(pcm: bytes) -> dict:
+def speech_activity(pcm: bytes, preferred_ms: int = 5000) -> dict:
     """Find an audibly active fault window; reject silent fixtures instead of masking failures."""
     values = struct.unpack(f"<{len(pcm) // 2}h", pcm)
     energies = []
@@ -109,11 +115,14 @@ def speech_activity(pcm: bytes) -> dict:
             candidates.append((fraction, sum(energies[start : start + 100]), chunk))
     if not candidates:
         raise ValueError("input needs a verified active one-second speech window after 1s")
-    _, _, anchor = max(candidates)
+    _, _, anchor = min(
+        candidates, key=lambda item: (abs(item[2] * 100 - preferred_ms), -item[0], -item[1])
+    )
     speech_chunks = {
         i for i in range(len(energies) // 10) if min(energies[i * 10 : i * 10 + 5]) >= threshold
     }
     return {
+        "preferred_onset_ms": preferred_ms,
         "anchor_chunk": anchor,
         "anchor_ms": anchor * 100,
         "threshold_rms": threshold,
@@ -286,6 +295,12 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--input", type=Path, required=True, help="external mono 24 kHz PCM16 WAV")
     parser.add_argument("--delay-ms", type=int, default=20)
+    parser.add_argument(
+        "--fault-at-ms",
+        type=int,
+        default=5000,
+        help="preferred fault onset; nearest verified speech window is selected",
+    )
     parser.add_argument("--scenario", choices=SCENARIOS, action="append")
     args = parser.parse_args()
     out = args.output.resolve()
@@ -297,7 +312,7 @@ def main() -> None:
         if (source.getframerate(), source.getnchannels(), source.getsampwidth()) != (24000, 1, 2):
             raise ValueError("fixture must be mono 24 kHz signed PCM16")
         pcm = source.readframes(source.getnframes())
-    activity = speech_activity(pcm)
+    activity = speech_activity(pcm, args.fault_at_ms)
     raw = out / "source.pcm"
     raw.write_bytes(pcm)
     source48 = out / "source48.pcm"

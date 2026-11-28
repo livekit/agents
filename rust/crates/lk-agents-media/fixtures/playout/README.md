@@ -106,4 +106,9 @@ values. Run `python3 -m unittest discover -s rust/crates/lk-agents-media/tools -
 energy checks establish audibility, not semantic intelligibility or a perceptual score.
 
 The no-reserve listening case uses a 30 ms delay. In the recorded passage it occurs at
-10.400–10.430 seconds; input chunk duration remains 100 ms. Playback-added delays are retained.
+5.100–5.130 seconds; input chunk duration remains 100 ms. Playback-added delays are retained.
+
+Fault placement prefers five seconds (`--fault-at-ms 5000`) and selects the nearest
+verified active window. For this passage that is 5.1 seconds; 5.0 seconds is quiet.
+All stall cases, chunk-size changes and clock drift begin at that common source time.
+The clean row has no injected fault and is a comparison reference.
