@@ -117,6 +117,37 @@ class FaultPlacementTests(unittest.TestCase):
         silence = schedule("sustained_jitter", 24_000 * 27, 22, set())
         self.assertEqual(silence[172][0] - silence[172][1] * 1_000_000 // 24_000, 150_000)
 
+    def test_provider_stalls_make_real_eighty_ms_gaps_without_discarding_or_resetting(self):
+        selected = {22, 51, 68, 83, 105, 123, 143, 163, 183, 205}
+        rows = schedule("stalled_delivery", 24_000 * 27, 22, selected)
+        self.assertEqual(rows, schedule("stalled_delivery", 24_000 * 27, 22, selected))
+        self.assertEqual(sum(row[2] for row in rows), 24_000 * 27)
+        self.assertEqual([row[0] for row in rows], sorted(row[0] for row in rows))
+        retained = 0
+        for index, (arrival, start, _) in enumerate(rows):
+            if index in selected:
+                retained += 80_000
+            self.assertEqual(arrival - start * 1_000_000 // 24_000, retained)
+        self.assertEqual(retained, 800_000)
+        received = consumed = next_chunk = 0
+        gap_lengths = []
+        in_gap = False
+        for at in range(0, 28_000, 10):
+            while next_chunk < len(rows) and rows[next_chunk][0] <= at * 1000:
+                received += rows[next_chunk][2]
+                next_chunk += 1
+            count = min(240, received - consumed)
+            if count < 240 and consumed < 24_000 * 27:
+                if not in_gap:
+                    gap_lengths.append(0)
+                gap_lengths[-1] += 240 - count
+                in_gap = True
+            else:
+                in_gap = False
+            consumed += count
+        self.assertEqual(gap_lengths, [80 * 24] * 10)
+        self.assertEqual(consumed, 24_000 * 27)
+
     def test_silence_is_rejected(self):
         with self.assertRaises(ValueError):
             speech_activity(bytes(24_000 * 10 * 2))
@@ -130,6 +161,8 @@ class FaultPlacementTests(unittest.TestCase):
         activity = speech_activity(struct.pack(f"<{len(pcm)}h", *pcm))
         anchor = activity["anchor_chunk"]
         self.assertEqual(anchor, 20)  # Default preference is two seconds, in active speech.
+        self.assertNotIn(20, activity["strong_speech_chunks"])  # Leading silence before onset.
+        self.assertIn(21, activity["strong_speech_chunks"])
         self.assertIn(anchor, activity["speech_chunks"])
         self.assertGreaterEqual(activity["active_fraction_next_second"], 0.7)
         for scenario in [

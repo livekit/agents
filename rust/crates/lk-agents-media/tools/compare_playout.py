@@ -30,6 +30,7 @@ SCENARIOS = (
     "startup_jitter",
     "reported_jitter",
     "sustained_jitter",
+    "stalled_delivery",
     "burst_recovery",
     "no_catchup",
     "long_outage",
@@ -66,6 +67,15 @@ def schedule(
     index = 0
     seed = 734
     correlated_jitter = 0
+    retained_delay = 0
+    stalls = set()
+    if name == "stalled_delivery":
+        for begin in range(anchor, anchor + 200, 20):
+            eligible = [
+                i for i in range(begin, begin + 20) if speech_chunks is None or i in speech_chunks
+            ]
+            if eligible:
+                stalls.add(eligible[0])
     while start < count:
         duration_ms = (
             (20, 100, 40, 200, 60)[(index - anchor) % 5]
@@ -98,6 +108,13 @@ def schedule(
         elif name == "startup_jitter" and 1 <= index <= 4:
             # Illustrative first-answer deliveries: no missing source, only delayed chunks.
             delay = (60_000, 100_000, 160_000, 300_000)[index - 1]
+        elif name == "stalled_delivery":
+            # Repeated production/pacing pauses, followed by realtime delivery without
+            # catch-up. Retaining each pause makes the actual FIFO gaps recur. This is
+            # a harsh concealment stress test, not bounded network jitter or a trace replay.
+            if index in stalls:
+                retained_delay += 80_000
+            delay = retained_delay
         elif name == "sustained_jitter" and index >= anchor:
             # A 20s period of 1% slower delivery plus up to 30ms variation. Bounded
             # jitter alone eventually fills even an untreated FIFO with enough reserve;
@@ -169,6 +186,12 @@ def speech_activity(pcm: bytes, preferred_ms: int = 2000) -> dict:
         "window_ms": 10,
         "active_fraction_next_second": sum(active[anchor * 10 : anchor * 10 + 100]) / 100,
         "speech_chunks": sorted(speech_chunks),
+        "strong_threshold_rms": 1000,
+        "strong_speech_chunks": [
+            i
+            for i in range(1, len(energies) // 10)
+            if min(energies[i * 10 - 2 : i * 10 + 5]) >= 1000
+        ],
         "window_rms": energies,
     }
 
@@ -258,6 +281,10 @@ def render_player(out: Path, report: dict) -> None:
         "startup_jitter": (
             "First-answer chunks arrive irregularly",
             "Delivery gaps in the first four chunks; first fault at 0.100s.",
+        ),
+        "stalled_delivery": (
+            "Repeated 80 ms provider stalls",
+            "One strong-speech stall per 2s source window for 20s; resumes realtime without catch-up.",
         ),
         "sustained_jitter": (
             "Twenty seconds of jitter and slow delivery",
@@ -470,14 +497,23 @@ def main() -> None:
         case = out / name
         case.mkdir(exist_ok=True)
         arrivals = case / "arrivals.csv"
+        active_chunks = set(
+            activity["strong_speech_chunks" if name == "stalled_delivery" else "speech_chunks"]
+        )
+        if name == "stalled_delivery":
+            windows = {
+                (chunk - activity["anchor_chunk"]) // 20
+                for chunk in active_chunks
+                if activity["anchor_chunk"] <= chunk < activity["anchor_chunk"] + 200
+            }
+            if len(windows) < 8:
+                raise ValueError(
+                    "stalled_delivery needs strong speech across at least eight 2s windows"
+                )
         with arrivals.open("w", newline="") as stream:
             writer = csv.writer(stream, lineterminator="\n")
             writer.writerow(("arrival_us", "source_start", "samples"))
-            writer.writerows(
-                schedule(
-                    name, len(pcm) // 2, activity["anchor_chunk"], set(activity["speech_chunks"])
-                )
-            )
+            writer.writerows(schedule(name, len(pcm) // 2, activity["anchor_chunk"], active_chunks))
         case_delay = 0 if name == "late_30ms_no_reserve" else args.delay_ms
         run(executable, raw, arrivals, case, str(duration_ms), str(case_delay))
         reference_stats = run(
@@ -551,8 +587,18 @@ def main() -> None:
                 row["track"]: {k: int(v) for k, v in row.items() if k != "track"}
                 for row in csv.DictReader(stream)
             }
+        fault_start_ms = 100 if name == "startup_jitter" else activity["anchor_ms"]
+        if name == "stalled_delivery":
+            fault_start_ms = (
+                min(
+                    chunk
+                    for chunk in active_chunks
+                    if activity["anchor_chunk"] <= chunk < activity["anchor_chunk"] + 200
+                )
+                * 100
+            )
         report["scenarios"][name] = {
-            "fault_start_ms": 100 if name == "startup_jitter" else activity["anchor_ms"],
+            "fault_start_ms": fault_start_ms,
             "delay_ms": case_delay,
             "rust_metrics": final,
             "acceleration": {

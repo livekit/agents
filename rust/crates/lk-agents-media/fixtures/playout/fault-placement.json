@@ -700,6 +700,106 @@
           "active_source": true
         }
       ]
+    },
+    "stalled_delivery": {
+      "fault_start_ms": 2200,
+      "duration_ms": 20000,
+      "stall_duration_ms": 80,
+      "strong_threshold_rms": 1000,
+      "rust_metrics": {
+        "time_us": 28240000,
+        "queued_source": 0,
+        "pending_output": 0,
+        "target_delay_us": 100000,
+        "source_consumed": 630000,
+        "concealed": 18720,
+        "silent": 28788,
+        "stretched": 492,
+        "accelerated": 0,
+        "underruns": 10,
+        "fast_accelerated": 0,
+        "merge_inserted": 468
+      },
+      "baseline": {
+        "startup_ms": 0,
+        "underruns": 10,
+        "missing_samples": 19200
+      },
+      "baseline_gaps": [
+        {
+          "start_ms": 2200.0,
+          "source_start": 52800,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 5180.0,
+          "source_start": 122400,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 6960.0,
+          "source_start": 163200,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 8540.0,
+          "source_start": 199200,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 10820.0,
+          "source_start": 252000,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 12700.0,
+          "source_start": 295200,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 14780.0,
+          "source_start": 343200,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 16860.0,
+          "source_start": 391200,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 18940.0,
+          "source_start": 439200,
+          "duration_ms": 80.0,
+          "active_source": true
+        },
+        {
+          "start_ms": 21220.0,
+          "source_start": 492000,
+          "duration_ms": 80.0,
+          "active_source": true
+        }
+      ],
+      "browser_preview_verification": {
+        "interval_ms": [
+          2220,
+          2260
+        ],
+        "baseline_rms": 0.0,
+        "rust_rms": 1946.6,
+        "files_sha256": {
+          "baseline": "85fd282cd4eb4bff709d24fbd572ac5abccd0e1ffb336f9dd9c181b5d56d19dc",
+          "neteq": "aa5bdf1942599f80a9516d5152f6c7c986d8bb6660665a5a77d8710ac4b5cbf6",
+          "candidate": "1be6425fc73c74816646e487d84084b5cccca2318bd02ea933f531e8c09a3df4"
+        }
+      }
     }
   }
 }

@@ -125,7 +125,7 @@ gap duration and listening quality, not just the injected delay count.
 
 ## Focused listening cases
 
-The PR table retains Startup, Jitter, Burst, Outage and Catchup. Other scenarios remain available
+The PR table retains Startup, Stalls, Burst, Outage and Catchup. Other scenarios remain available
 in the offline tool.
 `startup_jitter` delays source chunks 1–4 by 60, 100,
 160 and 300 ms. Ordered arrivals for chunks 0–7 are 0, 160, 300, 460, 700, 700, 700,
@@ -209,3 +209,23 @@ The original 20–90 ms / 300 ms `reported_jitter` case remains available separa
 `fifo_timeline.csv` records actual untreated consumption/starvation on every render.
 `report.json` lists each gap's onset, duration and source-energy check, so the continued
 faults can be verified rather than inferred from injected packet delays alone.
+
+## Clearly audible stall stress case
+
+The PR Stalls row uses `stalled_delivery`: ten 80 ms delivery pauses over twenty seconds
+of source time. Each two-second window chooses its first strong speech boundary: every
+10 ms source window in the preceding 20 ms and following 50 ms must exceed 1000 PCM RMS.
+If the source lacks strong speech in at least eight such windows, rendering refuses it.
+The captured passage yields ten gaps, from 2.200 s through 21.220 s in untreated playback.
+
+After each pause, the provider resumes at realtime without catch-up, retaining the added
+delay. This deliberately harsh production/pacing stress accumulates 800 ms; it is not
+bounded network jitter or a replay of a measured customer trace. All three paths receive
+identical arrivals and unmodified source at the same level. It evaluates concealment and
+return transitions; Rust still underruns rather than eliminating the stalls.
+
+The final browser MP4s are decoded and checked as well as the raw WAVs: the first untreated
+80 ms hole has a near-silent central 40 ms, while Rust continues the waveform there. Lossy
+encoding can soften small clicks, so raw-wave gap counts alone are insufficient evidence
+that a browser preview makes a useful listening example. The mild jitter cases remain in
+the offline tool for realistic robustness checks even when their differences are subtle.
