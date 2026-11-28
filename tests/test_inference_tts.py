@@ -11,7 +11,7 @@ import aiohttp
 import pytest
 
 import livekit.agents.inference.tts as inference_tts
-from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError
 from livekit.agents.inference import FallbackActivatedEvent
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.tts import (
@@ -138,6 +138,7 @@ class _FakePool:
                     receive=websocket.receive,
                     in_use=False,
                     handoff_id=None,
+                    inbox=asyncio.Queue(),
                 )
 
             async def __aexit__(self, *_exc: object) -> bool:  # noqa: ANN204
@@ -398,9 +399,16 @@ async def test_unknown_gateway_message_remains_harmless() -> None:
 class _GatewaySocket:
     """One in-memory `/tts` connection; `reply` and `hang_up` act as the gateway."""
 
-    def __init__(self, index: int) -> None:
+    def __init__(
+        self,
+        index: int,
+        flush_error: dict[str, Any] | None = None,
+        after_done: dict[str, Any] | None = None,
+    ) -> None:
         self.index = index
         self.closed = False
+        self.flush_error = flush_error
+        self.after_done = after_done
         self.sent: list[dict[str, Any]] = []
         self._inbox: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
 
@@ -410,8 +418,15 @@ class _GatewaySocket:
         event = json.loads(data)
         self.sent.append(event)
         if event["type"] == "session.flush":
+            if self.flush_error is not None:
+                fields = dict(self.flush_error)
+                self.reply(fields.pop("type"), **fields)
+                return
             self.reply("output_audio", audio=_AUDIO["audio"])
             self.reply("done")
+            if self.after_done is not None:
+                fields = dict(self.after_done)
+                self.reply(fields.pop("type"), **fields)
 
     async def receive(self, timeout: float | None = None) -> aiohttp.WSMessage:
         return await self._inbox.get()
@@ -435,11 +450,18 @@ class _GatewaySocket:
 class _Gateway:
     closed = False
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        flush_error: dict[str, Any] | None = None,
+        first_after_done: dict[str, Any] | None = None,
+    ) -> None:
         self.sockets: list[_GatewaySocket] = []
+        self.flush_error = flush_error
+        self.first_after_done = first_after_done
 
     async def ws_connect(self, url: str, **kwargs: Any) -> _GatewaySocket:
-        socket = _GatewaySocket(len(self.sockets))
+        after_done = self.first_after_done if not self.sockets else None
+        socket = _GatewaySocket(len(self.sockets), self.flush_error, after_done)
         self.sockets.append(socket)
         return socket
 
@@ -591,3 +613,140 @@ async def test_socket_error_fails_synthesis_without_waiting_for_receive_timeout(
                         pass
     finally:
         await tts.aclose()
+
+
+_BAD_REQUEST = {
+    "type": "error",
+    "code": "BAD_REQUEST",
+    "data": "no TTS candidate accepts the request parameters",
+    "retryable": False,
+}
+
+
+async def _run_failing_stream(tts: TTS) -> tuple[list[Any], APIError | None]:
+    errors: list[Any] = []
+    tts.on("error", errors.append)
+    raised: APIError | None = None
+    try:
+        async with tts.stream(
+            conn_options=APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=1.0)
+        ) as stream:
+            stream.push_text("hello there.")
+            stream.end_input()
+            try:
+                async for _ in stream:
+                    pass
+            except APIError as e:
+                raised = e
+    finally:
+        await tts.aclose()
+    return errors, raised
+
+
+async def test_non_retryable_error_frame_is_not_retried() -> None:
+    gateway = _Gateway(flush_error=_BAD_REQUEST)
+    errors, raised = await _run_failing_stream(_make_tts(http_session=gateway))
+
+    assert len(gateway.sockets) == 1
+    assert [e.recoverable for e in errors] == [False]
+    assert raised is not None and raised.retryable is False
+    assert "BAD_REQUEST" in raised.message
+    assert "no TTS candidate" in raised.message
+    assert isinstance(raised.body, dict) and raised.body["code"] == "BAD_REQUEST"
+
+
+@pytest.mark.parametrize("extra", [{}, {"retryable": True}])
+async def test_error_frame_without_retryable_false_is_retried(extra: dict[str, Any]) -> None:
+    frame = {"type": "error", "code": "SERVER_ERROR", "data": "boom", **extra}
+    gateway = _Gateway(flush_error=frame)
+    errors, raised = await _run_failing_stream(_make_tts(http_session=gateway))
+
+    assert len(gateway.sockets) == 4
+    assert [e.recoverable for e in errors] == [True, True, True, False]
+    assert raised is not None and raised.retryable is True
+
+
+async def test_error_frame_on_idle_connection_is_dropped_from_pool() -> None:
+    gateway = _Gateway()
+    errors: list[Any] = []
+    tts = _make_tts(http_session=gateway)
+    tts.on("error", errors.append)
+    try:
+        assert await _speak(tts, "first.") > 0
+        gateway.sockets[0].reply("error", code="CONNECTION_ERROR", data="provider went away")
+        await _until(lambda: not any(c.ws is gateway.sockets[0] for c in tts._pool._connections))
+
+        assert await _speak(tts, "second.") > 0
+        assert len(gateway.sockets) == 2
+        assert gateway.sockets[1].types().count("input_transcript") == 1
+        assert errors == []
+    finally:
+        await tts.aclose()
+
+
+async def test_error_frame_on_in_use_connection_is_still_delivered() -> None:
+    gateway = _Gateway(flush_error={"type": "error", "code": "SERVER_ERROR", "data": "mid-turn"})
+    tts = _make_tts(http_session=gateway)
+    try:
+        async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+            stream.push_text("hello.")
+            stream.end_input()
+            with pytest.raises(APIError, match="mid-turn"):
+                async for _ in stream:
+                    pass
+        assert len(gateway.sockets) == 1
+    finally:
+        await tts.aclose()
+
+
+@pytest.mark.parametrize("extra", [{}, {"retryable": False}])
+async def test_error_frame_right_after_done_does_not_fail_the_next_turn(
+    extra: dict[str, Any],
+) -> None:
+    stale = {"type": "error", "code": "SERVER_ERROR", "data": "stale", **extra}
+    gateway = _Gateway(first_after_done=stale)
+    errors: list[Any] = []
+    tts = _make_tts(http_session=gateway)
+    tts.on("error", errors.append)
+    try:
+        assert await _speak(tts, "first.") > 0
+        assert await _speak(tts, "second.") > 0
+        assert len(gateway.sockets) == 2
+        assert gateway.sockets[0].types().count("input_transcript") == 1
+        assert gateway.sockets[1].types().count("input_transcript") == 1
+        assert errors == []
+    finally:
+        await tts.aclose()
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        (
+            {"code": "SERVER_ERROR", "data": "", "message": "quota exhausted"},
+            "SERVER_ERROR: quota exhausted",
+        ),
+        ({"code": "SERVER_ERROR", "message": "quota exhausted"}, "SERVER_ERROR: quota exhausted"),
+        ({"code": "SERVER_ERROR", "data": "boom", "message": "ignored"}, "SERVER_ERROR: boom"),
+        ({"code": "SERVER_ERROR"}, "SERVER_ERROR"),
+        ({"message": "quota exhausted"}, "quota exhausted"),
+    ],
+)
+async def test_error_frame_message_formatting(frame: dict[str, Any], expected: str) -> None:
+    gateway = _Gateway(flush_error={"type": "error", "retryable": False, **frame})
+    _, raised = await _run_failing_stream(_make_tts(http_session=gateway))
+
+    assert raised is not None
+    assert raised.message == f"LiveKit Inference TTS returned error: {expected}"
+
+
+def test_assemblyai_overload_accepts_disable_system_default_fallback() -> None:
+    # runtime always accepted it; the overload is what `make type-check` reads
+    tts = TTS(
+        "assemblyai/assemblyai-tts-1",
+        api_key="test-key",
+        api_secret="test-secret-long-enough-for-hs256-signing",
+        base_url="https://example.livekit.cloud",
+        disable_system_default_fallback=True,
+    )
+    assert tts.model == "assemblyai/assemblyai-tts-1"
