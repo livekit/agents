@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, utils
+from livekit.agents import NOT_GIVEN, APIConnectionError, utils
 from livekit.agents.stt import (
     STT,
     AvailabilityChangedEvent,
@@ -536,3 +536,23 @@ async def test_prewarm_reaches_only_the_primary(primary_streams: bool) -> None:
         await fallback_adapter.aclose()
 
     assert (primary.prewarm_count, secondary.prewarm_count) == (1, 0)
+
+
+async def test_no_recovery_probe_after_close() -> None:
+    primary = FakeSTT(fake_exception=APIConnectionError("down"))
+    backup = FakeSTT(fake_transcript="backup")
+    adapter = FallbackAdapter([primary, backup])
+    await adapter.aclose()
+
+    try:
+        adapter._try_recovery(
+            stt=primary,
+            buffer=[],
+            language=NOT_GIVEN,
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        )
+        assert adapter._status[0].recovering_recognize_task is None
+    finally:
+        task = adapter._status[0].recovering_recognize_task
+        if task is not None:
+            await utils.aio.cancel_and_wait(task)
