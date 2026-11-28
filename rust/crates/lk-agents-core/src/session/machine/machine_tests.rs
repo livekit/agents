@@ -425,19 +425,11 @@ fn text_session_reconstruction_preserves_approval_child_and_once_only_parent_res
     let child_id = second.session.state.active_frame_id.clone();
     assert!(second.effects.iter().any(|e| matches!(e, SessionEffect::InvocationParked { .. })));
     assert_ne!(child_id, root_id);
-    // The child's first invocation is the local agent called as a tool, and only that one is.
-    let started: Vec<(bool, bool)> = second
-        .effects
-        .iter()
-        .filter_map(|effect| match effect {
-            SessionEffect::InvocationStarted { frame_id, agent_tool, .. } => {
-                Some((frame_id == &child_id, *agent_tool))
-            }
-            _ => None,
-        })
-        .collect();
-    assert!(started.contains(&(true, true)), "{started:?}");
-    assert!(started.iter().all(|(child, agent_tool)| child == agent_tool), "{started:?}");
+    let tool_calls = second.effects.iter().filter_map(|e| match e {
+        SessionEffect::InvocationStarted { frame_id, agent_tool: true, .. } => Some(frame_id),
+        _ => None,
+    });
+    assert_eq!(tool_calls.collect::<Vec<_>>(), [&child_id], "the child alone runs as a tool");
     assert_eq!(second.session.state.ancestors.as_slice(), std::slice::from_ref(&root_id));
     let call = second.session.state.frames[&child_id].parent.clone().unwrap();
     assert_eq!(call.frame_id, root_id);
