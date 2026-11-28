@@ -330,13 +330,19 @@ impl ServerCallbacks {
     }
 
     /// Jobs kept from before a reload, launched once the job processes started.
-    pub(crate) async fn reload(&self, jobs: Vec<RunningJobInfo>) -> Result<(), WorkerError> {
+    /// `launched` hears of each job once its process took it.
+    pub(crate) async fn reload(
+        &self,
+        jobs: Vec<RunningJobInfo>,
+        launched: impl Fn(RunningJobInfo),
+    ) -> Result<(), WorkerError> {
         let Some(pool) = self.pool.wait().await.clone() else {
             return Err(WorkerError::Failed("a server with no rtc_session runs no job".into()));
         };
         for info in jobs {
             log::info!(target: lk_agents_abi::LOG_TARGET, job_id = info.job.id.as_str(); "reloading job");
-            pool.launch(info).await?;
+            pool.launch(info.clone()).await?;
+            launched(info);
         }
         Ok(())
     }
@@ -614,7 +620,17 @@ impl ServerJobs for AgentServerRuntime {
         Box::pin(async move {
             let reload = async move {
                 let jobs = if token_mode { renew_join_tokens(&runtime, jobs).await } else { jobs };
-                host.reload(jobs).await
+                // A launched kept job is the worker's like any other: it reports its status,
+                // takes the server's termination, and is re-sent after a reconnect.
+                let worker = runtime.worker().await;
+                let adopt = |info| {
+                    if let Some(worker) = &worker
+                        && worker.send(WorkerCommand::AdoptJob(Box::new(info))).is_err()
+                    {
+                        log::debug!(target: lk_agents_abi::LOG_TARGET, "the worker stopped before a kept job was adopted");
+                    }
+                };
+                host.reload(jobs, adopt).await
             };
             self.spawner.run(reload).await
         })

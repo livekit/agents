@@ -6,6 +6,7 @@ use livekit_protocol::worker_message::Message as Sent;
 use livekit_protocol::{self as protocol, server_message};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 // Catches: writing lk.agent.name after the user's attributes, overriding a per-job rename.
 #[test]
@@ -851,7 +852,7 @@ async fn the_registration_is_published_before_its_notification() {
 
 const CLAIMS: &str = r#"{"identity":"avatar","video":{"roomJoin":true,"room":"r"}}"#;
 
-type Outgoing = tokio::sync::mpsc::UnboundedReceiver<protocol::WorkerMessage>;
+type Outgoing = UnboundedReceiver<protocol::WorkerMessage>;
 
 /// Starts a worker loop and waits until it is registered.
 async fn registered() -> (WorkerClient, Peer, Outgoing, Run) {
@@ -961,12 +962,9 @@ async fn job_tokens_need_a_registered_connection_and_fail_when_it_drops() {
     stop(handle, task).await;
 }
 
-// Catches a reload whose token request goes out before the server learns the kept job runs here
-// (the server then refuses it), or a migration without the job's accepted identity.
-#[tokio::test(start_paused = true)]
-async fn kept_jobs_are_migrated_before_their_token_requests() {
-    let (handle, peer, mut sent, task) = registered().await;
-    let kept = RunningJobInfo {
+/// A job kept across a reload, as the CLI gives it back.
+fn kept_job() -> RunningJobInfo {
+    RunningJobInfo {
         accept_arguments: AcceptArguments { identity: "agent-7".into(), ..Default::default() },
         job: protocol::Job { id: "AJ_1".into(), ..Default::default() },
         url: "wss://sfu".into(),
@@ -977,8 +975,47 @@ async fn kept_jobs_are_migrated_before_their_token_requests() {
         accepted_at: None,
         assigned_at: None,
         launched_at: 0.0,
-    };
-    handle.send(WorkerCommand::MigrateJobs(vec![kept])).unwrap();
+    }
+}
+
+// A kept job is adopted after its launch, then the connection drops and the worker registers
+// again. Catches a kept job whose status the worker refuses, and one missing from the migration
+// re-sent at the next registration, so that the server refuses its job tokens.
+#[tokio::test(start_paused = true)]
+async fn an_adopted_kept_job_reports_its_status_and_is_re_sent_after_a_reconnect() {
+    use lk_agents_abi::SpawnerExt as _;
+    let RuntimeRig { mut runtime, handle, peer, mut sent, connections, .. } =
+        runtime_rig_with_retry(1);
+    let mut notifications = handle.subscribe();
+    peer.send(register_message("worker")).unwrap();
+    let task =
+        lk_agents_net::task::TokioSpawner::current().spawn(async move { runtime.run().await });
+    while !matches!(notifications.recv().await.unwrap(), WorkerNotification::Registered(_)) {}
+
+    handle.send(WorkerCommand::AdoptJob(Box::new(kept_job()))).unwrap();
+    until_sent(&mut sent, |m| matches!(m.message, Some(Sent::MigrateJob(_)))).await;
+    assert_eq!(handle.snapshot().active_jobs, 1);
+    let status = protocol::JobStatus::JsRunning;
+    handle.send(WorkerCommand::JobStatus { job_id: "AJ_1".into(), status }).unwrap();
+    until_sent(&mut sent, |m| matches!(&m.message, Some(Sent::UpdateJob(u)) if u.job_id == "AJ_1"))
+        .await;
+
+    let (next, incoming) = tokio::sync::mpsc::unbounded_channel();
+    next.send(register_message("worker")).unwrap();
+    connections.lock().push_back((next.downgrade(), incoming));
+    peer.send(Err(TransportError::Failed("lost".into()))).unwrap();
+    let migrated = until_sent(&mut sent, |m| matches!(m.message, Some(Sent::MigrateJob(_)))).await;
+    let Some(Sent::MigrateJob(migrated)) = migrated.message else { unreachable!() };
+    assert_eq!(migrated.job_ids, ["AJ_1"]);
+    stop(handle, task).await;
+}
+
+// Catches a reload whose token request goes out before the server learns the kept job runs here
+// (the server then refuses it), or a migration without the job's accepted identity.
+#[tokio::test(start_paused = true)]
+async fn kept_jobs_are_migrated_before_their_token_requests() {
+    let (handle, peer, mut sent, task) = registered().await;
+    handle.send(WorkerCommand::MigrateJobs(vec![kept_job()])).unwrap();
     let asking = ask(&handle, CLAIMS);
     let mut order = Vec::new();
     while order.len() < 2 {

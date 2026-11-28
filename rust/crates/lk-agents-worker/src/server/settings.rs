@@ -1,4 +1,5 @@
 use livekit_protocol as proto;
+use lk_agents_net::token::token_mode;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -301,7 +302,7 @@ impl ServerSettings {
 
     /// Token mode: a worker token, and no key and no secret.
     pub fn token_mode(&self) -> bool {
-        lk_agents_net::token::token_mode(&self.api_key, &self.api_secret, &self.token)
+        token_mode(&self.api_key, &self.api_secret, &self.token)
     }
 
     /// Hosted on Cloud: the worker's load is the platform's to judge.

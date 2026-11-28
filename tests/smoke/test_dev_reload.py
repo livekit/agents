@@ -133,6 +133,7 @@ async def reloaded(
 
     ``request.param`` selects the setup:
 
+    - ``False``: key mode.
     - ``True``: token mode, with a worker token and no key.
     - ``"refused"``: token mode with two kept jobs. The server refuses the token of the first
       job, ``AJ_refused``.
@@ -167,6 +168,30 @@ async def reloaded(
             yield livekit, channel, tmp_path
 
 
+@pytest.mark.parametrize("reloaded", [False], indirect=True)
+async def test_a_kept_job_is_reported_and_held_after_a_reload(
+    reloaded: tuple[FakeLiveKit, DevChannel, Path],
+) -> None:
+    """Key mode reload, then the server ends the kept job.
+
+    Catches a kept job that resumes without a `MigrateJobRequest`, or that the worker does not
+    hold. Then the worker ignores the server's termination and refuses the job's status.
+    """
+    livekit, _, agent_dir = reloaded
+    await until((agent_dir / "job.json").exists, "the kept job resumed", STARTUP_SECONDS)
+    await until(lambda: livekit.migrations, "the kept job reported", STARTUP_SECONDS)
+    [job] = livekit.migrations[0].jobs
+    assert (job.id, job.state.participant_identity) == (KEPT.id, "agent-7")
+
+    await livekit.terminate(KEPT.id)
+    ended = {agent.JobStatus.JS_SUCCESS, agent.JobStatus.JS_FAILED}
+    await until(
+        lambda: ended & set(livekit.job_statuses.get(KEPT.id, [])),
+        "the kept job ended and its status reached the server",
+        STARTUP_SECONDS,
+    )
+
+
 @pytest.mark.parametrize("reloaded", [True], indirect=True)
 async def test_a_token_mode_reload_asks_the_server_for_the_jobs_new_token(
     reloaded: tuple[FakeLiveKit, DevChannel, Path],
@@ -184,7 +209,8 @@ async def test_a_token_mode_reload_asks_the_server_for_the_jobs_new_token(
     await until((agent_dir / "job.json").exists, "the kept job resumed", STARTUP_SECONDS)
     [info] = [m.server_info for m in channel.seen if m.HasField("server_info")]
     assert info.supports_token_mode
-    assert [m.jobs[0].id for m in livekit.migrations] == [KEPT.id]
+    # Once before its token request, and again when the worker adopts the launched job.
+    assert {m.jobs[0].id for m in livekit.migrations} == {KEPT.id}
     reload = [r for r in livekit.job_token_requests if "video" in json.loads(r.claims)]
     [request] = reload
     claims = json.loads(request.claims)

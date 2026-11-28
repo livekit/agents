@@ -17,6 +17,8 @@ use livekit_protocol::{
 use lk_agents_abi::errors::{ApiError, ErrorKind};
 use lk_agents_abi::worker::types::{DrainOutcome, RegisteredInfo};
 use lk_agents_net::job_token::JobToken;
+use lk_agents_net::strings::shortuuid;
+use lk_agents_net::token::token_mode;
 use tokio::sync::oneshot;
 
 /// How long a job token request waits for the server's answer.
@@ -801,8 +803,7 @@ impl Worker {
     ) -> Result<(), super::RuntimeError> {
         let config = &self.runtime_cfg;
         let token = config.token.lock().clone();
-        let token_mode =
-            lk_agents_net::token::token_mode(&config.api_key, &config.api_secret, &token);
+        let token_mode = token_mode(&config.api_key, &config.api_secret, &token);
         let agent_protocol = response.server_info.as_ref().map_or(0, |info| info.agent_protocol);
         if token_mode && agent_protocol < JOB_TOKEN_AGENT_PROTOCOL {
             return Err(super::RuntimeError::Configuration(format!(
@@ -832,10 +833,23 @@ impl Worker {
         }
         // Forget the requests whose askers stopped waiting.
         self.job_token_requests.retain(|_, reply| !reply.is_closed());
-        let request_id = lk_agents_net::strings::shortuuid("JT_");
+        let request_id = shortuuid("JT_");
         self.job_token_requests.insert(request_id.clone(), reply);
         let request = pb::CreateJobTokenRequest { request_id, job_id, claims };
         self.queue(wrap(pb::worker_message::Message::CreateJobToken(request)), outbox);
+    }
+
+    /// A kept job was launched: it becomes active, and the server learns it runs here (now, or
+    /// at the next registration).
+    pub(super) fn adopt_job(&mut self, info: RunningJobInfo, outbox: &mut Outbox) {
+        if self.active.iter().any(|active| active.job.id == info.job.id) {
+            return;
+        }
+        if self.conn == ConnState::Registered {
+            self.queue(migrate_jobs([&info]), outbox);
+        }
+        self.dispositions.insert(info.job.id.clone(), JobStatus::JsRunning);
+        self.active.push(info);
     }
 
     /// The server's answer to a job token request.

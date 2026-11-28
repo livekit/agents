@@ -88,6 +88,8 @@ pub enum WorkerCommand {
     /// Token mode, on a reload: tells the server that these kept jobs now run on this worker, so
     /// that it issues their tokens.
     MigrateJobs(Vec<RunningJobInfo>),
+    /// A job kept across a reload was launched: the worker holds it like a job it launched.
+    AdoptJob(Box<RunningJobInfo>),
 }
 
 /// What the worker tells its server as it happens: its registrations, a lost connection, a
@@ -971,6 +973,7 @@ impl Worker {
                     self.queue(jobs::migrate_jobs(&jobs), outbox);
                 }
             }
+            WorkerCommand::AdoptJob(info) => self.adopt_job(*info, outbox),
         }
     }
 

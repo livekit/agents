@@ -3,7 +3,7 @@ use prost::Message as _;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use livekit_protocol::agent::{AgentDevMessage, agent_dev_message::Message};
+use livekit_protocol::agent::{AgentDevMessage, RunningAgentJobInfo, agent_dev_message::Message};
 use lk_agents_abi::worker::job::{AcceptArguments, RunningJobInfo};
 use lk_agents_abi::worker::server_host::ServerJobs;
 
@@ -150,7 +150,7 @@ async fn serve_dev_channel(
 /// The jobs kept across a reload, with tokens that outlive it: extended with the key pair, or
 /// unchanged without one (token mode), where the server issues new ones.
 fn kept_jobs(
-    kept: Vec<livekit_protocol::agent::RunningAgentJobInfo>,
+    kept: Vec<RunningAgentJobInfo>,
     url: &str,
     api_key: &str,
     api_secret: &str,

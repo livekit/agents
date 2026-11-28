@@ -1,4 +1,5 @@
 use super::*;
+use parking_lot::Mutex;
 
 struct Server;
 
@@ -260,8 +261,8 @@ async fn an_invalid_kept_job_does_not_discard_healthy_jobs_or_close_the_dev_chan
 /// A fake token mode server: it records each reload and each new worker token.
 #[derive(Default)]
 struct TokenServer {
-    reloaded: parking_lot::Mutex<Vec<RunningJobInfo>>,
-    updated: parking_lot::Mutex<Vec<String>>,
+    reloaded: Mutex<Vec<RunningJobInfo>>,
+    updated: Mutex<Vec<String>>,
 }
 
 impl ServerJobs for TokenServer {

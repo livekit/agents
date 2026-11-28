@@ -306,17 +306,21 @@ impl ServerRuntime {
         self.snapshot.with(|snapshot| snapshot.clone())
     }
 
-    /// Token mode: waits until the worker connection is registered. `None` when the server runs
-    /// unregistered or the worker stops first.
-    pub async fn registered_worker(&self) -> Option<WorkerClient> {
-        let worker = self
-            .snapshot
+    /// Waits until the worker connection exists. `None` when the server runs unregistered.
+    pub async fn worker(&self) -> Option<WorkerClient> {
+        self.snapshot
             .wait_until(|snapshot| match (&snapshot.worker, snapshot.phase) {
                 (Some(worker), _) => Some(Some(worker.clone())),
                 (None, ServerPhase::Idle | ServerPhase::Starting) => None,
                 (None, _) => Some(None),
             })
-            .await?;
+            .await
+    }
+
+    /// Token mode: waits until the worker connection is registered. `None` when the server runs
+    /// unregistered or the worker stops first.
+    pub async fn registered_worker(&self) -> Option<WorkerClient> {
+        let worker = self.worker().await?;
         let mut notifications = worker.subscribe();
         loop {
             let state = worker.snapshot();
@@ -340,12 +344,8 @@ impl ServerRuntime {
         let process_cleanup = timeout * 3;
         let connection_cleanup =
             if start.unregistered { Duration::ZERO } else { crate::config::CONNECTION_TIMEOUT };
-        // In token mode the connection closes after the job processes, see `Resources::close`.
-        let cleanup_timeout = if start.settings.token_mode() {
-            process_cleanup + connection_cleanup
-        } else {
-            process_cleanup.max(connection_cleanup)
-        };
+        // The connection closes after the job processes, see `Resources::close`.
+        let cleanup_timeout = process_cleanup + connection_cleanup;
         self.snapshot.modify(|snapshot| {
             snapshot.phase = ServerPhase::Starting;
             snapshot.has_rtc = start.has_rtc;
@@ -568,7 +568,6 @@ impl ServerRuntime {
             observer: Box::new(move |job, status| send_job_status(&snapshot, &job.job.id, status)),
             job_tokens: settings.token_mode().then(|| job_token_issuer(Arc::clone(&self.snapshot))),
         };
-        resources.token_mode = settings.token_mode();
         resources.server_settings = Some(lk_agents_net::env::serve_settings(settings.child_env()));
         host.start(settings.clone(), start.devmode, start.has_rtc, launch).await?;
         if start.unregistered {
@@ -1085,7 +1084,6 @@ struct Resources {
     metrics: Option<OwnedTask<Result<(), ServerError>>>,
     /// What the job threads read as the server's settings, until the processes are closed.
     server_settings: Option<lk_agents_net::env::ServerSettings>,
-    token_mode: bool,
 }
 
 impl Resources {
@@ -1095,11 +1093,10 @@ impl Resources {
     ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), ServerError>)>> {
         let closing = FuturesUnordered::new();
         let settings = self.server_settings;
-        // Token mode: the connection stays up until the job processes are closed, because a job's
-        // shutdown can still ask it for tokens. It takes no new job meanwhile.
+        // The connection stays up until the job processes are closed: a job's shutdown can still
+        // ask it for tokens (token mode). It takes no new job meanwhile.
         let (processes_closed, pool_closed) = oneshot::channel::<()>();
-        if self.token_mode
-            && let Some(worker) = &self.worker
+        if let Some(worker) = &self.worker
             && worker.send(WorkerCommand::Drain { timeout: Some(Duration::ZERO) }).is_err()
         {
             log::debug!(target: lk_agents_abi::LOG_TARGET, "the worker stopped before the server closed");
@@ -1108,7 +1105,7 @@ impl Resources {
             async move {
                 host.close_pool().await;
                 drop(settings);
-                // Nothing waits for it in key mode.
+                // The receiver goes only with the whole close.
                 let _ = processes_closed.send(());
                 (ServerResource::Processes, Ok(()))
             }
@@ -1124,33 +1121,18 @@ impl Resources {
             }
             .boxed(),
         );
-        let close_worker = |worker: Option<WorkerClient>| {
-            worker
-                .map(|worker| {
-                    worker.send(WorkerCommand::Close).map_err(|_| {
-                        ServerError(
-                            worker
-                                .snapshot()
-                                .finished
-                                .unwrap_or_else(|| "worker close admission failed".into()),
-                        )
-                    })
-                })
-                .unwrap_or(Ok(()))
-        };
         let worker = self.worker;
-        let close_admission = match self.token_mode {
-            true => async move {
-                // Sent once the processes are closed; dropped only with the whole close.
-                match pool_closed.await {
-                    Ok(()) | Err(_) => {}
-                }
-                close_worker(worker)
+        let close_admission = async move {
+            match pool_closed.await {
+                Ok(()) | Err(_) => {}
             }
-            .boxed(),
-            false => std::future::ready(close_worker(worker)).boxed(),
+            let Some(worker) = worker else { return Ok(()) };
+            worker.send(WorkerCommand::Close).map_err(|_| {
+                let finished = worker.snapshot().finished;
+                ServerError(finished.unwrap_or_else(|| "worker close admission failed".into()))
+            })
         };
-        let mut close_admission = Some(close_admission);
+        let mut close_admission = Some(close_admission.boxed());
         for (resource, task) in [
             (ServerResource::Worker, self.connection),
             (ServerResource::Load, self.load),
