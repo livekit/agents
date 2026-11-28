@@ -30,6 +30,7 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     fn new(
         env: &Self::Env,
         #[host(label)] label: String,
+        #[host(plugin)] plugin: String,
         events: Arc<dyn crate::types::provider::ProviderEvents>,
         model: String,
         #[host(kw, default = None)] provider: Option<String>,

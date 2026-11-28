@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, NotRequired, TypeAlias
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
@@ -70,6 +70,21 @@ class ProviderId(TypedDict):
     """The model name; `"unknown"` until a plugin overrides it."""
     provider: str
     """The provider name; `"unknown"` until a plugin overrides it."""
+    plugin: NotRequired[str]
+    """The id of the plugin whose code runs the model, which every host's base class declares
+    from its own packaging and no plugin writes: the last part of the package name
+    (`livekit.plugins.deepgram` in Python, `@livekit/agents-plugin-deepgram` in Node, are
+    both `deepgram`), `livekit-inference` for the LiveKit Inference models, `custom` for a
+    class outside a LiveKit plugin. A Rust-native provider declares its own.
+    """
+    upstream_provider: NotRequired[str]
+    """Behind a gateway (LiveKit Inference), the vendor whose model runs; blank when `provider`
+    is that vendor. `provider` stays what the customer's metrics and usage name.
+    """
+    upstream_model: NotRequired[str]
+    """Behind a gateway, the vendor's own id for the model, without the gateway's vendor prefix
+    or options; blank when `model` is that id.
+    """
 
 
 FlushSentinel.__module__ = "livekit.agents.types"

@@ -1141,6 +1141,7 @@ impl InferenceLlm {
         }
         let env = crate::process::env();
         let label = crate::py_objects::class_label(slf.as_any())?;
+        let plugin = crate::py_objects::class_plugin(slf.as_any())?;
         let events = crate::generated::types::ProviderEventsProxy::weak(slf.as_any())?;
         let extra_kwargs = extra_kwargs
             .map(|v| match crate::py_values::value_from_py(v.as_any(), "extra_kwargs")? {
@@ -1163,6 +1164,7 @@ impl InferenceLlm {
                 <InferenceLlmImpl as ::lk_agents_abi::llm::inference::InferenceLlm>::new(
                     &env,
                     label,
+                    plugin,
                     events,
                     model,
                     provider,
@@ -2158,7 +2160,7 @@ impl OpenAIRealtimeModel {
     /// OpenAI's. `dialect`, `label` and `gateway` are the provider class's own. One instance
     /// serves every job it is handed to; a LiveKit Inference connection carries the identity of
     /// the job it runs for.
-    #[pyo3(signature = (*, model = None, voice = None, modalities = None, tool_choice = crate::py_values::Omittable::NOT_GIVEN, base_url = None, input_audio_transcription = crate::py_values::Omittable::NOT_GIVEN, input_audio_noise_reduction = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, speed = crate::py_values::Omittable::NOT_GIVEN, tracing = crate::py_values::Omittable::NOT_GIVEN, truncation = crate::py_values::Omittable::NOT_GIVEN, reasoning = crate::py_values::Omittable::NOT_GIVEN, max_response_output_tokens = crate::py_values::Omittable::NOT_GIVEN, api_key = None, azure_deployment = None, azure_endpoint = None, entra_token = None, max_session_duration = crate::py_values::Omittable::NOT_GIVEN, conn_options = None, dialect = None, label = None, gateway = None))]
+    #[pyo3(signature = (*, model = None, voice = None, modalities = None, tool_choice = crate::py_values::Omittable::NOT_GIVEN, base_url = None, input_audio_transcription = crate::py_values::Omittable::NOT_GIVEN, input_audio_noise_reduction = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, speed = crate::py_values::Omittable::NOT_GIVEN, tracing = crate::py_values::Omittable::NOT_GIVEN, truncation = crate::py_values::Omittable::NOT_GIVEN, reasoning = crate::py_values::Omittable::NOT_GIVEN, max_response_output_tokens = crate::py_values::Omittable::NOT_GIVEN, api_key = None, azure_deployment = None, azure_endpoint = None, entra_token = None, max_session_duration = crate::py_values::Omittable::NOT_GIVEN, conn_options = None, dialect = None, label = None, plugin = None, gateway = None))]
     fn __init__(
         slf: &Bound<'_, Self>,
         py: Python<'_>,
@@ -2183,6 +2185,7 @@ impl OpenAIRealtimeModel {
         conn_options: Option<Bound<'_, PyAny>>,
         dialect: Option<Bound<'_, PyAny>>,
         label: ::std::option::Option<::std::string::String>,
+        plugin: ::std::option::Option<::std::string::String>,
         gateway: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
@@ -2312,7 +2315,7 @@ impl OpenAIRealtimeModel {
                 crate::generated::records::realtime_options::inference_gateway_from_py(v.as_any())
             })
             .transpose()?;
-        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, model, voice, modalities, tool_choice, base_url, input_audio_transcription, input_audio_noise_reduction, turn_detection, speed, tracing, truncation, reasoning, max_response_output_tokens, api_key, azure_deployment, azure_endpoint, entra_token, max_session_duration, conn_options, dialect, label, gateway)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <OpenAIRealtimeModelImpl as ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel>::new(&env, model, voice, modalities, tool_choice, base_url, input_audio_transcription, input_audio_noise_reduction, turn_detection, speed, tracing, truncation, reasoning, max_response_output_tokens, api_key, azure_deployment, azure_endpoint, entra_token, max_session_duration, conn_options, dialect, label, plugin, gateway)).map_err(|e: ::lk_agents_abi::llm::realtime::RealtimeConfigurationError| <::lk_agents_abi::llm::realtime::RealtimeConfigurationError as crate::py_errors::HostException>::to_py_err(&e))?;
         slf.get().0.set(::std::sync::Arc::new(out)).map_err(|_| once())
     }
 

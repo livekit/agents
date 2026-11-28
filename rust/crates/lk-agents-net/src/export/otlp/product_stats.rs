@@ -3,7 +3,7 @@ use std::time::Duration;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::productstats::runner::{Runner, RunnerCmd};
 use lk_agents_abi::productstats::{ProductStat, ProductStatsResource, RuntimeName, ThreadStorage};
-use lk_agents_abi::telemetry::decl::{Attrs as _, Label};
+use lk_agents_abi::telemetry::decl::{Attrs as _, BoundedLabel};
 use lk_agents_abi::telemetry::record::KeyValues;
 
 use super::cloud::{self, PostError};
@@ -152,12 +152,12 @@ pub fn resource(
 ) -> ProductStatsResource {
     let var = |name: &str| std::env::var(name).ok();
     ProductStatsResource {
-        service: Label(lk_agents_abi::telemetry::record::FRAMEWORK.to_owned()),
-        framework_version: Label(sdk_version.to_owned()),
+        service: BoundedLabel::new(lk_agents_abi::telemetry::record::FRAMEWORK),
+        framework_version: BoundedLabel::new(sdk_version),
         runtime_name,
-        runtime_version: Label(runtime_version.to_owned()),
-        os: Label(std::env::consts::OS.to_owned()),
-        arch: Label(std::env::consts::ARCH.to_owned()),
+        runtime_version: BoundedLabel::new(runtime_version),
+        os: BoundedLabel::new(std::env::consts::OS),
+        arch: BoundedLabel::new(std::env::consts::ARCH),
         runner: Runner::detect(var, std::env::consts::OS, runner_cmd),
         storage: ThreadStorage::None,
     }

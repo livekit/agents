@@ -512,6 +512,8 @@ async fn a_model_request_is_counted_once_with_what_it_was_measured_in() {
         label: "livekit.plugins.openai.llm.LLM".into(),
         model: "llama-3.3-70b".into(),
         provider: "cerebras".into(),
+        plugin: "openai".into(),
+        ..Default::default()
     });
     let mut trace = LlmTrace::start(&cx, &llm, &request());
     clock.advance(std::time::Duration::from_millis(250));
@@ -537,7 +539,7 @@ async fn a_model_request_is_counted_once_with_what_it_was_measured_in() {
         ..lk_agents_abi::metrics::testkit::tts()
     };
     super::TtsTrace::start(&cx, &tts, true).end("hello".into(), Some(&spoken));
-    let model = ["tts", "cartesia", "unknown", "unknown"];
+    let model = ["tts", "custom", "unknown", "unknown"];
     assert_eq!(
         taken(),
         [

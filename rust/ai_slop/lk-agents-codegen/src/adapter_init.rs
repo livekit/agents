@@ -24,6 +24,7 @@ pub(super) fn init(c: &Class, m: &Method) -> Result<String, String> {
             Ty::Cx => Some("crate::py_calls::entry_cx()?".to_owned()),
             Ty::CallContext => Some("crate::py_calls::entered()".to_owned()),
             Ty::ClassLabel => Some("crate::py_objects::class_label(slf.as_any())?".to_owned()),
+            Ty::ClassPlugin => Some("crate::py_objects::class_plugin(slf.as_any())?".to_owned()),
             Ty::Proxy { self_events: true, declared: Some((family, name)), .. } => {
                 Some(format!("crate::generated::{family}::{name}Proxy::weak(slf.as_any())?"))
             }

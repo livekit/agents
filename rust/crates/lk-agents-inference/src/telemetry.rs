@@ -3,7 +3,7 @@
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::{LlmMetrics, Metadata, TtsMetrics};
 use lk_agents_abi::productstats::models::{
-    ModelKind, ModelLabels as ModelStats, ModelRequests, ModelTtfb, ModelTtft, ModelUsage,
+    ModelId, ModelKind, ModelRequests, ModelTtfb, ModelTtft, ModelUsage,
 };
 use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
@@ -48,7 +48,7 @@ pub fn model_labels(id: &ProviderId) -> ModelLabels {
 /// One request made to `id`'s model, as product statistics count it: counted when it is made,
 /// so a request that fails or is dropped is still one.
 pub(crate) fn model_request(cx: &Cx, kind: ModelKind, id: &ProviderId) {
-    measure(cx, &ModelRequests { model: ModelStats::of(kind, id) }, 1u64);
+    measure(cx, &ModelRequests { model: ModelId::of(kind, id) }, 1u64);
 }
 
 fn seconds(from: u64, to: u64) -> f64 {
@@ -256,7 +256,7 @@ impl LlmTrace {
         let Some(span) = self.span.take() else { return metrics };
         let cx = span.cx();
         let usage = self.usage.clone().unwrap_or_default();
-        let model = ModelStats::of(ModelKind::Llm, &self.id);
+        let model = ModelId::of(ModelKind::Llm, &self.id);
         ModelUsage::tokens(&usage).measure(&model, cx);
         if let Some(at) = self.first_chunk {
             measure(cx, &ModelTtft { model }, seconds(self.started, at));
@@ -477,7 +477,7 @@ impl TtsTrace {
         // An adapter's request carries the metrics of the member that served it, which its
         // identity names; the member's own request carries none.
         if let (Some(_), Some(metrics)) = (&self.span, metrics) {
-            let model = ModelStats::of(ModelKind::Tts, &self.id);
+            let model = ModelId::of(ModelKind::Tts, &self.id);
             let usage = ModelUsage {
                 characters: metrics.characters_count.into(),
                 audio_duration: metrics.audio_duration,

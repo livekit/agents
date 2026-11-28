@@ -44,7 +44,7 @@ fn configure(exporter: &Exporter, collector: Option<Collector>) {
 }
 
 fn counts(label: &str) -> TestCounts {
-    TestCounts { label: Label(label.to_owned()) }
+    TestCounts { label: BoundedLabel::new(label) }
 }
 
 /// One measurement, as its declared audience routes it.
@@ -170,7 +170,7 @@ async fn an_export_carries_its_own_resource_and_only_declared_product_statistics
 #[tokio::test]
 async fn model_statistics_reach_the_collector_as_declared() {
     use lk_agents_abi::productstats::models::{
-        EndpointedBy, ModelAudioDuration, ModelKind, ModelLabels, ModelRequests,
+        EndpointedBy, ModelAudioDuration, ModelId, ModelKind, ModelRequests,
         ModelTranscriptionDelay,
     };
     let (url, mut rx) = endpoint(ok).await;
@@ -180,8 +180,10 @@ async fn model_statistics_reach_the_collector_as_declared() {
         label: "livekit.plugins.deepgram.stt.STT".into(),
         model: "nova-3".into(),
         provider: "deepgram".into(),
+        plugin: "deepgram".into(),
+        ..Default::default()
     };
-    let model = ModelLabels::of(ModelKind::Stt, &id);
+    let model = ModelId::of(ModelKind::Stt, &id);
     measure(&stats, &ModelRequests { model: model.clone() }, 1u64);
     measure(&stats, &ModelAudioDuration { model: model.clone() }, 2.0);
     let delay = ModelTranscriptionDelay { model, endpointing: EndpointedBy::Vad };

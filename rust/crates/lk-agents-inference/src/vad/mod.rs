@@ -226,6 +226,7 @@ impl Vad for LocalVad {
             label: self.label(),
             model: VadModelName::Silero.as_str().into(),
             provider: "livekit".into(),
+            ..Default::default()
         }
     }
 

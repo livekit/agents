@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from livekit.plugins import anthropic, cerebras, groq, openai, perplexity, telnyx, xai
+from livekit.agents import _bindings, inference, llm
+from livekit.plugins import anthropic, cerebras, deepgram, groq, openai, perplexity, telnyx, xai
 
 _OWN_URL = "https://llm.internal.example/v1"
 _PYTHON = Path(__file__).parents[2] / "python"
@@ -130,3 +131,31 @@ async def test_an_endpoint_the_caller_gave_reports_unknown_never_its_host() -> N
     assert openai.realtime.RealtimeModel(api_key="k", base_url=_OWN_URL).provider == "unknown"
     assert openai.realtime.GPTLiveModel(api_key="k", base_url=_OWN_URL).provider == "unknown"
     assert anthropic.LLM(api_key="k", base_url=_OWN_URL).provider == "unknown"
+
+
+async def test_a_model_declares_the_plugin_its_class_belongs_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Catches: a plugin's model declared as custom code, a class outside the plugins or a
+    # LiveKit Inference model declared as a plugin's, or a plugin author having to write the id.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "secret")
+
+    class OwnLLM(llm.LLM):
+        def chat(self, **_: object) -> llm.LLMStream:
+            raise NotImplementedError
+
+    declared = {
+        "anthropic": anthropic.LLM(api_key="k"),
+        "openai": openai.realtime.RealtimeModel(api_key="k"),
+        "xai": xai.realtime.RealtimeModel(api_key="k"),
+        "deepgram": deepgram.STT(api_key="k"),
+        "custom": OwnLLM(),
+        "livekit-inference": inference.STT("deepgram/nova-3:en"),
+    }
+    for plugin, model in declared.items():
+        assert model._core_id()["plugin"] == plugin, type(model)
+    assert _bindings.plugin_id(openai.LLM) == "openai"
+    assert _bindings.plugin_id(inference.LLM) == "livekit-inference"
+    assert _bindings.plugin_of("livekit.plugins.boson_avatar.avatar") == "boson-avatar"
+    assert _bindings.plugin_of("livekit.pluginsish.tts") == "custom"

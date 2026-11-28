@@ -4,8 +4,9 @@ own and every provider speaking the protocol, with the session options they take
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from .. import _bindings
 from .._generated import (
     facades_llm_openai_protocol as _facades,
     public_llm_openai_protocol as _public,
@@ -21,6 +22,11 @@ if TYPE_CHECKING:
 class OpenAIProtocolModel(_facades.OpenAIProtocolModel):
     """A realtime model over the OpenAI Realtime protocol. Each provider's model subclasses it and
     declares ``update_options`` with the options its session carries."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # These classes live here for every protocol plugin: the label names the plugin.
+        cls._plugin = _bindings.plugin_of(cls._provider_label or cls.__module__)
 
 
 class OpenAIRealtimeModel(OpenAIProtocolModel):

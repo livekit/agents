@@ -878,6 +878,9 @@ pub enum Ty {
     /// `#[host(label)] label: String` of an `init` constructor: the host class path of the object
     /// being built (`module.Name` of `type(self)`). Never crosses.
     ClassLabel,
+    /// `#[host(plugin)] plugin: String` of an `init` constructor: the id of the plugin the class
+    /// of the object being built belongs to, as its host derives it. Never crosses.
+    ClassPlugin,
     /// `Arc<dyn Trait>` of a `#[host(proxy)]` trait: a native class as itself, any other host
     /// object behind the generated proxy.
     Proxy {
@@ -1061,6 +1064,7 @@ impl Ty {
                 | Ty::Cancellation
                 | Ty::Env
                 | Ty::ClassLabel
+                | Ty::ClassPlugin
                 | Ty::Proxy { self_events: true, .. }
         )
     }
@@ -1100,7 +1104,7 @@ impl Ty {
             Ty::Shared { rust, value: true, .. } => rust.clone(),
             Ty::Shared { rust, .. } => format!("::std::sync::Arc<{rust}>"),
             Ty::This => "Self".into(),
-            Ty::ClassLabel => "::std::string::String".into(),
+            Ty::ClassLabel | Ty::ClassPlugin => "::std::string::String".into(),
             Ty::Proxy { rust, boxed: true, .. } => format!("::std::boxed::Box<dyn {rust}>"),
             Ty::Proxy { rust, .. } | Ty::Native { rust, .. } => {
                 format!("::std::sync::Arc<dyn {rust}>")

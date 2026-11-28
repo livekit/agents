@@ -91,6 +91,8 @@ pub struct GatewayTts {
     conn_options: Option<ApiConnectOptions>,
     /// The name logs and metrics give it: its host class's when its host built it.
     label: String,
+    /// The plugin its host class belongs to; LiveKit Inference's without one.
+    plugin: String,
     /// The host object it was built as, which hears each failure the core reports.
     events: Option<Arc<dyn ProviderEvents>>,
     /// How its text is split and paced, which every synthesis over it reads.
@@ -219,6 +221,7 @@ impl GatewayTts {
             shared: Arc::new(shared),
             conn_options: None,
             label: NativeLabel::InferenceTts.as_str().into(),
+            plugin: crate::INFERENCE_PLUGIN.into(),
             events: None,
             options: Arc::new(options::OptionsCell::native(options)),
         }
@@ -408,11 +411,7 @@ impl Tts for GatewayTts {
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
-        lk_agents_abi::ProviderId {
-            label: Tts::label(self),
-            model: self.model(),
-            provider: "livekit".into(),
-        }
+        crate::inference_id(Tts::label(self), self.plugin.clone(), self.model())
     }
 
     /// `streaming` is always `True`; `aligned_transcript` reads the live extra kwargs.
@@ -679,6 +678,7 @@ impl InferenceTts for GatewayTts {
     fn new(
         env: &ProcessEnv,
         label: String,
+        plugin: String,
         events: Arc<dyn ProviderEvents>,
         sentence_tokenizer: lk_agents_abi::tts::types::OptionsTokenizer,
         model: String,
@@ -725,7 +725,7 @@ impl InferenceTts for GatewayTts {
         );
         let capabilities = Tts::capabilities(&tts);
         let options = options::OptionsCell::host(sentence_tokenizer, capabilities);
-        Ok(GatewayTts { label, events: Some(events), options: Arc::new(options), ..tts })
+        Ok(GatewayTts { label, plugin, events: Some(events), options: Arc::new(options), ..tts })
     }
 
     fn model(&self) -> String {

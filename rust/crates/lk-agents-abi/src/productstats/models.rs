@@ -1,5 +1,5 @@
 use crate::ProviderId;
-use crate::telemetry::decl::{Attrs, Bounded, Label, Measure, SpanValue, metric};
+use crate::telemetry::decl::{Attrs, Bounded, BoundedLabel, Measure, SpanValue, metric};
 use crate::telemetry::instruments::DURATION_BOUNDS;
 
 // What every model is counted under. The framework derives the labels from the identity a model
@@ -15,61 +15,37 @@ pub enum ModelKind {
     Duplex,
 }
 
-/// The module path of LiveKit's plugins, each named by the next segment.
-const PLUGINS: &str = "livekit.plugins.";
-/// The module path of the LiveKit Inference models.
-const INFERENCE: &str = "livekit.agents.inference.";
-/// The plugin id of the LiveKit Inference models.
-pub const INFERENCE_PLUGIN: &str = "livekit-inference";
-/// The plugin id of a class outside LiveKit's plugins.
-pub const CUSTOM_PLUGIN: &str = "custom";
-/// A provider or model name the model does not declare.
-pub const UNKNOWN: &str = "unknown";
-
 /// The code, the vendor and the model a statistic is about.
 #[derive(Attrs, Bounded, Debug, Clone, PartialEq, Eq)]
-pub struct ModelLabels {
+pub struct ModelId {
     /// STT, TTS, LLM, realtime or duplex.
     #[attr("lk.product.agents.model.kind")]
     pub kind: ModelKind,
     /// The code that runs: a plugin id, `livekit-inference`, or `custom`.
     #[attr("lk.product.agents.model.plugin")]
-    pub plugin: Label,
+    pub plugin: BoundedLabel,
     /// The vendor whose model runs, as the model declares it.
     #[attr("lk.product.agents.model.provider")]
-    pub provider: Label,
+    pub provider: BoundedLabel,
     /// The vendor's own id for the model.
     #[attr("lk.product.agents.model.name")]
-    pub name: Label,
+    pub name: BoundedLabel,
 }
 
-impl ModelLabels {
-    /// The labels of the model `id` declares.
-    ///
-    /// The plugin is read off the class path (`id.label`): the segment after `livekit.plugins.`
-    /// with hyphens, `livekit-inference` for a `livekit.agents.inference` class, `custom` for
-    /// any other. A LiveKit Inference model string names its vendor and options
-    /// (`deepgram/nova-3:en`): the provider is the vendor and the name loses both. Any other
-    /// provider and name are the declared ones, `unknown` when there is none; a provider that
-    /// reads as a host, a URL or an address is `unknown`, never sent.
-    pub fn of(kind: ModelKind, id: &ProviderId) -> Self {
-        let declared = |v: &str| if v.is_empty() { UNKNOWN } else { v }.to_owned();
-        let (plugin, provider, name) = if id.label.starts_with(INFERENCE) {
-            let (vendor, model) = id.model.split_once('/').unwrap_or(("", &id.model));
-            let model = model.split_once(':').map_or(model, |(model, _options)| model);
-            (INFERENCE_PLUGIN.to_owned(), declared(vendor), declared(model))
-        } else {
-            let plugin = id.label.strip_prefix(PLUGINS).and_then(|path| path.split('.').next());
-            let plugin = plugin.filter(|p| !p.is_empty()).map(|p| p.replace('_', "-"));
-            (
-                plugin.unwrap_or_else(|| CUSTOM_PLUGIN.to_owned()),
-                id.vendor().unwrap_or(UNKNOWN).to_owned(),
-                declared(&id.model),
-            )
+impl ModelId {
+    /// The identity `id` declares, copied: its plugin, its provider (the vendor behind a gateway
+    /// when it declares one) and its model's own id; a blank one is `unknown`. Nothing is parsed
+    /// or mapped here: the model, or its host's base class, declared each value.
+    pub fn of(kind: ModelKind, id: &ProviderId) -> ModelId {
+        let declared = |upstream: &str, own: &str| {
+            BoundedLabel::new(if upstream.trim().is_empty() { own } else { upstream })
         };
-        let provider =
-            if provider.contains(['.', '/', ':', '@']) { UNKNOWN.into() } else { provider };
-        ModelLabels { kind, plugin: Label(plugin), provider: Label(provider), name: Label(name) }
+        ModelId {
+            kind,
+            plugin: BoundedLabel::new(&id.plugin),
+            provider: declared(&id.upstream_provider, &id.provider),
+            name: declared(&id.upstream_model, &id.model),
+        }
     }
 }
 
@@ -84,7 +60,7 @@ impl ModelLabels {
 #[derive(Attrs)]
 pub struct ModelRequests {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
 }
 
 /// Tokens a model consumed, as its provider reports them.
@@ -97,7 +73,7 @@ pub struct ModelRequests {
 #[derive(Attrs)]
 pub struct ModelInputTokens {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
 }
 
 /// Tokens a model produced, as its provider reports them.
@@ -110,7 +86,7 @@ pub struct ModelInputTokens {
 #[derive(Attrs)]
 pub struct ModelOutputTokens {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
 }
 
 /// Characters of text a model was given to speak.
@@ -123,7 +99,7 @@ pub struct ModelOutputTokens {
 #[derive(Attrs)]
 pub struct ModelCharacters {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
 }
 
 /// Audio a model heard (an STT) or spoke (a TTS).
@@ -136,7 +112,7 @@ pub struct ModelCharacters {
 #[derive(Attrs)]
 pub struct ModelAudioDuration {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
 }
 
 /// What a model was measured in. It adds to each unit it reported, and to no other.
@@ -158,7 +134,7 @@ impl ModelUsage {
     }
 
     /// Adds this usage to `model`'s statistics: each unit it was measured in, and no other.
-    pub fn measure(self, model: &ModelLabels, mut into: impl Measure) {
+    pub fn measure(self, model: &ModelId, mut into: impl Measure) {
         let model = || model.clone();
         if self.input_tokens > 0 {
             let tokens = self.input_tokens.into();
@@ -189,7 +165,7 @@ impl ModelUsage {
 #[derive(Attrs)]
 pub struct ModelTtft {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
 }
 
 /// Time to the first audio of a TTS request.
@@ -203,7 +179,7 @@ pub struct ModelTtft {
 #[derive(Attrs)]
 pub struct ModelTtfb {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
 }
 
 /// What ended the speech a transcription delay is measured from.
@@ -227,7 +203,7 @@ pub enum EndpointedBy {
 #[derive(Attrs)]
 pub struct ModelTranscriptionDelay {
     #[attrs]
-    pub model: ModelLabels,
+    pub model: ModelId,
     /// What ended the speech.
     #[attr("lk.product.agents.model.transcription_delay.endpointing")]
     pub endpointing: EndpointedBy,
@@ -237,71 +213,60 @@ pub struct ModelTranscriptionDelay {
 mod tests {
     use super::*;
 
-    fn labels(label: &str, provider: &str, model: &str) -> (String, String, String) {
-        let id = ProviderId { label: label.into(), model: model.into(), provider: provider.into() };
-        let labels = ModelLabels::of(ModelKind::Llm, &id);
-        (labels.plugin.0, labels.provider.0, labels.name.0)
+    fn id(plugin: &str, provider: &str, model: &str) -> ProviderId {
+        ProviderId {
+            plugin: plugin.into(),
+            provider: provider.into(),
+            model: model.into(),
+            ..ProviderId::default()
+        }
     }
 
-    // Catches: a plugin counted under shared code instead of its own id (an OpenAI-compatible
-    // plugin as `openai`, an Inference model as its vendor's plugin), a hyphenated package losing
-    // its hyphen, an Inference model keeping `livekit`, its vendor prefix or its options, a model
-    // name renamed, or a host name, URL or address sent as a provider.
+    fn named(id: &ProviderId) -> (String, String, String) {
+        let model = ModelId::of(ModelKind::Llm, id);
+        let text = |label: &BoundedLabel| label.as_str().to_owned();
+        (text(&model.plugin), text(&model.provider), text(&model.name))
+    }
+
+    fn expected(plugin: &str, provider: &str, name: &str) -> (String, String, String) {
+        (plugin.to_owned(), provider.to_owned(), name.to_owned())
+    }
+
+    // Catches: a declared identity respelled, mapped or parsed on its way to a statistic, the
+    // gateway reported in place of the vendor a gateway model declares, or a blank value sent.
     #[test]
-    fn a_model_is_named_by_its_plugin_its_declared_vendor_and_its_own_id() {
-        let named = |plugin: &str, provider: &str, name: &str| {
-            (plugin.to_owned(), provider.to_owned(), name.to_owned())
+    fn a_model_id_copies_what_the_model_declares() {
+        assert_eq!(
+            named(&id("openai", "cerebras", "llama-3.3-70b")),
+            expected("openai", "cerebras", "llama-3.3-70b")
+        );
+        let inference = ProviderId {
+            upstream_provider: "deepgram".into(),
+            upstream_model: "nova-3".into(),
+            ..id("livekit-inference", "livekit", "deepgram/nova-3:en")
         };
-        for ((label, provider, model), expected) in [
-            (
-                ("livekit.plugins.deepgram.stt.STT", "deepgram", "nova-3"),
-                named("deepgram", "deepgram", "nova-3"),
-            ),
-            (
-                ("livekit.agents.inference.stt.STT", "livekit", "deepgram/nova-3:en"),
-                named("livekit-inference", "deepgram", "nova-3"),
-            ),
-            (
-                ("livekit.agents.inference.llm.LLM", "livekit", "openai/gpt-4.1-mini"),
-                named("livekit-inference", "openai", "gpt-4.1-mini"),
-            ),
-            (
-                ("livekit.agents.inference.llm.LLM", "livekit", "gpt-4.1-mini"),
-                named("livekit-inference", "unknown", "gpt-4.1-mini"),
-            ),
-            (
-                ("livekit.plugins.openai.llm.LLM", "cerebras", "llama-3.3-70b"),
-                named("openai", "cerebras", "llama-3.3-70b"),
-            ),
-            (
-                ("livekit.plugins.cerebras.llm.LLM", "cerebras", "gpt-4o-mini-2024-07-18"),
-                named("cerebras", "cerebras", "gpt-4o-mini-2024-07-18"),
-            ),
-            (
-                ("livekit.plugins.boson_avatar.tts.TTS", "boson", "higgs"),
-                named("boson-avatar", "boson", "higgs"),
-            ),
-            (("my_app.models.MyLLM", "acme", "m1"), named("custom", "acme", "m1")),
-            (("livekit.agents.llm.LLM", "", ""), named("custom", "unknown", "unknown")),
-            (
-                ("livekit.plugins.openai.llm.LLM", "unknown", "unknown"),
-                named("openai", "unknown", "unknown"),
-            ),
-            (
-                ("livekit.plugins.openai.llm.LLM", "llm.internal.example.com", "m"),
-                named("openai", "unknown", "m"),
-            ),
-            (
-                ("livekit.plugins.openai.llm.LLM", "https://example", "m"),
-                named("openai", "unknown", "m"),
-            ),
-            (
-                ("livekit.plugins.openai.llm.LLM", "localhost:8080", "m"),
-                named("openai", "unknown", "m"),
-            ),
-            (("livekit.plugins.openai.llm.LLM", "me@host", "m"), named("openai", "unknown", "m")),
+        assert_eq!(named(&inference), expected("livekit-inference", "deepgram", "nova-3"));
+        assert_eq!(named(&id("custom", "", " ")), expected("custom", "unknown", "unknown"));
+        assert_eq!(named(&id("", "acme", "m1")), expected("unknown", "acme", "m1"));
+    }
+
+    // Catches: a third-party plugin's free text reaching LiveKit as a label: a URL with a query,
+    // a sentence, a user name, or anything long.
+    #[test]
+    fn a_value_that_is_not_a_short_identifier_is_unknown() {
+        let long = "m".repeat(BoundedLabel::MAX_BYTES + 1);
+        for unfit in [
+            "https://llm.internal.example.com/v1?key=sk-123",
+            "My company's fine-tuned model, do not share",
+            "me@host",
+            "modèle",
+            long.as_str(),
         ] {
-            assert_eq!(labels(label, provider, model), expected, "{label} {provider} {model}");
+            assert_eq!(named(&id("acme", unfit, unfit)), expected("acme", "unknown", "unknown"));
         }
+        let fits = "m".repeat(BoundedLabel::MAX_BYTES);
+        assert_eq!(named(&id("acme", "aws", &fits)), expected("acme", "aws", &fits));
+        let dated = "us.anthropic.claude-3-5-sonnet-20241022-v2:0";
+        assert_eq!(named(&id("aws", "aws", dated)), expected("aws", "aws", dated));
     }
 }

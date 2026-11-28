@@ -45,6 +45,8 @@ pub struct GatewayLlm {
     /// The name logs and metrics give it: its host class's when its host built it, else
     /// `opts.label`.
     label: String,
+    /// The plugin its host class belongs to; LiveKit Inference's without one.
+    plugin: String,
     opts: Arc<Mutex<LlmOptions>>,
     http: Arc<GatewayHttp>,
     spawner: Arc<dyn Spawner>,
@@ -64,6 +66,7 @@ impl GatewayLlm {
     ) -> Self {
         GatewayLlm {
             label: opts.label.clone(),
+            plugin: crate::INFERENCE_PLUGIN.into(),
             opts: Arc::new(Mutex::new(opts)),
             http,
             spawner,
@@ -127,6 +130,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
     fn new(
         env: &ProcessEnv,
         label: String,
+        plugin: String,
         events: Arc<dyn ProviderEvents>,
         model: String,
         provider: Option<String>,
@@ -168,7 +172,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
         let llm = GatewayLlm::new(opts, http, spawner, env.clock.clone());
-        Ok(GatewayLlm { label, events: Some(events), ..llm })
+        Ok(GatewayLlm { label, plugin, events: Some(events), ..llm })
     }
 
     fn model(&self) -> String {
@@ -250,12 +254,15 @@ impl Llm for GatewayLlm {
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
-        lk_agents_abi::ProviderId {
-            label: self.label(),
-            model: self.model(),
-            provider: match self.options().auth {
-                Auth::Gateway { .. } => "livekit".into(),
-                Auth::ProviderKey { vendor, .. } => vendor.unwrap_or_else(|| "unknown".into()),
+        let (label, plugin) = (self.label(), self.plugin.clone());
+        match self.options().auth {
+            Auth::Gateway { .. } => crate::inference_id(label, plugin, self.model()),
+            Auth::ProviderKey { vendor, .. } => lk_agents_abi::ProviderId {
+                label,
+                plugin,
+                model: self.model(),
+                provider: vendor.unwrap_or_else(|| "unknown".into()),
+                ..Default::default()
             },
         }
     }

@@ -13,6 +13,7 @@ async fn late_realtime_metrics_become_a_child_of_the_ended_inference() {
         label: "rt".into(),
         model: "gpt-realtime".into(),
         provider: "openai".into(),
+        ..Default::default()
     }));
     let turn = SpanContext { trace_id: 3, span_id: 9, sampled: true };
     let early = spans.start(&runtime.shared, Some(turn)).expect("a model");
@@ -50,6 +51,7 @@ async fn realtime_inference_span_carries_its_usage() {
         label: "rt".into(),
         model: "gpt-realtime".into(),
         provider: "openai".into(),
+        ..Default::default()
     }));
     let turn = SpanContext { trace_id: 3, span_id: 9, sampled: true };
     let open = spans.start(&runtime.shared, Some(turn)).expect("a model");

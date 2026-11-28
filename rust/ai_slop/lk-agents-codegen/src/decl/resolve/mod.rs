@@ -360,17 +360,31 @@ impl Resolver<'_> {
             voc::only(
                 &pat,
                 &entries,
-                &["kw", "default", "context", "shape_error", "one_or_many", "pcm", "sdk", "label"],
+                &[
+                    "kw",
+                    "default",
+                    "context",
+                    "shape_error",
+                    "one_or_many",
+                    "pcm",
+                    "sdk",
+                    "label",
+                    "plugin",
+                ],
             )?;
             kw_only |= voc::find(&entries, "kw").is_some();
-            // The host class path of the object an `init` constructor builds.
-            if voc::find(&entries, "label").is_some() {
+            // The host class path of the object an `init` constructor builds, or the id of the
+            // plugin its class belongs to, which the host derives from its own packaging.
+            let captured = [("label", Ty::ClassLabel), ("plugin", Ty::ClassPlugin)]
+                .into_iter()
+                .find(|(entry, _)| voc::find(&entries, entry).is_some());
+            if let Some((entry, captured)) = captured {
                 if entries.len() != 1 || self.ty(&pt.ty, &pat)? != Ty::Str {
-                    return Err(format!("{pat}: a #[host(label)] parameter is a plain `String`"));
+                    return Err(format!("{pat}: a #[host({entry})] parameter is a plain `String`"));
                 }
                 params.push(Param {
                     name: ident.ident.to_string(),
-                    ty: Ty::ClassLabel,
+                    ty: captured,
                     shape_error: None,
                     one_or_many: false,
                     pcm: false,

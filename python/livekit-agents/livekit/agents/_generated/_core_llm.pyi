@@ -460,6 +460,7 @@ class OpenAIRealtimeModel:
         conn_options: APIConnectOptions | None = None,
         dialect: RealtimeProvider | None = None,
         label: str | None = None,
+        plugin: str | None = None,
         gateway: InferenceGateway | None = None,
     ) -> None:
         """Not given, `model`, `voice` and the session options are the dialect's defaults. The key

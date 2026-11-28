@@ -4,7 +4,7 @@ use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::productstats::features::{FeatureLanguageSwitch, FeatureModelSwitch};
 use lk_agents_abi::productstats::models::{
-    ModelKind, ModelLabels, ModelRequests, ModelTranscriptionDelay, ModelTtft, ModelUsage,
+    ModelId, ModelKind, ModelRequests, ModelTranscriptionDelay, ModelTtft, ModelUsage,
 };
 use lk_agents_abi::productstats::sessions::{
     Entrypoint, FalseInterruption, Interruption, Pipeline, Sessions, TurnDetection, VoiceSessions,
@@ -142,8 +142,8 @@ impl VoiceDriver {
     }
 
     /// The session STT's labels: a `FallbackAdapter`'s are the instance serving.
-    fn stt_stats(&self) -> Option<ModelLabels> {
-        self.stt_identity().map(|id| ModelLabels::of(ModelKind::Stt, &id))
+    fn stt_stats(&self) -> Option<ModelId> {
+        self.stt_identity().map(|id| ModelId::of(ModelKind::Stt, &id))
     }
 
     /// What the session's STT reported hearing.
@@ -174,7 +174,7 @@ impl VoiceDriver {
             true => ModelKind::Duplex,
             false => ModelKind::Realtime,
         };
-        let model = ModelLabels::of(kind, &realtime.provider);
+        let model = ModelId::of(kind, &realtime.provider);
         self.telemetry.measure(&ModelRequests { model: model.clone() }, 1u64.into());
         ModelUsage::tokens(&response.tokens).measure(&model, &mut self.telemetry);
         if let Some(ttft) = response.ttft.filter(|ttft| !response.cancelled && *ttft >= 0.0) {

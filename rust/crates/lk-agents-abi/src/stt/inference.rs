@@ -36,6 +36,7 @@ pub trait InferenceStt: Stt + Sized + 'static {
     fn new(
         env: &Self::Env,
         #[host(label)] label: String,
+        #[host(plugin)] plugin: String,
         events: Arc<dyn crate::types::provider::ProviderEvents>,
         vad_models: Arc<dyn VadModels>,
         #[host(default = None)] model: Option<String>,

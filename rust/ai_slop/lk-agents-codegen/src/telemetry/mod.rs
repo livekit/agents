@@ -744,7 +744,7 @@ impl Reader<'_> {
                 let wrap = |this: &Self| this.ty(module, arg(&name)?, at);
                 return Ok(match name.as_str() {
                     "Seconds" => Ty { seconds: true, ..leaf(Wire::Double) },
-                    "Label" => Ty { label: true, ..leaf(Wire::String) },
+                    "Label" | "BoundedLabel" => Ty { label: true, ..leaf(Wire::String) },
                     "BoolString" => Ty {
                         label: true,
                         encoding: Some(Encoding::BoolString),

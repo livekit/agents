@@ -91,6 +91,9 @@ fn inference_stt_session() -> VoiceDriver {
             label: "livekit.agents.inference.stt.STT".into(),
             model: "deepgram/nova-3:en".into(),
             provider: "livekit".into(),
+            plugin: "livekit-inference".into(),
+            upstream_provider: "deepgram".into(),
+            upstream_model: "nova-3".into(),
         },
         capabilities: Default::default(),
         instance: 0,
@@ -249,7 +252,12 @@ fn a_call_is_counted_at_its_end_and_each_handoff_when_it_lands() {
 }
 
 fn model(label: &str, name: &str) -> ProviderId {
-    ProviderId { label: label.into(), model: name.into(), provider: "acme".into() }
+    ProviderId {
+        label: label.into(),
+        model: name.into(),
+        provider: "acme".into(),
+        ..Default::default()
+    }
 }
 
 fn given<T>(model: T) -> Maybe<Option<T>> {

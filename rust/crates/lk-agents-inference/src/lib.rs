@@ -65,3 +65,27 @@ extern crate self as lk_agents_inference;
 
 // Two network clients over this crate's transport.
 pub mod realtime;
+
+/// The plugin id a LiveKit Inference model declares when no host class stands for it.
+pub(crate) const INFERENCE_PLUGIN: &str = "livekit-inference";
+
+/// The identity of a LiveKit Inference model named `vendor/model[:options]`. What the customer's
+/// metrics and usage name stays the gateway (`livekit`) and the model string as given; the
+/// vendor whose model runs and its own id are declared beside them. The one place that format
+/// is split for an identity.
+pub(crate) fn inference_id(
+    label: String,
+    plugin: String,
+    model: String,
+) -> lk_agents_abi::ProviderId {
+    let (vendor, name) = model.split_once('/').unwrap_or(("", &model));
+    let name = name.split_once(':').map_or(name, |(name, _options)| name);
+    lk_agents_abi::ProviderId {
+        label,
+        plugin,
+        provider: "livekit".into(),
+        upstream_provider: vendor.to_owned(),
+        upstream_model: name.to_owned(),
+        model,
+    }
+}

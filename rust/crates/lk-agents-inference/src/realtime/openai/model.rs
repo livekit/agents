@@ -35,6 +35,7 @@ struct Config {
     conn_options: ApiConnectOptions,
     dialect: Option<RealtimeProvider>,
     label: Option<String>,
+    plugin: Option<String>,
     gateway: Option<InferenceGateway>,
 }
 
@@ -191,6 +192,7 @@ fn build(env: &ProcessEnv, config: Config) -> Result<OpenAIRealtime, RealtimeCon
     if let Some(label) = config.label {
         native = native.with_label(label);
     }
+    native.plugin = config.plugin;
     Ok(native)
 }
 
@@ -220,6 +222,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
         conn_options: Option<ApiConnectOptions>,
         dialect: Option<RealtimeProvider>,
         label: Option<String>,
+        plugin: Option<String>,
         gateway: Option<InferenceGateway>,
     ) -> Result<Self, RealtimeConfigurationError> {
         let options = OptionsPatch {
@@ -250,6 +253,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
                 conn_options: conn_options.unwrap_or_default(),
                 dialect,
                 label,
+                plugin,
                 gateway,
             },
         )

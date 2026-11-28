@@ -100,6 +100,7 @@ impl EotStream {
             label: NativeLabel::TurnDetector.as_str().into(),
             model: session.model().as_str().into(),
             provider: crate::eot::PROVIDER.into(),
+            ..Default::default()
         };
         let stream = Arc::new(EotStream {
             inner: Mutex::new(Inner {

@@ -1,4 +1,4 @@
-use crate::telemetry::decl::{Attrs, Bounded, Label, SpanValue};
+use crate::telemetry::decl::{Attrs, Bounded, BoundedLabel, SpanValue};
 use crate::telemetry::record::Measurement;
 use crate::telemetry::semconv::otel;
 use runner::Runner;
@@ -53,22 +53,22 @@ pub enum ThreadStorage {
 pub struct ProductStatsResource {
     /// The framework's service name, `livekit-agents`.
     #[attr(otel::SERVICE_NAME)]
-    pub service: Label,
+    pub service: BoundedLabel,
     /// The framework's version.
     #[attr("lk.product.agents.framework.version")]
-    pub framework_version: Label,
+    pub framework_version: BoundedLabel,
     /// The runtime the agent runs on.
     #[attr("lk.product.agents.runtime.name")]
     pub runtime_name: RuntimeName,
     /// That runtime's version.
     #[attr("lk.product.agents.runtime.version")]
-    pub runtime_version: Label,
+    pub runtime_version: BoundedLabel,
     /// The operating system (`std::env::consts::OS`).
     #[attr("lk.product.agents.os")]
-    pub os: Label,
+    pub os: BoundedLabel,
     /// The CPU architecture (`std::env::consts::ARCH`).
     #[attr("lk.product.agents.arch")]
-    pub arch: Label,
+    pub arch: BoundedLabel,
     #[attrs]
     pub runner: Runner,
     /// Where threads are stored.

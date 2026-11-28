@@ -35,11 +35,13 @@ if TYPE_CHECKING:
 class OpenAIProtocolModel(_core.OpenAIRealtimeModel, RealtimeModel):
     """A realtime model over the OpenAI Realtime protocol, whose sessions run in the core: OpenAI,
     Azure OpenAI and every provider speaking it. A provider subclass sets `_dialect`,
-    `_provider_label` (the name logs and metrics give it) and, for LiveKit Inference, `_gateway`.
+    `_provider_label` (the name logs and metrics give it) and, for LiveKit Inference, `_gateway`;
+    the host base derives `_plugin`, the plugin id its identity declares, from that label.
     """
 
     _dialect: RealtimeProvider | None = None
     _provider_label: str | None = None
+    _plugin: str | None = None
     _gateway: InferenceGateway | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -122,6 +124,7 @@ class OpenAIProtocolModel(_core.OpenAIRealtimeModel, RealtimeModel):
             conn_options=conn_options,
             dialect=self._dialect,
             label=self._provider_label,
+            plugin=self._plugin,
             gateway=self._gateway,
         )
         RealtimeModel.__init__(self, capabilities=self.capabilities)

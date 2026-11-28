@@ -153,11 +153,12 @@ pub(crate) mod bounded {
 
 /// A value a product statistic may carry: a closed enum or a bounded label, never content, free
 /// text or an id. Sealed: only ABI's own closed vocabularies and label groups are, by their
-/// derives, so a `String`, a `Content` or a `GenAiContent` cannot appear in a product statistic.
+/// derives, so a `String`, a `Label`, a `Content` or a `GenAiContent` cannot appear in a product
+/// statistic.
 pub trait Bounded: bounded::Sealed {}
 
-impl bounded::Sealed for Label {}
-impl Bounded for Label {}
+impl bounded::Sealed for BoundedLabel {}
+impl Bounded for BoundedLabel {}
 impl bounded::Sealed for BoolString {}
 impl Bounded for BoolString {}
 impl<T: Bounded> bounded::Sealed for Option<T> {}
@@ -653,6 +654,39 @@ pub fn json(v: &serde_json::Value) -> Option<Value> {
 pub struct Label(pub String);
 
 impl SpanValue for Label {
+    fn value(&self) -> Option<Value> {
+        Some(Value::String(self.0.clone()))
+    }
+}
+
+/// A product statistics label, safe by construction: a short identifier of ASCII letters,
+/// digits and `.-_/:+`, or `unknown`. Free text, a sentence, a query string or anything long
+/// cannot be one, whatever a model or a host declares. It alone among strings is `Bounded`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundedLabel(String);
+
+impl BoundedLabel {
+    /// The longest value kept.
+    pub const MAX_BYTES: usize = 64;
+    /// What a blank, long or otherwise unfit value becomes.
+    pub const UNKNOWN: &'static str = "unknown";
+
+    /// `value`, trimmed, when it is at most [`Self::MAX_BYTES`] of the allowed characters;
+    /// `unknown` otherwise.
+    pub fn new(value: &str) -> Self {
+        let value = value.trim();
+        let allowed = |b: u8| b.is_ascii_alphanumeric() || b".-_/:+".contains(&b);
+        let fits = !value.is_empty() && value.len() <= Self::MAX_BYTES;
+        let kept = if fits && value.bytes().all(allowed) { value } else { Self::UNKNOWN };
+        BoundedLabel(kept.to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl SpanValue for BoundedLabel {
     fn value(&self) -> Option<Value> {
         Some(Value::String(self.0.clone()))
     }

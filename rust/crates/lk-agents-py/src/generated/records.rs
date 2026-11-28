@@ -27358,6 +27358,24 @@ pub mod types {
                 })?;
                 (v.as_any().extract::<::std::string::String>())?
             },
+            plugin: match obj.get_item("plugin")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => {
+                    (v.as_any().extract::<::std::string::String>())?
+                }
+                _ => "custom".to_owned(),
+            },
+            upstream_provider: match obj.get_item("upstream_provider")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => {
+                    (v.as_any().extract::<::std::string::String>())?
+                }
+                _ => "".to_owned(),
+            },
+            upstream_model: match obj.get_item("upstream_model")? {
+                Some(v) if !crate::py_values::is_not_given(&v)? => {
+                    (v.as_any().extract::<::std::string::String>())?
+                }
+                _ => "".to_owned(),
+            },
         })
     }
 }

@@ -465,6 +465,7 @@ impl InferenceTts {
         }
         let env = crate::process::env();
         let label = crate::py_objects::class_label(slf.as_any())?;
+        let plugin = crate::py_objects::class_plugin(slf.as_any())?;
         let events = crate::generated::types::ProviderEventsProxy::weak(slf.as_any())?;
         let sentence_tokenizer =
             crate::generated::records::tts::options_tokenizer_from_py(sentence_tokenizer.as_any())?;
@@ -487,6 +488,7 @@ impl InferenceTts {
                 <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(
                     &env,
                     label,
+                    plugin,
                     events,
                     sentence_tokenizer,
                     model,

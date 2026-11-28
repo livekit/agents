@@ -1,4 +1,4 @@
-use crate::telemetry::decl::{Attrs, Current, Label, metric, span};
+use crate::telemetry::decl::{Attrs, BoundedLabel, Current, metric, span};
 use crate::telemetry::instruments::DURATION_BOUNDS;
 
 // What the pipeline's tests record: no shipped build declares or sends these.
@@ -14,7 +14,7 @@ use crate::telemetry::instruments::DURATION_BOUNDS;
 pub struct TestCounts {
     /// What a test counted.
     #[attr("lk.product.agents.test.label")]
-    pub label: Label,
+    pub label: BoundedLabel,
 }
 
 /// A histogram only tests record.
