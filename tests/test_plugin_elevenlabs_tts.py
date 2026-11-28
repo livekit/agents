@@ -21,11 +21,15 @@ class _FakeWebSocket:
     def __init__(self, messages: list[object]) -> None:
         self._messages = messages
         self.closed = False
+        self.close_code: int | None = None
+        self.close_reason = ""
 
     async def receive(self) -> object:
         if self._messages:
             return self._messages.pop(0)
-        return SimpleNamespace(type=aiohttp.WSMsgType.CLOSE, data="")
+        return SimpleNamespace(
+            type=aiohttp.WSMsgType.CLOSE, data=self.close_code, extra=self.close_reason
+        )
 
     async def close(self) -> None:
         self.closed = True
@@ -55,6 +59,7 @@ class _FakeStream:
 class _FakeConnection:
     def __init__(self, context_id: str, messages: list[object]) -> None:
         self._closed = False
+        self._rejection: dict[str, object] | None = None
         self._ws = _FakeWebSocket(messages)
         self._is_current = True
         self._active_contexts = {context_id}
@@ -76,6 +81,11 @@ class _FakeConnection:
 
     def _cleanup_context(self, context_id: str) -> None:
         elevenlabs_tts._Connection._cleanup_context(self, context_id)  # pyright: ignore[reportArgumentType]
+
+    def _closed_error(
+        self, message: str, *, reason: str | None = None
+    ) -> elevenlabs_tts.APIStatusError:
+        return elevenlabs_tts._Connection._closed_error(self, message, reason=reason)  # pyright: ignore[reportArgumentType]
 
     async def aclose(self) -> None:
         self._closed = True
@@ -348,6 +358,195 @@ async def test_recv_loop_still_accepts_camel_case_context_id() -> None:
     assert connection.waiter.done()
     assert connection.waiter.result() is None
     assert connection._context_data == {}
+
+
+# what ElevenLabs sends for an invalid API key, on both websocket endpoints: the handshake
+# succeeds, this message arrives with no context id, and the socket then closes with code 1008
+_INVALID_API_KEY_MESSAGE: dict[str, object] = {
+    "message": "Invalid API key",
+    "error": "invalid_api_key",
+    "code": 1008,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+async def test_recv_loop_reports_why_the_server_closed_the_socket(connection_cls: type) -> None:
+    connection = _FakeConnection("ctx_123", [_websocket_text_message(_INVALID_API_KEY_MESSAGE)])
+
+    await connection_cls._recv_loop(connection)
+
+    exc = connection.waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIStatusError)
+    assert exc.message == "Invalid API key (invalid_api_key)"
+    assert exc.status_code == 1008
+    assert not exc.retryable  # the same key fails the same way on every attempt
+    assert connection._context_data == {}
+
+
+@pytest.mark.asyncio
+async def test_recv_loop_keeps_other_connection_errors_retryable() -> None:
+    connection = _FakeConnection(
+        "ctx_123", [_websocket_text_message({"error": "something_else", "code": 1008})]
+    )
+
+    await elevenlabs_tts._Connection._recv_loop(connection)
+
+    exc = connection.waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIStatusError)
+    assert exc.message == "something_else"
+    assert exc.status_code == 1008
+    assert exc.retryable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+async def test_recv_loop_context_error_is_not_the_reason_for_a_later_close(
+    connection_cls: type,
+) -> None:
+    # an error for one context fails only that context; a socket that drops afterwards
+    # is still an unexpected close for the others
+    connection = _FakeConnection(
+        "ctx_123", [_websocket_text_message({"context_id": "ctx_other", "error": "bad input"})]
+    )
+    connection._ws.close_code = 1006
+
+    await connection_cls._recv_loop(connection)
+
+    exc = connection.waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIStatusError)
+    assert "closed unexpectedly" in exc.message
+    assert exc.status_code == 1006
+    assert exc.retryable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+async def test_recv_loop_forgets_an_error_the_server_kept_serving_after(
+    connection_cls: type,
+) -> None:
+    # audio after a context-less error means that error did not end the socket, so it is
+    # not the reason for a close that comes later
+    connection = _FakeConnection(
+        "ctx_123",
+        [
+            _websocket_text_message({"message": "Rejected", "error": "something_else"}),
+            _websocket_text_message(
+                {"context_id": "ctx_123", "audio": base64.b64encode(b"audio").decode("ascii")}
+            ),
+        ],
+    )
+    connection._ws.close_code = 1006
+
+    await connection_cls._recv_loop(connection)
+
+    exc = connection.waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIStatusError)
+    assert "closed unexpectedly" in exc.message
+    assert exc.status_code == 1006
+    assert exc.retryable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+async def test_recv_loop_reports_the_close_code_when_the_error_has_none(
+    connection_cls: type,
+) -> None:
+    connection = _FakeConnection(
+        "ctx_123", [_websocket_text_message({"message": "Rejected", "error": "something_else"})]
+    )
+    connection._ws.close_code = 1008
+
+    await connection_cls._recv_loop(connection)
+
+    exc = connection.waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIStatusError)
+    assert exc.message == "Rejected (something_else)"
+    assert exc.status_code == 1008
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+async def test_recv_loop_keeps_the_close_reason_without_an_error_message(
+    connection_cls: type,
+) -> None:
+    connection = _FakeConnection("ctx_123", [])
+    connection._ws.close_code = 1008
+    connection._ws.close_reason = "Invalid API key"
+
+    await connection_cls._recv_loop(connection)
+
+    exc = connection.waiter.exception()
+    assert isinstance(exc, elevenlabs_tts.APIStatusError)
+    assert "closed unexpectedly" in exc.message
+    assert exc.status_code == 1008
+    assert exc.body == "Invalid API key"
+
+
+class _ClosingMidWriteWebSocket:
+    """Sends the invalid-key error, then fails the client's next write the way aiohttp does
+    once the server is closing the socket, before the close frame has been read."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_code: int | None = None
+        self._messages = [_websocket_text_message(_INVALID_API_KEY_MESSAGE)]
+        self.drained = asyncio.Event()
+        self._closed = asyncio.Event()
+
+    async def receive(self) -> object:
+        if self._messages:
+            return self._messages.pop(0)
+        self.drained.set()
+        await self._closed.wait()
+        return SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None, extra=None)
+
+    async def send_json(self, data: dict[str, object]) -> None:
+        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["eleven_flash_v2_5", "eleven_v3_conversational"])
+async def test_failed_write_reports_why_the_server_closed_the_socket(model: str) -> None:
+    ws = _ClosingMidWriteWebSocket()
+    session = SimpleNamespace(ws_connect=lambda *args, **kwargs: asyncio.sleep(0, result=ws))
+    opts = elevenlabs_tts.TTS(api_key="bad-key", model=model, voice_id="voice-1")._opts
+    connection_cls = (
+        elevenlabs_tts._DialogueConnection
+        if elevenlabs_tts.is_dialogue_model(model)
+        else elevenlabs_tts._Connection
+    )
+    connection = connection_cls(opts, session)
+    await connection.connect()
+
+    done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    stream = SimpleNamespace(_context_id="ctx_123", _conn_options=APIConnectOptions(timeout=1.0))
+    connection.register_stream(stream, _FakeEmitter(), done)
+    await asyncio.wait_for(ws.drained.wait(), timeout=1)
+
+    connection.send_content(elevenlabs_tts._SynthesizeContent(context_id="ctx_123", text="hi"))
+
+    with pytest.raises(elevenlabs_tts.APIStatusError) as exc_info:
+        await asyncio.wait_for(done, timeout=1)
+    assert exc_info.value.message == "Invalid API key (invalid_api_key)"
+    assert exc_info.value.status_code == 1008
+    assert not exc_info.value.retryable
+
+    await connection.aclose()
 
 
 @pytest.mark.asyncio
@@ -742,6 +941,67 @@ async def test_dropped_socket_waits_for_other_streams(monkeypatch: pytest.Monkey
         assert not connection._closed  # another stream still runs on it
 
         await tts.aclose()
+
+
+class _RejectingWebSocket:
+    """Accepts the handshake, then rejects the socket the way ElevenLabs does for a bad key:
+    the error message first, the close only after the client has sent its requests."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_code: int | None = None
+        self._messages = [_websocket_text_message(_INVALID_API_KEY_MESSAGE)]
+        self._context_closed = asyncio.Event()
+
+    async def receive(self) -> object:
+        if self._messages:
+            return self._messages.pop(0)
+        await self._context_closed.wait()
+        self.close_code = 1008
+        return SimpleNamespace(type=aiohttp.WSMsgType.CLOSE, data=1008, extra="Invalid API key")
+
+    async def send_json(self, data: dict[str, object]) -> None:
+        if data.get("close_context"):
+            self._context_closed.set()
+
+    async def close(self) -> None:
+        self.closed = True
+        self._context_closed.set()
+
+
+class _RejectingSession:
+    def __init__(self) -> None:
+        self.sockets: list[_RejectingWebSocket] = []
+
+    async def ws_connect(self, url: str, **kwargs: object) -> _RejectingWebSocket:
+        self.sockets.append(_RejectingWebSocket())
+        return self.sockets[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["eleven_flash_v2_5", "eleven_v3_conversational"])
+async def test_invalid_api_key_is_reported_and_not_retried(model: str) -> None:
+    session = _RejectingSession()
+    tts = elevenlabs_tts.TTS(
+        api_key="bad-key",
+        model=model,
+        voice_id="voice-1",
+        http_session=session,  # type: ignore[arg-type]
+    )
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=3, timeout=1.0))
+    stream.push_text("hello world.")
+    stream.end_input()
+
+    with pytest.raises(elevenlabs_tts.APIStatusError) as exc_info:
+        async for _ in stream:
+            pass
+
+    assert exc_info.value.message == "Invalid API key (invalid_api_key)"
+    assert not exc_info.value.retryable
+    assert len(session.sockets) == 1  # no retry: the key is just as invalid on a new socket
+
+    await stream.aclose()
+    await tts.aclose()
 
 
 # -- eleven_v3 / eleven_v4 (text-to-dialogue) ----------------------------------------
@@ -1251,6 +1511,7 @@ class _RecordingWs:
     def __init__(self) -> None:
         self.sent: list[dict[str, object]] = []
         self.closed = False
+        self.close_code: int | None = None
 
     async def send_json(self, data: dict[str, object]) -> None:
         self.sent.append(data)
