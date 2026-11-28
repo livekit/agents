@@ -16,11 +16,14 @@ pub mod media_queue;
 pub mod mime;
 pub mod mixer;
 pub mod pauses;
+pub mod playout;
 pub mod pool;
 pub mod recorder;
 pub mod resample;
 pub mod source;
 mod soxr;
+#[cfg(test)]
+mod test_alloc;
 pub mod wav;
 
 pub use audio_byte_stream::{AudioByteStream, Frame};
