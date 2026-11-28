@@ -558,7 +558,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await self._tts._close_ws(ws)
-                await sentence_stream.aclose()
                 await utils.aio.gracefully_cancel(*tasks)
 
         except asyncio.TimeoutError:
@@ -588,6 +587,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError(
                 f"WebSocket connection failed: {type(e).__name__}: {e} (trace_id: {trace_id})"
             ) from e
+        finally:
+            await sentence_stream.aclose()
 
     async def aclose(self) -> None:
         await super().aclose()

@@ -394,7 +394,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await asyncio.gather(*tasks)
                 finally:
                     input_sent_event.set()
-                    await sent_tokenizer_stream.aclose()
                     await utils.aio.gracefully_cancel(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -404,6 +403,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
+        finally:
+            await sent_tokenizer_stream.aclose()
 
 
 def _to_murf_websocket_pkt(opts: _TTSOptions) -> dict[str, Any]:
