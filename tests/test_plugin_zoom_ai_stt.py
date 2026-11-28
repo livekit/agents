@@ -736,6 +736,90 @@ async def test_live_empty_final_closes_the_turn_without_a_transcript(scribe, htt
     assert types == [SpeechEventType.START_OF_SPEECH, SpeechEventType.END_OF_SPEECH]
 
 
+class _PingSocket:
+    """In-memory Scribe socket that sends nothing; it answers pings unless the peer is gone."""
+
+    def __init__(self, *, answer_pings: bool) -> None:
+        self.answer_pings = answer_pings
+        self.inbox: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+        self.closed = False
+        self.close_code: int | None = None
+
+    async def receive(self) -> aiohttp.WSMessage:
+        return await self.inbox.get()
+
+    async def ping(self, message: bytes = b"") -> None:
+        if self.answer_pings:
+            self.inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", None))
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    async def close(self, **kwargs: Any) -> bool:
+        self.closed = True
+        self.inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None))
+        return True
+
+
+class _PingSession:
+    closed = False
+
+    def __init__(self, ws: _PingSocket) -> None:
+        self.ws = ws
+        self.connect_kwargs: dict[str, Any] = {}
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> _PingSocket:
+        self.connect_kwargs = kwargs
+        return self.ws
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("answer_pings", [True, False])
+async def test_live_liveness_timeout_detects_a_dead_connection(answer_pings: bool) -> None:
+    # a half-open socket never delivers a close, so only an unanswered ping reveals it
+    session = _PingSession(_PingSocket(answer_pings=answer_pings))
+    stt = make_stt(session, ("ws://127.0.0.1/live", "http://127.0.0.1/transcribe"))  # type: ignore[arg-type]
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, liveness_timeout=3.0))
+
+    async def drain() -> None:
+        async for _ in stream:
+            pass
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    task = asyncio.create_task(drain())
+    try:
+        if answer_pings:
+            await asyncio.sleep(30)  # ten liveness windows with nothing from Scribe
+            assert not task.done()
+        else:
+            with pytest.raises(APIConnectionError, match="WebSocket connection lost"):
+                await asyncio.wait_for(task, 10)
+            assert loop.time() - started == pytest.approx(3.0, abs=0.5)
+        # aiohttp's autoping would answer the pongs before WebSocketMonitor sees them
+        assert session.connect_kwargs.get("autoping") is False
+        assert "heartbeat" not in session.connect_kwargs
+    finally:
+        await stream.aclose()
+
+
+async def test_live_speech_events_reset_the_retry_budget(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+
+    async def speech_started(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        await ws.send_json({"type": "input_audio_buffer.speech_started", "audio_start_ms": 0})
+
+    fake.on_start = speech_started
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream(conn_options=FAST_RETRY)
+    stream._num_retries = 1  # as if a previous connection had failed
+    await wait_until(lambda: stream._num_retries == 0, "the retry budget to reset")
+    await run_stream(stream, frames(0.1))
+
+
 async def test_live_update_options_mid_turn_waits_for_the_final(scribe, http) -> None:
     fake, live_url, fast_url = scribe
     final_sent = asyncio.Event()

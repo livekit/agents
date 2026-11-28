@@ -1379,6 +1379,97 @@ async def test_a_websocket_error_frame_surfaces_its_cause(
     assert excinfo.value.__cause__ is None
 
 
+class _PingSocket:
+    """In-memory Reson8 socket that sends nothing; it answers pings unless the peer is gone."""
+
+    def __init__(self, *, answer_pings: bool) -> None:
+        self.answer_pings = answer_pings
+        self.inbox: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+        self.closed = False
+        self.close_code: int | None = None
+
+    async def receive(self) -> aiohttp.WSMessage:
+        return await self.inbox.get()
+
+    async def ping(self, message: bytes = b"") -> None:
+        if self.answer_pings:
+            self.inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.PONG, b"", None))
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    async def close(self, **kwargs: object) -> bool:
+        self.closed = True
+        self.inbox.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None))
+        return True
+
+
+class _PingSession:
+    closed = False
+
+    def __init__(self, ws: _PingSocket) -> None:
+        self.ws = ws
+        self.connect_kwargs: dict[str, object] = {}
+
+    async def ws_connect(self, url: str, **kwargs: object) -> _PingSocket:
+        self.connect_kwargs = kwargs
+        return self.ws
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("answer_pings", [True, False])
+async def test_the_liveness_timeout_detects_a_dead_connection(answer_pings: bool) -> None:
+    """A half-open socket never delivers a close, so only an unanswered ping reveals it."""
+
+    session = _PingSession(_PingSocket(answer_pings=answer_pings))
+    stream = _stt(HOSTED, session).stream(  # type: ignore[arg-type]
+        conn_options=APIConnectOptions(max_retry=0, liveness_timeout=3.0)
+    )
+
+    async def drain() -> None:
+        async for _ in stream:
+            pass
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    task = asyncio.create_task(drain())
+    try:
+        if answer_pings:
+            await asyncio.sleep(30)  # ten liveness windows with nothing from Reson8
+            assert not task.done()
+        else:
+            with pytest.raises(APIConnectionError, match="WebSocket connection lost"):
+                await asyncio.wait_for(task, 10)
+            assert loop.time() - started == pytest.approx(3.0, abs=0.5)
+        # aiohttp's autoping would answer the pongs before WebSocketMonitor sees them
+        assert session.connect_kwargs.get("autoping") is False
+        assert "heartbeat" not in session.connect_kwargs
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await stream.aclose()
+
+
+async def test_turn_events_reset_the_retry_budget(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream()
+    stream._num_retries = 1  # as if a previous connection had failed
+    log = EventLog(stream)
+
+    await server.send({"type": "turn_start"})
+    await log.wait_for(1)
+
+    assert stream._num_retries == 0
+    await log.aclose()
+    await stream.aclose()
+
+
 async def test_an_unreachable_host_is_a_connection_error(
     client_session: aiohttp.ClientSession,
 ) -> None:
