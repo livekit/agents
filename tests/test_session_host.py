@@ -764,6 +764,23 @@ class TestSessionHostRequests:
         assert transport._closed
         assert host._event_ch.closed
 
+    def test_discard_pending_events_keeps_host_open(self, transport: InMemoryTransport) -> None:
+        """A rolled-back start drops its queued events without closing the job host."""
+        host = SessionHost(transport)
+        session = self._make_mock_session()
+        host.register_session(session)
+        host._event_ch.send_nowait(agent_pb.AgentSessionMessage())
+        assert host._event_ch.qsize() == 1
+
+        host.discard_pending_events()
+
+        assert host._event_ch.qsize() == 0
+        assert not host._event_ch.closed
+        assert not transport._closed
+        assert host.session is session
+        host.unregister_session()
+        assert host.session is None
+
     def test_attach_replaces_the_attached_session(self, transport: InMemoryTransport) -> None:
         host = SessionHost(transport)
         first = self._make_mock_session()

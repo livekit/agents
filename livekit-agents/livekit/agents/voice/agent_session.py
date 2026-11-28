@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import copy
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
@@ -634,6 +634,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
+        # a failed start leaves session-owned toolsets open for a retry; a later
+        # aclose() must still release them even though no start span remains
+        self._failed_start_toolsets = False
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -950,6 +953,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._started:
                 return None
 
+            if capture_run and self._global_run_state is not None:
+                if not self._global_run_state.done():
+                    raise RuntimeError("nested runs are not supported")
+
+            # start() may wrap or replace these; a failed attempt must put the
+            # caller's I/O back exactly as it was so the session can be retried
+            caller_io = (
+                self.input.audio,
+                self.input.video,
+                self.output.audio,
+                self.output.transcription,
+            )
+            caller_chat_items = list(self._chat_ctx.items)
+
             self._started_at = time.time()
 
             # configure observability first
@@ -1032,94 +1049,148 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._update_agent_state("initializing")
 
             tasks: list[asyncio.Task[None]] = []
+            run_state: RunResult | None = None
+            start_span_ended = False
+
+            def _end_start_span() -> None:
+                nonlocal start_span_ended
+                if start_span_ended:
+                    return
+                start_span_ended = True
+                session_start_span.end()
+                self._session_start_context = None
+
+            async def _rollback_attempt(e: Exception) -> None:
+                trace_utils.record_exception(session_start_span, e)
+                try:
+                    await self._rollback_start(
+                        tasks,
+                        run_state=run_state,
+                        caller_io=caller_io,
+                        chat_items=caller_chat_items,
+                    )
+                finally:
+                    # a setup failure happens before the gather block's finally
+                    _end_start_span()
 
             c = cli.AgentsConsole.get_instance()
-            if c.enabled and not c.io_acquired:
-                if self.input.audio is not None or self.output.audio is not None:
-                    logger.warning(
-                        "agent started with the console subcommand, but input.audio/output.audio "
-                        "is already set, overriding..."
-                    )
-
-                c.acquire_io(loop=self._loop, session=self)
-
-                if (tcp_transport := c._tcp_transport) is not None:
-                    self._attach_session_host(
-                        lambda: SessionHost(
-                            tcp_transport,
-                            audio_input=c._tcp_audio_input,
-                            audio_output=c._tcp_audio_output,
+            if c.enabled and c.io_acquired and c.reattach_io(session=self):
+                # the console acquisition outlives a failed start; put its streams
+                # (and the TCP host the rollback closed) back on the retry
+                try:
+                    tcp_transport = c._tcp_transport
+                    if tcp_transport is not None and self._session_host is None:
+                        transport = cast("SessionTransport", tcp_transport)
+                        self._attach_session_host(
+                            lambda: SessionHost(
+                                transport,
+                                audio_input=c._tcp_audio_input,
+                                audio_output=c._tcp_audio_output,
+                            )
                         )
-                    )
+                except Exception as e:
+                    await _rollback_attempt(e)
+                    raise
+            elif c.enabled and not c.io_acquired:
+                try:
+                    if self.input.audio is not None or self.output.audio is not None:
+                        logger.warning(
+                            "agent started with the console subcommand, but input.audio/output.audio "
+                            "is already set, overriding..."
+                        )
+
+                    c.acquire_io(loop=self._loop, session=self)
+
+                    if (tcp_transport := c._tcp_transport) is not None:
+                        self._attach_session_host(
+                            lambda: SessionHost(
+                                tcp_transport,
+                                audio_input=c._tcp_audio_input,
+                                audio_output=c._tcp_audio_output,
+                            )
+                        )
+                except Exception as e:
+                    await _rollback_attempt(e)
+                    raise
             elif is_given(room) and not self._room_io:
-                room_options = room_io.RoomOptions._ensure_options(
-                    room_options,
-                    room_input_options=room_input_options,
-                    room_output_options=room_output_options,
-                )
-                room_options = copy.copy(room_options)  # shadow copy is enough
-
-                if self._text_only:
-                    room_options.audio_input = False
-                    room_options.audio_output = False
-
-                if self.input.audio is not None:
-                    if room_options.audio_input:
-                        logger.warning(
-                            "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
-                        )
-                    room_options.audio_input = False
-
-                if self.output.audio is not None:
-                    if room_options.audio_output:
-                        logger.warning(
-                            "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
-                        )
-                    room_options.audio_output = False
-
-                if self.output.transcription is not None:
-                    if room_options.text_output:
-                        logger.warning(
-                            "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
-                        )
-                    room_options.text_output = False
-
-                self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
-                # passed, not made current: RoomIO's tasks live for the whole session
-                await self._room_io.start(trace_context=self._session_start_context)
-
-                if hosting:
-                    # only the primary session can have a session host
-                    self._attach_session_host(
-                        lambda: SessionHost(RoomSessionTransport(room)), room=room
+                try:
+                    room_options = room_io.RoomOptions._ensure_options(
+                        room_options,
+                        room_input_options=room_input_options,
+                        room_output_options=room_output_options,
                     )
+                    room_options = copy.copy(room_options)  # shadow copy is enough
 
-                text_input_opts = room_options.get_text_input_options()
-                if text_input_opts:
-                    self._room_io.register_text_input(text_input_opts.text_input_cb)
+                    if self._text_only:
+                        room_options.audio_input = False
+                        room_options.audio_output = False
 
+                    if self.input.audio is not None:
+                        if room_options.audio_input:
+                            logger.warning(
+                                "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
+                            )
+                        room_options.audio_input = False
+
+                    if self.output.audio is not None:
+                        if room_options.audio_output:
+                            logger.warning(
+                                "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
+                            )
+                        room_options.audio_output = False
+
+                    if self.output.transcription is not None:
+                        if room_options.text_output:
+                            logger.warning(
+                                "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
+                            )
+                        room_options.text_output = False
+
+                    self._room_io = room_io.RoomIO(
+                        room=room, agent_session=self, options=room_options
+                    )
+                    # passed, not made current: RoomIO's tasks live for the whole session
+                    await self._room_io.start(trace_context=self._session_start_context)
+
+                    if hosting:
+                        # only the primary session can have a session host
+                        self._attach_session_host(
+                            lambda: SessionHost(RoomSessionTransport(room)), room=room
+                        )
+
+                    text_input_opts = room_options.get_text_input_options()
+                    if text_input_opts:
+                        self._room_io.register_text_input(text_input_opts.text_input_cb)
+
+                except Exception as e:
+                    await _rollback_attempt(e)
+                    raise
             if job_ctx:
                 # these aren't relevant during eval mode, as they require job context and/or room_io
                 if self.input.audio and self.output.audio:
-                    if self._opts.recording_options["audio"] or (c.enabled and c.record):
-                        self._recorder_io = RecorderIO(
-                            agent_session=self,
-                            bit_rate=self._opts.recording_options.get("bit_rate"),
-                            constant_bit_rate=self._opts.recording_options.get(
-                                "constant_bit_rate", False
-                            ),
-                        )
-                        self.input.audio = self._recorder_io.record_input(self.input.audio)
-                        self.output.audio = self._recorder_io.record_output(self.output.audio)
-
-                        if (c.enabled and c.record) or not c.enabled:
-                            task = asyncio.create_task(
-                                self._recorder_io.start(
-                                    output_path=job_ctx.session_directory / "audio.ogg"
-                                )
+                    try:
+                        if self._opts.recording_options["audio"] or (c.enabled and c.record):
+                            self._recorder_io = RecorderIO(
+                                agent_session=self,
+                                bit_rate=self._opts.recording_options.get("bit_rate"),
+                                constant_bit_rate=self._opts.recording_options.get(
+                                    "constant_bit_rate", False
+                                ),
                             )
-                            tasks.append(task)
+                            self.input.audio = self._recorder_io.record_input(self.input.audio)
+                            self.output.audio = self._recorder_io.record_output(self.output.audio)
 
+                            if (c.enabled and c.record) or not c.enabled:
+                                task = asyncio.create_task(
+                                    self._recorder_io.start(
+                                        output_path=job_ctx.session_directory / "audio.ogg"
+                                    )
+                                )
+                                tasks.append(task)
+
+                    except Exception as e:
+                        await _rollback_attempt(e)
+                        raise
                 if self.options.ivr_detection:
                     tasks.append(
                         asyncio.create_task(self._start_ivr_detection(), name="_ivr_activity_start")
@@ -1149,11 +1220,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     )
                     self._job_context_cb_registered = True
 
-            run_state: RunResult | None = None
             if capture_run:
-                if self._global_run_state is not None and not self._global_run_state.done():
-                    raise RuntimeError("nested runs are not supported")
-
                 run_state = RunResult(output_type=None, session=self)
                 self._global_run_state = run_state
 
@@ -1172,11 +1239,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if self._session_host is not None:
                     await self._session_host.start()
             except Exception as e:
-                trace_utils.record_exception(session_start_span, e)
+                # release what this attempt acquired before the caller sees the error,
+                # so the session is reusable and no close event is emitted for a
+                # session that never started
+                await _rollback_attempt(e)
                 raise
             finally:
-                session_start_span.end()
-                self._session_start_context = None
+                _end_start_span()
 
             # important: no await should be done after this!
 
@@ -1191,6 +1260,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             self._started = True
+            self._failed_start_toolsets = False
             self._update_agent_state("listening")
             if self._room_io and self._room_io.subscribed_fut:
 
@@ -1266,6 +1336,118 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._session_host = job_ctx._session_host
             self._owns_session_host = False
         self._session_host.register_session(self)
+
+    async def _rollback_start(
+        self,
+        tasks: list[asyncio.Task[None]],
+        *,
+        run_state: RunResult | None,
+        caller_io: tuple[
+            io.AudioInput | None,
+            io.VideoInput | None,
+            io.AudioOutput | None,
+            io.TextOutput | None,
+        ],
+        chat_items: list[llm.ChatItem],
+    ) -> None:
+        """Release what a failed ``start()`` acquired, in reverse order.
+
+        The caller holds ``self._lock``. This is not a session close: no ``close``
+        event is emitted, and caller-provided I/O is restored so the same session
+        can be started again.
+        """
+
+        async def _release(label: str, coro: Awaitable[None]) -> None:
+            try:
+                await coro
+            except Exception:
+                logger.exception("failed to release %s during start rollback", label)
+
+        try:
+            await utils.aio.cancel_and_wait(*tasks)
+
+            if self._activity is not None:
+                activity = self._activity
+                # aclose() leaves on_enter to the normal close path; on a failed
+                # start it must not outlive the attempt and touch the retry's
+                # activity
+                if activity._on_enter_task is not None:
+                    await utils.aio.cancel_and_wait(activity._on_enter_task)
+                # stop queued speech as well: aclose() shuts the scheduler down
+                # without authorizing the replies it is still holding
+                try:
+                    await activity.interrupt(force=True)
+                except RuntimeError:
+                    pass
+                await _release("activity", activity.aclose())
+                self._activity = None
+            self._cancel_user_away_timer()
+            self._on_aec_warmup_expired()
+            if self._agent_speaking_span is not None:
+                self._agent_speaking_span.end()
+                self._agent_speaking_span = None
+            if self._user_speaking_span is not None:
+                self._user_speaking_span.end()
+                self._user_speaking_span = None
+            if self._amd is not None:
+                await _release("amd", self._amd.aclose())
+                self._amd = None
+            if self._ivr_activity is not None:
+                await _release("ivr activity", self._ivr_activity.aclose())
+                self._ivr_activity = None
+            if self._forward_audio_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_audio_atask)
+                self._forward_audio_atask = None
+            if self._forward_video_atask is not None:
+                await utils.aio.cancel_and_wait(self._forward_video_atask)
+                self._forward_video_atask = None
+            if self._recorder_io is not None:
+                await _release("recorder io", self._recorder_io.aclose())
+                self._recorder_io = None
+            if self._room_io is not None:
+                await _release("room io", self._room_io.aclose())
+                self._room_io = None
+            if self._session_host is not None:
+                host = self._session_host
+                self._session_host = None
+                if host.session is self:
+                    host.unregister_session()
+                    if self._owns_session_host:
+                        await _release("session host", host.aclose())
+                    else:
+                        # a job-owned host outlives this attempt; drop the events
+                        # queued during it so a retry starts with a clean channel
+                        host.discard_pending_events()
+                self._owns_session_host = False
+        finally:
+            # restore the caller's I/O even if one of the releases raised
+            (
+                self.input.audio,
+                self.input.video,
+                self.output.audio,
+                self.output.transcription,
+            ) = caller_io
+            # drop items this attempt inserted (the handoff item before activity
+            # start); they would otherwise pollute the retry's model input
+            self._chat_ctx.items = chat_items
+            if run_state is not None:
+                if not run_state._done_fut.done():
+                    run_state._done_fut.cancel()
+                if self._global_run_state is run_state:
+                    self._global_run_state = None
+            self._started = False
+            self._failed_start_toolsets = True
+            self._started_at = None
+            self._closing = False
+            self._agent_state = "initializing"
+            self._user_state = "listening"
+            if self._session_ctx_token is not None:
+                otel_context.detach(self._session_ctx_token)
+                self._session_ctx_token = None
+            if self._session_span is not None:
+                self._session_span.end()
+                self._session_span = None
+            self._root_span_context = None
 
     async def drain(self) -> None:
         if self._activity is None:
@@ -1348,6 +1530,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # at the top of start() and cleared below, so only a session that never
             # started, or is already closed, is skipped
             if not self._started and self._activity is None and self._session_span is None:
+                # a failed start left session-owned toolsets open for a retry;
+                # an explicit aclose() is the session ending, so release them
+                if self._failed_start_toolsets:
+                    await self._close_session_toolsets()
                 return
 
             # the whole close as one bar under agent_session: activity teardown, the close
@@ -1494,12 +1680,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._ivr_activity is not None:
             await self._ivr_activity.aclose()
 
+        await self._close_session_toolsets()
+
+    async def _close_session_toolsets(self) -> None:
         toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
         if toolsets:
             await asyncio.gather(
                 *(toolset.aclose() for toolset in toolsets),
                 return_exceptions=True,
             )
+        self._failed_start_toolsets = False
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)

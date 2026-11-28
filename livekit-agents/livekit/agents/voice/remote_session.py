@@ -28,6 +28,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
+from ..utils.aio.channel import ChanEmpty
 from ..version import __version__
 from ..voice.amd import AMDCategory, AMDPredictionEvent
 from .events import (
@@ -416,6 +417,14 @@ class SessionHost:
             self._session.off("debug_message", self._on_debug_message)
             self._session.off("close", self._on_close)
         self._session = None
+
+    def discard_pending_events(self) -> None:
+        """Drop events buffered for the current session without closing the host."""
+        while True:
+            try:
+                self._event_ch.recv_nowait()
+            except ChanEmpty:
+                return
 
     async def start(self) -> None:
         if self._started:

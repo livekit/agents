@@ -458,6 +458,28 @@ class AgentsConsole:
                 self._io_transcription_sync.text_output,
             )
 
+    def reattach_io(self, *, session: AgentSession) -> bool:
+        """Reinstall the acquired console streams on a session retry.
+
+        A failed start restores the caller's I/O but keeps the console
+        acquisition, because the console owns the streams for the process.
+        This puts them back without acquiring a second time.
+        """
+        with self._lock:
+            if not (self._io_acquired and self._io_session is session):
+                return False
+            audio_input = self._io_audio_input
+            transcription_sync = self._io_transcription_sync
+
+        self._update_sess_io(
+            session,
+            self.console_mode,
+            audio_input,
+            transcription_sync.audio_output,
+            transcription_sync.text_output,
+        )
+        return True
+
     @property
     def enabled(self) -> bool:
         return self._enabled
