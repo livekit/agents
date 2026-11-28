@@ -1,6 +1,6 @@
 // Copyright (c) 2012 The WebRTC project authors. All Rights Reserved.
 // Expand analysis adapted under the BSD license and patent grant in
-// LICENSE.webrtc and PATENTS.webrtc.
+// the upstream notices in the playout README.md.
 
 //! Multi-candidate correlation/distortion search following NetEq's expand analysis. This is
 //! floating-point PCM analysis at 24 kHz, not its fixed-point, downsampled implementation.

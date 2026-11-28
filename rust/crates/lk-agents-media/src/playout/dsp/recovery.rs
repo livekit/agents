@@ -1,5 +1,5 @@
 // Copyright (c) 2012 The WebRTC project authors. All Rights Reserved.
-// NetEq processing adapted under LICENSE.webrtc and PATENTS.webrtc.
+// NetEq processing adapted under the upstream notices in the playout README.md.
 
 use std::collections::VecDeque;
 
