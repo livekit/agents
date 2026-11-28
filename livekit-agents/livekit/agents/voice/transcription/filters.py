@@ -59,11 +59,18 @@ FULL_LINE_PATTERNS = [
     ),
 ]
 
+# a link destination and title: parens are balanced, except in <...>, in a quoted title, or
+# after a backslash
+_TITLE = r"""(?<=\s)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')(?=\s*\))"""
+_OPEN_TITLE = r"""(?<=\s)(?:"(?:\\.|[^"\\])*(?:"\s*)?|'(?:\\.|[^'\\])*(?:'\s*)?)"""
+_URL_CHAR = rf"""(?:\\.|{_TITLE}|(?!{_TITLE})["']|[^()\\"'])"""
+_URL = rf"(?:<[^<>]*>|(?!<[^<>]*>))(?:{_URL_CHAR}|\({_URL_CHAR}*\))*"
+
 INLINE_PATTERNS = [
     # images: keep alt text ![alt](url) -> alt
-    (re.compile(r"!\[([^\]]*)\]\([^)]*\)"), r"\1"),
-    # links: keep text part [text](url) -> text
-    (re.compile(r"\[([^\]]*)\]\([^)]*\)"), r"\1"),
+    (re.compile(rf"!\[([^\]]*)\]\({_URL}\)"), r"\1"),
+    # links: keep text part [text](url) -> text; url may hold balanced parens
+    (re.compile(rf"\[([^\]]*)\]\({_URL}\)"), r"\1"),
     # emphasis: remove the delimiters, keep the body. Runs before the code and
     # strikethrough patterns, which would otherwise consume the body and strand
     # the delimiters around it (``**~~text~~**``).
@@ -90,7 +97,10 @@ _ASTERISK_OPENER = re.compile(rf"(?<!{_INTRAWORD})(?<!\*)\*{{1,3}}(?![\s*])")
 _UNDERSCORE_OPENER = re.compile(r"(?<!\w)_{1,3}(?![\s_])")
 
 # a link or image still being written; ``[1]`` followed by text is not one
-_PENDING_LINK = re.compile(r"\[[^\]]*(?:\]|\]\([^)]*)?$")
+# (a trailing backslash may still escape the next chunk's first char)
+_PENDING_LINK = re.compile(
+    rf"\[[^\]]*(?:\]|\]\((?:<[^<>]*|{_URL}(?:\({_URL_CHAR}*)?(?:{_OPEN_TITLE})?\\?))?$"
+)
 
 
 def _pending_emphasis(buffer: str) -> bool:
