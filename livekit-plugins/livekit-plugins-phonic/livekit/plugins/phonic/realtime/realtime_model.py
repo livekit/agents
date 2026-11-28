@@ -26,7 +26,10 @@ from phonic.conversations.socket_client import (
     AsyncConversationsSocketClient,
 )
 from phonic.core import RequestOptions
-from phonic.requests import ResponsesToolDefinitionParams
+from phonic.requests import (
+    ConfigOptionsDataRetentionPolicyParams,
+    ResponsesToolDefinitionParams,
+)
 from phonic.types import (
     AddSystemMessagePayload,
     AudioChunkPayload,
@@ -187,6 +190,8 @@ class _RealtimeOptions:
     configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
     additional_params: NotGivenOr[dict[str, typing.Any]]
     external_id: NotGivenOr[str]
+    data_retention_policy: NotGivenOr[ConfigOptionsDataRetentionPolicyParams]
+    external_storage_policy: NotGivenOr[str | None]
     configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
     forbid_speech_after_tool_call: NotGivenOr[list[str]]
     conn_options: APIConnectOptions
@@ -263,6 +268,8 @@ class RealtimeModel(llm.RealtimeModel):
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
         additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
         external_id: NotGivenOr[str] = NOT_GIVEN,
+        data_retention_policy: NotGivenOr[ConfigOptionsDataRetentionPolicyParams] = NOT_GIVEN,
+        external_storage_policy: NotGivenOr[str | None] = NOT_GIVEN,
         configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
         forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
@@ -327,6 +334,14 @@ class RealtimeModel(llm.RealtimeModel):
             additional_params: Additional runtime parameters forwarded to Phonic.
             external_id: Your own identifier for the conversation (e.g. a call or session ID),
                 stored on the Phonic conversation so you can look it up later.
+            data_retention_policy: When Phonic deletes the conversation's transcripts and audio:
+                ``{"zero_data_retention": True}`` to retain nothing, or
+                ``{"zero_data_retention": False, "transcripts": {"delete_after_hours": ...},
+                "audio_recordings": {"delete_after_hours": ...}}`` (``None`` hours = never delete).
+                Defaults to the Phonic agent's policy.
+            external_storage_policy: Name of an external storage policy in the project that the
+                conversation's transcripts and audio are delivered to (your own bucket). Requires
+                zero data retention. Pass None to disable. Defaults to the Phonic agent's policy.
             configs_for_tools: Per-tool behavior overrides, one ``PhonicToolConfig`` per tool
                 (keyed by ``name``); omitted fields fall back to the plugin defaults. See the
                 README for the available fields.
@@ -414,6 +429,8 @@ class RealtimeModel(llm.RealtimeModel):
             configuration_endpoint=configuration_endpoint,
             additional_params=additional_params,
             external_id=external_id,
+            data_retention_policy=data_retention_policy,
+            external_storage_policy=external_storage_policy,
             configs_for_tools=configs_for_tools,
             forbid_speech_after_tool_call=forbid_speech_after_tool_call,
             conn_options=conn_options,
@@ -905,6 +922,8 @@ class RealtimeSession(llm.RealtimeSession):
             "configuration_endpoint": self._opts.configuration_endpoint,
             "additional_params": self._opts.additional_params,
             "external_id": self._opts.external_id,
+            "data_retention_policy": self._opts.data_retention_policy,
+            "external_storage_policy": self._opts.external_storage_policy,
         }
         modality = "speech" if self._realtime_model.capabilities.audio_output else "text"
         options["input_modality"] = modality

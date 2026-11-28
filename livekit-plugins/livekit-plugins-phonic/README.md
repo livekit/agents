@@ -128,8 +128,30 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
 | `additional_params` | `dict[str, Any]` | Additional runtime parameters forwarded to Phonic |
 | `external_id` | `str` | Your own identifier for the conversation, stored on the Phonic conversation |
+| `data_retention_policy` | `dict` | Zero data retention, or when transcripts and audio are deleted (see [Data retention and external storage](#data-retention-and-external-storage)) |
+| `external_storage_policy` | `str` \| `None` | Name of an external storage policy that receives the transcript and audio. Requires zero data retention (see [Data retention and external storage](#data-retention-and-external-storage)) |
 | `configs_for_tools` | `list[PhonicToolConfig]` | Per-tool behavior overrides (see [Per-tool configuration](#per-tool-configuration)) |
 | `modalities` | `list["text" \| "audio"]` | `["text", "audio"]` (default) for voice, or `["text"]` for a text conversation: typed user turns in, text replies out, no audio. Start the session with room audio off: `room_options=room_io.RoomOptions(audio_input=False, audio_output=False)` |
+
+### Data retention and external storage
+
+`data_retention_policy` takes one of two shapes:
+
+| Value | Behavior |
+| --- | --- |
+| `{"zero_data_retention": True}` | Phonic retains no transcripts or audio for the conversation |
+| `{"zero_data_retention": False, "transcripts": {"delete_after_hours": 24}, "audio_recordings": {"delete_after_hours": None}}` | Phonic deletes each after the given number of hours (a positive whole number). `None` keeps it indefinitely |
+
+`external_storage_policy` is the snake_case name of an [external storage policy](https://docs.phonic.ai/api-reference/external-storage-policies/create) in the same project. Phonic delivers the conversation's transcript and audio to that policy's bucket. It requires `{"zero_data_retention": True}`. `None` turns delivery off.
+
+Both default to the Phonic agent's settings (`phonic_agent`), or to no retention limit and no external storage without one. Both are fixed for the conversation, so they can't be changed through `update_options`. A workspace without data retention enabled can only use the never-delete policy. See [Data Retention](https://docs.phonic.ai/docs/platform/retention).
+
+```python
+RealtimeModel(
+    data_retention_policy={"zero_data_retention": True},
+    external_storage_policy="my_storage_policy",
+)
+```
 
 ### Per-tool configuration
 
