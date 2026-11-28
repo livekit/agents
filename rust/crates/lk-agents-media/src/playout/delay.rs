@@ -4,13 +4,11 @@
 
 use std::time::Duration;
 
+use super::Rate;
 use super::histogram::{BIN_MS, Histogram};
-use super::{SAMPLE_RATE, samples};
 
-const UNIT: u64 = SAMPLE_RATE as u64 / 50;
 const WINDOW: u64 = 100;
 const BINS: usize = 128;
-const STARTUP_SAMPLES: u64 = SAMPLE_RATE as u64 / 2;
 
 #[derive(Clone, Copy)]
 struct Arrival {
@@ -21,6 +19,7 @@ struct Arrival {
 const EMPTY: Arrival = Arrival { bucket: u64::MAX, minimum: 0, maximum: 0 };
 
 pub(super) struct Delay {
+    rate: Rate,
     arrivals: [Arrival; BINS],
     newest: u64,
     minimum: i64,
@@ -38,9 +37,17 @@ pub(super) struct Delay {
     startup_complete: bool,
 }
 
+#[cfg(test)]
 impl Default for Delay {
     fn default() -> Self {
+        Self::new(Rate::default())
+    }
+}
+
+impl Delay {
+    pub(super) fn new(rate: Rate) -> Self {
         Self {
+            rate,
             arrivals: [EMPTY; BINS],
             newest: 0,
             minimum: 0,
@@ -58,14 +65,11 @@ impl Default for Delay {
             startup_complete: false,
         }
     }
-}
-
-impl Delay {
     pub(super) fn update(&mut self, now: Duration, source_start: u64, length: usize) {
-        let arrival = clock_samples(now);
+        let arrival = self.rate.clock_samples(now);
         let source = source_start.min((i64::MAX / 4) as u64) as i64;
         let offset = arrival - source;
-        let bucket = source_start / UNIT;
+        let bucket = source_start / (u64::from(self.rate.hz()) / 50);
         let slot = &mut self.arrivals[bucket as usize % BINS];
         if slot.bucket != bucket {
             *slot = Arrival { bucket, minimum: offset, maximum: offset };
@@ -98,13 +102,13 @@ impl Delay {
         self.timing_observed |= source_start > 0;
 
         let first = *self.first.get_or_insert(now);
-        if !self.startup_complete && source_start <= STARTUP_SAMPLES {
+        if !self.startup_complete && source_start <= (u64::from(self.rate.hz()) / 2) {
             self.startup_chunks += 1;
-            let elapsed = clock_samples(now.saturating_sub(first));
+            let elapsed = self.rate.clock_samples(now.saturating_sub(first));
             let deficit = (elapsed - source).max(0) as usize;
             self.startup_peak_ms =
-                self.startup_peak_ms.max(deficit.div_ceil(SAMPLE_RATE as usize / 1000));
-            if source_start.saturating_add(length as u64) >= STARTUP_SAMPLES
+                self.startup_peak_ms.max(deficit.div_ceil(self.rate.hz() as usize / 1000));
+            if source_start.saturating_add(length as u64) >= (u64::from(self.rate.hz()) / 2)
                 && self.startup_chunks >= 2
             {
                 self.complete_startup();
@@ -178,16 +182,18 @@ impl Delay {
         // Smooth the actually selected budget, rather than an invisible value above the
         // configured cap. A caller's cold prior is also the starting point for learning.
         *hint = (*hint).clamp(minimum, maximum);
-        samples(*hint)
+        self.rate.samples(*hint)
     }
 
     pub(super) fn target(&self, minimum: Duration, maximum: Duration) -> usize {
-        samples(Duration::from_millis(self.histogram.quantile_ms() as u64).clamp(minimum, maximum))
+        self.rate.samples(
+            Duration::from_millis(self.histogram.quantile_ms() as u64).clamp(minimum, maximum),
+        )
     }
 
     pub(super) fn max_delay_ms(&self) -> usize {
         if self.seen {
-            ((self.maximum - self.minimum).max(0) as usize).div_ceil(SAMPLE_RATE as usize / 1000)
+            ((self.maximum - self.minimum).max(0) as usize).div_ceil(self.rate.hz() as usize / 1000)
         } else {
             0
         }
@@ -198,13 +204,8 @@ impl Delay {
             return 0;
         }
         let source = source_position.min((i64::MAX / 4) as u64) as i64;
-        (clock_samples(now) - source - self.minimum).max(0) as usize
+        (self.rate.clock_samples(now) - source - self.minimum).max(0) as usize
     }
-}
-
-fn clock_samples(now: Duration) -> i64 {
-    (now.as_nanos().saturating_mul(u128::from(SAMPLE_RATE)) / 1_000_000_000)
-        .min((i64::MAX / 4) as u128) as i64
 }
 
 #[cfg(test)]

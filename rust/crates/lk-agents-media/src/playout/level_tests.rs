@@ -33,5 +33,8 @@ fn filter_cadence_does_not_depend_on_render_call_size() {
     }
     assert_eq!(run(1), run(120));
     assert_eq!(run(120), run(480));
-    assert_eq!(Level::default().update(usize::MAX, 100, 0), 60 * SAMPLE_RATE as usize);
+    assert_eq!(
+        Level::default().update(usize::MAX, 100, 0),
+        60 * crate::playout::DEFAULT_SAMPLE_RATE as usize
+    );
 }

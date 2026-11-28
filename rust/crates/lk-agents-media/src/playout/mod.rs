@@ -1,4 +1,4 @@
-//! Bounded playout of ordered, mono 24 kHz PCM. Transport chunks have arbitrary lengths.
+//! Bounded playout of ordered, mono 16/24/48 kHz PCM. Transport chunks have arbitrary lengths.
 //!
 //! The caller supplies monotonic arrival times, renders on its own clock, and owns downstream
 //! scheduling. No clock, task, I/O or allocation is used by `push` or `render`. Source samples
@@ -14,17 +14,23 @@ mod histogram;
 mod level;
 #[cfg(test)]
 mod playout_tests;
+mod rate;
 
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::time::Duration;
 
-use dsp::{Concealer, FRAME, OVERLAP, PERIOD_MAX, Recovery, Stretch, mix};
+use dsp::{Concealer, Recovery, Stretch, mix};
+#[cfg(test)]
+use dsp::{FRAME, PERIOD_MAX};
+use rate::Rate;
 
-pub const SAMPLE_RATE: u32 = 24_000;
+pub const DEFAULT_SAMPLE_RATE: u32 = 24_000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
+    /// Mono input and output rate: 16_000, 24_000 or 48_000 Hz. Fixed at construction.
+    pub sample_rate: u32,
     /// Lower bound for the adaptive reserve target.
     pub minimum_delay: Duration,
     /// Cold-start waiting-time prior. Learned startup coverage replaces it across explicit segments;
@@ -43,6 +49,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            sample_rate: DEFAULT_SAMPLE_RATE,
             minimum_delay: Duration::from_millis(20),
             startup_delay: Duration::from_millis(80),
             maximum_delay: Duration::from_millis(100),
@@ -55,6 +62,8 @@ impl Default for Config {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PlayoutError {
+    #[error("sample rate must be 16000, 24000 or 48000 Hz")]
+    SampleRate,
     #[error("invalid playout configuration")]
     Configuration,
     #[error("arrival or render time moved backwards")]
@@ -63,7 +72,7 @@ pub enum PlayoutError {
     Finished,
     #[error("PCM queue is full; {available} samples available")]
     Full { available: usize },
-    #[error("render blocks must contain 1..=480 samples")]
+    #[error("render blocks must contain 1 sample through 20 ms at the configured rate")]
     OutputSize,
 }
 
@@ -120,6 +129,7 @@ pub struct Segmented;
 pub struct Playout<Mode = Continuous> {
     mode: PhantomData<Mode>,
     config: Config,
+    rate: Rate,
     queue: VecDeque<i16>,
     capacity: usize,
     pending: VecDeque<i16>,
@@ -189,11 +199,12 @@ impl Playout<Segmented> {
 
 impl<Mode> Playout<Mode> {
     fn new(config: Config) -> Result<Self, PlayoutError> {
-        let capacity = samples(config.capacity);
+        let rate = Rate::new(config.sample_rate).ok_or(PlayoutError::SampleRate)?;
+        let capacity = rate.samples(config.capacity);
         if config.minimum_delay > config.maximum_delay
             || config.maximum_delay > config.capacity
-            || capacity < FRAME + PERIOD_MAX
-            || capacity > SAMPLE_RATE as usize * 60
+            || capacity < rate.frame() + rate.period_max()
+            || capacity > rate.hz() as usize * 60
             || config.maximum_concealment > Duration::from_millis(200)
             || !config.maximum_stretch.is_finite()
             || !(0.0..=0.1).contains(&config.maximum_stretch)
@@ -203,24 +214,24 @@ impl<Mode> Playout<Mode> {
         Ok(Self {
             mode: PhantomData,
             config,
+            rate,
             queue: VecDeque::with_capacity(capacity),
             capacity,
-            pending: VecDeque::with_capacity(FRAME),
-            history: VecDeque::with_capacity(dsp::HISTORY),
-            concealer: Concealer::default(),
+            pending: VecDeque::with_capacity(rate.frame()),
+            history: VecDeque::with_capacity(rate.history()),
+            concealer: Concealer::new(rate),
             statistics: Statistics::default(),
             first_arrival: None,
             last_time: None,
-            delay: delay::Delay::default(),
-            target: samples(config.minimum_delay),
-            startup_target: samples(
-                config.startup_delay.clamp(config.minimum_delay, config.maximum_delay),
-            ),
-            level: level::Level::default(),
+            delay: delay::Delay::new(rate),
+            target: rate.samples(config.minimum_delay),
+            startup_target: rate
+                .samples(config.startup_delay.clamp(config.minimum_delay, config.maximum_delay)),
+            level: level::Level::new(rate),
             started: false,
             finished: false,
             outage: false,
-            recovery: Recovery::default(),
+            recovery: Recovery::new(rate),
             last_output: 0,
             stretch_after: 0,
         })
@@ -270,7 +281,7 @@ impl<Mode> Playout<Mode> {
 
     /// Full reset for a new provider/connection. Clears learned timing as well as audio.
     pub fn reset(&mut self) {
-        self.delay = delay::Delay::default();
+        self.delay = delay::Delay::new(self.rate);
         self.clear_audio();
     }
 
@@ -278,7 +289,7 @@ impl<Mode> Playout<Mode> {
         self.queue.clear();
         self.pending.clear();
         self.history.clear();
-        self.concealer = Concealer::default();
+        self.concealer = Concealer::new(self.rate);
         self.statistics = Statistics::default();
         self.first_arrival = None;
         self.last_time = None;
@@ -288,13 +299,18 @@ impl<Mode> Playout<Mode> {
             self.config.minimum_delay,
             self.config.maximum_delay,
         );
-        self.level = level::Level::default();
+        self.level = level::Level::new(self.rate);
         self.started = false;
         self.finished = false;
         self.outage = false;
-        self.recovery = Recovery::default();
+        self.recovery = Recovery::new(self.rate);
         self.last_output = 0;
         self.stretch_after = 0;
+    }
+
+    /// The immutable rate shared by input, output and source-sample counters.
+    pub fn sample_rate(&self) -> u32 {
+        self.rate.hz()
     }
 
     pub fn statistics(&self) -> Statistics {
@@ -302,17 +318,18 @@ impl<Mode> Playout<Mode> {
     }
 
     /// Writes every output sample, including startup silence and exhausted-stream silence.
-    /// The caller chooses 1..=480 samples per call; this does not constrain chunk duration.
+    /// The caller chooses 1 sample through 20 ms per call (320/480/960 samples at 16/24/48 kHz).
+    /// This does not constrain chunk duration.
     pub fn render(&mut self, now: Duration, output: &mut [i16]) -> Result<Render, PlayoutError> {
         self.check_time(now)?;
-        if output.is_empty() || output.len() > FRAME {
+        if output.is_empty() || output.len() > self.rate.frame() {
             return Err(PlayoutError::OutputSize);
         }
         self.last_time = Some(now);
         if !self.started {
             self.started = self.first_arrival.is_some_and(|first| {
                 self.finished
-                    || samples(now - first) >= self.startup_target
+                    || self.rate.samples(now - first) >= self.startup_target
                     || self.queue.len()
                         >= self.statistics.largest_chunk.saturating_add(self.startup_target)
             });
@@ -333,7 +350,7 @@ impl<Mode> Playout<Mode> {
             if self.outage && !self.queue.is_empty() && !postpone {
                 self.recovery.start(&self.concealer, &self.queue, !self.finished);
                 self.outage = false;
-                self.level = level::Level::default();
+                self.level = level::Level::new(self.rate);
             }
             if let Some(sample) = self.recovery.next_prefix() {
                 *out = sample;
@@ -356,10 +373,16 @@ impl<Mode> Playout<Mode> {
                     if self.recovery.active() {
                         sample = self.recovery.apply(sample);
                     }
-                    if self.finished && self.pending.len() + self.queue.len() < OVERLAP {
-                        sample = mix(0, sample, self.pending.len() + self.queue.len(), OVERLAP);
+                    if self.finished && self.pending.len() + self.queue.len() < self.rate.overlap()
+                    {
+                        sample = mix(
+                            0,
+                            sample,
+                            self.pending.len() + self.queue.len(),
+                            self.rate.overlap(),
+                        );
                     }
-                    if self.history.len() == dsp::HISTORY {
+                    if self.history.len() == self.rate.history() {
                         self.history.pop_front();
                     }
                     self.history.push_back(sample);
@@ -370,11 +393,11 @@ impl<Mode> Playout<Mode> {
                         self.statistics.underruns += 1;
                         self.concealer.start(
                             &self.history,
-                            samples(self.config.maximum_concealment),
+                            self.rate.samples(self.config.maximum_concealment),
                             self.last_output,
                         );
                         self.outage = true;
-                        self.recovery = Recovery::default();
+                        self.recovery = Recovery::new(self.rate);
                     }
                     let sample = self.concealer.next();
                     if self.concealer.active() {
@@ -396,9 +419,9 @@ impl<Mode> Playout<Mode> {
         Ok(Render {
             queued_source: self.queue.len(),
             pending_output: self.pending.len(),
-            target_delay: Duration::from_secs_f64(self.target as f64 / f64::from(SAMPLE_RATE)),
+            target_delay: Duration::from_secs_f64(self.target as f64 / f64::from(self.rate.hz())),
             startup_delay: Duration::from_secs_f64(
-                self.startup_target as f64 / f64::from(SAMPLE_RATE),
+                self.startup_target as f64 / f64::from(self.rate.hz()),
             ),
             startup_observations: self.delay.startup_observations(),
             startup_quantile: self.delay.startup_quantile(),
@@ -421,11 +444,11 @@ impl<Mode> Playout<Mode> {
         let source_position =
             self.statistics.source_consumed.saturating_sub(self.pending.len() as u64);
         let playout_delay = self.delay.playout_delay(now, source_position);
-        let target_ms = self.target * 1000 / SAMPLE_RATE as usize;
+        let target_ms = self.target * 1000 / self.rate.hz() as usize;
         // NetEq's decision window includes the recent arrival envelope and 20ms granularity.
         // A queue refilled by a late packet must not immediately be drained back to zero.
         let high_limit =
-            self.target + (self.delay.max_delay_ms() + 20) * (SAMPLE_RATE as usize / 1000);
+            self.target + (self.delay.max_delay_ms() + 20) * (self.rate.hz() as usize / 1000);
         let filtered = self.level.update(playout_delay, target_ms, self.statistics.rendered);
         let fast = playout_delay >= high_limit.saturating_mul(4);
         if !fast && self.statistics.rendered < self.stretch_after {
@@ -443,13 +466,13 @@ impl<Mode> Playout<Mode> {
         if expand {
             self.statistics.reserve_requests += 1;
         }
-        if available_budget < dsp::PERIOD_MIN as u64 {
+        if available_budget < self.rate.period_min() as u64 {
             if expand {
                 self.statistics.reserve_budget_limited += 1;
             }
             return;
         }
-        let mut output = [0; FRAME];
+        let mut output = [0; dsp::MAX_FRAME];
         let operation = if expand {
             Stretch::Expand
         } else if fast {
@@ -457,22 +480,30 @@ impl<Mode> Playout<Mode> {
         } else {
             Stretch::Accelerate
         };
-        let mut limit = available_budget.min(PERIOD_MAX as u64) as usize;
+        let mut limit = available_budget.min(self.rate.period_max() as u64) as usize;
         if !expand && !self.delay.startup_observed() {
             // Do not reclaim the selected startup reserve before early deliveries have
             // been observed. Genuine excess backlog can still be removed safely.
             limit = limit.min(playout_delay.saturating_sub(self.startup_target));
         }
-        let result = if expand && self.queue.len() < FRAME + PERIOD_MAX {
+        let result = if expand && self.queue.len() < self.rate.frame() + self.rate.period_max() {
             dsp::preemptive(
+                self.rate,
                 &self.history,
                 &self.queue,
                 limit,
                 self.concealer.passive_level(),
-                &mut output,
+                &mut output[..self.rate.frame()],
             )
         } else {
-            dsp::stretch(&self.queue, operation, limit, self.concealer.passive_level(), &mut output)
+            dsp::stretch(
+                self.rate,
+                &self.queue,
+                operation,
+                limit,
+                self.concealer.passive_level(),
+                &mut output[..self.rate.frame()],
+            )
         };
         let Some(scale) = result else {
             if expand {
@@ -482,7 +513,7 @@ impl<Mode> Playout<Mode> {
         };
         let consumed = scale.consumed;
         let period = scale.change;
-        self.pending.extend(output);
+        self.pending.extend(output[..self.rate.frame()].iter().copied());
         for _ in 0..consumed {
             let source = self.queue.pop_front().expect("stretch validated queue length");
             self.concealer.observe(source);
@@ -502,11 +533,6 @@ impl<Mode> Playout<Mode> {
         }
         self.stretch_after = self.statistics.rendered
             + ((period as f64 / f64::from(self.config.maximum_stretch)).ceil() as u64)
-                .max(u64::from(SAMPLE_RATE) / 20);
+                .max(u64::from(self.rate.hz()) / 20);
     }
-}
-
-fn samples(duration: Duration) -> usize {
-    (duration.as_nanos().saturating_mul(u128::from(SAMPLE_RATE)) / 1_000_000_000)
-        .min(usize::MAX as u128) as usize
 }

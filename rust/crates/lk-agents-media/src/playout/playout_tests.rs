@@ -810,3 +810,172 @@ fn continuous_pcm_silence_and_speech_resume_without_new_startup_or_boundaries() 
     assert_eq!(p.statistics().source_consumed, source.len() as u64);
     assert_eq!(p.statistics().underruns, 0);
 }
+
+fn replay_native_rate(sample_rate: u32) -> (String, Statistics) {
+    use sha2::{Digest, Sha256};
+
+    let mut seed = 734_u32;
+    let per_ms = sample_rate as usize / 1000;
+    let period = sample_rate as usize / 200;
+    let source: Vec<i16> = (0..sample_rate as usize * 8)
+        .map(|i| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            match i / per_ms {
+                2500..3500 => (seed >> 16) as i16 / 100,
+                3500..4500 => (seed >> 16) as i16 / 4,
+                6000..6500 => 0,
+                _ => {
+                    (((i % period).min(period - i % period) as i32 - period as i32 / 4) * 42_000
+                        / period as i32) as i16
+                }
+            }
+        })
+        .collect();
+    let mut p = Playout::continuous(Config { sample_rate, ..Config::default() }).unwrap();
+    let mut output = vec![0; sample_rate as usize / 100];
+    let mut hash = Sha256::new();
+    let mut packet = 0_u64;
+    for tick in (0..12_000_u64).step_by(10) {
+        while packet < 80 {
+            let stall = packet.saturating_sub(10).min(24) / 6 * 80;
+            let catchup = packet.saturating_sub(40).min(15) * 100 * 2 / 3;
+            let arrival = packet * 100 + stall - catchup;
+            if arrival > tick {
+                break;
+            }
+            let offset = packet as usize * per_ms * 100;
+            push(&mut p, ms(arrival), &source[offset..offset + per_ms * 100]);
+            packet += 1;
+        }
+        if packet == 80 {
+            p.finish();
+        }
+        let report = render(&mut p, ms(tick), &mut output);
+        account(&p, report);
+        for sample in &output {
+            hash.update(sample.to_le_bytes());
+        }
+    }
+    let s = p.statistics();
+    assert_eq!(s.source_consumed, source.len() as u64);
+    assert!(s.stretched > 0 && s.accelerated > 0 && s.concealed > 0, "{s:?}");
+    (format!("{:x}", hash.finalize()), s)
+}
+
+#[test]
+fn twenty_four_khz_pcm_regression() {
+    assert_eq!(
+        replay_native_rate(24_000).0,
+        "910c785d2a9c733569c5f3ebe62ddc97104c3fdf68033b02a7ada8f51d582b8b"
+    );
+}
+
+#[test]
+fn native_rates_account_for_stalls_backlog_and_rate_limits() {
+    for sample_rate in [16_000, 48_000] {
+        let (_, s) = replay_native_rate(sample_rate);
+        assert!(s.stretched + s.accelerated <= (s.rendered as f64 * 0.03) as u64);
+    }
+}
+
+#[test]
+fn supported_native_rates_preserve_pcm_and_use_rate_specific_render_limits() {
+    for sample_rate in [16_000, 24_000, 48_000] {
+        for block in [1, sample_rate as usize / 200, sample_rate as usize / 50] {
+            let source: Vec<i16> =
+                (0..sample_rate as usize).map(|i| (i % 20000) as i16 - 10000).collect();
+            let mut p = Playout::continuous(Config {
+                sample_rate,
+                minimum_delay: Duration::ZERO,
+                startup_delay: Duration::ZERO,
+                maximum_delay: Duration::ZERO,
+                maximum_stretch: 0.0,
+                ..Config::default()
+            })
+            .unwrap();
+            let mut out = vec![0; block];
+            let mut sent = 0;
+            let mut chunk = 0;
+            for at in (0..source.len()).step_by(block) {
+                while sent < source.len() && sent <= at {
+                    let length = ([20, 100, 40, 200, 60][chunk % 5] * sample_rate as usize / 1000)
+                        .min(source.len() - sent);
+                    push(
+                        &mut p,
+                        Duration::from_nanos(sent as u64 * 1_000_000_000 / u64::from(sample_rate)),
+                        &source[sent..sent + length],
+                    );
+                    sent += length;
+                    chunk += 1;
+                }
+                let report = render(
+                    &mut p,
+                    Duration::from_nanos(at as u64 * 1_000_000_000 / u64::from(sample_rate)),
+                    &mut out,
+                );
+                account(&p, report);
+                assert_eq!(out.as_slice(), &source[at..at + block]);
+            }
+            p.finish();
+            assert!(render(&mut p, ms(1000), &mut out).drained);
+            assert_eq!(p.statistics().underruns, 0);
+            assert_eq!(p.sample_rate(), sample_rate);
+            p.reset();
+            let mut oversized = vec![123; sample_rate as usize / 50 + 1];
+            assert_eq!(p.render(ms(10), &mut oversized), Err(PlayoutError::OutputSize));
+            assert!(oversized.iter().all(|&s| s == 123));
+            push(&mut p, ms(0), &[1]); // Rejected render must not advance the clock.
+        }
+    }
+    for sample_rate in [0, 8000, 22_050, 44_100, 96_000] {
+        assert!(matches!(
+            Playout::continuous(Config { sample_rate, ..Config::default() }),
+            Err(PlayoutError::SampleRate)
+        ));
+    }
+}
+
+#[test]
+fn segmented_startup_learning_preserves_native_rate_across_answer_boundaries() {
+    for sample_rate in [16_000, 24_000, 48_000] {
+        let mut p = Playout::segmented(Config {
+            sample_rate,
+            startup_delay: ms(20),
+            maximum_stretch: 0.0,
+            ..Config::default()
+        })
+        .unwrap();
+        let source = vec![1234; sample_rate as usize / 2];
+        let chunk = sample_rate as usize / 10;
+        let mut output = vec![0; sample_rate as usize / 100];
+        for turn in 0..2 {
+            if turn > 0 {
+                p.begin_segment();
+            }
+            let mut packet = 0;
+            for at in (0..1000_u64).step_by(10) {
+                while packet < 5 {
+                    let arrival = packet * 100 + if packet == 1 { 60 } else { 0 };
+                    if arrival > at {
+                        break;
+                    }
+                    let offset = packet as usize * chunk;
+                    push(&mut p, ms(turn * 60000 + arrival), &source[offset..offset + chunk]);
+                    packet += 1;
+                    if packet == 5 {
+                        p.end_segment();
+                    }
+                }
+                let report = render(&mut p, ms(turn * 60000 + at), &mut output);
+                account(&p, report);
+                if at == 0 {
+                    assert_eq!(report.startup_delay, ms(if turn == 0 { 20 } else { 80 }));
+                    assert_eq!(report.startup_observations, turn);
+                }
+            }
+            assert_eq!(p.statistics().source_consumed, source.len() as u64);
+            assert_eq!(p.sample_rate(), sample_rate);
+            assert_eq!(p.statistics().underruns > 0, turn == 0);
+        }
+    }
+}

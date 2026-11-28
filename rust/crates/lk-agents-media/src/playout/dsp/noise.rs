@@ -1,6 +1,6 @@
 //! Bounded linear-prediction analysis and deterministic spectrally shaped excitation.
 
-use super::{FRAME, sample};
+use super::sample;
 
 const ORDER: usize = 8;
 
@@ -40,7 +40,7 @@ impl Noise {
     }
 
     fn analyze_order(&mut self, input: &[i16], order: usize) -> f64 {
-        if input.len() < FRAME {
+        if input.len() < ORDER * 2 {
             self.gain = 0.0;
             return 0.0;
         }
@@ -81,7 +81,8 @@ impl Noise {
         // autocorrelation error as excitation gain. The latter can produce a hiss burst when
         // a nearly periodic signal is regularized for filter stability.
         let mut residual_energy = 0.0;
-        let residual_start = (input.len().saturating_sub(128)).max(ORDER);
+        // Analyze the final 5 1/3 ms of each 20 ms native-rate window.
+        let residual_start = (input.len().saturating_sub(input.len() * 128 / 480)).max(ORDER);
         for i in residual_start..input.len() {
             let mut residual = f64::from(input[i]) - self.mean;
             for (j, &coefficient) in a.iter().enumerate() {

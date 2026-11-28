@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use super::recovery::smooth;
-use super::{FRAME, OVERLAP, PERIOD_MAX, PERIOD_MIN, correlation, rms, sample};
+use super::{Rate, correlation, rms, sample};
 
 const CORRELATION: f64 = 0.9;
 const FAST_CORRELATION: f64 = 0.5;
@@ -36,22 +36,27 @@ struct Match {
 /// 20ms of stationary speech. Preserve the onset before the splice. A genuine low-energy
 /// interval is preferred to changing voiced speech, even if the latter correlates perfectly.
 pub(in crate::playout) fn stretch(
+    rate: Rate,
     queue: &VecDeque<i16>,
     operation: Stretch,
     budget: usize,
     passive_level: f64,
-    output: &mut [i16; FRAME],
+    output: &mut [i16],
 ) -> Option<Scale> {
-    if queue.len() < FRAME + PERIOD_MAX || budget < PERIOD_MIN {
+    if queue.len() < rate.frame() + rate.period_max() || budget < rate.period_min() {
         return None;
     }
     let expand = operation == Stretch::Expand;
     let threshold =
         if operation == Stretch::FastAccelerate { FAST_CORRELATION } else { CORRELATION };
     let evaluate = |period: usize| -> Option<Match> {
-        let anchor = if expand { FRAME - OVERLAP } else { (FRAME - OVERLAP).max(period + OVERLAP) };
+        let anchor = if expand {
+            rate.frame() - rate.overlap()
+        } else {
+            (rate.frame() - rate.overlap()).max(period + rate.overlap())
+        };
         let splice = if expand { anchor } else { anchor - period };
-        let overlap = OVERLAP.min(FRAME - splice);
+        let overlap = rate.overlap().min(rate.frame() - splice);
         let before = rms(|i| queue[anchor - period + i], period);
         let after = rms(|i| queue[anchor + i], period);
         let passive = before < passive_level
@@ -69,7 +74,7 @@ pub(in crate::playout) fn stretch(
         Some(Match { period, splice, overlap, score, passive })
     };
     let mut best: Option<Match> = None;
-    for period in PERIOD_MIN..=PERIOD_MAX.min(budget) {
+    for period in rate.period_min()..=rate.period_max().min(budget) {
         let Some(candidate) = evaluate(period) else {
             continue;
         };
@@ -85,7 +90,7 @@ pub(in crate::playout) fn stretch(
     }
     let mut best = best?;
     if operation == Stretch::FastAccelerate {
-        for multiple in (2..=PERIOD_MAX.min(budget) / best.period).rev() {
+        for multiple in (2..=rate.period_max().min(budget) / best.period).rev() {
             if let Some(candidate) = evaluate(best.period * multiple) {
                 best = candidate;
                 break;
@@ -104,7 +109,7 @@ pub(in crate::playout) fn stretch(
         };
     }
     Some(Scale {
-        consumed: if expand { FRAME - best.period } else { FRAME + best.period },
+        consumed: if expand { rate.frame() - best.period } else { rate.frame() + best.period },
         change: best.period,
         passive: best.passive,
     })
@@ -114,21 +119,22 @@ pub(in crate::playout) fn stretch(
 /// analysis and one repeated period. A strong match across both history and new source
 /// protects consonants and onsets; no future 35 ms chunk is required.
 pub(in crate::playout) fn preemptive(
+    rate: Rate,
     history: &VecDeque<i16>,
     queue: &VecDeque<i16>,
     budget: usize,
     passive_level: f64,
-    output: &mut [i16; FRAME],
+    output: &mut [i16],
 ) -> Option<Scale> {
-    if history.len() < 2 * PERIOD_MIN || budget < PERIOD_MIN {
+    if history.len() < 2 * rate.period_min() || budget < rate.period_min() {
         return None;
     }
     let end = history.len();
     let mut quiet = false;
     let mut best = CORRELATION;
     let mut period = 0;
-    for lag in PERIOD_MIN..=PERIOD_MAX.min(budget).min(end / 2) {
-        if queue.len() < (FRAME - lag).max(lag) {
+    for lag in rate.period_min()..=rate.period_max().min(budget).min(end / 2) {
+        if queue.len() < (rate.frame() - lag).max(lag) {
             continue;
         }
         let previous = rms(|i| history[end - lag + i], lag);
@@ -162,5 +168,5 @@ pub(in crate::playout) fn preemptive(
             queue[i - period]
         };
     }
-    Some(Scale { consumed: FRAME - period, change: period, passive: quiet })
+    Some(Scale { consumed: rate.frame() - period, change: period, passive: quiet })
 }

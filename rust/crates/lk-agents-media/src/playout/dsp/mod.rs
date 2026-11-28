@@ -9,15 +9,23 @@ mod pitch;
 mod recovery;
 mod stretch;
 
+use super::Rate;
+
 pub(super) use conceal::Concealer;
 pub(super) use recovery::Recovery;
 pub(super) use stretch::{Stretch, preemptive, stretch};
 
+#[cfg(test)]
 pub(super) const FRAME: usize = 480;
-pub(super) const OVERLAP: usize = 120;
+#[cfg(test)]
 pub(super) const PERIOD_MIN: usize = 60;
+#[cfg(test)]
 pub(super) const PERIOD_MAX: usize = 360;
+#[cfg(test)]
 pub(super) const HISTORY: usize = 960;
+
+pub(super) const MAX_FRAME: usize = 960;
+pub(super) const MAX_PERIOD: usize = 720;
 
 pub(super) fn sample(value: f64) -> i16 {
     value.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16

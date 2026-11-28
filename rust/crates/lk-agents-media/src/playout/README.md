@@ -1,8 +1,13 @@
 # Ordered PCM playout
 
-Bounded mono 24 kHz PCM16 playout. Push complete chunks with monotonic arrival times and
-render 1–480 samples on the consumer's clock. Chunk sizes may change. The caller owns
+Bounded mono 16/24/48 kHz PCM16 playout. Push complete chunks with monotonic arrival times
+and render up to 20 ms on the consumer's clock (320/480/960 samples respectively). Chunk sizes may change. The caller owns
 pacing and format conversion; capacity errors reject the entire chunk atomically.
+
+Set `Config { sample_rate: 48_000, ..Config::default() }` at construction. The default is
+24 kHz. Input and output use the same native rate; there is no implicit resampling or
+runtime rate setter. `sample_rate()` reports the selected rate, which survives resets and
+segment boundaries. Other rates are rejected explicitly.
 
 ## Choose the source lifecycle
 
@@ -34,7 +39,8 @@ observations gradually reduce the initial wait; worse history increases it withi
 Time scaling prefers quiet splices or matching pitch periods. Concealment blends voiced
 and unvoiced continuation into source-trained room tone, then recovery merges returning
 PCM. Generated sound never trains the noise model. Long outages still lose intelligibility.
-Tests cover accounting, allocation, lifecycle, silence/resumption, jitter/drift, scaling,
+A deterministic PCM hash and the saved comparison recordings pin the existing 24 kHz
+output byte-for-byte. Tests cover accounting, allocation, lifecycle, silence/resumption, jitter/drift, scaling,
 transients, recovery, capacity errors and EOF. Provider/runtime wiring remains separate.
 
 ## Optional NetEq comparison
@@ -44,7 +50,7 @@ Requires Python 3.11+, Cargo, clang++, FFmpeg and the extracted platform archive
 
 ```sh
 python3 rust/crates/lk-agents-media/tools/neteq_compare.py \
-  --input /path/to/mono-24k-pcm16.wav \
+  --input /path/to/mono-pcm16.wav \
   --webrtc /path/to/mac-arm64-release --output /tmp/playout-comparison
 ```
 
@@ -59,7 +65,8 @@ settings, preset descriptions, seed, hashes, startup delay and pre-EOF counters.
 checks source accounting/drain and rejects silent fault onsets. A copied script accepts
 `--crate /path/to/lk-agents-media`; embedded bridges build in a temporary directory.
 
-Only NetEq resamples 24→48→24 kHz for L16. It retains each enclosing chunk's arrival time
+The script accepts 16/24/48 kHz WAVs. Only NetEq converts to/from 48 kHz for L16 when
+needed. It retains each enclosing chunk's arrival time
 and its own native rate control; `--native-maximum-ms` sets an optional target cap. Onset
 latency excludes model, live network and device delay. These are diagnostic comparisons,
 not perceptual scores or a claim of NetEq parity. Existing PR recordings remain attached.

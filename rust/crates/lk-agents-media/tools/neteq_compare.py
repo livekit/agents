@@ -24,7 +24,7 @@ from typing import Literal, NamedTuple, NotRequired, TypedDict
 #   python3 neteq_compare.py --input speech.wav \
 #       --webrtc /path/to/mac-arm64-release --output /tmp/comparison
 # A copied standalone script also accepts --crate /path/to/lk-agents-media.
-# Input must be a mono 24 kHz PCM16 WAV; choose speech active at the fault onset.
+# Input must be a mono 16/24/48 kHz PCM16 WAV; choose speech active at the fault onset.
 #
 # Writes a directory per scenario containing:
 #   untreated.wav, rust.wav, neteq.wav: recordings with the original wall-clock alignment.
@@ -34,7 +34,7 @@ from typing import Literal, NamedTuple, NotRequired, TypedDict
 # operation counters before EOF. Latency uses 1 ms signal-onset windows and excludes
 # model, live network and device latency. These measurements are not audio-quality scores.
 #
-# Only NetEq uses offline 24->48->24 kHz conversion for L16. Its native maximum target is
+# Only NetEq converts to/from 48 kHz for L16 when needed. Its native maximum target is
 # unlimited by default; Rust defaults to 100 ms. Native and Rust rate controls differ.
 # Temporary C++/Rust bridges are compiled locally and deleted after the run.
 #
@@ -77,9 +77,9 @@ struct Chunk {
 };
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
+  if (argc != 10) {
     std::cerr << "neteq_reference input48.pcm arrivals.csv output48.pcm duration_ms "
-                 "minimum_delay_ms maximum_delay_ms stretch_enabled timeline.csv\n";
+                 "minimum_delay_ms maximum_delay_ms stretch_enabled timeline.csv source_rate_hz\n";
     return 2;
   }
   std::ifstream pcm_file(argv[1], std::ios::binary);
@@ -96,9 +96,11 @@ int main(int argc, char** argv) {
     std::istringstream row(line);
     Chunk chunk;
     if (!(row >> chunk.arrival_us >> chunk.start >> chunk.count)) return 4;
-    // Schedule positions are mono 24 kHz source samples. The reference uses 48 kHz L16.
-    chunk.start *= 2;
-    chunk.count *= 2;
+    // Schedule positions use the source rate; L16 operates at 48 kHz.
+    const size_t source_rate = std::stoul(argv[9]);
+    const size_t end = (chunk.start + chunk.count) * 48000 / source_rate;
+    chunk.start = chunk.start * 48000 / source_rate;
+    chunk.count = end - chunk.start;
     if ((chunk.start + chunk.count) * 2 > pcm.size()) return 5;
     chunks.push_back(chunk);
   }
@@ -198,6 +200,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "time_us,queued_source,target_us,concealed,underruns,inserted,removed"
     )?;
     let mut playout = Playout::continuous(Config {
+        sample_rate: args[8].parse()?,
         minimum_delay: Duration::from_millis(args[5].parse()?),
         startup_delay: Duration::from_millis(args[6].parse()?),
         maximum_delay: Duration::from_millis(args[7].parse()?),
@@ -206,7 +209,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut next = 0;
     let mut available = 0;
     let mut read = 0;
-    let mut output = [0; 240];
+    let mut output = vec![0; playout.sample_rate() as usize / 100];
     let mut drained = false;
     for tick in (0..args[4].parse::<u64>()? * 1000).step_by(10_000) {
         while next < chunks.len() && chunks[next][0] as u64 <= tick {
@@ -245,7 +248,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             stats.stretched,
             stats.accelerated
         )?;
-        for sample in output {
+        for sample in &output {
             pcm.write_all(&sample.to_le_bytes())?;
             let value = if read < available {
                 let s = source[read];
@@ -264,9 +267,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 """
 
 
-SAMPLE_RATE = 24_000
-SAMPLES_PER_MS = SAMPLE_RATE // 1000
-BYTES_PER_MS = SAMPLES_PER_MS * 2
+SUPPORTED_RATES = (16_000, 24_000, 48_000)
 REFERENCE_TAG = "webrtc-a545de4"
 
 Scenario = Literal[
@@ -333,6 +334,7 @@ class Report(TypedDict):
 
 class Options(argparse.Namespace):
     input: Path
+    sample_rate: int
     webrtc: Path
     crate: Path
     output: Path
@@ -361,17 +363,22 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def onset_ms(pcm: bytes) -> int | None:
-    for offset in range(0, len(pcm) - BYTES_PER_MS + 1, BYTES_PER_MS):
-        samples = struct.unpack("<24h", pcm[offset : offset + BYTES_PER_MS])
-        energy = sum(sample * sample for sample in samples) / SAMPLES_PER_MS
+def onset_ms(pcm: bytes, sample_rate: int) -> int | None:
+    samples_per_ms = sample_rate // 1000
+    bytes_per_ms = samples_per_ms * 2
+    for offset in range(0, len(pcm) - bytes_per_ms + 1, bytes_per_ms):
+        samples = struct.unpack(f"<{samples_per_ms}h", pcm[offset : offset + bytes_per_ms])
+        energy = sum(sample * sample for sample in samples) / samples_per_ms
         if energy >= 150**2:
-            return offset // BYTES_PER_MS
+            return offset // bytes_per_ms
 
     return None
 
 
-def make_schedule(name: Scenario, sample_count: int, chunk_ms: int, fault_ms: int) -> list[Arrival]:
+def make_schedule(
+    name: Scenario, sample_count: int, chunk_ms: int, fault_ms: int, sample_rate: int = 24_000
+) -> list[Arrival]:
+    samples_per_ms = sample_rate // 1000
     schedule: list[Arrival] = []
     previous_arrival_us = 0
     seed = JITTER_SEED
@@ -381,13 +388,13 @@ def make_schedule(name: Scenario, sample_count: int, chunk_ms: int, fault_ms: in
     next_stall_us = 0
 
     while start < sample_count:
-        nominal_us = start * 1_000_000 // SAMPLE_RATE
+        nominal_us = start * 1_000_000 // sample_rate
         elapsed_us = max(0, nominal_us - fault_ms * 1000)
         after_onset = nominal_us >= fault_ms * 1000
         delay_us = 0
         duration_ms = chunk_ms
 
-        if name == "late-start" and start == chunk_ms * SAMPLES_PER_MS:
+        if name == "late-start" and start == chunk_ms * samples_per_ms:
             delay_us = 60_000
         elif after_onset:
             if name in ("stall-400ms", "stall-1s"):
@@ -417,7 +424,7 @@ def make_schedule(name: Scenario, sample_count: int, chunk_ms: int, fault_ms: in
 
         # A reliable transport may batch chunks but cannot reorder or discard source audio.
         arrival_us = max(previous_arrival_us, nominal_us + delay_us)
-        count = min(duration_ms * SAMPLES_PER_MS, sample_count - start)
+        count = min(duration_ms * samples_per_ms, sample_count - start)
         schedule.append(Arrival(arrival_us, start, count))
         previous_arrival_us = arrival_us
         start += count
@@ -432,7 +439,7 @@ def parse_arguments() -> Options:
         epilog="Scenarios (timing changes start at --fault-at-ms unless noted):\n"
         + "\n".join(f"  {name}: {description}" for name, description in SCENARIOS.items()),
     )
-    parser.add_argument("--input", type=Path, required=True, help="mono 24 kHz PCM16 WAV")
+    parser.add_argument("--input", type=Path, required=True, help="mono 16/24/48 kHz PCM16 WAV")
     parser.add_argument(
         "--webrtc", type=Path, required=True, help=f"extracted {REFERENCE_TAG} archive"
     )
@@ -460,14 +467,15 @@ def parse_arguments() -> Options:
 def read_input(options: Options) -> bytes:
     with wave.open(str(options.input), "rb") as stream:
         audio_format = (stream.getframerate(), stream.getnchannels(), stream.getsampwidth())
-        if audio_format != (SAMPLE_RATE, 1, 2):
-            raise ValueError("input must be mono 24 kHz PCM16 WAV")
+        if audio_format[0] not in SUPPORTED_RATES or audio_format[1:] != (1, 2):
+            raise ValueError("input must be mono 16/24/48 kHz PCM16 WAV")
+        options.sample_rate = stream.getframerate()
 
         pcm = stream.readframes(stream.getnframes())
 
-    if len(pcm) < (options.fault_at_ms + 1500) * BYTES_PER_MS:
+    if len(pcm) < (options.fault_at_ms + 1500) * (options.sample_rate // 1000 * 2):
         raise ValueError("input must extend at least 1.5 seconds beyond the fault onset")
-    if len(pcm) <= options.chunk_ms * BYTES_PER_MS:
+    if len(pcm) <= options.chunk_ms * (options.sample_rate // 1000 * 2):
         raise ValueError("input must contain at least two chunks")
 
     return pcm
@@ -538,34 +546,37 @@ def fault_onset_ms(schedule: list[Arrival], name: Scenario, options: Options) ->
     if name == "late-start":
         return options.chunk_ms
 
-    anchor = options.fault_at_ms * SAMPLES_PER_MS
+    anchor = options.fault_at_ms * (options.sample_rate // 1000)
     first_fault = next(chunk for chunk in schedule if chunk.source_start >= anchor)
-    return first_fault.source_start // SAMPLES_PER_MS
+    return first_fault.source_start // (options.sample_rate // 1000)
 
 
-def check_active_speech(pcm: bytes, name: Scenario, fault_ms: int | None) -> None:
+def check_active_speech(pcm: bytes, name: Scenario, fault_ms: int | None, sample_rate: int) -> None:
+    bytes_per_ms = sample_rate // 1000 * 2
     if fault_ms is None:
         return
 
-    window = pcm[fault_ms * BYTES_PER_MS : (fault_ms + 50) * BYTES_PER_MS]
+    window = pcm[fault_ms * bytes_per_ms : (fault_ms + 50) * bytes_per_ms]
     samples = struct.unpack(f"<{len(window) // 2}h", window)
     energy = sum(sample * sample for sample in samples) / len(samples) if samples else 0
     if math.sqrt(energy) < 150:
         raise ValueError(f"{name}: fault window is silent; select another onset or speech excerpt")
 
 
-def collect_metrics(directory: Path, source: bytes, cutoff_us: int) -> dict[Track, TrackMetrics]:
+def collect_metrics(
+    directory: Path, source: bytes, cutoff_us: int, sample_rate: int
+) -> dict[Track, TrackMetrics]:
     metrics: dict[Track, TrackMetrics] = {}
-    source_onset = onset_ms(source)
+    source_onset = onset_ms(source, sample_rate)
 
     for track in TRACKS:
         raw = directory / f"{track}.pcm"
         pcm = raw.read_bytes()
         with wave.open(str(directory / f"{track}.wav"), "wb") as stream:
-            stream.setparams((1, 2, SAMPLE_RATE, 0, "NONE", "not compressed"))
+            stream.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
             stream.writeframes(pcm)
 
-        output_onset = onset_ms(pcm)
+        output_onset = onset_ms(pcm, sample_rate)
         added_startup = None
         if output_onset is not None and source_onset is not None:
             added_startup = output_onset - source_onset
@@ -592,9 +603,11 @@ def render_scenario(
 ) -> ScenarioMetrics:
     directory = options.output.resolve() / name
     directory.mkdir(exist_ok=True)
-    schedule = make_schedule(name, len(source) // 2, options.chunk_ms, options.fault_at_ms)
+    schedule = make_schedule(
+        name, len(source) // 2, options.chunk_ms, options.fault_at_ms, options.sample_rate
+    )
     fault_ms = fault_onset_ms(schedule, name, options)
-    check_active_speech(source, name, fault_ms)
+    check_active_speech(source, name, fault_ms, options.sample_rate)
 
     arrivals_file = directory / "arrivals.csv"
     with arrivals_file.open("w", newline="") as stream:
@@ -602,17 +615,17 @@ def render_scenario(
         writer.writerow(("arrival_us", "source_start", "samples"))
         writer.writerows(schedule)
 
-    source_duration_ms = len(source) // BYTES_PER_MS
+    source_duration_ms = len(source) // (options.sample_rate // 1000 * 2)
     last_arrival_us = schedule[-1].arrival_us
     end_ms = max(source_duration_ms, last_arrival_us / 1000) + options.maximum_ms + 2500
     render_duration_ms = math.ceil(end_ms / 10) * 10
 
-    run(rust, raw, arrivals_file, directory, render_duration_ms, options.minimum_ms, options.startup_ms, options.maximum_ms)  # fmt: skip
-    run(native, source48, arrivals_file, directory / "neteq48.pcm", render_duration_ms, options.minimum_ms, options.native_maximum_ms, 1, directory / "neteq.csv")  # fmt: skip
-    run("ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", "48000", "-ac", "1", "-i", directory / "neteq48.pcm", "-ar", "24000", "-f", "s16le", directory / "neteq.pcm")  # fmt: skip
+    run(rust, raw, arrivals_file, directory, render_duration_ms, options.minimum_ms, options.startup_ms, options.maximum_ms, options.sample_rate)  # fmt: skip
+    run(native, source48, arrivals_file, directory / "neteq48.pcm", render_duration_ms, options.minimum_ms, options.native_maximum_ms, 1, directory / "neteq.csv", options.sample_rate)  # fmt: skip
+    run("ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", "48000", "-ac", "1", "-i", directory / "neteq48.pcm", "-ar", options.sample_rate, "-f", "s16le", directory / "neteq.pcm")  # fmt: skip
 
     cutoff_us = min(20_000_000, source_duration_ms * 1000, last_arrival_us)
-    metrics = collect_metrics(directory, source, cutoff_us)
+    metrics = collect_metrics(directory, source, cutoff_us, options.sample_rate)
     print(f"{name}: {directory}", flush=True)
     return {
         "description": SCENARIOS[name],

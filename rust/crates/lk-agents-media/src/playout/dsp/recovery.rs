@@ -4,17 +4,15 @@
 use std::collections::VecDeque;
 
 use super::conceal::Concealer;
-use super::{FRAME, OVERLAP, PERIOD_MAX, correlation, rms, sample};
-
-const MATCH: usize = 240;
-const MAX_MERGE: usize = 480;
+use super::{MAX_FRAME, MAX_PERIOD, Rate, correlation, rms, sample};
 
 /// A bounded continuation prefix aligns returning speech without skipping source samples.
 /// Two-window phase validation precedes an energy-normalized merge and, after a faded
 /// outage, a bounded gain ramp back to full level.
 pub(in crate::playout) struct Recovery {
-    continuation: [i16; MAX_MERGE],
-    prefix: [i16; PERIOD_MAX],
+    rate: Rate,
+    continuation: [i16; MAX_FRAME],
+    prefix: [i16; MAX_PERIOD],
     prefix_length: usize,
     prefix_position: usize,
     length: usize,
@@ -25,11 +23,19 @@ pub(in crate::playout) struct Recovery {
     similarity: f64,
 }
 
+#[cfg(test)]
 impl Default for Recovery {
     fn default() -> Self {
+        Self::new(Rate::default())
+    }
+}
+
+impl Recovery {
+    pub(in crate::playout) fn new(rate: Rate) -> Self {
         Self {
-            continuation: [0; MAX_MERGE],
-            prefix: [0; PERIOD_MAX],
+            rate,
+            continuation: [0; MAX_FRAME],
+            prefix: [0; MAX_PERIOD],
             prefix_length: 0,
             prefix_position: 0,
             length: 0,
@@ -40,9 +46,6 @@ impl Default for Recovery {
             similarity: 0.0,
         }
     }
-}
-
-impl Recovery {
     pub(in crate::playout) fn active(&self) -> bool {
         self.prefix_position < self.prefix_length
             || self.position < self.length
@@ -59,15 +62,15 @@ impl Recovery {
         self.ramp_position = 0;
         self.prefix_length = 0;
         self.prefix_position = 0;
-        let available = queue.len().min(MATCH);
+        let available = queue.len().min(self.rate.scale(240));
         if available == 0 {
             self.length = 0;
             self.ramp = 0;
             return;
         }
         let mut model = conceal.clone();
-        let mut prediction = [0; PERIOD_MAX + MAX_MERGE];
-        for out in &mut prediction {
+        let mut prediction = [0; MAX_PERIOD + MAX_FRAME];
+        for out in &mut prediction[..self.rate.period_max() + self.rate.frame()] {
             *out = model.next();
         }
         let new_rms = rms(|i| queue[i], available);
@@ -88,7 +91,7 @@ impl Recovery {
         };
         let original = score(0);
         let mut similarity = original;
-        if conceal.voiced() > 0.4 && conceal.gain() > 0.25 && available == MATCH {
+        if conceal.voiced() > 0.4 && conceal.gain() > 0.25 && available == self.rate.scale(240) {
             for lag in 1..conceal.period() {
                 let candidate = score(lag);
                 if candidate > similarity {
@@ -113,19 +116,19 @@ impl Recovery {
             similarity = original;
         }
         self.length = if similarity > 0.7 && conceal.voiced() > 0.4 {
-            (conceal.period() * 2).clamp(OVERLAP, MAX_MERGE).min(queue.len())
+            (conceal.period() * 2).clamp(self.rate.overlap(), self.rate.frame()).min(queue.len())
         } else {
-            48
+            self.rate.scale(48)
         };
         self.similarity = similarity.max(0.0);
         // Keep a short-gap return at original gain. Only a substantially faded interruption
         // warrants gradual unmuting; never boost an incoming quiet consonant to match a vowel.
-        self.gain = if conceal.duration() > 480 && old_rms < new_rms * 0.7 {
+        self.gain = if conceal.duration() > self.rate.frame() && old_rms < new_rms * 0.7 {
             (old_rms / new_rms.max(1.0)).clamp(0.0, 1.0).max(conceal.gain())
         } else {
             1.0
         };
-        self.ramp = if self.gain < 1.0 { FRAME } else { 0 };
+        self.ramp = if self.gain < 1.0 { self.rate.frame() } else { 0 };
         self.continuation[..self.length].copy_from_slice(&prediction[offset..offset + self.length]);
         if self.prefix_length == 0 {
             self.continuation[0] = conceal.last_generated();
