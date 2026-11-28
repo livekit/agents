@@ -19,6 +19,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import aiohttp
+from typing_extensions import TypeIs
 
 from livekit.agents import (
     APIConnectionError,
@@ -46,6 +47,11 @@ SUPPORTED_OUTPUT_FORMATS = {
 }
 
 
+def _is_number(value: object) -> TypeIs[float]:
+    # an int such as 1 or 50 is as valid as a float; bool is an int subclass, so exclude it
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 @dataclass
 class ProsodyConfig:
     rate: Literal["x-slow", "slow", "medium", "fast", "x-fast"] | float | None = None
@@ -53,10 +59,11 @@ class ProsodyConfig:
     pitch: Literal["x-low", "low", "medium", "high", "x-high"] | None = None
 
     def validate(self) -> None:
-        if self.rate:
-            if isinstance(self.rate, float) and not 0.5 <= self.rate <= 2:
-                raise ValueError("Prosody rate must be between 0.5 and 2")
-            if isinstance(self.rate, str) and self.rate not in [
+        if self.rate is not None:
+            if _is_number(self.rate):
+                if not 0.5 <= self.rate <= 2:
+                    raise ValueError("Prosody rate must be between 0.5 and 2")
+            elif self.rate not in [
                 "x-slow",
                 "slow",
                 "medium",
@@ -66,10 +73,11 @@ class ProsodyConfig:
                 raise ValueError(
                     "Prosody rate must be one of 'x-slow', 'slow', 'medium', 'fast', 'x-fast'"
                 )
-        if self.volume:
-            if isinstance(self.volume, float) and not 0 <= self.volume <= 100:
-                raise ValueError("Prosody volume must be between 0 and 100")
-            if isinstance(self.volume, str) and self.volume not in [
+        if self.volume is not None:
+            if _is_number(self.volume):
+                if not 0 <= self.volume <= 100:
+                    raise ValueError("Prosody volume must be between 0 and 100")
+            elif self.volume not in [
                 "silent",
                 "x-soft",
                 "soft",
