@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 from dataclasses import replace
 from urllib.parse import quote
 from uuid import uuid4
+
+import aiohttp
 
 from livekit.agents import APIConnectOptions, tts
 
 from ._client import DEFAULT_OPTIONS, SAMPLE_RATE, Client, duplex, error, receive
 
+logger = logging.getLogger(__name__)
+MAX_TEXT_LENGTH = 5000
+
 
 class TTS(tts.TTS):
-    """Kitsch TTS. Each stream represents one flush-delimited utterance.
+    """Kitsch Labs TTS. Each stream represents one flush-delimited utterance.
 
-    voice_id must be accessible with the supplied Kitsch workspace API key.
+    voice_id must be accessible with the supplied Kitsch Labs workspace API key.
     Output is mono PCM16 at 24 kHz.
     """
 
@@ -25,6 +31,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         language_code: str | None = None,
         base_url: str = "https://api.kitschlabs.com",
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         if not voice_id.strip():
             raise ValueError("voice_id is required.")
@@ -33,7 +40,7 @@ class TTS(tts.TTS):
             sample_rate=SAMPLE_RATE,
             num_channels=1,
         )
-        self._client = Client(api_key, base_url)
+        self._client = Client(api_key, base_url, http_session)
         self._path = f"/v1/text-to-speech/{quote(voice_id, safe='')}"
         self._language = language_code
 
@@ -43,14 +50,17 @@ class TTS(tts.TTS):
 
     @property
     def provider(self) -> str:
-        return "Kitsch"
+        return "Kitsch Labs"
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_OPTIONS
     ) -> ChunkedStream:
         """Synthesize complete text through the native HTTP audio stream."""
-        if not text.strip() or len(text) > 5000:
-            raise ValueError("text must contain 1–5000 characters.")
+        if not text.strip():
+            raise ValueError("text must not be empty.")
+        if len(text) > MAX_TEXT_LENGTH:
+            logger.warning("Kitsch Labs TTS input exceeded 5000 characters and was truncated.")
+            text = text[:MAX_TEXT_LENGTH]
         return ChunkedStream(
             tts=self, input_text=text, conn_options=replace(conn_options, max_retry=0)
         )
@@ -58,9 +68,6 @@ class TTS(tts.TTS):
     def stream(self, *, conn_options: APIConnectOptions = DEFAULT_OPTIONS) -> SynthesizeStream:
         """Accept incremental text; flush/end_input completes this utterance."""
         return SynthesizeStream(self, replace(conn_options, max_retry=0))
-
-    async def aclose(self) -> None:
-        await self._client.close()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -77,7 +84,7 @@ class ChunkedStream(tts.ChunkedStream):
             json=body,
         ) as response:
             if response.content_type not in {"audio/pcm", "application/octet-stream"}:
-                raise error("Kitsch returned an unexpected audio format.")
+                raise error("Kitsch Labs returned an unexpected audio format.")
             output_emitter.initialize(
                 request_id=response.headers.get("x-request-id", uuid4().hex),
                 sample_rate=SAMPLE_RATE,
@@ -90,7 +97,7 @@ class ChunkedStream(tts.ChunkedStream):
                 length += len(chunk)
                 output_emitter.push(chunk)
             if not length or length % 2:
-                raise error("Kitsch returned empty or incomplete PCM audio.")
+                raise error("Kitsch Labs returned empty or incomplete PCM audio.")
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -99,15 +106,21 @@ class SynthesizeStream(tts.SynthesizeStream):
     def __init__(self, tts_instance: TTS, options: APIConnectOptions) -> None:
         self._characters = 0
         self._flushed = False
+        self._truncated = False
         super().__init__(tts=tts_instance, conn_options=options)
 
     def push_text(self, token: str) -> None:
         if self._flushed and token:
             raise ValueError("Create a new TTS stream after flush.")
-        if self._characters + len(token) > 5000:
-            raise ValueError("A TTS utterance cannot exceed 5000 characters.")
+        remaining = MAX_TEXT_LENGTH - self._characters
+        if len(token) > remaining:
+            if not self._truncated:
+                logger.warning("Kitsch Labs TTS input exceeded 5000 characters and was truncated.")
+                self._truncated = True
+            token = token[:remaining]
         self._characters += len(token)
-        super().push_text(token)
+        if token:
+            super().push_text(token)
 
     def flush(self) -> None:
         self._flushed = True
@@ -153,17 +166,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 while True:
                     data = await receive(ws, self._conn_options.timeout)
                     if "error" in data:
-                        raise error("Kitsch synthesis failed.")
+                        raise error("Kitsch Labs synthesis failed.")
                     if data.get("audio"):
                         try:
                             chunk = base64.b64decode(data["audio"], validate=True)
                         except (ValueError, TypeError, binascii.Error):
-                            raise error("Invalid Kitsch audio response.") from None
+                            raise error("Invalid Kitsch Labs audio response.") from None
                         length += len(chunk)
                         output_emitter.push(chunk)
                     if data.get("isFinal") is True:
                         if not length or length % 2:
-                            raise error("Kitsch returned empty or incomplete PCM audio.")
+                            raise error("Kitsch Labs returned empty or incomplete PCM audio.")
                         output_emitter.end_segment()
                         return
 

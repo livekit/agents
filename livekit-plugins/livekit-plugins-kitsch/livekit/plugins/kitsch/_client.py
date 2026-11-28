@@ -4,17 +4,24 @@ import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
 import aiohttp
 
-from livekit.agents import APIConnectOptions, APIError, APIStatusError
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    utils,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable
 
-DEFAULT_OPTIONS = APIConnectOptions(max_retry=0, timeout=120)
+DEFAULT_OPTIONS = APIConnectOptions(timeout=120)
 SAMPLE_RATE = 24_000
 
 
@@ -22,19 +29,10 @@ def error(message: str) -> APIError:
     return APIError(message, retryable=False)
 
 
-async def _reject_redirect(
-    request: aiohttp.ClientRequest,
-    handler: Callable[[aiohttp.ClientRequest], Awaitable[aiohttp.ClientResponse]],
-) -> aiohttp.ClientResponse:
-    response = await handler(request)
-    if 300 <= response.status < 400:
-        response.release()
-        raise error("Kitsch API redirects are not supported.")
-    return response
-
-
 class Client:
-    def __init__(self, api_key: str | None, base_url: str) -> None:
+    def __init__(
+        self, api_key: str | None, base_url: str, http_session: aiohttp.ClientSession | None = None
+    ) -> None:
         key = api_key if api_key is not None else os.environ.get("KITSCH_API_KEY")
         if not key or not key.strip() or "\n" in key or "\r" in key:
             raise ValueError("Set KITSCH_API_KEY or provide a valid api_key.")
@@ -52,17 +50,13 @@ class Client:
             raise ValueError("base_url must be an HTTPS origin (HTTP for loopback only).")
         self.origin = base_url.rstrip("/")
         self.headers = {"Authorization": f"Bearer {key}"}
-        self._session: aiohttp.ClientSession | None = None
+        self._session = http_session
 
     @property
     def session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(middlewares=(_reject_redirect,))
+        if self._session is None:
+            self._session = utils.http_context.http_session()
         return self._session
-
-    async def close(self) -> None:
-        if self._session is not None:
-            await self._session.close()
 
     @asynccontextmanager
     async def post(
@@ -76,16 +70,20 @@ class Client:
                 allow_redirects=False,
                 **kwargs,
             ) as response:
+                if 300 <= response.status < 400:
+                    raise error("Kitsch Labs API redirects are not supported.")
                 if response.status != 200:
                     raise APIStatusError(
-                        "Kitsch API request failed.",
+                        "Kitsch Labs API request failed.",
                         status_code=response.status,
                         request_id=response.headers.get("x-request-id"),
-                        retryable=False,
+                        retryable=response.status in {408, 429} or response.status >= 500,
                     )
                 yield response
-        except (asyncio.TimeoutError, aiohttp.ClientError):
-            raise error("Kitsch API connection failed or timed out.") from None
+        except asyncio.TimeoutError:
+            raise APITimeoutError("Kitsch Labs API request timed out.") from None
+        except aiohttp.ClientError:
+            raise APIConnectionError("Kitsch Labs API connection failed.") from None
 
     @asynccontextmanager
     async def websocket(
@@ -103,27 +101,34 @@ class Client:
                 timeout=options.timeout,
             )
             async with ws:
-                yield ws
+                # aiohttp follows WS redirects but strips cross-origin Authorization.
+                # Reject the handshake before sending any customer content.
+                if ws._response.history:
+                    raise error("Kitsch Labs API redirects are not supported.")
+                # aiohttp omits its decoded-text overload on Python 3.10.
+                yield cast("aiohttp.ClientWebSocketResponse", ws)
         except aiohttp.WSServerHandshakeError as exc:
             raise APIStatusError(
-                "Kitsch WebSocket handshake failed.",
+                "Kitsch Labs WebSocket handshake failed.",
                 status_code=exc.status,
-                retryable=False,
+                retryable=exc.status in {408, 429} or exc.status >= 500,
             ) from None
-        except (asyncio.TimeoutError, aiohttp.ClientError):
-            raise error("Kitsch WebSocket connection failed or timed out.") from None
+        except asyncio.TimeoutError:
+            raise APITimeoutError("Kitsch Labs WebSocket request timed out.") from None
+        except aiohttp.ClientError:
+            raise APIConnectionError("Kitsch Labs WebSocket connection failed.") from None
 
 
 async def receive(ws: aiohttp.ClientWebSocketResponse, timeout: float) -> dict[str, Any]:
     message = await ws.receive(timeout=timeout)
     if message.type != aiohttp.WSMsgType.TEXT:
-        raise error("Kitsch stream closed before completion.")
+        raise APIConnectionError("Kitsch Labs stream closed before completion.")
     try:
         data = json.loads(message.data)
     except (ValueError, TypeError):
-        raise error("Invalid Kitsch stream response.") from None
+        raise error("Invalid Kitsch Labs stream response.") from None
     if not isinstance(data, dict):
-        raise error("Invalid Kitsch stream response.")
+        raise error("Invalid Kitsch Labs stream response.")
     return data
 
 

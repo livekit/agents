@@ -1,4 +1,4 @@
-"""Kitsch TTS and STT integration for LiveKit Agents."""
+"""Kitsch Labs TTS and STT integration for LiveKit Agents."""
 
 from livekit.agents import Plugin
 

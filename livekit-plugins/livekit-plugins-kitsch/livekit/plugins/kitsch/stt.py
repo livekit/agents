@@ -3,13 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import wave
-from dataclasses import replace
 from io import BytesIO
 
 import aiohttp
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, LanguageCode, stt
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -19,11 +18,11 @@ PREFIX = "conversation.item.input_audio_transcription."
 
 
 class STT(stt.STT):
-    """Kitsch file and streaming transcription using a workspace API key.
+    """Kitsch Labs file and streaming transcription using a workspace API key.
 
     Streaming accepts mono audio, resamples to 24 kHz, and enables replaceable
     partial transcripts. Server VAD endpoints speech; flush also commits manually.
-    Connections follow the server's session limit without reconnect or replay.
+    Connections recover according to the caller's retry options.
     """
 
     def __init__(
@@ -33,13 +32,14 @@ class STT(stt.STT):
         language: str | None = None,
         prompt: str | None = None,
         base_url: str = "https://api.kitschlabs.com",
+        http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True, interim_results=True, manual_flush=True
             )
         )
-        self._client = Client(api_key, base_url)
+        self._client = Client(api_key, base_url, http_session)
         self._language = language
         self._prompt = prompt
 
@@ -49,7 +49,7 @@ class STT(stt.STT):
 
     @property
     def provider(self) -> str:
-        return "Kitsch"
+        return "Kitsch Labs"
 
     async def recognize(
         self,
@@ -58,10 +58,8 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_OPTIONS,
     ) -> stt.SpeechEvent:
-        """Transcribe mono audio through the Kitsch file transcription API."""
-        return await super().recognize(
-            buffer, language=language, conn_options=replace(conn_options, max_retry=0)
-        )
+        """Transcribe mono audio through the Kitsch Labs file transcription API."""
+        return await super().recognize(buffer, language=language, conn_options=conn_options)
 
     async def _recognize_impl(
         self,
@@ -93,9 +91,9 @@ class STT(stt.STT):
             try:
                 data = await response.json()
             except (ValueError, aiohttp.ContentTypeError):
-                raise error("Invalid Kitsch transcription response.") from None
+                raise error("Invalid Kitsch Labs transcription response.") from None
             if not isinstance(data, dict) or not isinstance(data.get("text"), str):
-                raise error("Invalid Kitsch transcription response.")
+                raise error("Invalid Kitsch Labs transcription response.")
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 request_id=response.headers.get("x-request-id", ""),
@@ -113,12 +111,9 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_OPTIONS,
     ) -> RecognizeStream:
-        """Create a realtime stream; flush waits for final text before more audio."""
+        """Create a realtime stream with concurrent audio input and transcription."""
         selected_language = language if is_given(language) else self._language
-        return RecognizeStream(self, selected_language, replace(conn_options, max_retry=0))
-
-    async def aclose(self) -> None:
-        await self._client.close()
+        return RecognizeStream(self, selected_language, conn_options)
 
 
 class RecognizeStream(stt.RecognizeStream):
@@ -131,18 +126,24 @@ class RecognizeStream(stt.RecognizeStream):
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if frame.num_channels != 1:
             raise ValueError("STT streaming requires mono audio.")
-        # Bound the SDK's synchronous input queue instead of accumulating microphone data.
-        if self._input_ch.qsize() >= 500:
-            raise ValueError("STT input is full; consume events before sending more audio.")
         super().push_frame(frame)
 
     async def _run(self) -> None:
+        try:
+            await self._run_session()
+        except APIError as exc:
+            # A new connection cannot recover audio already consumed at end_input.
+            if self._input_ch.closed and self._input_ch.qsize() == 0:
+                exc.retryable = False
+            raise
+
+    async def _run_session(self) -> None:
         async with self._stt._client.websocket(
             "/v1/speech-to-text/stream", self._conn_options
         ) as ws:
             created = await receive(ws, self._conn_options.timeout)
             if created.get("type") != "session.created":
-                raise error("Kitsch STT did not create a session.")
+                raise error("Kitsch Labs STT did not create a session.")
             request_id = created.get("session", {}).get("id", "")
             transcription = {"model": self._stt.model, "include_partial": True}
             if self._language:
@@ -173,18 +174,18 @@ class RecognizeStream(stt.RecognizeStream):
                 .get("include_partial")
                 is not True
             ):
-                raise error("Kitsch STT did not enable partial transcripts.")
+                raise error("Kitsch Labs STT did not enable partial transcripts.")
 
             final_received = asyncio.Event()
-            pending_commit = False
-            commit_confirmed = False
+            final_received.set()
+            pending_commits = 0
             pending_items: set[str] = set()
+            completed_items: set[str] = set()
             finished = False
             speaking = False
-            last_final = None
 
             async def send() -> None:
-                nonlocal pending_commit, commit_confirmed, finished
+                nonlocal pending_commits, finished
                 audio_sent = False
                 async for part in self._input_ch:
                     if isinstance(part, rtc.AudioFrame):
@@ -201,12 +202,10 @@ class RecognizeStream(stt.RecognizeStream):
                         audio_sent = True
                     elif audio_sent:
                         final_received.clear()
-                        pending_commit = True
-                        commit_confirmed = False
+                        pending_commits += 1
                         await ws.send_json({"type": "input_audio_buffer.commit"})
-                        await asyncio.wait_for(final_received.wait(), self._conn_options.timeout)
-                        pending_commit = False
                         audio_sent = False
+                await asyncio.wait_for(final_received.wait(), self._conn_options.timeout)
                 finished = True
                 await ws.close()
 
@@ -231,7 +230,7 @@ class RecognizeStream(stt.RecognizeStream):
                 )
 
             async def read() -> None:
-                nonlocal last_final, speaking, commit_confirmed
+                nonlocal speaking, pending_commits
                 while True:
                     try:
                         data = await receive(ws, 930)
@@ -241,31 +240,40 @@ class RecognizeStream(stt.RecognizeStream):
                         raise
                     event_type = data.get("type")
                     if event_type == "error":
-                        if pending_commit and data.get("error", {}).get("code") == "buffer_empty":
+                        code = data.get("error", {}).get("code")
+                        if pending_commits and code == "buffer_empty":
                             # An empty input buffer can still have transcriptions in flight.
-                            commit_confirmed = True
-                            if not pending_items:
+                            pending_commits -= 1
+                            if not pending_commits and not pending_items:
                                 final_received.set()
                             continue
-                        raise error("Kitsch transcription failed.")
+                        if code in {
+                            "session_time_limit",
+                            "upstream_error",
+                            "provider_disconnected",
+                        }:
+                            raise APIConnectionError("Kitsch Labs transcription session ended.")
+                        raise error("Kitsch Labs transcription failed.")
                     item_id = data.get("item_id")
-                    if not isinstance(item_id, str) or not item_id or item_id == last_final:
+                    if not isinstance(item_id, str) or not item_id or item_id in completed_items:
                         continue
                     if event_type == "input_audio_buffer.committed":
                         pending_items.add(item_id)
-                        if pending_commit:
-                            commit_confirmed = True
+                        final_received.clear()
+                        if pending_commits:
+                            pending_commits -= 1
                         continue
                     if event_type == PREFIX + "partial":
                         stable = data.get("stable_text")
                         provisional = data.get("provisional_text")
                         if not isinstance(stable, str) or not isinstance(provisional, str):
-                            raise error("Invalid Kitsch partial transcript.")
+                            raise error("Invalid Kitsch Labs partial transcript.")
+                        self._mark_provider_progress()
                         emit_text(stt.SpeechEventType.INTERIM_TRANSCRIPT, stable + provisional)
                     elif event_type == PREFIX + "completed":
                         text = data.get("transcript")
                         if not isinstance(text, str):
-                            raise error("Invalid Kitsch final transcript.")
+                            raise error("Invalid Kitsch Labs final transcript.")
                         emit_text(stt.SpeechEventType.FINAL_TRANSCRIPT, text)
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
@@ -274,9 +282,9 @@ class RecognizeStream(stt.RecognizeStream):
                             )
                         )
                         speaking = False
-                        last_final = item_id
+                        completed_items.add(item_id)
                         pending_items.discard(item_id)
-                        if pending_commit and commit_confirmed and not pending_items:
+                        if not pending_commits and not pending_items:
                             final_received.set()
                         seconds = data.get("usage", {}).get("seconds")
                         if isinstance(seconds, (int, float)) and seconds >= 0:

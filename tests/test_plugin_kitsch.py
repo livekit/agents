@@ -5,11 +5,12 @@ import wave
 from contextlib import asynccontextmanager
 from io import BytesIO
 
+import aiohttp
 import pytest
 from aiohttp import web
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, stt, utils
 from livekit.plugins.kitsch import STT, TTS
 
 pytestmark = pytest.mark.unit
@@ -19,8 +20,21 @@ OPTIONS = APIConnectOptions(timeout=2, max_retry=3)
 PREFIX = "conversation.item.input_audio_transcription."
 
 
+@pytest.fixture(autouse=True)
+async def http_context():
+    async with utils.http_context.open():
+        yield
+
+
 @asynccontextmanager
-async def backend(*, failure=None, hold_http=False, automatic_final=False, delayed_final=False):
+async def backend(
+    *,
+    failure=None,
+    hold_http=False,
+    automatic_final=False,
+    delayed_final=False,
+    commit_received=None,
+):
     calls = []
     complete_http = asyncio.Event()
     tts_closed = asyncio.Event()
@@ -51,6 +65,8 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False, delay
         return response
 
     async def tts_ws(request):
+        if failure == "ws-redirect":
+            raise web.HTTPTemporaryRedirect(f"http://localhost:{request.url.port}/redirected")
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         assert request.headers["Authorization"] == "Bearer test-key"
@@ -76,13 +92,21 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False, delay
             tts_closed.set()
         return ws
 
+    async def redirected_ws(request):
+        calls.append(("redirect-target", {"authorization": request.headers.get("Authorization")}))
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for message in ws:
+            calls.append(("redirect-content", message.data))
+        return ws
+
     async def stt_http(request):
         reader = await request.multipart()
         fields = {}
         async for field in reader:
             fields[field.name] = bytes(await field.read())
         calls.append(("recognize", fields))
-        if failure == "status":
+        if failure == "status" or (failure == "retry-once" and len(calls) == 1):
             return web.json_response({}, status=429)
         with wave.open(BytesIO(fields["file"])) as wav:
             assert wav.getnchannels() == 1
@@ -90,12 +114,19 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False, delay
         return web.json_response({"text": "안녕하세요"}, headers={"x-request-id": "stt-1"})
 
     async def stt_ws(request):
+        assert request.headers["Authorization"] == "Bearer test-key"
+        calls.append(("stt-connect", {}))
+        connection = sum(p == "stt-connect" for p, _ in calls)
+        if failure in {"handshake-503", "handshake-401"}:
+            return web.json_response(
+                {"message": "PRIVATE provider detail"}, status=int(failure[-3:])
+            )
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        calls.append(("stt-connect", {}))
-        await ws.send_json({"type": "session.created", "session": {"id": "session-1"}})
+        await ws.send_json({"type": "session.created", "session": {"id": f"session-{connection}"}})
         count = 0
         dirty = False
+        held_final = False
 
         async def final():
             nonlocal count, dirty
@@ -148,6 +179,24 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False, delay
                             dirty = False
                         else:
                             await final()
+                    if failure in {"restart-close", "restart-limit"} and connection == 1:
+                        if failure == "restart-limit":
+                            await ws.send_json(
+                                {
+                                    "type": "error",
+                                    "error": {
+                                        "code": "session_time_limit",
+                                        "message": "PRIVATE provider detail",
+                                    },
+                                }
+                            )
+                        await ws.close()
+                        break
+                    if held_final:
+                        calls.append(("audio-before-final", {}))
+                        await final()
+                        held_final = False
+                        dirty = True
                 elif data["type"] == "input_audio_buffer.commit":
                     if failure == "early-close":
                         await ws.close()
@@ -159,7 +208,11 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False, delay
                                 "item_id": str(count + 1),
                             }
                         )
-                        if failure != "no-final":
+                        if failure == "slow-final" and count == 0:
+                            held_final = True
+                            dirty = False
+                            commit_received.set()
+                        elif failure != "no-final":
                             await final()
                     else:
                         await ws.send_json({"type": "error", "error": {"code": "buffer_empty"}})
@@ -172,6 +225,7 @@ async def backend(*, failure=None, hold_http=False, automatic_final=False, delay
 
     app.router.add_post("/v1/text-to-speech/{voice}/stream", tts_http)
     app.router.add_get("/v1/text-to-speech/{voice}/stream-input", tts_ws)
+    app.router.add_get("/redirected", redirected_ws)
     app.router.add_post("/v1/speech-to-text", stt_http)
     app.router.add_get("/v1/speech-to-text/stream", stt_ws)
     runner = web.AppRunner(app, shutdown_timeout=1)
@@ -325,7 +379,10 @@ async def test_file_stt_never_retries():
         STT(api_key="test-key", base_url=url) as engine,
     ):
         with pytest.raises(APIStatusError):
-            await engine.recognize(rtc.AudioFrame(PCM, 24000, 1, 2400), conn_options=OPTIONS)
+            await engine.recognize(
+                rtc.AudioFrame(PCM, 24000, 1, 2400),
+                conn_options=APIConnectOptions(timeout=2, max_retry=0),
+            )
         assert len(calls) == 1
 
 
@@ -478,3 +535,169 @@ async def test_final_timeout_never_replays(kind):
             with pytest.raises(APIError):
                 await asyncio.wait_for(collect(stream), 3)
         assert sum(p == kind + "-connect" for p, _ in calls) == 1
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_shared_http_session_lifetime(explicit):
+    async with backend() as (url, _, *_):
+        async with aiohttp.ClientSession() as supplied:
+            session = supplied if explicit else utils.http_context.http_session()
+            kwargs = {"api_key": "test-key", "base_url": url}
+            if explicit:
+                kwargs["http_session"] = session
+            tts_engine = TTS(voice_id="minjun", **kwargs)
+            stt_engine = STT(**kwargs)
+            assert await collect(tts_engine.synthesize("안녕", conn_options=OPTIONS))
+            assert (await stt_engine.recognize(rtc.AudioFrame(PCM, 24000, 1, 2400))).alternatives
+            assert tts_engine._client.session is session
+            assert stt_engine._client.session is session
+            await tts_engine.aclose()
+            await stt_engine.aclose()
+            assert not session.closed
+            assert "Authorization" not in session.headers
+
+
+async def test_file_stt_retries_with_callers_options():
+    async with (
+        backend(failure="retry-once") as (url, calls, *_),
+        STT(api_key="test-key", base_url=url) as engine,
+    ):
+        result = await engine.recognize(
+            rtc.AudioFrame(PCM, 24000, 1, 2400),
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0.01, timeout=2),
+        )
+        assert result.alternatives[0].text == "안녕하세요"
+        assert len(calls) == 2
+
+
+@pytest.mark.parametrize("failure", ["restart-close", "restart-limit"])
+@pytest.mark.parametrize("max_retry", [0, 1])
+async def test_stt_recovers_with_fresh_session_and_remaining_audio(failure, max_retry, caplog):
+    async with (
+        backend(failure=failure) as (url, calls, *_),
+        STT(api_key="test-key", base_url=url) as engine,
+    ):
+        failed = asyncio.Event()
+        errors = []
+
+        def on_error(event):
+            errors.append(event)
+            failed.set()
+
+        engine.on("error", on_error)
+        options = APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=2)
+        async with engine.stream(conn_options=options) as stream:
+            consumer = asyncio.create_task(collect(stream))
+            try:
+                stream.push_frame(rtc.AudioFrame(PCM, 24000, 1, 2400))
+                await asyncio.wait_for(failed.wait(), 3)
+                assert errors[0].recoverable == bool(max_retry)
+                if max_retry:
+                    stream.push_frame(rtc.AudioFrame(b"\x02\x00" * 2400, 24000, 1, 2400))
+                    stream.end_input()
+                    events = await asyncio.wait_for(consumer, 3)
+                    finals = [e for e in events if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+                    assert len(finals) == 1
+                    assert finals[0].request_id == "session-2"
+                else:
+                    with pytest.raises(APIError):
+                        await asyncio.wait_for(consumer, 3)
+            finally:
+                consumer.cancel()
+                await asyncio.gather(consumer, return_exceptions=True)
+        assert sum(p == "stt-connect" for p, _ in calls) == max_retry + 1
+        audio = [
+            base64.b64decode(d["audio"])
+            for p, d in calls
+            if p == "stt" and d["type"] == "input_audio_buffer.append"
+        ]
+        assert audio == [PCM] + ([b"\x02\x00" * 2400] if max_retry else [])
+        assert "PRIVATE" not in caplog.text and "test-key" not in caplog.text
+
+
+@pytest.mark.parametrize("status, expected", [(503, 3), (401, 1)])
+async def test_stt_handshake_recovery_is_bounded_and_auth_is_permanent(status, expected, caplog):
+    async with (
+        backend(failure=f"handshake-{status}") as (url, calls, *_),
+        STT(api_key="test-key", base_url=url) as engine,
+    ):
+        options = APIConnectOptions(max_retry=2, retry_interval=0.01, timeout=2)
+        stream = engine.stream(conn_options=options)
+        with pytest.raises(APIError) as caught:
+            await asyncio.wait_for(collect(stream), 3)
+        assert sum(p == "stt-connect" for p, _ in calls) == expected
+        assert "PRIVATE" not in str(caught.value) + caplog.text
+        assert "test-key" not in str(caught.value) + caplog.text
+
+
+async def test_stt_keeps_sending_audio_while_final_is_pending():
+    committed = asyncio.Event()
+    async with (
+        backend(failure="slow-final", commit_received=committed) as (url, calls, *_),
+        STT(api_key="test-key", base_url=url) as engine,
+    ):
+        options = APIConnectOptions(max_retry=0, timeout=5)
+        async with engine.stream(conn_options=options) as stream:
+            consumer = asyncio.create_task(collect(stream))
+            try:
+                frame = rtc.AudioFrame(b"\x01\x00" * 240, 24000, 1, 240)
+                stream.push_frame(frame)
+                stream.flush()
+                await asyncio.wait_for(committed.wait(), 3)
+                for _ in range(501):
+                    stream.push_frame(frame)
+                stream.end_input()
+                events = await asyncio.wait_for(consumer, 8)
+            finally:
+                consumer.cancel()
+                await asyncio.gather(consumer, return_exceptions=True)
+        assert sum(p == "audio-before-final" for p, _ in calls) == 1
+        assert sum(p == "stt" and d["type"] == "input_audio_buffer.append" for p, d in calls) == 502
+        assert sum(e.type == stt.SpeechEventType.FINAL_TRANSCRIPT for e in events) == 2
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_long_tts_truncates_without_stalling_or_logging_text(streaming, caplog):
+    async with (
+        backend() as (url, calls, *_),
+        TTS(voice_id="minjun", api_key="test-key", base_url=url) as engine,
+    ):
+        text = "あ" * 4999 + "い"
+        if streaming:
+            stream = engine.stream(conn_options=OPTIONS)
+            try:
+                stream.push_text(text[:4999])
+                stream.push_text(text[4999:] + "PRIVATE customer text")
+                stream.push_text("PRIVATE more customer text")
+                stream.end_input()
+                events = await asyncio.wait_for(collect(stream), 3)
+            finally:
+                await stream.aclose()
+        else:
+            stream = engine.synthesize(text + "PRIVATE customer text", conn_options=OPTIONS)
+            events = await asyncio.wait_for(collect(stream), 3)
+        assert events
+        sent = (
+            "".join(d.get("text", "") for p, d in calls if p == "tts")
+            if streaming
+            else calls[0][1]["text"]
+        )
+        assert sent == text
+        assert sum("was truncated" in record.message for record in caplog.records) == 1
+        assert "PRIVATE" not in caplog.text
+
+
+async def test_websocket_redirect_does_not_forward_key_or_customer_content(caplog):
+    async with (
+        backend(failure="ws-redirect") as (url, calls, *_),
+        TTS(voice_id="minjun", api_key="test-key", base_url=url) as engine,
+    ):
+        stream = engine.stream(conn_options=OPTIONS)
+        stream.push_text("PRIVATE customer text")
+        stream.end_input()
+        with pytest.raises(APIError, match="redirects") as caught:
+            await asyncio.wait_for(collect(stream), 3)
+        assert [d for p, d in calls if p == "redirect-target"] == [{"authorization": None}]
+        assert not any(p == "redirect-content" for p, _ in calls)
+        assert "PRIVATE" not in str(caught.value) + caplog.text
+        assert "test-key" not in str(caught.value) + caplog.text
