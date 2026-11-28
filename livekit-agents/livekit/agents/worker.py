@@ -1241,14 +1241,15 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                         "LIVEKIT_API_KEY and LIVEKIT_API_SECRET in place of LIVEKIT_TOKEN"
                     )
 
+                # Reattach jobs before sending queued messages. The queue may be full
+                # from the previous connection, and its sender has not started yet.
+                await self._report_active_jobs(ws=ws)
+
                 retry_count = 0
                 self._handle_register(msg.register)
                 self._connecting = False
                 self._disconnected_at = None
                 self._registered.set()
-
-                # report all active jobs to the server after registration
-                await self._report_active_jobs()
 
                 try:
                     await self._run_ws(ws)
@@ -1334,6 +1335,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             while True:
                 try:
                     msg = await self._msg_chan.recv()
+                    if msg.HasField("create_job_token"):
+                        fut = self._job_token_requests.get(msg.create_job_token.request_id)
+                        if fut is None or fut.done():
+                            continue
                     await ws.send_bytes(msg.SerializeToString())
                 except utils.aio.ChanClosed:
                     closing_ws = True
@@ -1814,7 +1819,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         msg = agent.WorkerMessage(update_job=update)
         await self._queue_msg(msg)
 
-    async def _report_active_jobs(self, active_jobs: list[RunningJobInfo] | None = None) -> None:
+    async def _report_active_jobs(
+        self,
+        active_jobs: list[RunningJobInfo] | None = None,
+        *,
+        ws: aiohttp.ClientWebSocketResponse | None = None,
+    ) -> None:
         active_jobs = self.active_jobs if active_jobs is None else active_jobs
         if not active_jobs:
             return
@@ -1830,7 +1840,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         job_ids = [job.id for job in jobs]
         migrate_req = agent.MigrateJobRequest(job_ids=job_ids, jobs=jobs)
         msg = agent.WorkerMessage(migrate_job=migrate_req)
-        await self._queue_msg(msg)
+        if ws is None:
+            await self._queue_msg(msg)
+        else:
+            await asyncio.wait_for(
+                ws.send_bytes(msg.SerializeToString()), timeout=WORKER_REGISTRATION_TIMEOUT
+            )
 
         logger.debug(
             "reported active jobs after registration",

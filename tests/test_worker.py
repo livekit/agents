@@ -722,6 +722,87 @@ async def test_create_job_token_fails_when_the_connection_is_lost() -> None:
                 await task
 
 
+@pytest.mark.virtual_time
+async def test_reconnect_reports_jobs_before_draining_a_full_queue() -> None:
+    running = RunningJobInfo(
+        accept_arguments=JobAcceptArguments(name="", identity="agent-identity", metadata=""),
+        job=agent.Job(id="AJ_running"),
+        url="ws://localhost",
+        token="test-token",
+        worker_id="AW_previous",
+        fake_job=False,
+    )
+    sent: list[agent.WorkerMessage] = []
+    incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.receive.side_effect = incoming.get
+
+    async def register() -> bytes:
+        # Model the backlog left by the disconnected sender, including a job status
+        # update that still needs to reach the server.
+        for index in range(127):
+            request = agent.CreateJobTokenRequest(request_id=f"old_{index}", job_id=running.job.id)
+            server._msg_chan.send_nowait(agent.WorkerMessage(create_job_token=request))
+        server._msg_chan.send_nowait(
+            agent.WorkerMessage(update_job=agent.UpdateJobStatus(job_id=running.job.id))
+        )
+        assert server._msg_chan.full()
+        return agent.ServerMessage(
+            register=_register_response("AW_reconnected", agent_protocol=2)
+        ).SerializeToString()
+
+    async def send(data: bytes) -> None:
+        message = agent.WorkerMessage.FromString(data)
+        sent.append(message)
+        if message.HasField("migrate_job"):
+            assert not server._registered.is_set()
+        if message.HasField("ping"):
+            response = agent.ServerMessage(
+                pong=agent.WorkerPong(last_timestamp=message.ping.timestamp)
+            )
+        elif message.HasField("create_job_token"):
+            response = agent.ServerMessage(
+                create_job_token=agent.CreateJobTokenResponse(
+                    request_id=message.create_job_token.request_id, token="new-token"
+                )
+            )
+        else:
+            return
+        incoming.put_nowait(
+            aiohttp.WSMessage(aiohttp.WSMsgType.BINARY, response.SerializeToString(), None)
+        )
+
+    ws.receive_bytes.side_effect = register
+    ws.send_bytes.side_effect = send
+    with patch.dict(os.environ, _NO_KEY_ENV):
+        server = AgentServer(ws_url="ws://localhost", num_idle_processes=0, max_retry=0)
+        server.rtc_session()(_noop_entrypoint)
+        server._simulation = True
+        with (
+            patch.object(
+                AgentServer, "active_jobs", new_callable=PropertyMock, return_value=[running]
+            ),
+            patch.object(aiohttp.ClientSession, "ws_connect", new=AsyncMock(return_value=ws)),
+        ):
+            run = asyncio.create_task(server.run(devmode=True))
+            try:
+                await asyncio.wait_for(server._registered.wait(), timeout=5)
+                token = await asyncio.wait_for(server._create_job_token(running.job.id, "{}"), 5)
+            finally:
+                await server.aclose()
+                await run
+
+    assert token.token == "new-token"
+    message_types = [msg.WhichOneof("message") for msg in sent]
+    assert [kind for kind in message_types if kind not in {"ping", "update_worker"}] == [
+        "register",
+        "migrate_job",
+        "update_job",
+        "create_job_token",
+    ]
+    assert list(sent[1].migrate_job.job_ids) == [running.job.id]
+
+
 async def test_jobs_get_tokens_while_the_worker_closes() -> None:
     """A job's shutdown callbacks call the API, so the connection outlives the jobs."""
 
