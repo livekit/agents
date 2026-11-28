@@ -62,6 +62,10 @@ DEFAULT_SPEAKING_RATE = 1.0
 DEFAULT_BUFFER_CHAR_THRESHOLD = 250
 DEFAULT_MAX_BUFFER_DELAY_MS = 3000
 NUM_CHANNELS = 1
+# the most Inworld takes as `synthesisContext.previousRequests`; a context over either is
+# rejected with INVALID_ARGUMENT
+MAX_CONTEXT_REPLIES = 5
+MAX_CONTEXT_CHARS = 2000
 
 TTSModels = Literal["inworld-tts-2", "inworld-tts-2-flash", "inworld-tts-1.5-max"]
 Encoding = Literal["LINEAR16", "PCM", "MP3", "OGG_OPUS", "FLAC"]
@@ -110,6 +114,8 @@ class _TTSOptions:
     buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN
     max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS
     auto_mode_strategy: AutoModeStrategy = "CLIENT_SEGMENTED"
+    # earlier replies, sent as `synthesisContext.previousRequests` when a context is created
+    previous_requests: list[str] = field(default_factory=list)
 
     @property
     def mime_type(self) -> str:
@@ -123,6 +129,25 @@ class _TTSOptions:
             return "audio/flac"
         else:
             return "audio/wav"
+
+
+def _trim_context(replies: list[str]) -> list[str]:
+    """Keep the most recent replies that fit Inworld's ``previousRequests`` limits.
+
+    At most ``MAX_CONTEXT_REPLIES`` texts and ``MAX_CONTEXT_CHARS`` characters together. An older
+    reply that no longer fits is dropped whole; a single reply over the limit keeps its end.
+    """
+    kept: list[str] = []
+    budget = MAX_CONTEXT_CHARS
+    for text in reversed(replies[-MAX_CONTEXT_REPLIES:]):
+        if len(text) > budget:
+            if not kept:
+                kept.append(text[-budget:])
+            break
+        kept.append(text)
+        budget -= len(text)
+    kept.reverse()
+    return kept
 
 
 # Shared WebSocket connection infrastructure
@@ -342,6 +367,10 @@ class _InworldConnection:
                         pkt["create"]["applyTextNormalization"] = opts.text_normalization
                     if is_given(opts.delivery_mode):
                         pkt["create"]["deliveryMode"] = opts.delivery_mode
+                    if opts.previous_requests:
+                        pkt["create"]["synthesisContext"] = {
+                            "previousRequests": opts.previous_requests
+                        }
                     pkt["create"]["autoMode"] = True
                     if opts.auto_mode_strategy == "SENTENCE_BOUNDARY":
                         pkt["create"]["autoModeStrategy"] = opts.auto_mode_strategy
@@ -601,6 +630,7 @@ class TTS(tts.TTS):
         timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        conversation_context: bool = False,
         base_url: str = DEFAULT_URL,
         ws_url: str = DEFAULT_WS_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -647,6 +677,12 @@ class TTS(tts.TTS):
                 the server default when the server splits sentences.
             max_buffer_delay_ms (int, optional): For streaming, the maximum time in ms to buffer
                 before starting generation. Defaults to 3000.
+            conversation_context (bool, optional): Whether to send the text of earlier replies
+                as ``synthesisContext`` when a reply starts, so that delivery stays consistent
+                from one reply to the next. Each reply opens a new Inworld context that knows
+                nothing of the ones before it. Sends the last 5 replies, 2,000 characters
+                together at most (Inworld's limits); context text is not billed. A reply that was
+                interrupted counts as generated, not as heard. Defaults to False.
             base_url (str, optional): The base URL for the Inworld TTS API.
                 Defaults to "https://api.inworld.ai/".
             ws_url (str, optional): The WebSocket URL for streaming TTS.
@@ -726,6 +762,8 @@ class TTS(tts.TTS):
             else DEFAULT_MAX_BUFFER_DELAY_MS,
         )
 
+        self._conversation_context = conversation_context
+        self._recent_replies: list[str] = []
         self._connection: _InworldConnection | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
@@ -781,6 +819,7 @@ class TTS(tts.TTS):
         timestamp_transport_strategy: NotGivenOr[TimestampTransportStrategy] = NOT_GIVEN,
         buffer_char_threshold: NotGivenOr[int] = NOT_GIVEN,
         max_buffer_delay_ms: NotGivenOr[int] = NOT_GIVEN,
+        conversation_context: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """
         Update the TTS configuration options.
@@ -843,6 +882,10 @@ class TTS(tts.TTS):
             self._opts.buffer_char_threshold = buffer_char_threshold
         if is_given(max_buffer_delay_ms):
             self._opts.max_buffer_delay_ms = max_buffer_delay_ms
+        if is_given(conversation_context):
+            self._conversation_context = conversation_context
+            if not conversation_context:
+                self._recent_replies.clear()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -1028,6 +1071,25 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._opts = replace(tts._opts)
         if not tts._client_segmentation and _supports_sentence_boundary(self._opts.model):
             self._opts.auto_mode_strategy = "SENTENCE_BOUNDARY"
+        # taken once, so every retry of this reply sends the same earlier replies
+        if tts._conversation_context:
+            self._opts.previous_requests = _trim_context(tts._recent_replies)
+
+    async def _main_task(self) -> None:
+        try:
+            await super()._main_task()
+        except asyncio.CancelledError:
+            # an interrupted reply enters the context as generated, not as heard
+            self._remember_reply()
+            raise
+        else:
+            self._remember_reply()
+
+    def _remember_reply(self) -> None:
+        # once per reply, not per attempt: a reply whose synthesis failed never reaches here
+        if self._tts._conversation_context and (reply := self._pushed_text.strip()):
+            self._tts._recent_replies.append(reply)
+            del self._tts._recent_replies[:-MAX_CONTEXT_REPLIES]
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()

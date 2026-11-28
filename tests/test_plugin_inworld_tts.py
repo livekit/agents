@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -584,3 +585,203 @@ async def test_timed_out_stream_waiter_is_not_failed_later():
     assert conn._closed
     assert waiters[0].cancelled()
     await tts.aclose()
+
+
+# -- conversation_context: earlier replies sent as synthesisContext --
+
+
+def _ws_opts(**overrides):
+    from livekit.plugins.inworld.tts import _TTSOptions
+
+    return _TTSOptions(
+        model="inworld-tts-2",
+        encoding="PCM",
+        voice="Ashley",
+        sample_rate=24000,
+        bit_rate=64000,
+        speaking_rate=1.0,
+        temperature=1.0,
+        **overrides,
+    )
+
+
+async def test_ws_create_packet_includes_synthesis_context():
+    pkt = await _capture_first_ws_create_packet(
+        _ws_opts(previous_requests=["Hello there.", "How can I help?"])
+    )
+    assert pkt["create"]["synthesisContext"] == {
+        "previousRequests": ["Hello there.", "How can I help?"]
+    }
+
+
+async def test_ws_create_packet_omits_synthesis_context_when_empty():
+    pkt = await _capture_first_ws_create_packet(_ws_opts())
+    assert "synthesisContext" not in pkt["create"]
+
+
+async def test_conversation_context_is_off_by_default_and_updatable():
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key")
+    assert tts._conversation_context is False
+
+    tts.update_options(conversation_context=True)
+    assert tts._conversation_context is True
+    assert TTS(api_key="test-key", conversation_context=True)._conversation_context is True
+
+
+class _RecordingConnection(_FakeConnection):
+    """A fake connection that keeps the options of every context it creates."""
+
+    def __init__(self) -> None:
+        super().__init__(asyncio.get_running_loop().create_future())
+        self.created_opts: list = []
+
+    def create_context(self, emitter, opts) -> tuple[str, asyncio.Future[None]]:
+        self.created_opts.append(dataclasses.replace(opts))  # a stream reuses its opts per attempt
+        return f"ctx-{len(self.created_opts)}", self.waiter
+
+    def close_context(self, context_id: str, *, cancel: bool = False) -> None:
+        super().close_context(context_id, cancel=cancel)
+        if not self.waiter.done():
+            self.waiter.set_result(None)
+
+
+async def _speak(tts, conn: _RecordingConnection, text: str, *, interrupt: bool = False) -> None:
+    conn.waiter = asyncio.get_running_loop().create_future()
+    conn.closed.clear()
+    stream = tts.stream()
+    stream.push_text(text)
+    if interrupt:
+        stream.flush()
+        await asyncio.sleep(0.1)
+    else:
+        stream.end_input()
+        await asyncio.wait_for(conn.closed.wait(), timeout=2.0)
+    await stream.aclose()
+
+
+def _tts_recording(**kwargs):
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key", **kwargs)
+    conn = _RecordingConnection()
+    tts._get_connection = MagicMock(return_value=conn)  # type: ignore[method-assign]
+    return tts, conn
+
+
+async def test_next_stream_carries_earlier_replies_when_enabled():
+    tts, conn = _tts_recording(conversation_context=True)
+
+    await _speak(tts, conn, "Hello there.")
+    await _speak(tts, conn, "How can I help?")
+    await _speak(tts, conn, "Sure.")
+
+    assert [o.previous_requests for o in conn.created_opts] == [
+        [],
+        ["Hello there."],
+        ["Hello there.", "How can I help?"],
+    ]
+
+
+async def test_streams_carry_no_context_by_default():
+    tts, conn = _tts_recording()
+
+    await _speak(tts, conn, "Hello there.")
+    await _speak(tts, conn, "How can I help?")
+
+    assert [o.previous_requests for o in conn.created_opts] == [[], []]
+
+
+async def test_interrupted_reply_enters_the_context_as_generated():
+    tts, conn = _tts_recording(conversation_context=True)
+
+    await _speak(tts, conn, "A long answer that the caller cut off.", interrupt=True)
+    await _speak(tts, conn, "Sorry, go on.")
+
+    assert conn.created_opts[1].previous_requests == ["A long answer that the caller cut off."]
+
+
+async def test_context_is_trimmed_to_the_count_inworld_accepts():
+    from livekit.plugins.inworld.tts import MAX_CONTEXT_REPLIES
+
+    tts, conn = _tts_recording(conversation_context=True)
+    for i in range(MAX_CONTEXT_REPLIES + 3):
+        await _speak(tts, conn, f"Reply {i}.")
+    await _speak(tts, conn, "Next.")
+
+    last = conn.created_opts[-1].previous_requests
+    assert len(last) == MAX_CONTEXT_REPLIES == 5
+    assert last[-1] == f"Reply {MAX_CONTEXT_REPLIES + 2}."
+
+
+async def test_context_is_trimmed_to_the_length_inworld_accepts():
+    from livekit.plugins.inworld.tts import MAX_CONTEXT_CHARS
+
+    tts, conn = _tts_recording(conversation_context=True)
+    await _speak(tts, conn, "x" * 1500)
+    await _speak(tts, conn, "y" * 1500)
+    await _speak(tts, conn, "Next.")
+
+    last = conn.created_opts[-1].previous_requests
+    assert sum(len(t) for t in last) <= MAX_CONTEXT_CHARS == 2000
+    # the most recent reply wins; an older one that no longer fits is dropped whole
+    assert last == ["y" * 1500]
+
+
+async def test_one_reply_longer_than_the_limit_keeps_its_end():
+    tts, conn = _tts_recording(conversation_context=True)
+    await _speak(tts, conn, "a" * 3000 + "THE END")
+    await _speak(tts, conn, "Next.")
+
+    (only,) = conn.created_opts[1].previous_requests
+    assert len(only) == 2000 and only.endswith("THE END")
+
+
+class _FlakyConnection(_RecordingConnection):
+    """Fails the first context before any audio, then serves the retry."""
+
+    def create_context(self, emitter, opts) -> tuple[str, asyncio.Future[None]]:
+        ctx_id, _ = super().create_context(emitter, opts)
+        waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        if len(self.created_opts) == 1:
+            # a handshake that fails after the stream has already read its text
+            asyncio.get_running_loop().call_later(0.05, waiter.set_exception, APIConnectionError())
+        else:
+            emitter.start_segment(segment_id=ctx_id)
+            emitter.push(b"\x00" * 48000)
+            emitter.end_segment()
+        self.waiter = waiter
+        return ctx_id, waiter
+
+    def close_context(self, context_id: str, *, cancel: bool = False) -> None:
+        # a real connection ends the waiter when the server does, not when the client closes
+        self.calls.append(("close_context", cancel))
+        if len(self.created_opts) > 1 and not self.waiter.done():
+            self.waiter.set_result(None)
+
+
+async def test_failed_attempt_is_not_added_to_the_context_and_the_retry_sees_the_same_replies():
+    from livekit.agents import APIConnectOptions
+    from livekit.plugins.inworld import TTS
+
+    tts = TTS(api_key="test-key", conversation_context=True)
+    conn = _FlakyConnection()
+    tts._get_connection = MagicMock(return_value=conn)  # type: ignore[method-assign]
+    tts._recent_replies.append("Hello.")
+
+    stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0))
+    stream.push_text("How can I help?")
+    stream.end_input()
+
+    async def _drain() -> None:
+        async for _ in stream:
+            pass
+
+    await asyncio.wait_for(_drain(), timeout=5.0)
+    await stream.aclose()
+
+    assert len(conn.created_opts) == 2
+    # the failed attempt neither adds its own reply to the history nor shows up in the retry
+    assert [o.previous_requests for o in conn.created_opts] == [["Hello."], ["Hello."]]
+    assert tts._recent_replies == ["Hello.", "How can I help?"]
