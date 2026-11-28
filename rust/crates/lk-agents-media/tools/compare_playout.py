@@ -10,8 +10,10 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import platform
 import shutil
+import struct
 import subprocess
 import sys
 import wave
@@ -49,7 +51,9 @@ def encode(raw: Path, destination: Path, rate: int = 24000) -> None:
         output.writeframes(raw.read_bytes())
 
 
-def schedule(name: str, count: int) -> list[tuple[int, int, int]]:
+def schedule(
+    name: str, count: int, anchor: int = 20, speech_chunks: set[int] | None = None
+) -> list[tuple[int, int, int]]:
     """Ordered complete source delivery. Delays hold subsequent chunks, never reorder them."""
     if name == "late_20ms_no_reserve":
         name = "late_20ms"
@@ -62,16 +66,21 @@ def schedule(name: str, count: int) -> list[tuple[int, int, int]]:
         length = min(duration_ms * 24, count - start)
         nominal = start * 1_000_000 // 24000
         delay = 0
-        if name == "late_20ms" and index == 20:
+        if name == "late_20ms" and index == anchor:
             delay = 20_000
-        elif name == "repeated_stalls" and index % 9 == 4:
+        elif (
+            name == "repeated_stalls"
+            and index >= anchor
+            and (index - anchor) % 9 == 0
+            and (speech_chunks is None or index in speech_chunks)
+        ):
             delay = 40_000
-        elif name == "burst_recovery" and 20 <= index <= 23:
-            delay = (24 - index) * 100_000
-        elif name == "no_catchup" and index >= 20:
+        elif name == "burst_recovery" and anchor <= index <= anchor + 3:
+            delay = (anchor + 4 - index) * 100_000
+        elif name == "no_catchup" and index >= anchor:
             delay = 40_000
-        elif name == "long_outage" and 20 <= index <= 29:
-            delay = (30 - index) * 100_000
+        elif name == "long_outage" and anchor <= index <= anchor + 9:
+            delay = (anchor + 10 - index) * 100_000
         elif name == "clock_drift":
             delay = nominal // 1000  # sender is 1000 ppm slower than the receiver
         arrival = max(previous, nominal + delay)
@@ -80,6 +89,41 @@ def schedule(name: str, count: int) -> list[tuple[int, int, int]]:
         start += length
         index += 1
     return result
+
+
+def speech_activity(pcm: bytes) -> dict:
+    """Find an audibly active fault window; reject silent fixtures instead of masking failures."""
+    values = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+    energies = []
+    for start in range(0, len(values) - 239, 240):
+        block = values[start : start + 240]
+        energies.append(math.sqrt(sum(v * v for v in block) / 240))
+    threshold = 150
+    active = [rms >= threshold for rms in energies]
+    candidates = []
+    for chunk in range(10, len(energies) // 10 - 15):
+        start = chunk * 10
+        # Require speech at the onset, at 20 ms, and across >=70% of the next second.
+        if min(energies[start : start + 5]) < threshold:
+            continue
+        fraction = sum(active[start : start + 100]) / 100
+        if fraction >= 0.7:
+            candidates.append((fraction, sum(energies[start : start + 100]), chunk))
+    if not candidates:
+        raise ValueError("input needs a verified active one-second speech window after 1s")
+    _, _, anchor = max(candidates)
+    speech_chunks = {
+        i for i in range(len(energies) // 10) if min(energies[i * 10 : i * 10 + 5]) >= threshold
+    }
+    return {
+        "anchor_chunk": anchor,
+        "anchor_ms": anchor * 100,
+        "threshold_rms": threshold,
+        "window_ms": 10,
+        "active_fraction_next_second": sum(active[anchor * 10 : anchor * 10 + 100]) / 100,
+        "speech_chunks": sorted(speech_chunks),
+        "window_rms": energies,
+    }
 
 
 def compile_reference(root: Path, destination: Path) -> None:
@@ -130,7 +174,7 @@ def render_player(out: Path, report: dict) -> None:
         "late_20ms": ("20 ms late delivery", "A 20 ms reserve can absorb this gap."),
         "late_20ms_no_reserve": (
             "20 ms late, no reserve",
-            "Exposes short concealment and recovery at 2 seconds.",
+            "Exposes short concealment and recovery during verified speech.",
         ),
         "repeated_stalls": ("Repeated 40 ms stalls", "Tests reserve adaptation and recovery."),
         "burst_recovery": (
@@ -182,6 +226,7 @@ def render_player(out: Path, report: dict) -> None:
             "cases": {name: {"label": labels[name][0]} for name in report["scenarios"]},
             "tracks": tracks,
             "source": report.get("source_path", "speech.wav"),
+            "faultSeconds": report["speech_activity"]["anchor_ms"] / 1000,
         }
     ).replace("<", "\\u003c")
     (out / "index.html").write_text(
@@ -199,7 +244,7 @@ def render_player(out: Path, report: dict) -> None:
         + """</select>
 <button id="start">Play from start</button><button id="gap">Play around stall</button><button id="original">Original sentence</button>
 <audio id="audio" controls preload="metadata"></audio><div id="status" role="status"></div></section>
-<p>Start at zero to compare latency. For the short-stall cases, the interruption is at 2 seconds. The Playback menu switches at the same wall-clock position; these are not speech-aligned quality scores. Gaps exclude intentional startup and the trailing observation window. Concealed time can include generated fades. NetEq alone uses offline 24→48→24 kHz conversion; its delay is adaptive.</p>
+<p>Start at zero to compare latency. Fault onset is selected from verified active speech; see the onset time below. The Playback menu switches at the same wall-clock position; these are not speech-aligned quality scores. Gaps exclude intentional startup and the trailing observation window. Concealed time can include generated fades. NetEq alone uses offline 24→48→24 kHz conversion; its delay is adaptive.</p>
 <div class="scroll"><table><thead><tr><th>Scenario / what to listen for</th><th>No NetEq</th><th>100 ms FIFO</th><th>libwebrtc NetEq</th><th>Rust controller</th></tr></thead><tbody>"""
         + "".join(rows)
         + """</tbody></table></div>
@@ -223,7 +268,7 @@ function select(time=0,play=false){
 scenario.addEventListener('change',()=>select(0,false));
 track.addEventListener('change',()=>select(audio.currentTime,!audio.paused));
 document.getElementById('start').onclick=()=>select(0,true);
-document.getElementById('gap').onclick=()=>select(1.6,true);
+document.getElementById('gap').onclick=()=>select(Math.max(0,data.faultSeconds-0.4),true);
 document.getElementById('original').onclick=()=>{audio.src=data.source;status.textContent='Original GPTLive sentence';audio.play().catch(()=>{});};
 document.querySelectorAll('a.play').forEach(link=>link.onclick=event=>{event.preventDefault();const next=new URL(link.href);scenario.value=next.searchParams.get('scenario');track.value=next.searchParams.get('track');select(0,true);document.getElementById('player').scrollIntoView();});
 audio.addEventListener('error',()=>{status.textContent='Audio could not load. Please reload this page.';});
@@ -254,6 +299,7 @@ def main() -> None:
         if (source.getframerate(), source.getnchannels(), source.getsampwidth()) != (24000, 1, 2):
             raise ValueError("fixture must be mono 24 kHz signed PCM16")
         pcm = source.readframes(source.getnframes())
+    activity = speech_activity(pcm)
     raw = out / "source.pcm"
     raw.write_bytes(pcm)
     source48 = out / "source48.pcm"
@@ -289,6 +335,7 @@ def main() -> None:
         ).hexdigest(),
         "reference_expected_tag": WEBRTC_TAG,
         "delay_ms": args.delay_ms,
+        "speech_activity": activity,
         "scenarios": {},
     }
     shutil.copyfile(fixture, out / "speech.wav")
@@ -299,7 +346,11 @@ def main() -> None:
         with arrivals.open("w", newline="") as stream:
             writer = csv.writer(stream, lineterminator="\n")
             writer.writerow(("arrival_us", "source_start", "samples"))
-            writer.writerows(schedule(name, len(pcm) // 2))
+            writer.writerows(
+                schedule(
+                    name, len(pcm) // 2, activity["anchor_chunk"], set(activity["speech_chunks"])
+                )
+            )
         case_delay = 0 if name == "late_20ms_no_reserve" else args.delay_ms
         run(executable, raw, arrivals, case, str(duration_ms), str(case_delay))
         reference_stats = run(
