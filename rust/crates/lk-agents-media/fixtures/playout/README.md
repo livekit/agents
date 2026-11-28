@@ -124,7 +124,9 @@ gap duration and listening quality, not just the injected delay count.
 
 ## Focused listening cases
 
-The PR table retains two cases. `startup_jitter` delays source chunks 1–4 by 60, 100,
+The primary report-focused cases are Startup and Jitter; the PR also retains short gaps,
+bursts, long outages, permanent delay, chunk changes, clock drift and a stress case.
+`startup_jitter` delays source chunks 1–4 by 60, 100,
 160 and 300 ms. Ordered arrivals for chunks 0–7 are 0, 160, 300, 460, 700, 700, 700,
 700 ms. Speech is active at the first underrun (100 ms), so this tests the beginning
 of an answer before much history or buffering has accumulated.
