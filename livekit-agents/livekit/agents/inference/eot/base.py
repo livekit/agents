@@ -37,6 +37,9 @@ an inference request. Enforced against the caller-supplied VAD's
 
 DEFAULT_PREDICTION_TIMEOUT = 1.0
 
+PREFIX_PADDING = 2.0
+"""Seconds of audio pre-roll when user speaks out of turn."""
+
 
 @dataclass
 class TurnDetectorOptions:
@@ -153,6 +156,10 @@ class _BaseStreamingTurnDetectorStream:
         self._request_id: str | None = None
         self._request_fut: asyncio.Future[TurnDetectionEvent] | None = None
 
+        self._agent_speech_ended_at: float | None = None
+        self._agent_speech_restarted_at: float | None = None
+        self._user_speech_ended_at: float | None = None
+
         self._tasks: set[asyncio.Task[None]] = set()
         self._task = asyncio.create_task(self._main_task())
 
@@ -243,6 +250,8 @@ class _BaseStreamingTurnDetectorStream:
         if self._audio_ch.closed:
             return
 
+        self._agent_speech_ended_at = None
+        self._agent_speech_restarted_at = None
         for resampled_frame in self._flush_audio_resampler():
             self._audio_ch.send_nowait(resampled_frame)
         self._audio_ch.send_nowait(_BaseStreamingTurnDetectorStream._FlushSentinel(reason=reason))
@@ -266,13 +275,48 @@ class _BaseStreamingTurnDetectorStream:
         for resampled_frame in self._resample_audio_frame(frame):
             self._audio_ch.send_nowait(resampled_frame)
 
-    def on_start_of_turn(self, started_at: float) -> None:
-        """The user turn started at ``started_at``; it lasts until the next flush."""
+    def on_start_of_agent_speech(self, started_at: float) -> None:
+        """The agent started speaking."""
+        if self._agent_speech_ended_at is not None:
+            self._agent_speech_restarted_at = started_at
+
+    def on_end_of_agent_speech(self, ended_at: float, *, interrupted: bool) -> None:
+        """The agent stopped speaking; ``interrupted`` when its speech was cut short."""
+        self._agent_speech_ended_at = None if interrupted else ended_at
+        self._agent_speech_restarted_at = None
+
+    def on_end_of_user_speech(self, ended_at: float) -> None:
+        """The user stopped speaking at ``ended_at``, which can be before the call."""
+        self._user_speech_ended_at = ended_at
+
+    def on_start_of_user_speech(self, started_at: float, *, new_turn: bool) -> None:
+        """The user started speaking at ``started_at``; ``new_turn`` when it opens the turn.
+
+        Turn samples start when agent's turn ends naturally, leaving out backchannels. Otherwise
+        a new turn starts PREFIX_PADDING before ``started_at`` and an open turn keeps its start.
+        A turn lasts until the next flush.
+        """
         if self._audio_ch.closed:
+            return
+        turn_start = started_at - PREFIX_PADDING if new_turn else None
+        # an agent end after the onset waits: the user's end of speech decides at the next burst
+        if (ended_at := self._agent_speech_ended_at) is not None and ended_at <= started_at:
+            self._agent_speech_ended_at = None
+            user_was_silent = (
+                self._user_speech_ended_at is None or self._user_speech_ended_at <= ended_at
+            )
+            # a restart after the onset (a late VAD event) doesn't count
+            agent_spoke_again = (
+                self._agent_speech_restarted_at is not None
+                and self._agent_speech_restarted_at <= started_at
+            )
+            if user_was_silent and not agent_spoke_again:
+                turn_start = ended_at
+        if turn_start is None:
             return
         # measured now, while the frames queued so far end at the present; the transport may
         # drain them much later, e.g. after a cloud reconnect backlog
-        elapsed = max(0.0, time.time() - started_at)
+        elapsed = max(0.0, time.time() - turn_start)
         self._audio_ch.send_nowait(
             _BaseStreamingTurnDetectorStream._StartOfTurnSentinel(elapsed=elapsed)
         )

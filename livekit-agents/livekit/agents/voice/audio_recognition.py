@@ -570,6 +570,8 @@ class AudioRecognition:
         self._agent_speaking = True
         self._agent_speech_started_at = started_at
         self._endpointing.on_start_of_agent_speech(started_at=started_at)
+        if self._turn_detector_stream is not None:
+            self._turn_detector_stream.on_start_of_agent_speech(started_at)
 
         # reset user turn tracker when agent starts speaking
         self._turn_tracker = _UserTurnTracker()
@@ -589,16 +591,20 @@ class AudioRecognition:
                 user_speaking_span=self._session._user_speaking_span,
             )
 
-    def _on_end_of_agent_speech(self, *, ended_at: float) -> None:
+    def _on_end_of_agent_speech(self, *, ended_at: float, interrupted: bool) -> None:
         """Mark the end of active agent speech.
 
         This can occur while the generation remains active, such as when playout is paused.
+        ``interrupted`` is true when the speech was cut short.
         """
         self._cancel_backchannel_boundary()
         agent_was_speaking = self._agent_speaking
 
         if agent_was_speaking:
             self._endpointing.on_end_of_agent_speech(ended_at=ended_at)
+            if self._turn_detector_stream is not None:
+                self._turn_detector_stream.on_end_of_agent_speech(ended_at, interrupted=interrupted)
+
         # Replayed STT events must observe the post-playout state.
         self._agent_speaking = False
 
@@ -1511,8 +1517,15 @@ class AudioRecognition:
             self._cancel_transcription_timeout()
             self._end_eou_wait_span("user_resumed", end_time=speech_start_time)
 
+            # read before _ensure_user_turn_span, which opens the turn
+            resumes_turn = self._user_turn_start is not None
             with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
+
+            if resumes_turn and self._turn_detector_stream is not None:
+                self._turn_detector_stream.on_start_of_user_speech(
+                    speech_start_time, new_turn=False
+                )
 
             self._speaking = True
 
@@ -1557,6 +1570,9 @@ class AudioRecognition:
             self._vad_speech_started = False
             self._speaking = False
             self._last_speaking_time = speech_end_time
+
+            if self._turn_detector_stream is not None:
+                self._turn_detector_stream.on_end_of_user_speech(speech_end_time)
 
             # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
             if self._stt_pipeline is not None and vad_speech_started:
@@ -2278,12 +2294,11 @@ class AudioRecognition:
         return self._user_turn_span
 
     def _start_user_turn(self, start_time: float) -> None:
-        """Record when the user turn started, once per turn; the turn detector counts from it."""
         if self._user_turn_start is not None:
             return
         self._user_turn_start = start_time
         if self._turn_detector_stream is not None:
-            self._turn_detector_stream.on_start_of_turn(start_time)
+            self._turn_detector_stream.on_start_of_user_speech(start_time, new_turn=True)
 
     def _end_user_turn_span(self) -> None:
         # a wait still open here never reached a decision (teardown, clear_user_turn, ...)

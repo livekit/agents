@@ -616,7 +616,28 @@ async def test_interruption_event_ends_the_agent_turn_once_when_pausing(
     assert activity._paused_speech is not None
     await rt_session.aclose()
 
-    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(ended_at=ANY)
+    # the user's speech paused the agent, so the pause is an interruption
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(
+        ended_at=ANY, interrupted=True
+    )
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_pipeline_reply_done_reports_whether_the_speech_was_interrupted(
+    rt_session: AgentSession, interrupted: bool
+) -> None:
+    """A reply task cancelled after an interruption reports the end as interrupted, so the
+    turn detector does not start the user's turn there."""
+    activity = AgentActivity(Agent(instructions="test"), rt_session)
+    activity._audio_recognition = MagicMock()
+    handle = MagicMock(interrupted=interrupted)
+
+    activity._on_pipeline_reply_done(handle, MagicMock())
+    await rt_session.aclose()
+
+    activity._audio_recognition._on_end_of_agent_speech.assert_called_once_with(
+        ended_at=ANY, interrupted=interrupted
+    )
 
 
 # --- a parked preemptive generation never blocks a handoff -----------------------------

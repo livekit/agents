@@ -194,13 +194,13 @@ def test_agent_speech_end_clears_confirmed_interruption_after_recognition_teardo
     activity._interruption_detected = True
     activity._audio_recognition = MagicMock()
 
-    def _end_agent_speech(*, ended_at: float) -> None:
+    def _end_agent_speech(*, ended_at: float, interrupted: bool = False) -> None:
         assert ended_at == 10.0
         assert activity._interruption_detected
 
     activity._audio_recognition._on_end_of_agent_speech.side_effect = _end_agent_speech
 
-    activity._on_end_of_agent_speech(ended_at=10.0)
+    activity._on_end_of_agent_speech(ended_at=10.0, interrupted=False)
 
     assert not activity._interruption_detected
 
@@ -463,6 +463,7 @@ def _recognition_with_interruption_ch() -> tuple[AudioRecognition, _RecordingCha
     ar._transcript_gate_active = False
     ar._active_vad_speech_started_at = None
     ar._endpointing = MagicMock()
+    ar._turn_detector_stream = None
     ar._backchannel_boundary = None
     ar._backchannel_boundary_timer = None
     ar._backchannel_boundary_callback = None
@@ -534,7 +535,7 @@ def test_agent_speech_end_keeps_gate_closed_during_transcript_replay() -> None:
         side_effect=lambda _: ar._on_start_of_speech(started_at=9.5)
     )
 
-    ar._on_end_of_agent_speech(ended_at=10.0)
+    ar._on_end_of_agent_speech(ended_at=10.0, interrupted=False)
 
     assert not ar._agent_speaking
     assert not ar._transcript_gate_active
@@ -553,7 +554,7 @@ def test_agent_speech_end_releases_stale_transcripts_when_already_not_speaking(
     ar._transcript_buffer.append(held_event)
     ar._process_stt_event = MagicMock()  # type: ignore[method-assign]
 
-    ar._on_end_of_agent_speech(ended_at=10.0)
+    ar._on_end_of_agent_speech(ended_at=10.0, interrupted=False)
 
     ar._process_stt_event.assert_called_once_with(held_event)  # type: ignore[attr-defined]
     assert not ar._transcript_gate_active
@@ -566,7 +567,7 @@ async def test_agent_speech_end_closes_overlap_before_reset() -> None:
     ar._on_start_of_speech(started_at=time.time())
     ch.sent.clear()
 
-    ar._on_end_of_agent_speech(ended_at=time.time())
+    ar._on_end_of_agent_speech(ended_at=time.time(), interrupted=False)
 
     assert _sentinel_names(ch) == [
         "_OverlapSpeechEndedSentinel",
@@ -580,7 +581,7 @@ async def test_user_speech_ending_after_agent_end_does_not_close_overlap_again()
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
     ar._on_start_of_speech(started_at=time.time())
-    ar._on_end_of_agent_speech(ended_at=time.time())
+    ar._on_end_of_agent_speech(ended_at=time.time(), interrupted=False)
     ch.sent.clear()
 
     ar._on_end_of_speech(ended_at=time.time())
@@ -594,7 +595,7 @@ async def test_resume_with_active_user_speech_stays_with_audio_activity() -> Non
     user_started_at = time.time()
     ar._speaking = True
     ar._on_start_of_speech(started_at=user_started_at)
-    ar._on_end_of_agent_speech(ended_at=time.time())
+    ar._on_end_of_agent_speech(ended_at=time.time(), interrupted=False)
     ch.sent.clear()
 
     ar._hooks.interruption_by_audio_activity_enabled = True
