@@ -230,3 +230,56 @@ async def test_usage_takes_the_cumulative_message_delta_counts(
     assert response.usage is not None
     assert response.usage.prompt_tokens == prompt_tokens
     assert response.usage.completion_tokens == completion_tokens
+
+
+@pytest.mark.parametrize(
+    ("arguments", "stop_reason", "sent"),
+    [
+        (['{"city": "Paris"}', '{"city": "Ber'], "max_tokens", ['{"city": "Paris"}']),
+        (
+            ['{"city": "Paris"}', '{"city": "Berlin"}'],
+            "tool_use",
+            ['{"city": "Paris"}', '{"city": "Berlin"}'],
+        ),
+    ],
+)
+async def test_tool_call_cut_off_by_max_tokens_is_dropped(
+    arguments: list[str], stop_reason: str, sent: list[str]
+) -> None:
+    blocks: list[dict[str, Any]] = []
+    for index, partial_json in enumerate(arguments):
+        tool_use = {"type": "tool_use", "id": f"toolu_{index}", "name": "get_weather", "input": {}}
+        blocks += [
+            {"type": "content_block_start", "index": index, "content_block": tool_use},
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": partial_json},
+            },
+            {"type": "content_block_stop", "index": index},
+        ]
+    body = _sse(
+        _message_start({"input_tokens": 10, "output_tokens": 1}),
+        *blocks,
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": {"output_tokens": 1024},
+        },
+        {"type": "message_stop"},
+    )
+    client = anthropic.AsyncClient(
+        api_key="sk-ant-test",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200, headers={"content-type": "text/event-stream"}, content=body
+                )
+            )
+        ),
+    )
+    instance = LLM(model="claude-sonnet-4-6", api_key="sk-ant-test", client=client)
+
+    response = await instance.chat(chat_ctx=ChatContext(), tools=[get_weather]).collect()
+
+    assert [call.arguments for call in response.tool_calls] == sent

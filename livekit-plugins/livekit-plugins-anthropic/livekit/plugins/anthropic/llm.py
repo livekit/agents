@@ -23,7 +23,7 @@ import httpx2 as httpx
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
-from livekit.agents.llm import ToolChoice
+from livekit.agents.llm import ChatChunk, ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
 from livekit.agents.types import (
@@ -338,6 +338,8 @@ class LLMStream(llm.LLMStream):
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
+        # held until the next event: only message_delta says whether max_tokens cut it off
+        self._pending_tool_call: ChatChunk | None = None
 
         self._request_id: str = ""
         self._ignoring_cot = False  # ignore chain of thought
@@ -350,10 +352,17 @@ class LLMStream(llm.LLMStream):
         retryable = True
         try:
             async with await self._create_anthropic_stream() as stream:
-                async for event in stream:
-                    chat_chunk = self._parse_event(event)
-                    if chat_chunk is not None:
-                        self._event_ch.send_nowait(chat_chunk)
+                try:
+                    async for event in stream:
+                        chat_chunk = self._parse_event(event)
+                        if chat_chunk is not None:
+                            self._event_ch.send_nowait(chat_chunk)
+                            retryable = False
+                finally:
+                    # without a message_delta, nothing says the held call was cut off
+                    if self._pending_tool_call is not None:
+                        self._event_ch.send_nowait(self._pending_tool_call)
+                        self._pending_tool_call = None
                         retryable = False
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#tracking-cache-performance
@@ -395,6 +404,10 @@ class LLMStream(llm.LLMStream):
             if event.message.usage.cache_read_input_tokens:
                 self._cache_read_tokens = event.message.usage.cache_read_input_tokens
         elif event.type == "message_delta":
+            chat_chunk, self._pending_tool_call = self._pending_tool_call, None
+            if chat_chunk is not None and event.delta.stop_reason == "max_tokens":
+                logger.warning("anthropic llm: dropping a tool call cut off by max_tokens")
+                chat_chunk = None
             # usage on message_delta is cumulative: it replaces the message_start counts
             usage = event.usage
             self._output_tokens = usage.output_tokens
@@ -404,11 +417,14 @@ class LLMStream(llm.LLMStream):
                 self._cache_creation_tokens = usage.cache_creation_input_tokens
             if usage.cache_read_input_tokens is not None:
                 self._cache_read_tokens = usage.cache_read_input_tokens
+            return chat_chunk
         elif event.type == "content_block_start":
+            chat_chunk, self._pending_tool_call = self._pending_tool_call, None
             if event.content_block.type == "tool_use":
                 self._tool_call_id = event.content_block.id
                 self._fnc_name = event.content_block.name
                 self._fnc_raw_arguments = ""
+            return chat_chunk
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -452,6 +468,6 @@ class LLMStream(llm.LLMStream):
                     ),
                 )
                 self._tool_call_id = self._fnc_raw_arguments = self._fnc_name = None
-                return chat_chunk
+                self._pending_tool_call = chat_chunk
 
         return None
