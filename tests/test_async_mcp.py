@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, get_type_hints
 
+import mcp.types
 import pytest
 
 from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.agents.llm.mcp import (
     MCPServer,
     MCPToolOptions,
+    MCPToolResultContext,
+    MCPToolResultResolver,
     MCPToolset,
     _resolve_tool_options,
 )
@@ -40,12 +44,24 @@ class _FakeClient:
         self.list_tools_calls += 1
         return _FakeListToolsResult(self._names)
 
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], *, progress_callback: Any = None
+    ) -> mcp.types.CallToolResult:
+        return mcp.types.CallToolResult(content=[mcp.types.TextContent(type="text", text="echo")])
+
 
 class _FakeMCPServer(MCPServer):
     """Minimal MCPServer with a fake client — no real streams or network."""
 
-    def __init__(self, tool_names: list[str] | None = None) -> None:
-        super().__init__(client_session_timeout_seconds=5)
+    def __init__(
+        self,
+        tool_names: list[str] | None = None,
+        *,
+        tool_result_resolver: MCPToolResultResolver | None = None,
+    ) -> None:
+        super().__init__(
+            client_session_timeout_seconds=5, tool_result_resolver=tool_result_resolver
+        )
         self._client = _FakeClient(tool_names or ["echo"])  # type: ignore[assignment]
 
     def client_streams(self):  # type: ignore[no-untyped-def]  # not used in these tests
@@ -104,6 +120,23 @@ def test_flags_and_on_duplicate_pass_through_independently() -> None:
     assert tool.info.on_duplicate == "reject"
     # cancellable but still blocking — no ctx param
     assert not _has_run_context_param(tool)
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_awaits_future_result_from_resolver() -> None:
+    expected = "resolved text"
+
+    def resolve(ctx: MCPToolResultContext) -> asyncio.Future[str]:
+        assert ctx.tool_name == "echo"
+        loop = asyncio.get_running_loop()
+        result = loop.create_future()
+        loop.call_soon(result.set_result, expected)
+        return result
+
+    server = _FakeMCPServer(tool_result_resolver=resolve)
+    (tool,) = await server.list_tools()
+
+    assert await tool({}) == expected
 
 
 @pytest.mark.asyncio

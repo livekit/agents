@@ -8,18 +8,147 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, ToolResult, function_tool
-from livekit.agents.llm import FunctionCallOutput, FunctionToolCall, StopResponse
+from livekit.agents import Agent, AgentSession, ToolResult, function_tool, mock_tools
+from livekit.agents.llm import (
+    FunctionCallOutput,
+    FunctionToolCall,
+    StopResponse,
+    ToolContext,
+    ToolError,
+    execute_function_call,
+)
 
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 SESSION_TIMEOUT = 60.0
+
+
+@pytest.mark.parametrize("on_duplicate", ["allow", "confirm"])
+@pytest.mark.parametrize("result_kind", ["future", "task"])
+@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("executor", ["session", "function_call"])
+async def test_tool_awaits_future_result(
+    on_duplicate: Literal["allow", "confirm"], result_kind: str, fails: bool, executor: str
+) -> None:
+    expected = "Room unavailable." if fails else "Room reserved."
+
+    async def reserve() -> str:
+        if fails:
+            raise ToolError(expected)
+        return expected
+
+    result: asyncio.Future[str]
+    if result_kind == "task":
+        result = asyncio.create_task(reserve())
+    else:
+        result = asyncio.get_running_loop().create_future()
+        if fails:
+            result.set_exception(ToolError(expected))
+        else:
+            result.set_result(expected)
+
+    @function_tool(on_duplicate=on_duplicate)
+    def reserve_room() -> asyncio.Future[str]:
+        """Reserve the meeting room."""
+        return result
+
+    call = FunctionToolCall(name="reserve_room", arguments="{}", call_id="1")
+    try:
+        if executor == "function_call":
+            call_result = await execute_function_call(call, ToolContext([reserve_room]))
+            assert call_result.fnc_call_out is not None
+            output = call_result.fnc_call_out
+        else:
+            actions = FakeActions()
+            actions.add_user_speech(0.5, 2.5, "Reserve the meeting room.")
+            actions.add_llm(content="", tool_calls=[call])
+            actions.add_llm(input=expected, content="Done.")
+            actions.add_tts(1.0)
+
+            session = create_session(actions)
+            agent = Agent(instructions="You reserve meeting rooms.", tools=[reserve_room])
+            await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+            outputs = [
+                item for item in session.history.items if item.type == "function_call_output"
+            ]
+            assert len(outputs) == 1
+            output = outputs[0]
+        assert output.output == expected
+        assert output.is_error is fails
+    finally:
+        await asyncio.gather(result, return_exceptions=True)
+
+
+async def test_mock_tool_awaits_future_result() -> None:
+    expected = "Room reserved."
+
+    @function_tool
+    async def reserve_room() -> str:
+        """Reserve the meeting room."""
+        return "Real tool output."
+
+    def mock_reserve_room() -> asyncio.Future[str]:
+        loop = asyncio.get_running_loop()
+        result = loop.create_future()
+        loop.call_soon(result.set_result, expected)
+        return result
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Reserve the meeting room.")
+    actions.add_llm(
+        content="",
+        tool_calls=[FunctionToolCall(name="reserve_room", arguments="{}", call_id="1")],
+    )
+    actions.add_llm(input=expected, content="Done.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = Agent(instructions="You reserve meeting rooms.", tools=[reserve_room])
+    with mock_tools(Agent, {"reserve_room": mock_reserve_room}):
+        await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    outputs = [item for item in session.history.items if item.type == "function_call_output"]
+    assert len(outputs) == 1
+    assert outputs[0].output == expected
+    assert not outputs[0].is_error
+
+
+@pytest.mark.parametrize("on_duplicate", ["allow", "confirm"])
+async def test_cancelling_function_call_cancels_pending_future(
+    on_duplicate: Literal["allow", "confirm"],
+) -> None:
+    result: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    called = asyncio.Event()
+
+    @function_tool(on_duplicate=on_duplicate)
+    def reserve_room() -> asyncio.Future[str]:
+        """Reserve the meeting room."""
+        called.set()
+        return result
+
+    task = asyncio.create_task(
+        execute_function_call(
+            FunctionToolCall(name="reserve_room", arguments="{}", call_id="1"),
+            ToolContext([reserve_room]),
+        )
+    )
+    try:
+        await called.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert result.cancelled()
+    finally:
+        task.cancel()
+        result.cancel()
+        await asyncio.gather(task, result, return_exceptions=True)
 
 
 class ToolAgent(Agent):

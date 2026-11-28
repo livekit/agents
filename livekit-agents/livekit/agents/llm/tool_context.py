@@ -466,7 +466,7 @@ def _wrap_with_confirm_duplicate(func: Callable[..., Any]) -> Callable[..., Any]
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         kwargs.pop(CONFIRM_DUPLICATE_PARAM, None)
         result = func(*args, **kwargs)
-        if asyncio.iscoroutine(result):
+        if inspect.isawaitable(result):
             return await result
         return result
 

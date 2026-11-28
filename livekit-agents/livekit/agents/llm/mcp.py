@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
@@ -240,7 +241,7 @@ class MCPServer(ABC):
 
             ctx = MCPToolResultContext(tool_name=name, arguments=raw_arguments, result=tool_result)
             resolved = self._tool_result_resolver(ctx)
-            if asyncio.iscoroutine(resolved):
+            if inspect.isawaitable(resolved):
                 resolved = await resolved
             return resolved
 

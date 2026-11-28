@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import bisect
 import copy
@@ -1068,7 +1067,7 @@ async def execute_function_call(
             fnc_call=fnc_call,
         )
         result = function_tool(*fnc_args, **fnc_kwargs)
-        if asyncio.iscoroutine(result):
+        if inspect.isawaitable(result):
             result = await result
 
         out = make_function_call_output(fnc_call=fnc_call, output=result, exception=None)
