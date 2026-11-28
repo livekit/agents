@@ -81,6 +81,8 @@ The Agent Skill works best alongside the MCP server: the skill teaches your agen
 
 ---
 
+This is a trimmed version of the [starter agent](examples/voice_agents/basic_agent.py). For a complete project with tests, simulation scenarios, and a Dockerfile, start from [agent-starter-python](https://github.com/livekit-examples/agent-starter-python) with `lk agent init my-agent --template agent-starter-python`.
+
 ```python
 from livekit.agents import (
     Agent,
@@ -88,10 +90,12 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     RunContext,
+    TurnHandlingOptions,
     cli,
     function_tool,
     inference,
 )
+from livekit.agents.beta import EndCallTool
 
 
 @function_tool
@@ -110,26 +114,25 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=inference.VAD(),
-        # any combination of STT, LLM, TTS, or realtime API can be used
+        # any combination of STT, LLM, TTS, or realtime model can be used
         # this example shows LiveKit Inference, a unified API to access different models via LiveKit Cloud
-        # to use model provider keys directly, replace with the following:
-        # from livekit.plugins import deepgram, openai, cartesia
-        # stt=deepgram.STT(model="nova-3"),
-        # llm=openai.LLM(model="gpt-4.1-mini"),
-        # tts=cartesia.TTS(model="sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        stt=inference.STT("deepgram/nova-3", language="multi"),
+        stt=inference.STT("assemblyai/assemblyai-stt-3-7-realtime-agent"),
         llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
-        tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
+        tts=inference.TTS("fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"),
+        turn_handling=TurnHandlingOptions(turn_detection=inference.TurnDetector()),
+        # to use OpenAI GPT-Live, a speech-to-speech model, instead of the pipeline above,
+        # remove stt, tts, and turn_handling, and set:
+        # llm="openai/gpt-live-1",
     )
 
     agent = Agent(
         instructions="You are a friendly voice assistant built by LiveKit.",
-        tools=[lookup_weather],
+        # EndCallTool lets the agent hang up when the user is done
+        tools=[lookup_weather, EndCallTool()],
     )
 
     await session.start(agent=agent, room=ctx.room)
-    await session.generate_reply(instructions="greet the user and ask about their day")
+    await session.generate_reply(instructions="greet the user and offer to help")
 
 
 if __name__ == "__main__":
@@ -186,8 +189,8 @@ class StoryAgent(Agent):
         super().__init__(
             instructions=f"You are a storyteller. Use the user's information in order to make the story personalized."
             f"The user's name is {name}, from {location}",
-            # override the default model, switching to Realtime API from standard LLMs
-            llm=openai.realtime.RealtimeModel(voice="echo"),
+            # override the default model, switching to OpenAI GPT-Live, a speech-to-speech model
+            llm="openai/gpt-live-1",
             chat_ctx=chat_ctx,
         )
 
@@ -247,7 +250,7 @@ For more examples and detailed setup instructions, see the [examples directory](
 <h3>🎙️ Starter Agent</h3>
 <p>A starter agent optimized for voice conversations.</p>
 <p>
-<a href="examples/voice_agents/basic_agent.py">Code</a>
+<a href="examples/voice_agents/basic_agent.py">Code</a> · <a href="https://github.com/livekit-examples/agent-starter-python">Starter project</a>
 </p>
 </td>
 <td width="50%">

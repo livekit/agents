@@ -10,19 +10,19 @@ Most examples use **LiveKit Inference** by default, which provides a unified API
 from livekit.agents import inference
 
 session = AgentSession(
-    stt=inference.STT("deepgram/nova-3"),
+    stt=inference.STT("assemblyai/assemblyai-stt-3-7-realtime-agent"),
     llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
-    tts=inference.TTS("cartesia/sonic-3"),
+    tts=inference.TTS("fishaudio/s2.1-pro", voice="fa4c9eb3dccc4806b382b40d61c6b10a"),
 )
 ```
 
-**Note:** OpenAI Realtime and xAI Grok Voice models are available through `inference.RealtimeModel`, and OpenAI GPT-Live through `inference.DuplexModel(model="openai/gpt-live-1")`; use provider plugin classes for direct credentials or for other real-time models such as Amazon Nova Sonic.
+**Note:** For a speech-to-speech model, use OpenAI GPT-Live through LiveKit Inference with `llm="openai/gpt-live-1"` (or `inference.DuplexModel(model="openai/gpt-live-1")`). xAI Grok Voice is available through `inference.RealtimeModel`; use provider plugin classes for direct credentials or for other realtime models such as Amazon Nova Sonic.
 
 ## Table of Contents
 
 ### Getting Started
 
-- [`basic_agent.py`](./basic_agent.py) - A fundamental voice agent with STT, turn detection, preemptive generation, and metrics collection; switch its LLM to `inference.responses.LLM` for OpenAI models over the Responses API
+- [`basic_agent.py`](./basic_agent.py) - The agent from the official [agent-starter-python](https://github.com/livekit-examples/agent-starter-python) template: an STT-LLM-TTS pipeline on LiveKit Inference with the LiveKit turn detector, keyterms, expressive TTS with fallback, noise cancellation, and an end call tool. Shows how to switch to OpenAI GPT-Live. For a full project with tests, simulation scenarios, and a Dockerfile, run `lk agent init my-agent --template agent-starter-python`
 
 ### MCP & External Integrations
 
