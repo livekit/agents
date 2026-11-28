@@ -309,17 +309,27 @@ class LLMStream(llm.LLMStream):
 
             pending_fnc_calls: dict[str, _PendingFunctionCall] = {}
 
+            response_done = False
             async for ev in async_response:
+                if isinstance(ev.data, ResponseDoneEvent):
+                    response_done = True
                 chunks = self._parse_event(ev, pending_fnc_calls)
                 for chat_chunk in chunks:
                     retryable = False
                     self._event_ch.send_nowait(chat_chunk)
+
+            # the SDK ends silently when the body runs out, so a cut-off stream looks complete
+            # and its pending function calls may hold truncated arguments
+            if not response_done:
+                raise APIConnectionError(retryable=retryable)
 
             for chat_chunk in self._flush_pending_fnc_calls(pending_fnc_calls):
                 self._event_ch.send_nowait(chat_chunk)
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
+        except APIConnectionError:
+            raise
         except (asyncio.TimeoutError, httpx2.TimeoutException) as e:
             raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
